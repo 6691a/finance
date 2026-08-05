@@ -55,12 +55,17 @@ DEFAULT_DATABASE_ALIAS = "default"
 
 def table_options(
     *,
-    schema: str,
-    comment: str,
+    comment: str | None,
     database: str = DEFAULT_DATABASE_ALIAS,
     managed: bool = True,
 ) -> dict[str, object]:
     """`__table_args__`의 마지막 dict를 만든다.
+
+    스키마는 지정하지 않는다. 연결의 `search_path`(PostgreSQL 기본 `public`)를 따른다.
+
+    `comment`는 이 프로젝트가 만든 테이블이면 항상 채운다. `None`은 다른 시스템이 이미
+    만들어 둔 테이블을 그대로 미러링할 때만 쓴다. 실제 DB에 주석이 없는데 모델에만 주석을
+    달면 autogenerate가 매번 `COMMENT ON` 차이를 만들어 낸다.
 
     테이블이 어느 마이그레이션 데이터베이스 별칭에 속하는지 모델에서 직접 선언한다.
     Alembic은 이 값을 보고 현재 별칭이 소유하지 않는 테이블을 autogenerate 대상에서 제외한다.
@@ -70,7 +75,6 @@ def table_options(
     `Meta.managed = False`와 같은 뜻이며, 런타임 쓰기 금지와는 관계가 없다.
     """
     return {
-        "schema": schema,
         "comment": comment,
         "info": {"database": database, "managed": managed},
     }

@@ -19,6 +19,16 @@ databases:
       enabled: true
       model_modules:
         - apps.models
+  # 외부 시스템이 소유한 DB. 런타임은 읽기 전용이고, 이미 존재하는 테이블은
+  # fake-initial revision으로 이력만 추적한다. README의 `이미 존재하는 외부 테이블 편입` 참고.
+  finance:
+    url: postgresql+asyncpg://finance_reader:finance_reader@localhost:15432/finance
+    runtime_enabled: true
+    read_only: true
+    migration:
+      enabled: true
+      model_modules:
+        - apps.models
 
 redises:
   default:

@@ -1,0 +1,42 @@
+databases:
+  default:
+    url: postgresql+asyncpg://news2:news2@localhost:15432/news2
+    runtime_enabled: true
+    migration:
+      enabled: true
+      model_modules:
+        - apps.models
+  analytics:
+    url: postgresql+asyncpg://news2:news2@localhost:15432/news2
+  market_read:
+    url: postgresql+asyncpg://market_reader:market_reader@localhost:15432/news2
+    runtime_enabled: true
+    read_only: true
+  market_migration:
+    url: postgresql+asyncpg://migration_owner:migration_owner@localhost:15432/news2
+    runtime_enabled: false
+    migration:
+      enabled: true
+      model_modules:
+        - apps.models
+
+redises:
+  default:
+    url: redis://localhost:16379/0
+  stream:
+    url: redis://localhost:16379/1
+    decode_responses: false
+
+kis_app_key: ""
+kis_app_secret: ""
+kis_rest_domain: https://openapi.koreainvestment.com:9443
+kis_websocket_domain: ws://ops.koreainvestment.com:21000
+
+fred_api_key: ""
+ecos_api_key: ""
+
+sentry_dsn: ""
+sentry_environment: development
+sentry_release: news2@local
+sentry_traces_sample_rate: 0.1
+sentry_error_sample_rate: 1.0

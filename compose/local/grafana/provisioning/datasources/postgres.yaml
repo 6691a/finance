@@ -1,0 +1,21 @@
+apiVersion: 1
+
+datasources:
+  - name: news2
+    uid: news2-postgres
+    type: postgres
+    access: proxy
+    url: db:5432
+    database: news2
+    user: news2
+    isDefault: true
+    editable: false
+    secureJsonData:
+      password: news2
+    jsonData:
+      sslmode: disable
+      postgresVersion: 1700
+      maxOpenConns: 5
+      maxIdleConns: 2
+      connMaxLifetime: 14400
+      timescaledb: false

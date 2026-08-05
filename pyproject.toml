@@ -1,0 +1,41 @@
+[project]
+name = "news"
+version = "0.1.0"
+requires-python = ">=3.13"
+dependencies = [
+    "alembic>=1.18.5",
+    "asyncpg>=0.31.0",
+    "dependency-injector>=4.49.1",
+    "fastapi==0.136.3",
+    "httpx>=0.28.1",
+    "pydantic-settings>=2.14.2",
+    "pyyaml>=6.0.3",
+    "redis>=8.1.0",
+    "scrapling>=0.4.12",
+    "sentry-sdk>=2.66.1",
+    "slack-sdk>=3.43.0",
+    "sqlalchemy[asyncio]>=2.0.51",
+    "uvicorn>=0.52.1",
+    "websockets>=17.0.1",
+]
+
+[dependency-groups]
+dev = [
+    "apache-airflow==3.3.0",
+    "apache-airflow-providers-postgres>=7.0.0",
+    "pre-commit>=4.6.1",
+    "pyrefly>=1.2.0",
+    "pytest-asyncio>=1.4.0",
+    "ruff>=0.16.1",
+]
+
+[tool.pytest.ini_options]
+# Collect only this project's tests. Without this pytest walks the whole
+# repository: Airflow leaves a `latest` symlink under compose/local/airflow/data
+# that Windows cannot stat, and dags/ tests import airflow, which only
+# initializes inside the Airflow image.
+testpaths = ["tests"]
+norecursedirs = ["compose", "dags", ".venv"]
+
+[tool.ruff]
+line-length = 120

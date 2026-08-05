@@ -1,0 +1,14 @@
+.idea/
+
+.env
+config.yaml
+
+docs/
+
+compose/local/airflow/data/
+
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+.venv/

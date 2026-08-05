@@ -1,0 +1,42 @@
+Alembic revisions are selected by database alias. Each alias has its own
+revision directory and version history.
+
+Configure a migration target in `config.yaml`:
+
+~~~yaml
+databases:
+  default:
+    url: postgresql+asyncpg://...
+    runtime_enabled: true
+    migration:
+      enabled: true
+      version_path: migrations/default/versions
+      model_modules:
+        - apps.models
+  market_migration:
+    url: postgresql+asyncpg://...
+    runtime_enabled: false
+    migration:
+      enabled: true
+      version_path: migrations/market/versions
+      model_modules:
+        - apps.models.raw
+~~~
+
+`runtime_enabled: false` keeps a privileged migration connection out of the
+application runtime registry. A read-only runtime alias can use
+`read_only: true`; PostgreSQL role permissions remain the final guard.
+
+Run one alias at a time:
+
+~~~text
+just migrate default upgrade head
+just migrate market_migration upgrade head
+just migrate market_migration revision --autogenerate -m "create market tables"
+just migrate market_migration downgrade -1
+~~~
+
+The alias is required. Unknown aliases and aliases without enabled migration
+settings fail before a database connection is opened. The first migration
+command creates the configured `version_path`; generated revision files should
+be committed to Git.

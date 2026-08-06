@@ -1,0 +1,9 @@
+# DAG 런타임에만 필요한 추가 패키지. 이미지 빌드에서 설치한다.
+# Airflow 3.3.0 이미지에 이미 들어 있는 것은 여기 적지 않는다:
+# apache-airflow-providers-postgres, psycopg2-binary, pydantic.
+#
+# 버전 범위는 백엔드 pyproject.toml과 맞춘다. 백엔드에 없는 패키지만 새 줄로 추가한다.
+
+# modules/collectors/hana.py: scrapling.fetchers.Fetcher와 curl_cffi.curl.CurlError.
+# curl_cffi는 scrapling 기본 의존성이 아니라 fetchers extra에 들어 있다.
+scrapling[fetchers]>=0.4.12

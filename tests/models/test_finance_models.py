@@ -1,8 +1,10 @@
-"""`exchange_rate` mirrors a table the finance database already owns.
+"""`exchange_rate` is this project's own table, shaped after the finance one.
 
-The model exists to read that table and to keep a revision pointer for it. Its
-declaration has to match the live DDL exactly: any drift turns into an ALTER the
-next autogenerate run would emit against data this project does not own.
+The table lives on the `default` alias (news2) and the Hana collector writes to
+it. Its DDL is a byte-for-byte copy of the external finance table so those rows
+can be loaded later without translating columns, which is why it keeps SERIAL,
+naive timestamps and no comments instead of the project defaults. Drift here
+would break that copy, so the shape is pinned column by column.
 """
 
 from sqlalchemy.dialects import postgresql
@@ -61,12 +63,13 @@ def test_exchange_rate_keeps_the_external_constraint_and_index_names():
 
 
 def test_exchange_rate_declares_no_comments():
-    # The live table has none. Adding them here would make every autogenerate
-    # run emit COMMENT ON statements against a table this project must not alter.
+    # The finance table it copies has none. Adding them here would make the two
+    # differ and turn a later data load into a schema comparison.
     assert TABLE.comment is None
     assert all(column.comment is None for column in TABLE.columns)
 
 
-def test_exchange_rate_is_migrated_by_the_finance_alias():
-    assert table_database(TABLE) == "finance"
+def test_exchange_rate_is_migrated_by_the_default_alias():
+    # The table moved off the `finance` alias; this project owns and writes its copy.
+    assert table_database(TABLE) == "default"
     assert table_managed(TABLE) is True

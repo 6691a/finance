@@ -1,4 +1,8 @@
 databases:
+  # [배포] 저장 위치 4/5 — 마이그레이션이 테이블을 만드는 곳.
+  # `exchange_rate`, `indicator_observation`, `source_record`, `instrument`가 여기 생긴다.
+  # Airflow DAG는 이 파일을 읽지 않는다. DAG의 대상은 `AIRFLOW_CONN_NEWS`가 정하므로
+  # 배포할 때 둘이 같은 DB를 가리키는지 확인한다. 어긋나면 DAG가 없는 테이블에 INSERT한다.
   default:
     url: postgresql+asyncpg://news2:news2@localhost:15432/news2
     runtime_enabled: true
@@ -19,16 +23,17 @@ databases:
       enabled: true
       model_modules:
         - apps.models
-  # 외부 시스템이 소유한 DB. 런타임은 읽기 전용이고, 이미 존재하는 테이블은
-  # fake-initial revision으로 이력만 추적한다. README의 `이미 존재하는 외부 테이블 편입` 참고.
+  # 외부 시스템이 소유한 DB. 런타임은 읽기 전용이다.
+  # 이 별칭에 매핑된 모델이 없으므로 마이그레이션은 꺼 둔다. 켜 두면 `makemigrations`가
+  # 접속을 요구하고, 외부 호스트가 닫혀 있으면 리비전을 만들지 못한다.
+  # 여기 있는 테이블을 편입하려면 `enabled: true`와 `model_modules`를 함께 넣는다.
+  # README의 `이미 존재하는 외부 테이블 편입` 참고.
   finance:
     url: postgresql+asyncpg://finance_reader:finance_reader@localhost:15432/finance
     runtime_enabled: true
     read_only: true
     migration:
-      enabled: true
-      model_modules:
-        - apps.models
+      enabled: false
 
 redises:
   default:

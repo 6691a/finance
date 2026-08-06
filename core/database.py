@@ -1,11 +1,10 @@
 from collections.abc import Mapping
 from datetime import datetime
 from typing import TypeVar
-from uuid import UUID, uuid4
 
 from pydantic import BaseModel as PydanticBaseModel
 from pydantic import ConfigDict, Field, model_validator
-from sqlalchemy import DateTime, Table, Uuid, func, text
+from sqlalchemy import BigInteger, DateTime, Table, func
 from sqlalchemy.ext.asyncio import (
     AsyncEngine,
     AsyncSession,
@@ -101,15 +100,18 @@ class Base(DeclarativeBase):
 
 
 class EntityBase(Base):
-    """모든 애플리케이션 테이블이 공유하는 식별자와 UTC 시각."""
+    """모든 애플리케이션 테이블이 공유하는 식별자와 UTC 시각.
+
+    기본키는 데이터베이스가 채우는 `BIGSERIAL`이다. 값은 INSERT 이후에만 알 수 있으므로
+    쓰기 쪽에서는 `RETURNING id`나 `flush()`로 받아야 한다.
+    """
 
     __abstract__ = True
 
-    id: Mapped[UUID] = mapped_column(
-        Uuid,
+    id: Mapped[int] = mapped_column(
+        BigInteger,
         primary_key=True,
-        default=uuid4,
-        server_default=text("gen_random_uuid()"),
+        autoincrement=True,
         comment="레코드 고유 식별자",
     )
     created_at: Mapped[datetime] = mapped_column(

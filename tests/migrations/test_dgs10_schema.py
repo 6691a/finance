@@ -28,7 +28,7 @@ def test_indicator_observation_keeps_natural_key_and_source_reference(capsys):
     sql = head_sql(capsys)
 
     assert "CREATE TABLE indicator_observation" in sql
-    assert "source_record_id UUID NOT NULL" in sql
+    assert "source_record_id BIGINT NOT NULL" in sql
     assert "realtime_start" not in sql
     assert "realtime_end" not in sql
     assert "quality_status" not in sql
@@ -49,15 +49,13 @@ def test_migrations_never_pin_a_schema(capsys):
 def test_every_table_carries_common_columns(capsys):
     sql = head_sql(capsys)
 
-    # `alembic_version*` is Alembic's own bookkeeping, and `exchange_rate` mirrors
-    # a table another system owns, so neither derives from EntityBase.
+    # `alembic_version*` is Alembic's own bookkeeping, and `exchange_rate` copies the
+    # DDL of an external table, so neither derives from EntityBase.
     tables = (
-        sql.count("CREATE TABLE ")
-        - sql.count("CREATE TABLE alembic_version")
-        - sql.count("CREATE TABLE exchange_rate")
+        sql.count("CREATE TABLE ") - sql.count("CREATE TABLE alembic_version") - sql.count("CREATE TABLE exchange_rate")
     )
     assert tables >= 3
-    assert sql.count("id UUID DEFAULT gen_random_uuid() NOT NULL") == tables
+    assert sql.count("id BIGSERIAL NOT NULL") == tables
     assert sql.count("created_at TIMESTAMP WITH TIME ZONE DEFAULT now() NOT NULL") == tables
     assert sql.count("updated_at TIMESTAMP WITH TIME ZONE DEFAULT now() NOT NULL") == tables
 

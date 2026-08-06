@@ -1,8 +1,8 @@
 from datetime import date
 from decimal import Decimal
-from uuid import UUID
 
 from sqlalchemy import (
+    BigInteger,
     ForeignKey,
     Index,
     Numeric,
@@ -37,7 +37,8 @@ class IndicatorObservation(EntityBase):
     observation_date: Mapped[date] = mapped_column(nullable=False, comment="지표 값의 기준일")
     value: Mapped[Decimal] = mapped_column(Numeric(18, 8), nullable=False, comment="정규화한 지표 값")
     unit: Mapped[str] = mapped_column(Text, nullable=False, comment="지표 값의 단위(예: Percent)")
-    source_record_id: Mapped[UUID] = mapped_column(
+    source_record_id: Mapped[int] = mapped_column(
+        BigInteger,
         ForeignKey("source_record.id", ondelete="RESTRICT"),
         nullable=False,
         comment="근거가 되는 source_record 레코드 ID",

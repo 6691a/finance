@@ -14,7 +14,7 @@ Codex용 규칙 원본은 [.codex/AGENTS.md](../.codex/AGENTS.md)이며 두 문�
 | `apps/models/` | SQLAlchemy 모델. 파일 이름 = PostgreSQL 스키마 이름 |
 | `migrations/` | Alembic. 리비전 파일은 `migrations/versions` 하나를 모든 별칭이 공유한다 |
 | `migrations/routing.py` | 어떤 테이블이 어떤 DB 별칭에 속하는지 판단하는 순수 함수 |
-| `dags/` | Airflow DAG |
+| `../airflow/dags/` | Airflow DAG |
 | `tests/` | pytest |
 
 `apps/models/`의 모듈은 스키마 단위로 나눈다. `raw.py` → `raw`, `market.py` → `market`,
@@ -105,7 +105,7 @@ Django의 `DATABASE_ROUTERS`와 목적은 같지만 위치가 다르다. Django�
 `apps/models/finance.py`의 `ExchangeRate`가 그 예다.
 
 - 모델은 실제 DDL을 글자 그대로 미러링한다. 컬럼 타입, nullable, 기본값, 제약·인덱스 이름까지 같아야 한다.
-- UUID 기본키, timezone-aware 시각, 테이블·컬럼 주석 같은 프로젝트 기본 규칙은 적용하지 않는다.
+- BIGSERIAL 기본키, timezone-aware 시각, 테이블·컬럼 주석 같은 프로젝트 기본 규칙은 적용하지 않는다.
   실제 DB에 주석이 없으면 `table_options(comment=None)`으로 둔다. 모델에만 주석을 달면
   autogenerate가 매번 `COMMENT ON` 차이를 만든다.
 - `managed=True`를 유지한다. `managed=False`는 이후 스키마 변경을 추적하지 못한다.
@@ -115,16 +115,80 @@ Django의 `DATABASE_ROUTERS`와 목적은 같지만 위치가 다르다. Django�
 
 전체 사용법과 예시는 [README.md](../README.md)의 `테이블 라우팅` 절에 있다.
 
+## Airflow와 공유하는 코드
+
+저장소의 `airflow/`가 컨테이너의 `/opt/airflow`다. 운영 Airflow의 마운트 경로와 1:1로 맞춘다.
+
+| 저장소 | 컨테이너 |
+| --- | --- |
+| `airflow/dags/` | `/opt/airflow/dags` |
+| `airflow/modules/` | `/opt/airflow/modules` |
+| `airflow/utility/` | `/opt/airflow/utility` |
+| `airflow/sql/` | `/opt/airflow/sql` |
+| `airflow/plugins/` | `/opt/airflow/plugins` |
+| `airflow/config/` | `/opt/airflow/config` |
+
+Airflow는 `apps/`, `core/`, `migrations/`를 보지 못한다. DAG가 실행 시점에 import하는 코드는
+전부 `airflow/` 아래 있어야 한다.
+
+import 뿌리는 `airflow/`다. DAG는 배포와 같은 이름으로 `from modules.collectors import ...`처럼
+쓴다. 로컬 도구도 같은 뿌리를 쓴다: pytest `pythonpath`, pyrefly `search-path`,
+ruff isort `known-first-party`가 `pyproject.toml`에 맞춰져 있다.
+
+쿼리는 Python 문자열이 아니라 `airflow/sql/<엔진>/<테이블>/<동작>.sql`에 둔다.
+`modules/sql.py`의 `read_sql`이 `AIRFLOW_HOME`이 있으면 그 아래를, 없으면 저장소의
+`airflow/sql`을 읽는다. 컨테이너와 로컬 pytest가 같은 파일을 쓴다.
+
+로컬 Compose와 Dockerfile은 운영 Airflow에 맞춰 둔 상태다. **건드리지 않는다.** 배치 문제는
+코드 위치로만 해결한다. 실행 코드를 이미지에 굽거나 `apps/`를 볼륨으로 붙이지 않는다.
+
+겹치는 코드는 **위치는 Airflow를, 규칙은 백엔드를** 따른다.
+
+- 공유 코드는 `airflow/modules` 아래 한 벌만 둔다. `apps/`에 사본을 만들지 않는다.
+- 외부 입력은 Pydantic으로 검증하고, 시각은 timezone-aware UTC이며, 주석은 한국어로 쓴다.
+- `dags/`에는 스케줄, 재시도, 태스크 매핑, Hook 사용, 실패 분류만 둔다.
+  파싱·검증·저장 규칙은 `modules/`에 둔다.
+- 의존성은 Airflow 환경에 있는 것만 쓴다. 표준 라이브러리, Pydantic, PEP 249 연결,
+  그리고 HTML 수집용 `scrapling[fetchers]`다. SQLAlchemy 모델과 `core.config`는 import하지 않는다.
+  여기에 더 넣으려면 운영 Airflow 이미지에 먼저 들어가야 한다.
+- 테이블 정의의 원본은 백엔드의 `apps/models`다. 수집기는 문자열 SQL을 쓰므로
+  `tests/collectors/test_fred.py`가 INSERT 컬럼과 `ON CONFLICT` 키를 모델 metadata와 대조한다.
+
+## 수집기 작성
+
+`airflow/modules/collectors/fred.py`가 기준이다.
+
+- 요청 값, 외부 응답 본문, 정규화 결과, 수집 결과를 모두 Pydantic 모델로 선언한다.
+  `dataclass`를 쓰지 않는다. 외부 JSON은 `model_validate_json`으로 검증한다.
+- 모델은 `ConfigDict(frozen=True)`다. 재시도 경로에서 값이 바뀌면 원본과 저장값이 어긋난다.
+- 시각 필드는 `AwareDatetime`으로 받고 validator에서 UTC로 정규화한다.
+- 허용 값이 정해진 필드는 validator로 막는다(예: 시계열 ID는 `TREASURY_SERIES` 안의 값만).
+- API 키는 `SecretStr`로 받는다. URL에 키가 들어가므로 예외 메시지와 로그에 URL을 넣지 않는다.
+- 외부 오류는 재시도 가능 여부로 나눠 올린다. 판단은 DAG가 한다.
+- HTML 수집은 scrapling을 쓴다. `airflow/modules/collectors/hana.py`가 기준이다.
+  요청은 `Fetcher`(curl_cffi), 파싱은 `Selector`다. `impersonate`로 실제 브라우저 지문을
+  흉내 내므로 앞단 WAF에 막히지 않는다. 페이지가 JavaScript로 표를 그릴 때만
+  `DynamicFetcher`나 `StealthyFetcher`를 쓴다. 이건 브라우저를 띄우므로 기본값이 아니다.
+- 표를 위치(index)로 읽으면 칸 수를 상수로 두고 응답마다 검증한다. 사이트가 열을 추가하면
+  값이 조용히 옆 칸으로 밀린다. 칸 수 검사가 먼저 실패해야 그걸 알 수 있다.
+
 ## 시간대 규칙
 
 ### Airflow 배치
 
-- Airflow, 워커와 컨테이너의 기본 시간대는 `UTC`로 통일한다.
-- Airflow cron, `start_date`, `logical_date`와 data interval은 timezone-aware UTC로 작성하고 계산한다.
-- 스케줄 코드에는 같은 줄 주석으로 한국 시간(`KST`, UTC+9)을 반드시 병기한다.
-  예: `schedule="30 22 * * 1-5"  # UTC 월~금 22:30 = KST 화~토 07:30`
-- 배치 조회 기간과 멱등 키는 UTC 경계를 기준으로 계산한다.
+- 배치 트리거 시간대는 한국 시간(`Asia/Seoul`)이다. `AIRFLOW__CORE__DEFAULT_TIMEZONE=Asia/Seoul`.
+- Airflow cron과 `start_date`는 KST로 작성한다. `start_date`는 반드시 timezone-aware로 두고
+  `pendulum.datetime(..., tz=KST_TIMEZONE)`을 쓴다. naive datetime은 쓰지 않는다.
+  `KST_TIMEZONE`은 `modules/utility.py`에 있다.
+- 스케줄 코드에는 같은 줄 주석으로 UTC를 반드시 병기한다.
+  예: `schedule="30 7 * * 2-6"  # KST 화~토 07:30 = UTC 월~금 22:30`
+- 배치 조회 기간과 날짜 경계는 KST 기준으로 계산한다. `data_interval_end`는 aware 값이므로
+  `astimezone(KST_TIMEZONE)`으로 변환한 뒤 날짜를 뽑는다.
+- 시간대는 트리거 시점과 날짜 경계 계산에만 쓴다. **DB에 저장하는 시각과 로그는 UTC다.**
+  컨테이너 시계도 UTC로 둔다.
 - 외부 데이터의 원본 시각과 시간대는 보존하되, 비교·저장용 시각은 UTC로 정규화한다.
+- 제공처가 날짜의 기준 시간대를 정하는 값(하나은행 고시일자는 KST, FRED 관측일은 미국 영업일)은
+  그 제공처 기준을 따르고 코드 주석에 어느 기준인지 남긴다.
 
 ### 백엔드
 
@@ -193,13 +257,23 @@ API, 크롤링, 웹소켓 수집 결과의 출처와 상태를 가볍게 보존�
 - 한 종목을 여러 소스에서 수집하게 되면 `source_symbol` 한 칸으로 못 버틴다.
   그때는 `reference.instrument_source(instrument_id, source, symbol)` 자식 테이블로 옮긴다.
 
-### `exchange_rate` (finance DB)
+### `exchange_rate`
 
-이 프로젝트가 만들지 않은 환율 고시 테이블이다. `finance` alias가 소유하고 운영 데이터가 이미 있다.
+통화별·회차별 환율 고시다. `default` alias(news2)에 있고 `exchange_rate_daily` DAG가 채운다.
+2026-08-06에 `finance` alias에서 `default`로 옮겼다. 이전 데이터는 가져오지 않았다.
 
-- 모델은 실제 DDL 미러링만 한다. serial `id`, naive `timestamp`, 주석 없음 상태를 바꾸지 않는다.
-- 런타임은 읽기 전용이다. `finance` alias에 `read_only: true`가 걸려 있다.
-- 컬럼을 추가·변경하려면 finance DB 소유자와 먼저 합의한다. 여기서 마음대로 revision을 만들지 않는다.
+- **DDL은 외부 finance DB의 같은 이름 테이블을 글자 그대로 복사한 것이다.** serial `id`,
+  naive `timestamp`, 주석 없음을 그대로 둔다. 나중에 finance의 과거 행을 옮기거나 Grafana를
+  news2로 돌릴 때 컬럼이 1:1로 맞아야 하기 때문이다. 프로젝트 기본 규칙(BIGSERIAL,
+  timezone-aware, 주석)을 적용하지 않는 유일한 테이블이다.
+- 그래서 주석을 달거나 타입을 바꾸려면 그 이관 계획을 먼저 접는다. 지금 상태는
+  `tests/models/test_finance_models.py`가 컬럼 단위로 고정한다.
+- 모델은 `apps/models/finance.py`에 있다. 파일 이름은 스키마도 alias도 아니고 형태를 가져온
+  원본 DB 이름이다.
+- 멱등 키는 `(currency, date, time, round)`, 제약 이름은 `unique_currency_date_time_round`다.
+  수집기 upsert가 이 이름을 그대로 쓴다.
+- `finance` alias는 이제 매핑된 모델이 없어서 `migration.enabled: false`다. 런타임 읽기 전용
+  연결만 남아 있다. 여기에 테이블을 편입하려면 `enabled: true`와 `model_modules`를 함께 켠다.
 
 ## 마이그레이션 작성
 

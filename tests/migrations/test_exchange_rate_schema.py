@@ -5,12 +5,18 @@ from tests.helpers import NO_REVISION_REASON, head_sql, revision_files
 pytestmark = pytest.mark.skipif(not revision_files(), reason=NO_REVISION_REASON)
 
 
-def test_exchange_rate_migration_emits_the_external_table(capsys):
-    # Offline `--sql` has no connection to check, so it always renders the full
-    # table: what a finance database built from scratch would get.
+def test_exchange_rate_migration_creates_the_table(capsys):
     sql = head_sql(capsys)
 
     assert "CREATE TABLE exchange_rate" in sql
+
+
+def test_exchange_rate_migration_mirrors_the_finance_ddl(capsys):
+    # The table is a byte-for-byte copy of the external finance table so its rows
+    # can be loaded later without translating columns. That is why it uses SERIAL
+    # and naive timestamps instead of the project defaults.
+    sql = head_sql(capsys)
+
     assert "id SERIAL NOT NULL" in sql
     assert "created_at TIMESTAMP WITHOUT TIME ZONE DEFAULT CURRENT_TIMESTAMP" in sql
     assert "currency VARCHAR(10) NOT NULL" in sql
@@ -20,7 +26,8 @@ def test_exchange_rate_migration_emits_the_external_table(capsys):
     assert "exchange_standard_rate NUMERIC(10, 2) NOT NULL" in sql
 
 
-def test_exchange_rate_migration_keeps_the_external_constraint_and_index_names(capsys):
+def test_exchange_rate_migration_keeps_the_original_constraint_and_index_names(capsys):
+    # The collector's upsert targets `unique_currency_date_time_round` by name.
     sql = head_sql(capsys)
 
     assert "CONSTRAINT unique_currency_date_time_round UNIQUE (currency, date, time, round)" in sql
@@ -28,16 +35,17 @@ def test_exchange_rate_migration_keeps_the_external_constraint_and_index_names(c
     assert "CREATE INDEX idx_exchange_rate_currency_date ON exchange_rate (currency, date)" in sql
 
 
-def test_exchange_rate_migration_never_drops_the_external_table(capsys):
-    # The finance database owns the data. Downgrading only moves the pointer.
-    sql = head_sql(capsys)
-
-    assert "DROP TABLE exchange_rate" not in sql
-
-
 def test_exchange_rate_migration_documents_nothing(capsys):
-    # The live table carries no comments; emitting them would be an ALTER.
+    # Comments would put the copy out of step with the finance table it mirrors.
     sql = head_sql(capsys)
 
     assert "COMMENT ON TABLE exchange_rate" not in sql
     assert "COMMENT ON COLUMN exchange_rate" not in sql
+
+
+def test_upgrading_never_drops_exchange_rate(capsys):
+    # The move to `default` must not emit a DROP: autogenerate would have proposed
+    # one for the alias the table left, and that alias is a live external database.
+    sql = head_sql(capsys)
+
+    assert "DROP TABLE exchange_rate" not in sql

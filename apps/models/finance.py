@@ -1,14 +1,19 @@
-"""`finance` alias가 가리키는 외부 DB의 테이블 매핑.
+"""외부 finance DB에서 형태를 가져온 환율 고시 테이블.
 
-이 모듈의 테이블은 이 프로젝트가 만든 것이 아니라 이미 운영 데이터가 들어 있는 상태로
-존재한다. 스키마는 `migrations`가 추적하지만(라우팅상 `managed=True`) 첫 revision은
-Django의 `migrate --fake-initial`처럼 실제 DB에 DDL을 내지 않고 리비전 포인터만 올린다.
+원본은 다른 시스템이 만든 finance DB의 `exchange_rate`다. 지금은 이 프로젝트가 `default`
+alias(news2)에 **같은 DDL로** 제 테이블을 만들어 직접 수집한다. finance DB의 데이터는
+가져오지 않는다. `airflow/dags/exchange_rate_daily.py`가 `news` 연결로 여기에 쓴다.
 
-그래서 모델 선언은 실제 DDL을 **글자 그대로** 미러링한다. 프로젝트 기본 규칙(UUID 기본키,
-timezone-aware UTC 시각, 테이블·컬럼 주석)을 여기서는 적용하지 않는다. 모델과 DB가 한 글자라도
-어긋나면 autogenerate가 그 차이를 ALTER로 뱉고, 그건 이 테이블에 내면 안 되는 변경이다.
+alias만 옮기고 DDL은 원본 그대로 둔다. 그래서 프로젝트 기본 규칙(BIGSERIAL 기본키,
+timezone-aware UTC 시각, 테이블·컬럼 주석)이 이 테이블에는 적용돼 있지 않다. 나중에 finance의
+과거 데이터를 이관하거나 대시보드를 news2로 돌릴 때 컬럼이 1:1로 맞아야 하기 때문이다.
+주석을 달거나 타입을 바꾸려면 그 계획을 먼저 접고 시작한다.
 
-파일 이름은 스키마 이름이 아니라 DB alias 이름이다. 이 테이블은 finance DB의 `public`에 있다.
+`created_at`/`updated_at`이 naive `timestamp`인 것도 원본을 따른 결과다. 이 프로젝트가 새로
+만드는 테이블이라면 `EntityBase`의 timezone-aware 컬럼을 썼을 자리다.
+
+파일 이름은 스키마 이름이 아니라 형태를 가져온 원본 DB 이름이다. 테이블 자체는 news2의
+`public`에 있다.
 """
 
 import datetime as dt
@@ -31,7 +36,7 @@ from core.database import Base, table_options
 
 
 class ExchangeRate(Base):
-    """finance DB가 소유한 통화별 환율 고시 테이블. 이 프로젝트는 읽기만 한다."""
+    """통화별·회차별 환율 고시 테이블. 하나은행 수집 DAG가 채운다."""
 
     __tablename__ = "exchange_rate"
     __table_args__ = (
@@ -46,7 +51,12 @@ class ExchangeRate(Base):
         Index("idx_exchange_rate_currency_date", "currency", "date"),
         table_options(
             comment=None,
-            database="finance",
+            # [배포] 저장 위치 4/5 — 이 테이블을 **만드는** DB 별칭.
+            # `config.yaml`의 같은 이름 별칭 URL이 실제 대상이다. 배포 대상을 바꾸려면
+            # 그 URL을 바꾸는 게 먼저고, 별칭 자체를 옮길 때만 이 값을 건드린다.
+            # `airflow/dags/exchange_rate_daily.py`의 `CONNECTION_ID`가 가리키는 DB와
+            # 같은 곳이어야 한다. 어긋나면 DAG가 없는 테이블에 INSERT를 시도한다.
+            database="default",
         ),
     )
 

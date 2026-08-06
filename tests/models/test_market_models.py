@@ -1,5 +1,5 @@
+from sqlalchemy import BigInteger, UniqueConstraint
 from sqlalchemy import Enum as SqlEnum
-from sqlalchemy import UniqueConstraint
 
 
 def test_market_models_inherit_common_identity_and_utc_timestamps():
@@ -10,6 +10,11 @@ def test_market_models_inherit_common_identity_and_utc_timestamps():
         columns = model.__table__.c
 
         assert columns.id.primary_key
+        # DB가 채우는 BIGSERIAL. 애플리케이션이 만든 값을 넣지 않는다.
+        assert isinstance(columns.id.type, BigInteger)
+        assert columns.id.autoincrement is True
+        assert columns.id.default is None
+        assert columns.id.server_default is None
         assert columns.created_at.nullable is False
         assert columns.created_at.type.timezone is True
         assert columns.updated_at.nullable is False

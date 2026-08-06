@@ -1,17 +1,27 @@
 apiVersion: 1
 
+# [배포] 저장 위치 5/5 — Grafana가 읽는 DB.
+#
+# `exchange-rate` 대시보드가 기본으로 쓰는 데이터소스다. 접속 정보는 compose/local/.env가
+# 넘기고, 비어 있으면 compose가 로컬 `db` 컨테이너 값을 채운다. 설정 없이도 그대로 뜬다.
+#
+# `uid`는 바꾸지 않는다. 대시보드가 이 이름표로 데이터소스를 찾는다. 바꾸려면 대시보드
+# JSON의 `ds` 변수 기본값도 함께 옮겨야 한다.
+#
+# 잠깐 다른 DB를 보려고 이 파일을 고칠 필요는 없다. 대시보드 상단 `데이터소스` 드롭다운에서
+# 고르면 패널이 전부 따라간다. 여기는 기본값을 정하는 자리다.
 datasources:
   - name: news2
     uid: news2-postgres
     type: postgres
     access: proxy
-    url: db:5432
-    database: news2
-    user: news2
+    url: $NEWS_DB_URL
+    database: $NEWS_DB_NAME
+    user: $NEWS_DB_USER
     isDefault: true
     editable: false
     secureJsonData:
-      password: news2
+      password: $NEWS_DB_PASSWORD
     jsonData:
       sslmode: disable
       postgresVersion: 1700

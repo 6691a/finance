@@ -84,4 +84,4 @@ def test_models_route_to_the_alias_they_declare():
     assert table_database(SourceRecord.__table__) == "default"
     assert table_database(IndicatorObservation.__table__) == "default"
     assert table_database(Instrument.__table__) == "default"
-    assert table_database(ExchangeRate.__table__) == "finance"
+    assert table_database(ExchangeRate.__table__) == "default"

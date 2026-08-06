@@ -11,7 +11,7 @@ dependencies = [
     "pydantic-settings>=2.14.2",
     "pyyaml>=6.0.3",
     "redis>=8.1.0",
-    "scrapling>=0.4.12",
+    "scrapling[fetchers]>=0.4.12",
     "sentry-sdk>=2.66.1",
     "slack-sdk>=3.43.0",
     "sqlalchemy[asyncio]>=2.0.51",
@@ -35,7 +35,22 @@ dev = [
 # that Windows cannot stat, and dags/ tests import airflow, which only
 # initializes inside the Airflow image.
 testpaths = ["tests"]
-norecursedirs = ["compose", "dags", ".venv"]
+norecursedirs = ["compose", "airflow", ".venv"]
+# 저장소의 `airflow/`가 컨테이너의 `/opt/airflow`다. 배포와 같은 이름(`modules.collectors...`,
+# `utility...`)으로 import하도록 같은 뿌리를 경로에 넣는다.
+pythonpath = [".", "airflow"]
+
+[tool.pyrefly]
+# 설정이 없으면 pyrefly는 basic preset으로 돈다. 여기서 명시하는 이유는 하나뿐이다.
+# Airflow가 보는 트리의 뿌리가 저장소의 airflow/(컨테이너의 /opt/airflow)라서
+# modules.* import를 배포와 같은 이름으로 해석해야 한다. 검사 강도는 그대로 둔다.
+preset = "basic"
+search-path = ["airflow"]
 
 [tool.ruff]
 line-length = 120
+
+[tool.ruff.lint.isort]
+# `modules`는 Airflow가 보는 폴더(`airflow/modules`)의 최상위 패키지다. 설치된 배포판이 아니라
+# 이 저장소의 코드이므로 first-party로 묶는다.
+known-first-party = ["apps", "core", "migrations", "modules", "utility"]

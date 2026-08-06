@@ -46,11 +46,14 @@
 ---
 x-airflow-common:
   &airflow-common
-  # In order to add custom dependencies or upgrade provider distributions you can use your extended image.
-  # Comment the image line, place your Dockerfile in the directory where you placed the docker-compose.yaml
-  # and uncomment the "build" line below, Then run `docker-compose build` to build the images.
-  image: ${AIRFLOW_IMAGE_NAME:-apache/airflow:3.3.0}
-  # build: .
+  image: ${AIRFLOW_IMAGE_NAME:-news-airflow:${AIRFLOW_VERSION:-3.3.0}}
+  build:
+    context: .
+    dockerfile: Dockerfile
+    args:
+      # 베이스 이미지 태그와 pip constraints가 이 값 하나에서 나온다.
+      AIRFLOW_VERSION: ${AIRFLOW_VERSION:-3.3.0}
+      PYTHON_VERSION: ${PYTHON_VERSION:-3.13}
   env_file:
     - ${ENV_FILE_PATH:-.env}
   environment:
@@ -77,10 +80,14 @@ x-airflow-common:
     # The following line can be used to set a custom config file, stored in the local config folder
     AIRFLOW_CONFIG: '/opt/airflow/config/airflow.cfg'
   volumes:
-    - ${AIRFLOW_DAG_DIR:-.}/dags:/opt/airflow/dags
+    - ${AIRFLOW_PROJ_DIR:-.}/dags:/opt/airflow/dags
     - ${AIRFLOW_PROJ_DIR:-.}/logs:/opt/airflow/logs
     - ${AIRFLOW_PROJ_DIR:-.}/config:/opt/airflow/config
     - ${AIRFLOW_PROJ_DIR:-.}/plugins:/opt/airflow/plugins
+    - ${AIRFLOW_PROJ_DIR:-.}/modules:/opt/airflow/modules
+    - ${AIRFLOW_PROJ_DIR:-.}/utility:/opt/airflow/utility
+    - ${AIRFLOW_PROJ_DIR:-.}/sql:/opt/airflow/sql
+    - ${AIRFLOW_PROJ_DIR:-.}/airflow.cfg:/opt/airflow/airflow.cfg
   user: "${AIRFLOW_UID:-50000}:0"
   depends_on:
     &airflow-common-depends-on

@@ -86,8 +86,7 @@ backfill의 dag_run을 running으로 올리지 않는다. 태스크를 clear해�
 
 import logging
 import os
-from collections.abc import Mapping
-from datetime import date, timedelta
+from datetime import timedelta
 from typing import Any
 
 import pendulum
@@ -104,6 +103,14 @@ from modules.collectors.fred import (
     fetch_series,
     store_observations,
 )
+from modules.period import (
+    LOOKBACK_DAYS,
+    LOOKBACK_DAYS_PARAM,
+    OBSERVATION_END_PARAM,
+    OBSERVATION_START_PARAM,
+    PeriodError,
+    resolve_observation_period,
+)
 from modules.utility import KST_TIMEZONE
 
 logger = logging.getLogger(__name__)
@@ -112,58 +119,8 @@ logger = logging.getLogger(__name__)
 # `AIRFLOW_CONN_NEWS`가 갖는다.
 CONNECTION_ID = "news"
 
-# 휴장일과 발표 지연을 별도 캘린더 없이 흡수한다. 재조회는 멱등 키로 흡수된다.
-LOOKBACK_DAYS = 7
-
 # 설정 오류라 재시도해도 같은 결과인 HTTP 상태.
 UNRECOVERABLE_STATUSES = frozenset({400, 401, 403, 404})
-
-# 조회 구간을 직접 지정하는 run 파라미터. 비어 있으면 run 시각에서 계산한다.
-OBSERVATION_START_PARAM = "observation_start"
-OBSERVATION_END_PARAM = "observation_end"
-LOOKBACK_DAYS_PARAM = "lookback_days"
-
-
-def _parse_param_date(name: str, value: object) -> date:
-    try:
-        return date.fromisoformat(str(value))
-    except ValueError as error:
-        raise AirflowFailException(f"{name} must be an ISO date (YYYY-MM-DD)") from error
-
-
-def resolve_observation_period(context: Mapping[str, Any]) -> tuple[date, date]:
-    """이 run이 조회할 관측 구간.
-
-    파라미터가 있으면 그 값을 그대로 쓰고, 없으면 run 시각에서 계산한다. 계산 기준은
-    `data_interval_end`이고 수동 run에는 그 값이 없으므로 `dag_run.run_after`로 물러선다.
-    두 값 모두 aware라 KST로 바꿔 날짜를 뽑는다.
-    """
-    params = context.get("params") or {}
-
-    end_override = params.get(OBSERVATION_END_PARAM)
-    if end_override:
-        observation_end = _parse_param_date(OBSERVATION_END_PARAM, end_override)
-    else:
-        reference = context.get("data_interval_end") or getattr(context.get("dag_run"), "run_after", None)
-        if reference is None:
-            raise AirflowFailException(
-                f"No run time to derive the observation period from; pass {OBSERVATION_END_PARAM}"
-            )
-        observation_end = reference.astimezone(KST_TIMEZONE).date()
-
-    start_override = params.get(OBSERVATION_START_PARAM)
-    if start_override:
-        observation_start = _parse_param_date(OBSERVATION_START_PARAM, start_override)
-    else:
-        lookback_days = int(params.get(LOOKBACK_DAYS_PARAM) or LOOKBACK_DAYS)
-        observation_start = observation_end - timedelta(days=lookback_days - 1)
-
-    if observation_start > observation_end:
-        # 파라미터를 잘못 준 것이므로 재시도해도 같다.
-        raise AirflowFailException(
-            f"{OBSERVATION_START_PARAM} ({observation_start}) is after {OBSERVATION_END_PARAM} ({observation_end})"
-        )
-    return observation_start, observation_end
 
 
 @dag(
@@ -203,7 +160,10 @@ def fred_treasury_daily():
     @task
     def collect(series_id: str) -> int:
         context = get_current_context()
-        observation_start, observation_end = resolve_observation_period(context)
+        try:
+            observation_start, observation_end = resolve_observation_period(context)
+        except PeriodError as error:
+            raise AirflowFailException(str(error)) from error
         request = FredRequest(
             series_id=series_id,
             observation_start=observation_start,

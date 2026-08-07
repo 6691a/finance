@@ -61,13 +61,13 @@
       {
         "name": "maturity",
         "label": "비교 만기",
-        "description": "국가 간 비교에 쓸 만기. 값은 개월 수다. 표시 이름은 12개월 미만이면 개월, 그 이상이면 연 단위로 만든다.",
+        "description": "국가 간 비교에 쓸 만기. 값은 개월 수다. 표시 이름은 12개월 미만이면 개월, 그 이상이면 연 단위로 만든다. 두 나라 이상이 가진 만기만 나온다. 일본 5·20·40년처럼 한 나라만 고시하는 만기는 골라도 비교할 대상이 없어서 뺀다. 한 나라의 만기 전부는 `최신 수익률 곡선`과 `선택 국가의 만기별 추이` 패널이 그린다.",
         "type": "query",
         "datasource": {
           "type": "postgres",
           "uid": "${ds}"
         },
-        "query": "SELECT DISTINCT CASE WHEN maturity_months < 12 THEN maturity_months || '개월' ELSE (maturity_months / 12) || '년' END AS \"__text\", maturity_months AS \"__value\" FROM indicator_series WHERE kind = 'government_bond' ORDER BY 2",
+        "query": "SELECT CASE WHEN maturity_months < 12 THEN maturity_months || '개월' ELSE (maturity_months / 12) || '년' END AS \"__text\", maturity_months AS \"__value\" FROM indicator_series WHERE kind = 'government_bond' GROUP BY maturity_months HAVING count(DISTINCT country) > 1 ORDER BY 2",
         "includeAll": false,
         "multi": false,
         "refresh": 1,

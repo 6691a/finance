@@ -1,0 +1,467 @@
+{
+  "uid": "market-japan-jgb",
+  "title": "일본 국채 금리",
+  "description": "indicator_observation 테이블의 재무성 국채 금리(JGB 2·5·10·20·30·40년)를 만기별로 조회한다. 모든 패널이 provider = 'mof' 를 함께 건다. 만기 목록은 indicator_series 마스터에서 읽으므로 시계열을 늘려도 이 대시보드를 고칠 일이 없다. 데이터소스는 상단 `데이터소스` 변수로 바꾼다.",
+  "tags": [
+    "market",
+    "rate",
+    "mof"
+  ],
+  "editable": true,
+  "schemaVersion": 39,
+  "version": 1,
+  "refresh": "5m",
+  "time": {
+    "from": "now-3M",
+    "to": "now"
+  },
+  "timezone": "browser",
+  "templating": {
+    "list": [
+      {
+        "name": "ds",
+        "label": "데이터소스",
+        "description": "indicator_observation 을 읽을 postgres 데이터소스. 모든 패널이 이 값을 쓰므로 여기 하나만 바꾸면 대시보드 전체가 다른 DB를 본다. 프로비저닝된 데이터소스는 compose/local/grafana/provisioning/datasources 에 있다.",
+        "type": "datasource",
+        "query": "postgres",
+        "current": {
+          "selected": true,
+          "text": "news2",
+          "value": "news2-postgres"
+        },
+        "hide": 0,
+        "options": [],
+        "refresh": 1
+      },
+      {
+        "name": "series",
+        "label": "만기",
+        "description": "재무성 시계열. 표시는 마스터의 label 이고 값은 저장된 series_id 다. 목록을 손으로 적지 않는다. 수집 대상과 ID는 modules.collectors.mof 의 JgbSeries 가 정한다.",
+        "type": "query",
+        "datasource": {
+          "type": "postgres",
+          "uid": "${ds}"
+        },
+        "query": "SELECT label AS \"__text\", series_id AS \"__value\" FROM indicator_series WHERE provider = 'mof' ORDER BY maturity_months",
+        "includeAll": true,
+        "multi": true,
+        "refresh": 1,
+        "current": {
+          "selected": true,
+          "text": [
+            "All"
+          ],
+          "value": [
+            "$__all"
+          ]
+        },
+        "options": []
+      }
+    ]
+  },
+  "panels": [
+    {
+      "id": 1,
+      "type": "stat",
+      "title": "${series:text} 최신 금리",
+      "description": "선택 구간의 마지막 관측값. 휴일은 재무성 파일에 행이 없으므로 직전 영업일 값이 그대로 남는다.",
+      "datasource": {
+        "type": "postgres",
+        "uid": "${ds}"
+      },
+      "repeat": "series",
+      "repeatDirection": "h",
+      "maxPerRow": 6,
+      "gridPos": {
+        "h": 5,
+        "w": 4,
+        "x": 0,
+        "y": 0
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percent",
+          "decimals": 3,
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "text",
+                "value": null
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "orientation": "auto",
+        "textMode": "auto",
+        "colorMode": "none",
+        "graphMode": "area",
+        "justifyMode": "auto"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "format": "time_series",
+          "rawQuery": true,
+          "editorMode": "code",
+          "datasource": {
+            "type": "postgres",
+            "uid": "${ds}"
+          },
+          "rawSql": "SELECT\n  observed_at AS time,\n  value\nFROM (\n  SELECT\n    observation_date::timestamp AT TIME ZONE 'UTC' AS observed_at,\n    value\n  FROM indicator_observation\n  WHERE provider = 'mof'\n    AND series_id = ${series:sqlstring}\n) AS observations\nWHERE $__timeFilter(observed_at)\nORDER BY 1"
+        }
+      ]
+    },
+    {
+      "id": 2,
+      "type": "timeseries",
+      "title": "만기별 금리 추이",
+      "description": "관측일은 일본 영업일이다. 주말과 일본 공휴일에는 행이 없다. 만기마다 발행 시작 시점이 달라 과거 구간에는 없는 시계열이 있다. 재무성 파일이 그 칸을 `-` 로 보내고 수집기가 건너뛴다.",
+      "datasource": {
+        "type": "postgres",
+        "uid": "${ds}"
+      },
+      "gridPos": {
+        "h": 10,
+        "w": 24,
+        "x": 0,
+        "y": 5
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percent",
+          "decimals": 3,
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "drawStyle": "line",
+            "lineInterpolation": "linear",
+            "lineWidth": 2,
+            "fillOpacity": 0,
+            "showPoints": "auto",
+            "pointSize": 4,
+            "spanNulls": true,
+            "axisSoftMin": null,
+            "scaleDistribution": {
+              "type": "linear"
+            }
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "right",
+          "showLegend": true,
+          "calcs": [
+            "lastNotNull",
+            "min",
+            "max"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "format": "time_series",
+          "rawQuery": true,
+          "editorMode": "code",
+          "datasource": {
+            "type": "postgres",
+            "uid": "${ds}"
+          },
+          "rawSql": "SELECT\n  observed_at AS time,\n  value,\n  label AS metric\nFROM (\n  SELECT\n    o.observation_date::timestamp AT TIME ZONE 'UTC' AS observed_at,\n    o.value,\n    s.label\n  FROM indicator_observation o\n  JOIN indicator_series s\n    ON s.provider = o.provider\n   AND s.series_id = o.series_id\n  WHERE o.provider = 'mof'\n    AND o.series_id IN (${series:sqlstring})\n) AS observations\nWHERE $__timeFilter(observed_at)\nORDER BY 1"
+        }
+      ]
+    },
+    {
+      "id": 3,
+      "type": "barchart",
+      "title": "최신 수익률 곡선",
+      "description": "가장 최근 고시값을 만기 순으로 세운다. 만기 변수와 무관하게 마스터에 있는 일본 시계열 전부를 그린다. 초장기 구간(20·30·40년)이 곡선의 끝을 이룬다.",
+      "datasource": {
+        "type": "postgres",
+        "uid": "${ds}"
+      },
+      "gridPos": {
+        "h": 9,
+        "w": 12,
+        "x": 0,
+        "y": 15
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percent",
+          "decimals": 3,
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "lineWidth": 1,
+            "fillOpacity": 80,
+            "gradientMode": "none",
+            "axisPlacement": "auto"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "orientation": "auto",
+        "showValue": "auto",
+        "stacking": "none",
+        "groupWidth": 0.7,
+        "barWidth": 0.9,
+        "xTickLabelRotation": 0,
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": false
+        },
+        "tooltip": {
+          "mode": "single",
+          "sort": "none"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "format": "table",
+          "rawQuery": true,
+          "editorMode": "code",
+          "datasource": {
+            "type": "postgres",
+            "uid": "${ds}"
+          },
+          "rawSql": "SELECT\n  (s.maturity_months / 12) || '년' AS \"만기\",\n  latest.value AS \"금리\"\nFROM indicator_series s\nJOIN LATERAL (\n  SELECT o.value\n  FROM indicator_observation o\n  WHERE o.provider = s.provider\n    AND o.series_id = s.series_id\n  ORDER BY o.observation_date DESC\n  LIMIT 1\n) AS latest ON true\nWHERE s.provider = 'mof'\nORDER BY s.maturity_months"
+        }
+      ]
+    },
+    {
+      "id": 4,
+      "type": "timeseries",
+      "title": "장단기 금리차 (10년 - 2년)",
+      "description": "0 아래로 내려가면 금리 역전이다. 두 시계열이 같은 날 모두 고시된 날만 그린다. `만기` 변수와 무관하게 항상 10년과 2년을 쓴다.",
+      "datasource": {
+        "type": "postgres",
+        "uid": "${ds}"
+      },
+      "gridPos": {
+        "h": 9,
+        "w": 12,
+        "x": 12,
+        "y": 15
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percent",
+          "decimals": 3,
+          "color": {
+            "mode": "thresholds"
+          },
+          "custom": {
+            "drawStyle": "line",
+            "lineInterpolation": "linear",
+            "lineWidth": 2,
+            "fillOpacity": 15,
+            "showPoints": "never",
+            "spanNulls": true,
+            "gradientMode": "none",
+            "thresholdsStyle": {
+              "mode": "line"
+            },
+            "scaleDistribution": {
+              "type": "linear"
+            }
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "red",
+                "value": null
+              },
+              {
+                "color": "green",
+                "value": 0
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": false
+        },
+        "tooltip": {
+          "mode": "single",
+          "sort": "none"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "format": "time_series",
+          "rawQuery": true,
+          "editorMode": "code",
+          "datasource": {
+            "type": "postgres",
+            "uid": "${ds}"
+          },
+          "rawSql": "SELECT\n  observed_at AS time,\n  ten_year - two_year AS \"10Y-2Y\"\nFROM (\n  SELECT\n    observation_date::timestamp AT TIME ZONE 'UTC' AS observed_at,\n    max(value) FILTER (WHERE series_id = 'JGB10Y') AS ten_year,\n    max(value) FILTER (WHERE series_id = 'JGB2Y') AS two_year\n  FROM indicator_observation\n  WHERE provider = 'mof'\n    AND series_id IN ('JGB10Y', 'JGB2Y')\n  GROUP BY 1\n) AS spread\nWHERE $__timeFilter(observed_at)\n  AND ten_year IS NOT NULL\n  AND two_year IS NOT NULL\nORDER BY 1"
+        }
+      ]
+    },
+    {
+      "id": 5,
+      "type": "table",
+      "title": "만기별 최신 관측값과 수집 계보",
+      "description": "시계열마다 가장 최근 행 하나. `source_record`를 조인해 그 값이 어느 파일에서 왔는지 보여 준다. 수집 시각은 UTC이고 관측일은 일본 영업일이다. 재무성은 시계열이 아니라 파일 단위로 고시하므로 원천 식별자가 `jgbcm` 또는 `jgbcm_all` 이다.",
+      "datasource": {
+        "type": "postgres",
+        "uid": "${ds}"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 24,
+        "x": 0,
+        "y": 24
+      },
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "align": "auto",
+            "cellOptions": {
+              "type": "auto"
+            }
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "금리"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "percent"
+              },
+              {
+                "id": "decimals",
+                "value": 3
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "showHeader": true,
+        "cellHeight": "sm",
+        "footer": {
+          "show": false,
+          "reducer": [
+            "sum"
+          ],
+          "countRows": false,
+          "fields": ""
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "format": "table",
+          "rawQuery": true,
+          "editorMode": "code",
+          "datasource": {
+            "type": "postgres",
+            "uid": "${ds}"
+          },
+          "rawSql": "SELECT DISTINCT ON (o.series_id)\n  s.label AS \"만기\",\n  o.observation_date AS \"관측일\",\n  o.value AS \"금리\",\n  o.unit AS \"단위\",\n  o.series_id AS \"시계열 ID\",\n  r.source AS \"제공처\",\n  r.source_key AS \"원천 파일\",\n  r.completed_at AS \"수집 시각(UTC)\",\n  r.record_count AS \"수집 행 수\"\nFROM indicator_observation o\nJOIN indicator_series s\n  ON s.provider = o.provider\n AND s.series_id = o.series_id\nJOIN source_record r ON r.id = o.source_record_id\nWHERE o.provider = 'mof'\n  AND o.series_id IN (${series:sqlstring})\nORDER BY o.series_id, o.observation_date DESC"
+        }
+      ]
+    },
+    {
+      "id": 6,
+      "type": "timeseries",
+      "title": "수집 실행별 정규화 행 수",
+      "description": "`source_record`에 남은 수집 계보. 재무성은 파일 하나가 곡선 전체라 실행마다 시계열이 아니라 파일이 한 행씩 남는다. 정상 실행이면 최근 7일 × 만기 수만큼, 즉 20~30행이 나온다. 매달 초 며칠은 지난달 파일(`jgbcm_all`)까지 받아 한 run이 점을 두 개 남긴다.",
+      "datasource": {
+        "type": "postgres",
+        "uid": "${ds}"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 24,
+        "x": 0,
+        "y": 32
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "decimals": 0,
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "drawStyle": "points",
+            "pointSize": 6,
+            "lineWidth": 0,
+            "fillOpacity": 0,
+            "showPoints": "always",
+            "spanNulls": false,
+            "scaleDistribution": {
+              "type": "linear"
+            }
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "format": "time_series",
+          "rawQuery": true,
+          "editorMode": "code",
+          "datasource": {
+            "type": "postgres",
+            "uid": "${ds}"
+          },
+          "rawSql": "SELECT\n  completed_at AS time,\n  record_count AS value,\n  source_key AS metric\nFROM source_record\nWHERE source = 'mof'\n  AND $__timeFilter(completed_at)\nORDER BY 1"
+        }
+      ]
+    }
+  ]
+}

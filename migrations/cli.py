@@ -5,7 +5,7 @@ from pathlib import Path
 from alembic import command as alembic_command
 from alembic.config import Config
 
-from core.config import Settings, settings
+from apps.core.config import Settings, settings
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 

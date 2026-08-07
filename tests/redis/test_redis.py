@@ -2,8 +2,8 @@ import pytest
 from dependency_injector import providers
 from pydantic import ValidationError
 
-from core.container import Container
-from core.redis import Redis
+from apps.core.container import Container
+from apps.core.redis import Redis
 from tests.helpers import SettingsForTest as Settings
 
 DEFAULT_URL = "redis://localhost:16379/0"

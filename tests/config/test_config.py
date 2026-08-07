@@ -1,6 +1,6 @@
 from textwrap import dedent
 
-from core.config import Settings
+from apps.core.config import Settings
 
 
 def test_settings_loads_every_field_from_yaml_only(monkeypatch, tmp_path):

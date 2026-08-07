@@ -11,7 +11,7 @@ from sqlalchemy import (
 )
 from sqlalchemy.orm import Mapped, mapped_column
 
-from core.database import EntityBase, table_options
+from apps.core.database import EntityBase, table_options
 
 
 class IndicatorObservation(EntityBase):

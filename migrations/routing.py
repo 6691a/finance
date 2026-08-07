@@ -8,7 +8,7 @@ from collections.abc import Container, Iterable
 
 from sqlalchemy import Table
 
-from core.database import DEFAULT_DATABASE_ALIAS, table_database, table_managed
+from apps.core.database import DEFAULT_DATABASE_ALIAS, table_database, table_managed
 
 TableKey = tuple[str | None, str | None]
 

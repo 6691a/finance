@@ -7,10 +7,10 @@ Codex용 규칙 원본은 [.codex/AGENTS.md](../.codex/AGENTS.md)이며 두 문�
 
 | 경로 | 역할 |
 | --- | --- |
-| `core/config.py` | `config.yaml`을 읽는 Pydantic 설정. `settings` 싱글턴 제공 |
-| `core/database.py` | `Base`, `EntityBase`, 다중 DB 별칭을 관리하는 `Database` |
-| `core/redis.py` | Redis 연결 관리 |
-| `core/container.py` | dependency-injector 컨테이너 |
+| `../apps/core/config.py` | `config.yaml`을 읽는 Pydantic 설정. `settings` 싱글턴 제공 |
+| `../apps/core/database.py` | `Base`, `EntityBase`, 다중 DB 별칭을 관리하는 `Database` |
+| `../apps/core/redis.py` | Redis 연결 관리 |
+| `../apps/core/container.py` | dependency-injector 컨테이너 |
 | `apps/models/` | SQLAlchemy 모델. 파일 이름 = PostgreSQL 스키마 이름 |
 | `migrations/` | Alembic. 리비전 파일은 `migrations/versions` 하나를 모든 별칭이 공유한다 |
 | `migrations/routing.py` | 어떤 테이블이 어떤 DB 별칭에 속하는지 판단하는 순수 함수 |
@@ -128,7 +128,7 @@ Django의 `DATABASE_ROUTERS`와 목적은 같지만 위치가 다르다. Django�
 | `airflow/plugins/` | `/opt/airflow/plugins` |
 | `airflow/config/` | `/opt/airflow/config` |
 
-Airflow는 `apps/`, `core/`, `migrations/`를 보지 못한다. DAG가 실행 시점에 import하는 코드는
+Airflow는 `apps/`, `../apps/core/`, `migrations/`를 보지 못한다. DAG가 실행 시점에 import하는 코드는
 전부 `airflow/` 아래 있어야 한다.
 
 import 뿌리는 `airflow/`다. DAG는 배포와 같은 이름으로 `from modules.collectors import ...`처럼
@@ -262,12 +262,19 @@ API, 크롤링, 웹소켓 수집 결과의 출처와 상태를 가볍게 보존�
 통화별·회차별 환율 고시다. `default` alias(news2)에 있고 `exchange_rate_daily` DAG가 채운다.
 2026-08-06에 `finance` alias에서 `default`로 옮겼다. 이전 데이터는 가져오지 않았다.
 
-- **DDL은 외부 finance DB의 같은 이름 테이블을 글자 그대로 복사한 것이다.** serial `id`,
-  naive `timestamp`, 주석 없음을 그대로 둔다. 나중에 finance의 과거 행을 옮기거나 Grafana를
-  news2로 돌릴 때 컬럼이 1:1로 맞아야 하기 때문이다. 프로젝트 기본 규칙(BIGSERIAL,
-  timezone-aware, 주석)을 적용하지 않는 유일한 테이블이다.
-- 그래서 주석을 달거나 타입을 바꾸려면 그 이관 계획을 먼저 접는다. 지금 상태는
+- **컬럼 형태는 외부 finance DB의 같은 이름 테이블을 글자 그대로 복사한 것이다.** serial `id`,
+  naive `timestamp`, `date`/`time` 분리를 그대로 둔다. 나중에 finance의 과거 행을 옮기거나
+  Grafana를 news2로 돌릴 때 컬럼이 1:1로 맞아야 하기 때문이다. 프로젝트 기본 규칙 중
+  BIGSERIAL과 timezone-aware 시각을 적용하지 않는 유일한 테이블이다.
+- 그래서 타입이나 컬럼 구성을 바꾸려면 그 이관 계획을 먼저 접는다. 지금 상태는
   `tests/models/test_finance_models.py`가 컬럼 단위로 고정한다.
+- **주석은 예외로 단다.** 주석은 데이터를 옮기는 데 영향을 주지 않으므로 테이블·컬럼 주석은
+  프로젝트 기본 규칙대로 채운다.
+- `currency`는 `apps/models/finance.py`의 `Currency` StrEnum이다. 저장 타입은 `VARCHAR(10)`
+  그대로고 CHECK 제약도 없다. 이 프로젝트의 다른 Enum 컬럼과 다른 점인데, CHECK를 걸면 원본에
+  없는 제약이 생기고 통화를 추가할 때마다 제약을 다시 만들어야 하기 때문이다. 허용 값은
+  수집기와 Enum이 막는다. `Currency`의 값은 `modules.collectors.hana.HanaCurrency`와 같아야
+  하고 `tests/models/test_finance_models.py`가 둘을 대조한다.
 - 모델은 `apps/models/finance.py`에 있다. 파일 이름은 스키마도 alias도 아니고 형태를 가져온
   원본 DB 이름이다.
 - 멱등 키는 `(currency, date, time, round)`, 제약 이름은 `unique_currency_date_time_round`다.
@@ -291,3 +298,6 @@ API, 크롤링, 웹소켓 수집 결과의 출처와 상태를 가볍게 보존�
 - 마이그레이션 테스트는 `alembic_command.upgrade(config, "head", sql=True)`로 SQL만 뽑아
   테이블 단위 사실만 검증한다. 특정 리비전 ID에 고정하거나 전체 문자열을 세지 않는다.
   리비전을 다시 만들 때마다 깨진다.
+# graphify
+- **graphify** (`.claude/skills/graphify/SKILL.md`) - any input to knowledge graph. Trigger: `/graphify`
+When the user types `/graphify`, use the installed graphify skill or instructions before doing anything else.

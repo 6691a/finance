@@ -31,7 +31,7 @@
 ## Airflow와 공유하는 코드
 
 - 저장소의 `airflow/`가 컨테이너의 `/opt/airflow`다. 운영 Airflow가 마운트하는 경로와 1:1로 맞춘다: `dags`, `modules`, `utility`, `sql`, `plugins`, `config`.
-- Airflow는 `apps/`, `core/`, `migrations/`를 보지 못한다. DAG가 실행 시점에 import하는 코드는 전부 `airflow/` 아래 둔다.
+- Airflow는 `apps/`, `../apps/core/`, `migrations/`를 보지 못한다. DAG가 실행 시점에 import하는 코드는 전부 `airflow/` 아래 둔다.
 - import 뿌리는 `airflow/`다. DAG는 배포와 같은 이름으로 `from modules.collectors import ...`처럼 쓴다. pytest `pythonpath`, pyrefly `search-path`, ruff isort `known-first-party`가 `pyproject.toml`에서 같은 뿌리를 가리킨다.
 - 쿼리는 Python 문자열이 아니라 `airflow/sql/<엔진>/<테이블>/<동작>.sql`에 둔다. `modules/sql.py`의 `read_sql`이 `AIRFLOW_HOME` 유무와 관계없이 같은 파일을 읽는다.
 - 로컬 Compose와 Dockerfile은 운영 Airflow에 맞춰 둔 상태다. 건드리지 않는다. 배치 문제는 코드 위치로만 해결하고, 실행 코드를 이미지에 굽거나 `apps/`를 볼륨으로 붙이지 않는다.
@@ -85,8 +85,10 @@
 ### `exchange_rate`
 
 - 통화별·회차별 환율 고시다. `default` 별칭(news2)에 있고 `exchange_rate_daily` DAG가 채운다. 2026-08-06에 `finance` 별칭에서 옮겼고 이전 데이터는 가져오지 않았다.
-- DDL은 외부 finance DB의 같은 이름 테이블을 글자 그대로 복사한 것이다. serial `id`, naive `timestamp`, 주석 없음을 그대로 둔다. 나중에 finance의 과거 행을 옮기거나 Grafana를 news2로 돌릴 때 컬럼이 1:1로 맞아야 하기 때문이다.
-- 프로젝트 기본 규칙(BIGSERIAL, timezone-aware, 주석)을 적용하지 않는 유일한 테이블이다. 주석을 달거나 타입을 바꾸려면 그 이관 계획을 먼저 접는다. 지금 상태는 `tests/models/test_finance_models.py`가 컬럼 단위로 고정한다.
+- 컬럼 형태는 외부 finance DB의 같은 이름 테이블을 글자 그대로 복사한 것이다. serial `id`, naive `timestamp`, `date`/`time` 분리를 그대로 둔다. 나중에 finance의 과거 행을 옮기거나 Grafana를 news2로 돌릴 때 컬럼이 1:1로 맞아야 하기 때문이다.
+- 프로젝트 기본 규칙 중 BIGSERIAL과 timezone-aware 시각을 적용하지 않는 유일한 테이블이다. 타입이나 컬럼 구성을 바꾸려면 그 이관 계획을 먼저 접는다. 지금 상태는 `tests/models/test_finance_models.py`가 컬럼 단위로 고정한다.
+- 주석은 예외로 단다. 주석은 데이터 이관에 영향을 주지 않으므로 테이블·컬럼 주석을 기본 규칙대로 채운다.
+- `currency`는 `apps/models/finance.py`의 `Currency` StrEnum이고 저장 타입은 `VARCHAR(10)` 그대로다. CHECK 제약은 걸지 않는다. 원본에 없는 제약이 생기고 통화를 추가할 때마다 다시 만들어야 하기 때문이다. 값은 `modules.collectors.hana.HanaCurrency`와 같아야 하며 테스트가 둘을 대조한다.
 - 모델은 `apps/models/finance.py`에 있다. 파일 이름은 스키마도 별칭도 아니고 형태를 가져온 원본 DB 이름이다.
 - 멱등 키는 `(currency, date, time, round)`, 제약 이름은 `unique_currency_date_time_round`다. 수집기 upsert가 이 이름을 그대로 쓴다.
 - `finance` 별칭은 매핑된 모델이 없어 `migration.enabled: false`다. 런타임 읽기 전용 연결만 남아 있다. 여기에 테이블을 편입하려면 `enabled: true`와 `model_modules`를 함께 켠다.

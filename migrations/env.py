@@ -9,8 +9,8 @@ from sqlalchemy import pool
 from sqlalchemy.engine import Connection
 from sqlalchemy.ext.asyncio import create_async_engine
 
-from core.config import settings
-from core.database import Base, DatabaseConfig
+from apps.core.config import settings
+from apps.core.database import Base, DatabaseConfig
 from migrations.routing import (
     excluded_tables,
     include_table,

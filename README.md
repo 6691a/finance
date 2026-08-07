@@ -61,7 +61,7 @@ redises:
 테이블이 어느 alias에 속하는지는 모델에서 선언합니다. `core.database.table_options`를 `__table_args__`의 **마지막** 요소로 씁니다.
 
 ```python
-from core.database import EntityBase, table_options
+from apps.core.database import EntityBase, table_options
 
 
 class Instrument(EntityBase):
@@ -129,7 +129,7 @@ market_read:
 다른 시스템이 이미 만들어 운영 데이터가 들어 있는 테이블을, DDL은 건드리지 않으면서 migration 이력에만 올리는 방법입니다. Django의 `migrate --fake-initial`과 같습니다. `finance` alias의 `exchange_rate`가 이 방식입니다.
 
 1. 모델을 실제 DDL 그대로 미러링합니다. 컬럼 타입, nullable, 기본값, 제약·인덱스 **이름**까지 같아야 합니다. 한 글자라도 다르면 다음 autogenerate가 그 차이를 `ALTER`로 뱉습니다.
-2. 프로젝트 기본 규칙을 여기서는 적용하지 않습니다. BIGSERIAL 기본키, timezone-aware UTC 시각, 테이블·컬럼 주석 모두 실제 DB를 따릅니다. 주석이 없는 테이블이면 `table_options(comment=None)`으로 둡니다. 모델에만 주석을 달면 `COMMENT ON` 차이가 영구히 남습니다.
+2. 프로젝트 기본 규칙을 여기서는 적용하지 않습니다. BIGSERIAL 기본키, timezone-aware UTC 시각, 테이블·컬럼 주석 모두 실제 DB를 따릅니다. 주석이 없는 테이블이면 `table_options(comment=None)`으로 둡니다. 모델에만 주석을 달면 `COMMENT ON` 차이가 영구히 남습니다. 편입한 테이블을 이 프로젝트가 이어받아 직접 채우기로 했다면 주석은 나중에 붙일 수 있습니다. 주석은 데이터를 옮기는 데 영향을 주지 않으므로 `COMMENT ON` 리비전 하나로 정리하면 그 뒤 autogenerate는 다시 조용해집니다. `exchange_rate`가 그 경우입니다.
 3. `managed=True`로 둡니다. `managed=False`는 autogenerate에서 완전히 빼는 설정이라 이후 스키마 변경을 추적하지 못합니다.
 4. revision은 손으로 씁니다. 해당 alias 함수 맨 앞에서 테이블 존재 여부를 확인하고, 있으면 그대로 반환합니다.
 
@@ -218,7 +218,7 @@ autogenerate 결과는 **반드시 열어서 확인합니다.**
 | `airflow/plugins/` | `/opt/airflow/plugins` | Airflow 플러그인 |
 | `airflow/config/` | `/opt/airflow/config` | Airflow 설정 |
 
-Airflow는 `apps/`, `core/`, `migrations/`를 **보지 못합니다.** DAG가 실행 시점에 import하는 코드는 전부 `airflow/` 아래 있어야 합니다.
+Airflow는 `apps/`, `apps/core/`, `migrations/`를 **보지 못합니다.** DAG가 실행 시점에 import하는 코드는 전부 `airflow/` 아래 있어야 합니다.
 
 import 뿌리는 `airflow/`입니다. DAG는 배포와 같은 이름으로 `from modules.collectors import ...`, `from utility.alert import ...`처럼 씁니다. 로컬 도구도 같은 뿌리를 쓰도록 [pyproject.toml](pyproject.toml)에 맞춰 뒀습니다.
 
@@ -374,3 +374,8 @@ docker compose -f compose/local/docker-compose.yaml up -d grafana
 - **`exchange_standard_rate`가 0인 통화가 있습니다.** 최근 구간의 CNY·RUB·TWD가 그렇습니다(2024년 데이터는 정상). 패널은 `CASE WHEN exchange_standard_rate > 0 THEN exchange_standard_rate ELSE (buy + sell) / 2 END`로 대체값을 씁니다.
 
 1분 간격 고시라 구간이 길면 행이 많아집니다. 시계열 패널은 `$__timeGroupAlias(..., $__interval)`로 다운샘플링합니다.
+
+ uv tool install "graphifyy[sql]"
+graphify install --project --platform codex
+graphify install --project --platform claude
+graphify extract . --code-only --force

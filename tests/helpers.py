@@ -3,7 +3,7 @@ from pathlib import Path
 from alembic import command as alembic_command
 from pydantic_settings import SettingsConfigDict
 
-from core.config import Settings
+from apps.core.config import Settings
 from migrations.cli import PROJECT_ROOT, VERSION_PATH, build_alembic_config
 
 

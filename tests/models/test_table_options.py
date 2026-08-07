@@ -1,7 +1,7 @@
 import pytest
 from sqlalchemy import Column, MetaData, Table, Text
 
-from core.database import (
+from apps.core.database import (
     DEFAULT_DATABASE_ALIAS,
     Base,
     table_database,

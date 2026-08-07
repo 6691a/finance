@@ -2,8 +2,8 @@ import pytest
 from dependency_injector import providers
 from pydantic import ValidationError
 
-from core.container import Container
-from core.database import Database, _connect_args_for
+from apps.core.container import Container
+from apps.core.database import Database, _connect_args_for
 from tests.helpers import SettingsForTest as Settings
 
 DEFAULT_URL = "postgresql+asyncpg://news2:news2@localhost:15432/news2"

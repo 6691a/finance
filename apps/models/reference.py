@@ -10,7 +10,7 @@ from sqlalchemy import (
 from sqlalchemy import Enum as SqlEnum
 from sqlalchemy.orm import Mapped, mapped_column
 
-from core.database import EntityBase, table_options
+from apps.core.database import EntityBase, table_options
 
 
 class Market(StrEnum):

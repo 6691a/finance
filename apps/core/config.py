@@ -5,8 +5,8 @@ from pydantic_settings import (
     YamlConfigSettingsSource,
 )
 
-from core.database import DatabaseConfig
-from core.redis import RedisConfig
+from apps.core.database import DatabaseConfig
+from apps.core.redis import RedisConfig
 
 
 class Settings(BaseSettings):

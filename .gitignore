@@ -20,3 +20,6 @@ airflow/config/*
 !airflow/config/.gitkeep
 airflow/plugins/*
 !airflow/plugins/.gitkeep
+
+
+graphify-out/

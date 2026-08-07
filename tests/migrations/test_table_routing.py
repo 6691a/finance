@@ -42,7 +42,7 @@ def test_excluded_tables_hides_unmanaged_tables_from_every_alias():
 
 def test_project_models_route_to_the_alias_they_declare():
     import apps.models  # noqa: F401
-    from core.database import Base
+    from apps.core.database import Base
 
     tables = Base.metadata.tables.values()
 

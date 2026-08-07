@@ -12,9 +12,10 @@ def test_exchange_rate_migration_creates_the_table(capsys):
 
 
 def test_exchange_rate_migration_mirrors_the_finance_ddl(capsys):
-    # The table is a byte-for-byte copy of the external finance table so its rows
-    # can be loaded later without translating columns. That is why it uses SERIAL
-    # and naive timestamps instead of the project defaults.
+    # The column shape copies the external finance table so its rows can be loaded
+    # later without translating columns. That is why it uses SERIAL and naive
+    # timestamps instead of the project defaults. `currency` is an Enum in Python
+    # only; a native enum or a CHECK constraint would add DDL the original lacks.
     sql = head_sql(capsys)
 
     assert "id SERIAL NOT NULL" in sql
@@ -35,12 +36,21 @@ def test_exchange_rate_migration_keeps_the_original_constraint_and_index_names(c
     assert "CREATE INDEX idx_exchange_rate_currency_date ON exchange_rate (currency, date)" in sql
 
 
-def test_exchange_rate_migration_documents_nothing(capsys):
-    # Comments would put the copy out of step with the finance table it mirrors.
+def test_exchange_rate_migration_documents_the_table(capsys):
+    # Comments carry no data, so they do not stand in the way of loading the
+    # finance rows later. The table follows the project rule and describes itself.
     sql = head_sql(capsys)
 
-    assert "COMMENT ON TABLE exchange_rate" not in sql
-    assert "COMMENT ON COLUMN exchange_rate" not in sql
+    assert "COMMENT ON TABLE exchange_rate" in sql
+    for column in ("currency", "round", "date", "time", "buy", "sell", "send", "receive"):
+        assert f"COMMENT ON COLUMN exchange_rate.{column}" in sql
+
+
+def test_exchange_rate_migration_adds_no_currency_check_constraint(capsys):
+    # A CHECK would have to be rewritten every time the collector adds a currency.
+    sql = head_sql(capsys)
+
+    assert "currency IN (" not in sql
 
 
 def test_upgrading_never_drops_exchange_rate(capsys):

@@ -1,11 +1,11 @@
 {
-  "uid": "market-us-treasury",
-  "title": "미국 국채 금리",
-  "description": "indicator_observation 테이블의 FRED 국채 수익률(DGS3MO, DGS2, DGS10, DGS30)을 만기별로 조회한다. 데이터소스는 상단 `DB` 변수로 바꾼다.",
+  "uid": "market-korea-rate",
+  "title": "국내 시장금리",
+  "description": "indicator_observation 테이블의 ECOS 국내 시장금리(국고채 2·3·10·30년, CD 91일)를 만기별로 조회한다. 모든 패널이 provider = 'ecos' 를 함께 건다. 데이터소스는 상단 `데이터소스` 변수로 바꾼다.",
   "tags": [
     "market",
-    "treasury",
-    "fred"
+    "rate",
+    "ecos"
   ],
   "editable": true,
   "schemaVersion": 39,
@@ -36,9 +36,9 @@
       {
         "name": "series",
         "label": "만기",
-        "description": "FRED 시계열. 표시는 한글 만기 이름이고 값은 시계열 ID다. 수집 대상은 modules.collectors.fred 의 TREASURY_SERIES 가 정한다.",
+        "description": "ECOS 시계열. 표시는 한글 만기 이름이고 값은 저장된 series_id 다. 수집 대상과 ID는 modules.collectors.ecos 의 MarketRateSeries 가 정하고, ECOS 항목코드(010210000 등)는 그 Enum과 source_record.metadata 에 있다.",
         "type": "custom",
-        "query": "3개월물 (DGS3MO) : DGS3MO, 2년물 (DGS2) : DGS2, 10년물 (DGS10) : DGS10, 30년물 (DGS30) : DGS30",
+        "query": "국고채 2년 : KTB2Y, 국고채 3년 : KTB3Y, 국고채 10년 : KTB10Y, 국고채 30년 : KTB30Y, CD 91일 : CD91D",
         "includeAll": true,
         "multi": true,
         "current": {
@@ -59,24 +59,24 @@
       "id": 1,
       "type": "stat",
       "title": "${series:text} 최신 금리",
-      "description": "선택 구간의 마지막 관측값. 발표가 없는 날(휴장·결측)은 행이 없으므로 직전 영업일 값이 그대로 남는다.",
+      "description": "선택 구간의 마지막 관측값. 휴장일은 ECOS 응답에 행이 없으므로 직전 영업일 값이 그대로 남는다.",
       "datasource": {
         "type": "postgres",
         "uid": "${ds}"
       },
       "repeat": "series",
       "repeatDirection": "h",
-      "maxPerRow": 4,
+      "maxPerRow": 5,
       "gridPos": {
         "h": 5,
-        "w": 6,
+        "w": 4,
         "x": 0,
         "y": 0
       },
       "fieldConfig": {
         "defaults": {
           "unit": "percent",
-          "decimals": 2,
+          "decimals": 3,
           "color": {
             "mode": "thresholds"
           },
@@ -116,7 +116,7 @@
             "type": "postgres",
             "uid": "${ds}"
           },
-          "rawSql": "SELECT\n  observed_at AS time,\n  value\nFROM (\n  SELECT\n    observation_date::timestamp AT TIME ZONE 'UTC' AS observed_at,\n    value\n  FROM indicator_observation\n  WHERE provider = 'fred'\n    AND series_id = ${series:sqlstring}\n) AS observations\nWHERE $__timeFilter(observed_at)\nORDER BY 1"
+          "rawSql": "SELECT\n  observed_at AS time,\n  value\nFROM (\n  SELECT\n    observation_date::timestamp AT TIME ZONE 'UTC' AS observed_at,\n    value\n  FROM indicator_observation\n  WHERE provider = 'ecos'\n    AND series_id = ${series:sqlstring}\n) AS observations\nWHERE $__timeFilter(observed_at)\nORDER BY 1"
         }
       ]
     },
@@ -124,7 +124,7 @@
       "id": 2,
       "type": "timeseries",
       "title": "만기별 금리 추이",
-      "description": "관측일은 미국 영업일이다. 주말과 미국 공휴일에는 행이 없다.",
+      "description": "관측일은 국내 영업일이다. 주말과 국내 공휴일에는 행이 없다. 국고채 2년은 2021-03-10, 30년은 2012-09-11부터 고시된다.",
       "datasource": {
         "type": "postgres",
         "uid": "${ds}"
@@ -138,7 +138,7 @@
       "fieldConfig": {
         "defaults": {
           "unit": "percent",
-          "decimals": 2,
+          "decimals": 3,
           "color": {
             "mode": "palette-classic"
           },
@@ -184,15 +184,15 @@
             "type": "postgres",
             "uid": "${ds}"
           },
-          "rawSql": "SELECT\n  observed_at AS time,\n  value,\n  maturity AS metric\nFROM (\n  SELECT\n    observation_date::timestamp AT TIME ZONE 'UTC' AS observed_at,\n    value,\n    CASE series_id\n    WHEN 'DGS3MO' THEN '3개월물 (DGS3MO)'\n    WHEN 'DGS2' THEN '2년물 (DGS2)'\n    WHEN 'DGS10' THEN '10년물 (DGS10)'\n    WHEN 'DGS30' THEN '30년물 (DGS30)'\n    ELSE series_id\n  END AS maturity\n  FROM indicator_observation\n  WHERE provider = 'fred'\n    AND series_id IN (${series:sqlstring})\n) AS observations\nWHERE $__timeFilter(observed_at)\nORDER BY 1"
+          "rawSql": "SELECT\n  observed_at AS time,\n  value,\n  maturity AS metric\nFROM (\n  SELECT\n    observation_date::timestamp AT TIME ZONE 'UTC' AS observed_at,\n    value,\n    CASE series_id\n      WHEN 'KTB2Y' THEN '국고채 2년'\n      WHEN 'KTB3Y' THEN '국고채 3년'\n      WHEN 'KTB10Y' THEN '국고채 10년'\n      WHEN 'KTB30Y' THEN '국고채 30년'\n      WHEN 'CD91D' THEN 'CD 91일'\n      ELSE series_id\n    END AS maturity\n  FROM indicator_observation\n  WHERE provider = 'ecos'\n    AND series_id IN (${series:sqlstring})\n) AS observations\nWHERE $__timeFilter(observed_at)\nORDER BY 1"
         }
       ]
     },
     {
       "id": 3,
       "type": "timeseries",
-      "title": "장단기 금리차 (10Y - 3M)",
-      "description": "0 아래로 내려가면 금리 역전이다. 두 시계열이 같은 날 모두 발표된 날만 그린다. `series` 변수와 무관하게 항상 DGS10과 DGS3MO를 쓴다.",
+      "title": "장단기 금리차 (국고채 10년 - 3년)",
+      "description": "국내에서 쓰는 장단기 스프레드다. 0 아래로 내려가면 금리 역전이다. 두 시계열이 같은 날 모두 고시된 날만 그린다. `만기` 변수와 무관하게 항상 국고채 10년과 3년을 쓴다.",
       "datasource": {
         "type": "postgres",
         "uid": "${ds}"
@@ -206,7 +206,7 @@
       "fieldConfig": {
         "defaults": {
           "unit": "percent",
-          "decimals": 2,
+          "decimals": 3,
           "color": {
             "mode": "thresholds"
           },
@@ -262,15 +262,15 @@
             "type": "postgres",
             "uid": "${ds}"
           },
-          "rawSql": "SELECT\n  observed_at AS time,\n  ten_year - three_month AS \"10Y-3M\"\nFROM (\n  SELECT\n    observation_date::timestamp AT TIME ZONE 'UTC' AS observed_at,\n    max(value) FILTER (WHERE series_id = 'DGS10') AS ten_year,\n    max(value) FILTER (WHERE series_id = 'DGS3MO') AS three_month\n  FROM indicator_observation\n  WHERE provider = 'fred'\n    AND series_id IN ('DGS10', 'DGS3MO')\n  GROUP BY 1\n) AS spread\nWHERE $__timeFilter(observed_at)\n  AND ten_year IS NOT NULL\n  AND three_month IS NOT NULL\nORDER BY 1"
+          "rawSql": "SELECT\n  observed_at AS time,\n  ten_year - three_year AS \"10Y-3Y\"\nFROM (\n  SELECT\n    observation_date::timestamp AT TIME ZONE 'UTC' AS observed_at,\n    max(value) FILTER (WHERE series_id = 'KTB10Y') AS ten_year,\n    max(value) FILTER (WHERE series_id = 'KTB3Y') AS three_year\n  FROM indicator_observation\n  WHERE provider = 'ecos'\n    AND series_id IN ('KTB10Y', 'KTB3Y')\n  GROUP BY 1\n) AS spread\nWHERE $__timeFilter(observed_at)\n  AND ten_year IS NOT NULL\n  AND three_year IS NOT NULL\nORDER BY 1"
         }
       ]
     },
     {
-      "id": 4,
+      "id": 5,
       "type": "table",
       "title": "만기별 최신 관측값과 수집 계보",
-      "description": "시계열마다 가장 최근 행 하나. `source_record`를 조인해 그 값이 어느 수집 실행에서 왔는지 보여 준다. 수집 시각은 UTC다.",
+      "description": "시계열마다 가장 최근 행 하나. `source_record`를 조인해 그 값이 어느 수집 실행에서 왔는지 보여 준다. 수집 시각은 UTC이고 관측일은 국내 영업일이다.",
       "datasource": {
         "type": "postgres",
         "uid": "${ds}"
@@ -303,7 +303,7 @@
               },
               {
                 "id": "decimals",
-                "value": 2
+                "value": 3
               }
             ]
           }
@@ -331,15 +331,15 @@
             "type": "postgres",
             "uid": "${ds}"
           },
-          "rawSql": "SELECT DISTINCT ON (o.series_id)\n  CASE o.series_id\n    WHEN 'DGS3MO' THEN '3개월물 (DGS3MO)'\n    WHEN 'DGS2' THEN '2년물 (DGS2)'\n    WHEN 'DGS10' THEN '10년물 (DGS10)'\n    WHEN 'DGS30' THEN '30년물 (DGS30)'\n    ELSE o.series_id\n  END AS \"만기\",\n  o.observation_date AS \"관측일\",\n  o.value AS \"금리\",\n  o.unit AS \"단위\",\n  r.source AS \"제공처\",\n  r.completed_at AS \"수집 시각(UTC)\",\n  r.record_count AS \"수집 행 수\"\nFROM indicator_observation o\nJOIN source_record r ON r.id = o.source_record_id\nWHERE o.provider = 'fred'\n  AND o.series_id IN (${series:sqlstring})\nORDER BY o.series_id, o.observation_date DESC"
+          "rawSql": "SELECT DISTINCT ON (o.series_id)\n  CASE o.series_id\n    WHEN 'KTB2Y' THEN '국고채 2년'\n    WHEN 'KTB3Y' THEN '국고채 3년'\n    WHEN 'KTB10Y' THEN '국고채 10년'\n    WHEN 'KTB30Y' THEN '국고채 30년'\n    WHEN 'CD91D' THEN 'CD 91일'\n    ELSE o.series_id\n  END AS \"만기\",\n  o.observation_date AS \"관측일\",\n  o.value AS \"금리\",\n  o.unit AS \"단위\",\n  o.series_id AS \"시계열 ID\",\n  r.source AS \"제공처\",\n  r.completed_at AS \"수집 시각(UTC)\",\n  r.record_count AS \"수집 행 수\"\nFROM indicator_observation o\nJOIN source_record r ON r.id = o.source_record_id\nWHERE o.provider = 'ecos'\n  AND o.series_id IN (${series:sqlstring})\nORDER BY o.series_id, o.observation_date DESC"
         }
       ]
     },
     {
-      "id": 5,
+      "id": 6,
       "type": "timeseries",
       "title": "수집 실행별 정규화 행 수",
-      "description": "`source_record`에 남은 수집 계보. 실행마다 최근 7일을 다시 조회하므로 정상 실행이면 5~7행이 나온다. 0이 이어지면 발표가 없었거나 수집이 비어 돌아온 것이다.",
+      "description": "`source_record`에 남은 수집 계보. 실행마다 최근 7일을 다시 조회하므로 정상 실행이면 4~5행이 나온다. 국내 공휴일이 낀 주에는 더 적다. 0이 이어지면 고시가 없었거나 수집이 비어 돌아온 것이다.",
       "datasource": {
         "type": "postgres",
         "uid": "${ds}"
@@ -392,7 +392,7 @@
             "type": "postgres",
             "uid": "${ds}"
           },
-          "rawSql": "SELECT\n  completed_at AS time,\n  record_count AS value,\n  CASE source_key\n    WHEN 'DGS3MO' THEN '3개월물 (DGS3MO)'\n    WHEN 'DGS2' THEN '2년물 (DGS2)'\n    WHEN 'DGS10' THEN '10년물 (DGS10)'\n    WHEN 'DGS30' THEN '30년물 (DGS30)'\n    ELSE source_key\n  END AS metric\nFROM source_record\nWHERE source = 'fred'\n  AND source_key IN (${series:sqlstring})\n  AND $__timeFilter(completed_at)\nORDER BY 1"
+          "rawSql": "SELECT\n  completed_at AS time,\n  record_count AS value,\n  CASE source_key\n    WHEN 'KTB2Y' THEN '국고채 2년'\n    WHEN 'KTB3Y' THEN '국고채 3년'\n    WHEN 'KTB10Y' THEN '국고채 10년'\n    WHEN 'KTB30Y' THEN '국고채 30년'\n    WHEN 'CD91D' THEN 'CD 91일'\n    ELSE source_key\n  END AS metric\nFROM source_record\nWHERE source = 'ecos'\n  AND source_key IN (${series:sqlstring})\n  AND $__timeFilter(completed_at)\nORDER BY 1"
         }
       ]
     }

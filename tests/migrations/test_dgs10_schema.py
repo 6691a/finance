@@ -32,8 +32,10 @@ def test_indicator_observation_keeps_natural_key_and_source_reference(capsys):
     assert "realtime_start" not in sql
     assert "realtime_end" not in sql
     assert "quality_status" not in sql
-    assert "CONSTRAINT uq_indicator_observation_natural_key UNIQUE (series_id, observation_date)" in sql
     assert "CREATE INDEX ix_indicator_observation_source_record_id" in sql
+    # 초기 리비전은 자연키를 (series_id, observation_date)로 만들고 뒤 리비전이 제공처까지
+    # 넓힌다. head까지의 SQL에는 둘 다 남으므로 마지막 상태만 확인한다.
+    assert "UNIQUE (provider, series_id, observation_date)" in sql
 
 
 def test_migrations_never_pin_a_schema(capsys):
@@ -66,7 +68,7 @@ def test_migrations_document_table_purposes(capsys):
     assert "COMMENT ON TABLE source_record IS 'API, 크롤링, 웹소켓 수집 단위의 출처와 상태를 보존하는 테이블'" in sql
     assert (
         "COMMENT ON TABLE indicator_observation IS "
-        "'FRED 지표 관측값을 조회 가능한 형태로 정규화하고 원본과 연결하는 테이블'"
+        "'여러 제공처의 지표 관측값을 조회 가능한 형태로 정규화하고 원본과 연결하는 테이블'"
     ) in sql
     assert "COMMENT ON COLUMN source_record.payload IS '작은 JSON 원본; 저장하지 않으면 NULL'" in sql
     assert "COMMENT ON COLUMN indicator_observation.source_record_id IS '근거가 되는 source_record 레코드 ID'" in sql

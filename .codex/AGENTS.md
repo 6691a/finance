@@ -9,7 +9,7 @@
 - 배치 조회 기간과 날짜 경계는 KST 기준으로 계산한다. `data_interval_end`를 `astimezone(KST_TIMEZONE)`으로 변환한 뒤 날짜를 뽑는다.
 - 시간대는 트리거 시점과 날짜 경계 계산에만 쓴다. DB에 저장하는 시각과 로그, 컨테이너 시계는 UTC다.
 - 외부 데이터의 원본 시각과 시간대는 보존하되, 비교·저장용 시각은 UTC로 정규화한다.
-- 제공처가 날짜의 기준 시간대를 정하는 값(하나은행 고시일자는 KST, FRED 관측일은 미국 영업일)은 그 제공처 기준을 따르고 주석에 남긴다.
+- 제공처가 날짜의 기준 시간대를 정하는 값(하나은행 고시일자와 ECOS 고시 기준일은 KST, FRED 관측일은 미국 영업일)은 그 제공처 기준을 따르고 주석에 남긴다.
 
 ## 백엔드 시간 처리 규칙
 
@@ -39,7 +39,7 @@
 - 외부 입력은 Pydantic으로 검증하고, 시각은 timezone-aware UTC이며, 주석은 한국어로 쓴다.
 - `dags/`에는 스케줄, 재시도, 태스크 매핑, Hook 사용, 실패 분류만 둔다. 파싱·검증·저장 규칙은 `modules/`에 둔다.
 - 의존성은 Airflow 환경에 있는 것만 쓴다. 표준 라이브러리, Pydantic, PEP 249 연결이다. SQLAlchemy 모델과 `core.config`는 import하지 않는다.
-- 테이블 정의의 원본은 백엔드의 `apps/models`다. 수집기는 문자열 SQL을 쓰므로 `tests/collectors/test_fred.py`가 INSERT 컬럼과 `ON CONFLICT` 키를 모델 metadata와 대조한다.
+- 테이블 정의의 원본은 백엔드의 `apps/models`다. 수집기는 문자열 SQL을 쓰므로 `tests/collectors/test_fred.py`와 `tests/collectors/test_ecos.py`가 INSERT 컬럼과 `ON CONFLICT` 키를 모델 metadata와 대조한다.
 
 ## 수집기 작성 규칙
 
@@ -47,11 +47,14 @@
 - 모델은 `ConfigDict(frozen=True)`로 둔다. 재시도 경로에서 값이 바뀌면 원본과 저장값이 어긋난다.
 - 시각 필드는 `AwareDatetime`으로 받고 validator에서 UTC로 정규화한다.
 - 허용 값이 정해진 필드는 validator로 막는다. 예: 시계열 ID는 `TREASURY_SERIES` 안의 값만 받는다.
+- 제공처가 잘못된 식별자에도 정상 응답으로 답하면 식별자를 Enum으로 좁혀 요청 전에 막는다. ECOS는 없는 항목코드에도 데이터 없음(`INFO-200`)으로 답해서 오타가 조용한 0건이 된다.
 - API 키는 `SecretStr`로 받는다. URL에 키가 들어가므로 예외 메시지와 로그에 URL을 넣지 않는다.
 - 외부 오류는 재시도 가능 여부로 나눠 올린다. HTTP 상태, 응답 형식, 연결 실패를 각각 다른 예외로 구분하고 판단은 DAG가 한다.
+- 제공처가 실패를 HTTP 상태가 아니라 본문으로 알리면 그 코드를 담는 예외를 따로 둔다(`EcosResultError`). 수집기는 코드를 해석하지 않고 DAG가 재시도 여부를 정한다.
+- 응답이 페이지 단위로 잘릴 수 있으면 제공처가 알려 준 전체 건수와 받은 행 수를 대조해 잘림을 실패로 만든다. 조용히 잘린 응답은 조회 구간에 구멍을 남긴다.
 - HTML 수집은 scrapling을 쓴다. 요청은 `Fetcher`(curl_cffi), 파싱은 `Selector`다. `impersonate`로 실제 브라우저 지문을 흉내 내므로 앞단 WAF에 막히지 않는다. 페이지가 JavaScript로 표를 그릴 때만 `DynamicFetcher`나 `StealthyFetcher`를 쓴다. 이건 브라우저를 띄우므로 기본값이 아니다.
 - 표를 위치(index)로 읽으면 칸 수를 상수로 두고 응답마다 검증한다. 사이트가 열을 추가하면 값이 조용히 옆 칸으로 밀린다. 칸 수 검사가 먼저 실패해야 그걸 알 수 있다.
-- 기준 예시는 `airflow/modules/collectors/fred.py`와 `airflow/dags/fred_treasury_daily.py`, HTML 쪽은 `airflow/modules/collectors/hana.py`와 `airflow/dags/exchange_rate_daily.py`다.
+- 기준 예시는 `airflow/modules/collectors/fred.py`와 `airflow/dags/fred_treasury_daily.py`, HTML 쪽은 `airflow/modules/collectors/hana.py`와 `airflow/dags/exchange_rate_daily.py`다. 본문으로 실패를 알리는 API는 `airflow/modules/collectors/ecos.py`와 `airflow/dags/ecos_market_rate_daily.py`를 본다.
 
 ## 마이그레이션 라우팅 규칙
 
@@ -123,11 +126,27 @@ API, 크롤링, 웹소켓 수집 결과의 출처와 상태를 가볍게 보존�
 - 정규화 테이블은 `source_record_id` 외래키와 `ON DELETE RESTRICT`로 출처를 연결한다.
 - 웹소켓 메시지별로 `SourceRecord`를 생성하지 않는다.
 
-## DGS10 테이블 목적
+## 지표 관측값 테이블 목적
 
 ### `market.indicator_observation`
 
-원본에서 추출한 DGS10 관측값을 날짜와 단위와 함께 조회 가능한 형태로 누적 저장한다. `(series_id, observation_date)`를 고유키로 사용하고 `source_record_id`로 근거 수집 레코드와 연결한다.
+여러 제공처에서 추출한 지표 관측값을 날짜와 단위와 함께 조회 가능한 형태로 누적 저장한다. `(provider, series_id, observation_date)`를 고유키로 사용하고 `source_record_id`로 근거 수집 레코드와 연결한다.
+
+- `provider`는 그 값을 준 제공처(`fred`, `ecos`)이며 같은 수집의 `source_record.source`와 같은 값이다.
+- `series_id`는 **제공처 안에서만 고유하다.** 그래서 자연키에 `provider`가 함께 들어간다.
+- `series_id`는 사람이 읽을 수 있어야 한다. FRED의 `DGS10`처럼 제공처 ID가 이미 읽히면 그대로 쓰고, ECOS 항목코드(`010210000`)처럼 숫자뿐이면 `KTB10Y` 같은 ID를 만들어 저장한다. 제공처의 원본 좌표는 수집기 Enum이 들고 있다가 요청에 쓰고 `source_record.metadata`에 남긴다.
+- 조회하는 쪽도 `provider`를 함께 건다. `series_id` 하나로 거는 쿼리는 제공처가 늘어나면 조용히 틀린다.
+- 국가·만기 같은 시계열의 성격은 여기 두지 않고 `reference.indicator_series`에 둔다.
+
+### `reference.indicator_series`
+
+`indicator_observation`의 시계열이 어느 나라 무슨 금리인지 설명하는 마스터다. `(provider, series_id)`가 자연키이고 대시보드가 이 키로 관측값을 조인한다.
+
+- 존재 이유는 나라를 추가할 때 조회 쪽을 안 고치기 위해서다. 국가·만기를 조회 쿼리가 알고 있으면 나라가 늘 때마다 대시보드 SQL을 고쳐야 한다.
+- `kind`가 국채(`government_bond`)와 단기 자금시장 금리(`money_market`)를 가른다. `maturity_months`는 비교와 정렬 기준이며 91일물은 3으로 둔다.
+- 관측값에서 이 테이블로 외래키를 걸지 않는다. 걸면 마스터 행이 없는 시계열을 수집기가 저장하지 못해 Enum에만 추가한 순간 DAG가 죽는다. `tests/migrations/test_indicator_series_catalog.py`가 Enum과 시드를 대조한다.
+- 시계열을 늘릴 때는 수집기 Enum과 마스터 시드를 같은 커밋에서 함께 늘린다. 시드는 마이그레이션이 넣고 리비전 파일에서 앱 코드를 import하지 않는다.
+- `unit`은 제공처 표기가 아니라 정규화한 표기다. 연이율 퍼센트는 제공처가 `Percent`든 `연%`든 `Percent`로 저장해야 두 나라 금리를 한 쿼리로 비교할 수 있다.
 
 ## 종목 마스터 테이블 목적
 

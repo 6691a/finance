@@ -236,7 +236,7 @@ import 뿌리는 `airflow/`입니다. DAG는 배포와 같은 이름으로 `from
 - **규칙은 백엔드를 따릅니다.** 외부 입력은 Pydantic으로 검증하고, 시각은 timezone-aware UTC이며, 주석은 한국어로 씁니다.
 - **`dags/`에는 오케스트레이션만 둡니다.** 스케줄, 재시도, 태스크 매핑, Hook 사용, 실패 분류가 여기에 해당합니다. 파싱·검증·저장 규칙은 `modules/`에 둡니다.
 - **의존성은 Airflow 환경에 있는 것만 씁니다.** 표준 라이브러리, Pydantic, PEP 249 연결입니다. SQLAlchemy 모델과 `core.config`는 import하지 않습니다.
-- **테이블 정의의 원본은 백엔드입니다.** 수집기는 ORM 없이 문자열 SQL을 쓰므로 컬럼 이름이 어긋나면 실행 시점에야 드러납니다. [tests/collectors/test_fred.py](tests/collectors/test_fred.py)가 INSERT 컬럼 목록과 `ON CONFLICT` 키를 `apps/models`의 metadata와 대조합니다. 모델을 고치면 이 테스트가 먼저 깨집니다.
+- **테이블 정의의 원본은 백엔드입니다.** 수집기는 ORM 없이 문자열 SQL을 쓰므로 컬럼 이름이 어긋나면 실행 시점에야 드러납니다. [tests/collectors/test_fred.py](tests/collectors/test_fred.py)와 [tests/collectors/test_ecos.py](tests/collectors/test_ecos.py)가 INSERT 컬럼 목록과 `ON CONFLICT` 키를 `apps/models`의 metadata와 대조합니다. 모델을 고치면 이 테스트가 먼저 깨집니다.
 
 ### 수집기 작성 규칙
 
@@ -249,6 +249,13 @@ import 뿌리는 `airflow/`입니다. DAG는 배포와 같은 이름으로 `from
 - API 키는 `SecretStr`로 받습니다. URL에 키가 들어가므로 예외 메시지와 로그에 URL을 넣지 않습니다. 키는 Git에서 제외된 `compose/local/airflow/.env`의 `FRED_API_KEY`로만 주입합니다.
 - 외부 오류는 재시도 가능 여부로 나눕니다. HTTP 상태는 `FredHTTPError`, 형식 오류는 `FredPayloadError`, 연결 실패는 `ConnectionError`입니다. 판단은 DAG가 합니다.
 
+제공처가 FRED처럼 얌전하지 않을 때 더 필요한 규칙은 [airflow/modules/collectors/ecos.py](airflow/modules/collectors/ecos.py)에 있습니다.
+
+- **실패를 HTTP 상태로 알리지 않는 API는 본문 코드를 담는 예외를 따로 둡니다.** ECOS는 인증 실패도 데이터 없음도 HTTP 200에 `{"RESULT": {"CODE": ...}}`로 답합니다. 수집기는 그 코드를 `EcosResultError`에 담아 올리고 해석하지 않습니다. 재시도 여부는 DAG가 정합니다.
+- **잘못된 식별자에 정상 응답이 오면 식별자를 Enum으로 좁힙니다.** ECOS는 없는 항목코드에도 데이터 없음과 같은 `INFO-200`으로 답해서, 오타가 조용한 0건이 됩니다. `MarketRateSeries`가 요청 전에 막습니다.
+- **응답이 잘릴 수 있으면 전체 건수와 받은 행 수를 대조합니다.** ECOS는 요청한 건수 범위를 넘으면 경고 없이 앞부분만 돌려줍니다. 그대로 저장하면 조회 구간에 조용히 구멍이 남습니다.
+- **단위는 제공처 표기가 아니라 정규화한 표기로 저장합니다.** ECOS는 `연%`, FRED는 단위를 주지 않습니다. 둘 다 `Percent`로 저장해야 두 나라 금리를 한 쿼리로 비교할 수 있습니다. 원본 표기는 `source_record`에 남습니다.
+
 ### 미국 국채 수집 DAG
 
 [airflow/dags/fred_treasury_daily.py](airflow/dags/fred_treasury_daily.py)는 FRED에서 국채 수익률 곡선(`DGS3MO`, `DGS2`, `DGS10`, `DGS30`)을 한국 시간 화~토 07:30(UTC 월~금 22:30)에 수집합니다.
@@ -257,10 +264,22 @@ import 뿌리는 `airflow/`입니다. DAG는 배포와 같은 이름으로 `from
 
 - 시계열마다 태스크를 매핑합니다. 하나가 실패해도 나머지는 저장되고, 재시도도 실패한 시계열만 다시 호출합니다.
 - 실행마다 최근 7일을 다시 조회합니다. 휴장일과 발표 지연을 별도 캘린더 없이 흡수합니다.
-- 정규화 멱등 키는 `(series_id, observation_date)`입니다. 재조회분은 행을 늘리지 않고 최신 발표로 갱신합니다.
+- 정규화 멱등 키는 `(provider, series_id, observation_date)`입니다. 재조회분은 행을 늘리지 않고 최신 발표로 갱신합니다.
 - FRED가 결측을 뜻하는 `.`을 보내면 정규화하지 않습니다. 원본 응답에는 그대로 남습니다.
 - 원본 INSERT와 정규화 UPSERT는 하나의 트랜잭션입니다. 커밋과 롤백은 DAG가 결정합니다.
 - `FRED_API_KEY`가 없거나 HTTP 400·401·403·404면 재시도하지 않고 즉시 실패합니다. 429는 `Retry-After`를 로그에 남기고 재시도합니다.
+
+### 국내 시장금리 수집 DAG
+
+[airflow/dags/ecos_market_rate_daily.py](airflow/dags/ecos_market_rate_daily.py)는 한국은행 ECOS의 통계표 `1.3.2.1. 시장금리(일별)`(817Y002)에서 국고채 2·3·10·30년과 CD 91일을 한국 시간 화~토 08:00(UTC 월~금 23:00)에 수집합니다. 미국 국채와 같은 `indicator_observation` 테이블에 쌓이고 `provider`로 갈립니다.
+
+구간 계산, 태스크 매핑, 트랜잭션 경계는 미국 국채 DAG와 같습니다. 제공처 성질이 달라 아래가 다릅니다.
+
+- 저장하는 `series_id`는 `817Y002.010210000`처럼 통계표 코드와 항목코드를 붙인 값입니다. ECOS에서 시계열 하나를 가리키려면 둘 다 필요하고, 항목코드는 다른 통계표에서 다른 뜻으로 다시 쓰일 수 있습니다.
+- 조회 구간 밖의 날짜가 딸려 오지 않습니다. 되돌아본 만큼이 그대로 조회 구간이라 백필이 요청 범위를 넘지 않습니다. FRED는 넘칩니다.
+- 휴장일은 행 자체가 없습니다. 구간 전체가 휴장이면 `INFO-200`이 오고, 이건 실패가 아니라 관측값 0건입니다. 그래도 `source_record`는 남겨 조회한 구간과 아직 조회하지 않은 구간을 구분합니다.
+- `INFO-100`(인증키 무효)과 `ERROR-1xx~4xx`(요청 인자 문제)는 즉시 실패합니다. 그 밖의 `RESULT` 코드는 제공처 쪽 오류로 보고 재시도합니다. 실제 응답으로 확인한 코드는 `INFO-100`과 `INFO-200`뿐이라 모르는 코드는 재시도 쪽에 둡니다.
+- 관측일 기준은 국내 영업일입니다. 인증키는 `compose/local/airflow/.env`의 `ECOS_API_KEY`로 주입하며, ECOS는 이 키를 질의 문자열이 아니라 URL 경로에 받습니다.
 
 ## Grafana
 
@@ -306,6 +325,18 @@ docker compose -f compose/local/docker-compose.yaml up -d grafana
 
 datasource YAML은 `$NEWS_DB_URL` 같은 이름만 참조하므로 접속 정보가 저장소에 들어가지 않습니다. 값은 compose 서비스의 `environment`가 넘깁니다.
 
+### 대시보드 구성
+
+금리 대시보드는 셋입니다. 나라별로 하나씩, 그리고 나라를 가로지르는 통합 하나입니다.
+
+| 대시보드 | 파일 | 보는 것 |
+| --- | --- | --- |
+| 미국 국채 금리 | `us-treasury.json` | 미국 곡선과 미국 장단기 금리차 |
+| 국내 시장금리 | `korea-market-rate.json` | 국내 곡선, 국내 장단기 금리차, CD 91일 |
+| 통합 국채 금리 | `global-treasury.json` | 나라 간 비교, 나라 간 금리차, 최신 수익률 곡선 |
+
+나라별 대시보드는 그 나라 이야기만 담습니다. 나라를 가로지르는 비교는 전부 통합에 둡니다. 나라가 늘어날 때 나라별 대시보드는 새로 하나 만들면 되고, 통합은 **고치지 않습니다.** 통합이 국가와 만기를 `indicator_series` 마스터에서 읽기 때문입니다.
+
 ### 미국 국채 대시보드
 
 [compose/local/grafana/dashboards/us-treasury.json](compose/local/grafana/dashboards/us-treasury.json)은 `indicator_observation` 테이블의 FRED 국채 수익률을 그립니다. `fred_treasury_daily` DAG가 채우는 테이블입니다.
@@ -317,6 +348,32 @@ datasource YAML은 `$NEWS_DB_URL` 같은 이름만 참조하므로 접속 정보
 - 수집 실행별 정규화 행 수. 실행마다 최근 7일을 다시 조회하므로 정상이면 5~7행이 찍힙니다.
 
 `observation_date`는 시간대가 없는 `date`입니다. 시계열 패널이 쓰려면 timestamptz가 필요하므로 서브쿼리에서 `observation_date::timestamp AT TIME ZONE 'UTC'`로 만든 뒤 매크로에는 컬럼 이름만 넘깁니다. Grafana 매크로 인자 파서가 중첩 괄호를 읽지 못하기 때문입니다.
+
+모든 패널이 `provider = 'fred'`를 함께 겁니다. `indicator_observation`은 제공처가 여럿이고 `series_id`는 제공처 안에서만 고유합니다. `series_id` 하나로 거는 쿼리는 지금은 맞지만 제공처가 늘어나면 조용히 틀립니다.
+
+### 국내 시장금리 대시보드
+
+[compose/local/grafana/dashboards/korea-market-rate.json](compose/local/grafana/dashboards/korea-market-rate.json)은 같은 `indicator_observation` 테이블의 ECOS 국내 시장금리를 그립니다. `ecos_market_rate_daily` DAG가 채웁니다.
+
+- 만기별 최신 금리 stat. `만기` 변수로 패널이 반복됩니다.
+- 만기별 금리 추이 시계열.
+- 장단기 금리차(국고채 10년 - 3년) 시계열. 국내에서 쓰는 스프레드입니다.
+- 만기별 최신 관측값과 수집 계보 테이블. 원본 `series_id`를 함께 보여 줍니다.
+- 수집 실행별 정규화 행 수. 실행마다 최근 7일을 다시 조회하므로 정상이면 4~5행이 찍히고, 공휴일이 낀 주에는 더 적습니다.
+
+만기 변수의 값은 화면에 보이는 한글 이름이 아니라 저장된 `series_id`(`KTB10Y`)입니다. ECOS 항목코드(`010210000`)는 `MarketRateSeries` Enum과 `source_record.metadata`가 들고 있습니다.
+
+### 통합 국채 대시보드
+
+[compose/local/grafana/dashboards/global-treasury.json](compose/local/grafana/dashboards/global-treasury.json)은 나라를 가리지 않고 국채 금리를 비교합니다. 국가·만기·기준국이 전부 변수이고, 그 목록을 `reference.indicator_series` 마스터에서 읽습니다.
+
+- 국가별 같은 만기 비교 시계열. 만기는 `비교 만기` 변수로 고릅니다.
+- 최신 수익률 곡선 막대. 나라마다 마지막 고시값을 만기 순으로 세웁니다.
+- 기준국 대비 금리차 시계열. `금리차 기준국`을 미국으로 두면 다른 나라가 미국보다 얼마나 높은지 봅니다.
+- 선택 국가의 만기별 추이. 범례 이름은 `indicator_series.label`입니다.
+- 시계열별 최신 관측값과 수집 계보 표. 마스터에는 있는데 관측값이 없는 시계열은 여기서 빠지므로, 수집이 안 붙은 시계열을 찾는 데 씁니다.
+
+**이 대시보드에는 나라 이름도 시계열 ID도 하드코딩돼 있지 않습니다.** 일본을 추가하면 수집기와 마스터 시드만 늘리면 되고, 국가 변수 목록과 모든 패널이 저절로 따라옵니다. 국채가 아닌 금리(CD 91일 등)는 `kind = 'government_bond'` 조건에서 빠집니다.
 
 ### 대시보드를 Git에 남기기
 
@@ -375,7 +432,8 @@ docker compose -f compose/local/docker-compose.yaml up -d grafana
 
 1분 간격 고시라 구간이 길면 행이 많아집니다. 시계열 패널은 `$__timeGroupAlias(..., $__interval)`로 다운샘플링합니다.
 
- uv tool install "graphifyy[sql]"
+ uv tool install "graphifyy[sql, postgres, openai]"
+graphify hook install
 graphify install --project --platform codex
 graphify install --project --platform claude
 graphify extract . --code-only --force

@@ -18,21 +18,27 @@ class IndicatorObservation(EntityBase):
     __tablename__ = "indicator_observation"
     __table_args__ = (
         UniqueConstraint(
+            "provider",
             "series_id",
             "observation_date",
             name="uq_indicator_observation_natural_key",
         ),
         Index("ix_indicator_observation_source_record_id", "source_record_id"),
         table_options(
-            comment="FRED 지표 관측값을 조회 가능한 형태로 정규화하고 원본과 연결하는 테이블",
+            comment="여러 제공처의 지표 관측값을 조회 가능한 형태로 정규화하고 원본과 연결하는 테이블",
             database="default",
         ),
     )
 
+    provider: Mapped[str] = mapped_column(
+        Text,
+        nullable=False,
+        comment="데이터 제공처 식별자(예: fred 또는 ecos). 같은 수집의 source_record.source와 같은 값이다",
+    )
     series_id: Mapped[str] = mapped_column(
         Text,
         nullable=False,
-        comment="공급자가 정의한 시계열 식별자(예: DGS10)",
+        comment="제공처가 정의한 시계열 식별자(예: DGS10). 제공처 안에서만 고유하다",
     )
     observation_date: Mapped[date] = mapped_column(nullable=False, comment="지표 값의 기준일")
     value: Mapped[Decimal] = mapped_column(Numeric(18, 8), nullable=False, comment="정규화한 지표 값")

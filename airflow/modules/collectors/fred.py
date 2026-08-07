@@ -227,8 +227,9 @@ OBSERVATION_UPSERT = read_sql("postgres", "indicator_observation", "upsert.sql")
 def store_observations(connection: Connection, response: FredResponse) -> int:
     """원본 1건과 유효 관측값을 저장하고 정규화한 관측값 수를 돌려준다.
 
-    파싱을 먼저 해서 형식 오류면 아무 것도 쓰지 않는다. `(series_id, observation_date)`가
-    멱등 키라서 같은 기간을 다시 수집해도 행이 늘지 않고 최신 값으로 갱신된다.
+    파싱을 먼저 해서 형식 오류면 아무 것도 쓰지 않는다. `(provider, series_id, observation_date)`가
+    멱등 키라서 같은 기간을 다시 수집해도 행이 늘지 않고 최신 값으로 갱신된다. `series_id`는
+    제공처 안에서만 고유하므로 이 수집기의 `provider`는 항상 `SOURCE`다.
 
     ORM 대신 문자열 SQL을 쓴다. Airflow 이미지에는 SQLAlchemy와 이 프로젝트의 DB 설정이
     없기 때문이다. 컬럼 이름은 `tests/collectors/test_fred.py`가 모델 metadata와 맞춰 둔다.
@@ -262,6 +263,7 @@ def store_observations(connection: Connection, response: FredResponse) -> int:
             cursor.execute(
                 OBSERVATION_UPSERT,
                 (
+                    SOURCE,
                     response.series_id,
                     observation.observation_date,
                     observation.value,

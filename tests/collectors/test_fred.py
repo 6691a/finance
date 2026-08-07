@@ -249,7 +249,7 @@ def test_store_writes_the_raw_response_once_and_upserts_only_valid_observations(
     assert len(statements) == 2
     assert "INSERT INTO source_record" in statements[0]
     assert "INSERT INTO indicator_observation" in statements[1]
-    assert "ON CONFLICT (series_id, observation_date) DO UPDATE" in statements[1]
+    assert "ON CONFLICT (provider, series_id, observation_date) DO UPDATE" in statements[1]
 
 
 def test_store_records_lineage_and_collection_state_on_the_source_record():
@@ -278,10 +278,12 @@ def test_store_links_each_observation_to_the_stored_source_record():
 
     store_observations(connection, response_for())
 
-    series_id, observation_date, value, unit, source_record_id = connection.recorded_cursor.calls[1][1]
+    provider, series_id, observation_date, value, unit, source_record_id = connection.recorded_cursor.calls[1][1]
 
     assert (series_id, observation_date, value, unit) == ("DGS10", date(2026, 8, 3), Decimal("4.25"), SERIES_UNIT)
     assert source_record_id == SOURCE_RECORD_ID
+    # 멱등 키가 제공처까지 포함하므로 관측값의 provider는 원본 레코드의 source와 같아야 한다.
+    assert provider == connection.recorded_cursor.calls[0][1][1]
 
 
 def test_store_writes_nothing_when_the_payload_is_broken():

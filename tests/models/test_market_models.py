@@ -31,7 +31,8 @@ def test_indicator_observation_keeps_natural_key_and_source_reference():
         if isinstance(constraint, UniqueConstraint)
     }
 
-    assert ("series_id", "observation_date") in unique_columns
+    # series_id는 제공처 안에서만 고유하므로 provider가 자연키에 함께 들어간다.
+    assert ("provider", "series_id", "observation_date") in unique_columns
     assert {foreign_key.target_fullname for foreign_key in table.c.source_record_id.foreign_keys} == {
         "source_record.id"
     }
@@ -105,13 +106,14 @@ def test_market_models_document_table_and_column_purposes():
 
     assert (
         IndicatorObservation.__table__.comment
-        == "FRED 지표 관측값을 조회 가능한 형태로 정규화하고 원본과 연결하는 테이블"
+        == "여러 제공처의 지표 관측값을 조회 가능한 형태로 정규화하고 원본과 연결하는 테이블"
     )
     assert {column.name: column.comment for column in IndicatorObservation.__table__.columns} == {
         "id": "레코드 고유 식별자",
         "created_at": "레코드 생성 시각(UTC)",
         "updated_at": "레코드 최종 수정 시각(UTC)",
-        "series_id": "공급자가 정의한 시계열 식별자(예: DGS10)",
+        "provider": "데이터 제공처 식별자(예: fred 또는 ecos). 같은 수집의 source_record.source와 같은 값이다",
+        "series_id": "제공처가 정의한 시계열 식별자(예: DGS10). 제공처 안에서만 고유하다",
         "observation_date": "지표 값의 기준일",
         "value": "정규화한 지표 값",
         "unit": "지표 값의 단위(예: Percent)",

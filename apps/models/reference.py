@@ -95,6 +95,99 @@ class IndicatorSeries(EntityBase):
     )
 
 
+class QuoteSymbolKind(StrEnum):
+    INDEX = "index"
+    INDEX_FUTURE = "index_future"
+    FX = "fx"
+    RATE = "rate"
+    BOND_FUTURE = "bond_future"
+    COMMODITY = "commodity"
+    EQUITY = "equity"
+
+
+class QuoteSymbol(EntityBase):
+    """`quote_bar`에 쌓이는 심볼이 현물 지수인지 지수선물인지 설명하는 마스터다.
+
+    `indicator_series`가 국채 대시보드에 하는 역할을 `quote_bar` 쪽에서 한다. 봉 테이블은
+    `(provider, symbol)`까지만 알고, 그 문자열이 현물인지 선물인지는 모른다. 그 지식을
+    조회하는 쪽이 들고 있으면 심볼을 하나 추가할 때마다 대시보드 SQL을 전부 고쳐야 한다.
+
+    **`kind`가 존재하는 이유는 성격이 다른 값을 다른 화면에 두기 위해서다.**
+
+    - 현물 지수와 지수선물은 거래 시간대가 다르다. 한국 정규장 시간에 현물은 멈춰 있고
+      선물만 움직이므로 한 패널에 겹치면 현물 선이 직선으로 깔린다.
+    - 환율(`fx`)과 금리(`rate`)는 정상 변동폭의 자릿수가 지수와 다르다. 금리는 특히
+      **변화율(%)이 아니라 bp로 읽어야 하는 값**이라 지수와 같은 축에 두면 오해를 부른다.
+      4.66에서 4.70으로 가는 건 "+0.86%"가 아니라 "+4bp"다.
+    - `rate`와 `bond_future`를 나눈 이유는 **하나는 수익률이고 하나는 가격**이기 때문이다.
+      `US10Y`는 4.66(%)이고 `ZN=F`는 110(달러)이다. 같은 "미 10년물"이라도 방향이 반대로
+      움직이므로 한 패널에 겹치면 읽는 사람이 반드시 틀린다.
+    - `commodity`(금·은·구리·유가)와 `equity`(개별 종목)도 각자 변동폭이 달라 따로 둔다.
+
+    관측값에서 이 테이블로 외래키를 걸지 않는다. 걸면 마스터 행이 없는 심볼을 수집기가
+    저장하지 못해, Enum에만 추가하고 시드를 빠뜨린 순간 DAG가 죽는다. 대신
+    `tests/migrations/test_quote_symbol_catalog.py`가 수집기 Enum과 시드를 대조해 어긋남을
+    테스트 단계에서 잡는다.
+    """
+
+    __tablename__ = "quote_symbol"
+    __table_args__ = (
+        UniqueConstraint(
+            "provider",
+            "symbol",
+            name="uq_quote_symbol_natural_key",
+        ),
+        CheckConstraint(
+            "kind IN ('index', 'index_future', 'fx', 'rate', 'bond_future', 'commodity', 'equity')",
+            name="ck_quote_symbol_kind",
+        ),
+        table_options(
+            comment="quote_bar 심볼이 현물 지수인지 지수선물인지 설명하는 마스터",
+            database="default",
+        ),
+    )
+
+    provider: Mapped[str] = mapped_column(
+        Text,
+        nullable=False,
+        comment="데이터 제공처 식별자(예: yahoo). quote_bar.provider와 같은 값이다",
+    )
+    symbol: Mapped[str] = mapped_column(
+        Text,
+        nullable=False,
+        comment="제공처 안에서 심볼을 가리키는 식별자. quote_bar.symbol과 같은 값이다",
+    )
+    kind: Mapped[QuoteSymbolKind] = mapped_column(
+        SqlEnum(
+            QuoteSymbolKind,
+            native_enum=False,
+            length=20,
+            values_callable=lambda enum: [member.value for member in enum],
+        ),
+        nullable=False,
+        comment=(
+            "값의 종류(index, index_future, fx, rate, bond_future, commodity, equity). "
+            "화면을 가르는 기준이다. 거래 시간대가 다르고 정상 변동폭의 자릿수도 달라 "
+            "한 축에 겹치면 읽을 수 없다"
+        ),
+    )
+    country: Mapped[str] = mapped_column(
+        Text,
+        nullable=False,
+        comment="기초 시장의 국가(ISO 3166-1 alpha-2, 예: US 또는 KR)",
+    )
+    country_name: Mapped[str] = mapped_column(
+        Text,
+        nullable=False,
+        comment="국가 표시 이름. 국가에 붙는 속성이 더 늘면 country 마스터 테이블로 분리한다",
+    )
+    label: Mapped[str] = mapped_column(
+        Text,
+        nullable=False,
+        comment="차트와 표에 쓰는 표시 이름(예: 나스닥100 선물)",
+    )
+
+
 class Market(StrEnum):
     KOSPI = "kospi"
     KOSDAQ = "kosdaq"

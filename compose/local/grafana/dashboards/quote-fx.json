@@ -1,0 +1,775 @@
+{
+  "uid": "market-quote-fx",
+  "title": "환율 장중",
+  "description": "환율만 본다(quote_symbol.kind = 'fx'). **거의 24시간 움직여 한국 정규장 구간을 채우는 몇 안 되는 값이다.** 원/달러는 외국인 수급과, 엔/달러는 엔캐리 청산과 직결된다. 달러인덱스는 그 둘의 배경인 글로벌 달러 유동성이다. 하나은행 고시환율(exchange_rate 테이블)과는 성격이 다르다. 저쪽은 은행이 하루 몇 차례 고시하는 값이고 여기는 장외 시장 환율이 분 단위로 움직이는 값이다. 장중 알림에는 이쪽이 필요하다. 정상 변동폭이 지수보다 훨씬 작아서 임계값 기본값을 0.2%로 둔다. 심볼 목록은 reference 마스터인 quote_symbol 에서 읽는다. 손으로 적지 않으므로 수집기 Enum 과 마스터 시드에 심볼을 추가하면 여기 저절로 나타난다. uid 는 바꾸지 않는다. 프로비저닝된 대시보드의 uid 를 바꾸면 Grafana 가 같은 파일로 두 번째 대시보드를 만들고 그 뒤로 갱신이 uid 충돌로 막힌다.",
+  "tags": [
+    "market",
+    "intraday",
+    "quote",
+    "fx"
+  ],
+  "editable": true,
+  "schemaVersion": 39,
+  "version": 1,
+  "refresh": "1m",
+  "time": {
+    "from": "now-2d",
+    "to": "now"
+  },
+  "timezone": "browser",
+  "annotations": {
+    "list": [
+      {
+        "name": "한국 정규장",
+        "enable": true,
+        "hide": false,
+        "iconColor": "orange",
+        "datasource": {
+          "type": "postgres",
+          "uid": "${ds}"
+        },
+        "target": {
+          "format": "table",
+          "rawQuery": true,
+          "editorMode": "code",
+          "rawSql": "SELECT\n  (g.d::date + TIME '09:00') AT TIME ZONE 'Asia/Seoul' AS time,\n  (g.d::date + TIME '15:30') AT TIME ZONE 'Asia/Seoul' AS \"timeEnd\",\n  '한국 정규장' AS text\nFROM generate_series(\n  $__timeFrom()::date, $__timeTo()::date, INTERVAL '1 day'\n) AS g(d)\nWHERE EXTRACT(DOW FROM g.d) BETWEEN 1 AND 5"
+        }
+      }
+    ]
+  },
+  "templating": {
+    "list": [
+      {
+        "name": "ds",
+        "label": "데이터소스",
+        "description": "quote_bar 를 읽을 postgres 데이터소스. 모든 패널이 이 값을 쓴다.",
+        "type": "datasource",
+        "query": "postgres",
+        "refresh": 1,
+        "hide": 0,
+        "current": {
+          "selected": true,
+          "text": "news2",
+          "value": "news2-postgres"
+        },
+        "options": []
+      },
+      {
+        "name": "provider",
+        "label": "제공처",
+        "description": "시세를 준 곳. 미국은 yahoo, 국내는 kis 다. **기본값이 전체라 나스닥100 선물과 코스피200 선물을 같은 축에서 비교할 수 있다.** 그게 이 수집의 핵심 비교다. 한쪽만 보려면 여기서 고른다. quote_bar.symbol 은 제공처 안에서만 고유하므로 조회에 provider 를 항상 함께 건다. 지금은 두 제공처의 심볼 이름이 겹치지 않아 범례가 symbol 하나로 구분된다. 겹치는 이름이 생기면 범례에 provider 를 붙여야 한다.",
+        "type": "query",
+        "datasource": {
+          "type": "postgres",
+          "uid": "${ds}"
+        },
+        "query": "SELECT DISTINCT provider FROM quote_symbol ORDER BY 1",
+        "includeAll": true,
+        "multi": true,
+        "refresh": 1,
+        "sort": 1,
+        "current": {
+          "selected": true,
+          "text": [
+            "All"
+          ],
+          "value": [
+            "$__all"
+          ]
+        },
+        "options": []
+      },
+      {
+        "name": "symbol",
+        "label": "심볼",
+        "description": "이 대시보드가 보는 심볼. 목록을 손으로 적지 않고 quote_symbol 마스터에서 읽는다( AND kind = 'fx'). 수집기 Enum 과 마스터 시드에 추가하면 여기 저절로 나타난다.",
+        "type": "query",
+        "datasource": {
+          "type": "postgres",
+          "uid": "${ds}"
+        },
+        "query": "SELECT label || '(' || symbol || ')' AS \"__text\", symbol AS \"__value\" FROM quote_symbol WHERE provider IN (${provider:sqlstring}) AND kind = 'fx' ORDER BY kind, symbol",
+        "includeAll": true,
+        "multi": true,
+        "refresh": 1,
+        "sort": 0,
+        "current": {
+          "selected": true,
+          "text": [
+            "All"
+          ],
+          "value": [
+            "$__all"
+          ]
+        },
+        "options": []
+      },
+      {
+        "name": "window_min",
+        "label": "급변 판단 구간(분)",
+        "description": "'방금 빠졌다' 를 재는 구간. 직전 거래일 대비 누적 변동률은 아침부터 빠져 있던 경우와 방금 빠진 경우를 구분하지 못한다. 이 값이 그 구분을 만든다.",
+        "type": "custom",
+        "query": "5,10,15,30,60",
+        "includeAll": false,
+        "multi": false,
+        "current": {
+          "selected": true,
+          "text": "15",
+          "value": "15"
+        },
+        "options": []
+      },
+      {
+        "name": "threshold",
+        "label": "임계값(%)",
+        "description": "급변으로 칠 기준. 이 값을 바꿔 가며 '임계값 참고' 표의 울린 분 수를 보고 알림 임계값을 정한다. 심볼마다 정상 변동폭이 달라 하나로 통일할 수 없다.",
+        "type": "custom",
+        "query": "0.2,0.3,0.5,1.0,1.5,2.0,3.0",
+        "includeAll": false,
+        "multi": false,
+        "current": {
+          "selected": true,
+          "text": "0.2",
+          "value": "0.2"
+        },
+        "options": []
+      }
+    ]
+  },
+  "panels": [
+    {
+      "id": 1,
+      "type": "stat",
+      "title": "${symbol:text}",
+      "description": "선택 구간 마지막 봉의 직전 거래일 종가 대비 변동률. 기준값은 저장된 previous_close 가 아니라 봉에서 직접 계산한 '직전 거래일(UTC) 마지막 종가'다. 저장 컬럼은 백필 구간에서 여러 날에 같은 값이 박혀 쓸 수 없다(문서 §8.3).",
+      "datasource": {
+        "type": "postgres",
+        "uid": "${ds}"
+      },
+      "repeat": "symbol",
+      "repeatDirection": "h",
+      "maxPerRow": 5,
+      "gridPos": {
+        "h": 4,
+        "w": 4,
+        "x": 0,
+        "y": 0
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percent",
+          "decimals": 2,
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "red",
+                "value": null
+              },
+              {
+                "color": "text",
+                "value": -0.0001
+              },
+              {
+                "color": "green",
+                "value": 0.0001
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "orientation": "auto",
+        "textMode": "auto",
+        "colorMode": "value",
+        "graphMode": "area",
+        "justifyMode": "auto"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "format": "time_series",
+          "rawQuery": true,
+          "editorMode": "code",
+          "datasource": {
+            "type": "postgres",
+            "uid": "${ds}"
+          },
+          "rawSql": "WITH bars AS (\n  SELECT q.bar_at, q.symbol, m.label || '(' || m.symbol || ')' AS display, q.close\n  FROM quote_bar q\n  JOIN quote_symbol m ON m.provider = q.provider AND m.symbol = q.symbol\n  WHERE q.provider IN (${provider:sqlstring})\n    AND q.symbol = ${symbol:sqlstring}\n    -- 기준일을 잡으려면 조회 구간보다 앞을 더 읽어야 한다.\n    AND q.bar_at >= $__timeFrom()::timestamptz - INTERVAL '7 days'\n    AND q.bar_at <= $__timeTo()::timestamptz\n), daily AS (\n  SELECT symbol, bar_at::date AS d,\n         (array_agg(close ORDER BY bar_at DESC))[1] AS day_close\n  FROM bars GROUP BY symbol, bar_at::date\n), baseline AS (\n  SELECT symbol, d, lag(day_close) OVER (PARTITION BY symbol ORDER BY d) AS prev_close\n  FROM daily\n)\nSELECT\n  b.bar_at AS time,\n  (b.close - k.prev_close) / NULLIF(k.prev_close, 0) * 100 AS value\nFROM bars b\nJOIN baseline k ON k.symbol = b.symbol AND k.d = b.bar_at::date\nWHERE $__timeFilter(b.bar_at)\nORDER BY 1"
+        }
+      ]
+    },
+    {
+      "id": 2,
+      "type": "table",
+      "title": "급변 이벤트 (${window_min}분 변화 ±${threshold}% 이상)",
+      "description": "임계값을 정하려고 만든 표다. 선 그래프에서 눈으로 찾을 필요 없이 '언제 몇 % 움직였나' 를 사건 단위로 본다. 연속한 분은 한 사건으로 묶는다. 묶지 않으면 9분짜리 급락 하나가 표를 아홉 줄로 채워 상위 목록을 다 먹는다. 10분 넘게 조용하면 다음 사건으로 끊는다. '구간' 이 한국장중이면 알림이 곧바로 매매 판단으로 이어지는 시간대다.",
+      "datasource": {
+        "type": "postgres",
+        "uid": "${ds}"
+      },
+      "gridPos": {
+        "h": 11,
+        "w": 14,
+        "x": 0,
+        "y": 4
+      },
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "align": "auto"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "text",
+                "value": null
+              }
+            ]
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "최대 낙폭"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "percent"
+              },
+              {
+                "id": "decimals",
+                "value": 2
+              },
+              {
+                "id": "custom.cellOptions",
+                "value": {
+                  "type": "color-text"
+                }
+              },
+              {
+                "id": "thresholds",
+                "value": {
+                  "mode": "absolute",
+                  "steps": [
+                    {
+                      "color": "red",
+                      "value": null
+                    },
+                    {
+                      "color": "text",
+                      "value": -0.0001
+                    }
+                  ]
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "최대 상승"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "percent"
+              },
+              {
+                "id": "decimals",
+                "value": 2
+              },
+              {
+                "id": "custom.cellOptions",
+                "value": {
+                  "type": "color-text"
+                }
+              },
+              {
+                "id": "thresholds",
+                "value": {
+                  "mode": "absolute",
+                  "steps": [
+                    {
+                      "color": "text",
+                      "value": null
+                    },
+                    {
+                      "color": "green",
+                      "value": 0.0001
+                    }
+                  ]
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "구간"
+            },
+            "properties": [
+              {
+                "id": "custom.cellOptions",
+                "value": {
+                  "type": "color-text"
+                }
+              },
+              {
+                "id": "mappings",
+                "value": [
+                  {
+                    "type": "value",
+                    "options": {
+                      "한국장중": {
+                        "color": "orange",
+                        "index": 0
+                      }
+                    }
+                  }
+                ]
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "showHeader": true,
+        "sortBy": [
+          {
+            "displayName": "시작(KST)",
+            "desc": true
+          }
+        ]
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "format": "table",
+          "rawQuery": true,
+          "editorMode": "code",
+          "datasource": {
+            "type": "postgres",
+            "uid": "${ds}"
+          },
+          "rawSql": "WITH w AS (\n  SELECT q.bar_at, q.symbol, m.label || '(' || m.symbol || ')' AS display, q.close,\n    first_value(q.close) OVER (\n      PARTITION BY q.symbol ORDER BY q.bar_at\n      RANGE BETWEEN INTERVAL '${window_min} minutes' PRECEDING AND CURRENT ROW\n    ) AS open_w\n  FROM quote_bar q\n  -- 표시 이름을 마스터에서 가져온다. 원시 심볼을 화면에 그대로 쓰지 않는다.\n  JOIN quote_symbol m ON m.provider = q.provider AND m.symbol = q.symbol\n  WHERE q.provider IN (${provider:sqlstring})\n    AND q.symbol IN (${symbol:sqlstring})\n    AND $__timeFilter(q.bar_at)\n), moves AS (\n  SELECT bar_at, symbol, display, (close - open_w) / NULLIF(open_w, 0) * 100 AS pct\n  FROM w\n  WHERE open_w IS NOT NULL\n)\n, hit AS (\n  SELECT *, lag(bar_at) OVER (PARTITION BY symbol ORDER BY bar_at) AS prev_at\n  FROM moves\n  WHERE abs(pct) >= ${threshold}\n), islands AS (\n  -- 연속한 분을 한 사건으로 묶는다. 10분 넘게 조용하면 다음 사건이다.\n  SELECT *,\n    sum(CASE WHEN prev_at IS NULL OR bar_at - prev_at > INTERVAL '10 minutes' THEN 1 ELSE 0 END)\n      OVER (PARTITION BY symbol ORDER BY bar_at) AS grp\n  FROM hit\n)\nSELECT\n  islands.display AS \"종목\",\n  to_char(min(bar_at) AT TIME ZONE 'Asia/Seoul', 'MM-DD HH24:MI') AS \"시작(KST)\",\n  (EXTRACT(EPOCH FROM (max(bar_at) - min(bar_at))) / 60)::int AS \"지속(분)\",\n  min(pct) AS \"최대 낙폭\",\n  max(pct) AS \"최대 상승\",\n  CASE WHEN (min(bar_at) AT TIME ZONE 'Asia/Seoul')::time BETWEEN '09:00' AND '15:30'\n    AND EXTRACT(DOW FROM min(bar_at) AT TIME ZONE 'Asia/Seoul') BETWEEN 1 AND 5\n       THEN '한국장중' ELSE '' END AS \"구간\"\nFROM islands\nGROUP BY islands.display, grp\nORDER BY min(bar_at) DESC\nLIMIT 100"
+        }
+      ]
+    },
+    {
+      "id": 3,
+      "type": "table",
+      "title": "임계값 참고 — ${window_min}분 변화율 분포",
+      "description": "알림 임계값을 근거 있게 정하려고 만든 표다. 심볼마다 정상 변동폭이 크게 다르므로 임계값 하나를 전부에 쓰면 안 된다. '상위 1%' 는 그 값을 넘는 일이 100분에 한 번쯤 있다는 뜻이고, 오른쪽 칸은 그 임계값으로 알림을 걸었을 때 조회 구간에서 실제로 몇 분이나 울렸을지를 보여 준다. 이 숫자가 하루에 수백이면 못 쓴다.",
+      "datasource": {
+        "type": "postgres",
+        "uid": "${ds}"
+      },
+      "gridPos": {
+        "h": 11,
+        "w": 10,
+        "x": 14,
+        "y": 4
+      },
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "align": "auto"
+          },
+          "decimals": 2,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "text",
+                "value": null
+              }
+            ]
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byRegexp",
+              "options": "상위.*"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "percent"
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "최대 낙폭"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "percent"
+              },
+              {
+                "id": "custom.cellOptions",
+                "value": {
+                  "type": "color-text"
+                }
+              },
+              {
+                "id": "thresholds",
+                "value": {
+                  "mode": "absolute",
+                  "steps": [
+                    {
+                      "color": "red",
+                      "value": null
+                    }
+                  ]
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "showHeader": true,
+        "sortBy": [
+          {
+            "displayName": "심볼",
+            "desc": false
+          }
+        ]
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "format": "table",
+          "rawQuery": true,
+          "editorMode": "code",
+          "datasource": {
+            "type": "postgres",
+            "uid": "${ds}"
+          },
+          "rawSql": "WITH w AS (\n  SELECT q.bar_at, q.symbol, m.label || '(' || m.symbol || ')' AS display, q.close,\n    first_value(q.close) OVER (\n      PARTITION BY q.symbol ORDER BY q.bar_at\n      RANGE BETWEEN INTERVAL '${window_min} minutes' PRECEDING AND CURRENT ROW\n    ) AS open_w\n  FROM quote_bar q\n  -- 표시 이름을 마스터에서 가져온다. 원시 심볼을 화면에 그대로 쓰지 않는다.\n  JOIN quote_symbol m ON m.provider = q.provider AND m.symbol = q.symbol\n  WHERE q.provider IN (${provider:sqlstring})\n    AND q.symbol IN (${symbol:sqlstring})\n    AND $__timeFilter(q.bar_at)\n), moves AS (\n  SELECT bar_at, symbol, display, (close - open_w) / NULLIF(open_w, 0) * 100 AS pct\n  FROM w\n  WHERE open_w IS NOT NULL\n)\nSELECT\n  display AS \"종목\",\n  percentile_cont(0.95) WITHIN GROUP (ORDER BY abs(pct)) AS \"상위 5%\",\n  percentile_cont(0.99) WITHIN GROUP (ORDER BY abs(pct)) AS \"상위 1%\",\n  min(pct) AS \"최대 낙폭\",\n  count(*) FILTER (WHERE pct <= -${threshold}) AS \"-${threshold}% 이하(분)\",\n  count(*) AS \"전체(분)\"\nFROM moves\nGROUP BY display\nORDER BY 1"
+        }
+      ]
+    },
+    {
+      "id": 4,
+      "type": "timeseries",
+      "title": "직전 거래일 대비 변동률",
+      "description": "선택한 심볼을 한 축에서 비교한다. 가격을 그대로 겹치면 자릿수 차이(VIX 15 vs 나스닥 선물 29,000) 때문에 비교가 불가능해서 전부 %로 정규화한다. 주황 음영이 한국 정규장(09:00~15:30 KST)이다. 기준값은 저장된 previous_close 가 아니라 봉에서 직접 계산한 '직전 거래일(UTC) 마지막 종가'다. 저장 컬럼은 백필 구간에서 여러 날에 같은 값이 박혀 쓸 수 없다(문서 §8.3).",
+      "datasource": {
+        "type": "postgres",
+        "uid": "${ds}"
+      },
+      "gridPos": {
+        "h": 10,
+        "w": 24,
+        "x": 0,
+        "y": 15
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percent",
+          "decimals": 2,
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 2,
+            "fillOpacity": 0,
+            "showPoints": "never",
+            "spanNulls": true,
+            "axisSoftMin": -1,
+            "axisSoftMax": 1
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "text",
+                "value": null
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "right",
+          "showLegend": true,
+          "calcs": [
+            "lastNotNull",
+            "min",
+            "max"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "format": "time_series",
+          "rawQuery": true,
+          "editorMode": "code",
+          "datasource": {
+            "type": "postgres",
+            "uid": "${ds}"
+          },
+          "rawSql": "WITH bars AS (\n  SELECT q.bar_at, q.symbol, m.label || '(' || m.symbol || ')' AS display, q.close\n  FROM quote_bar q\n  JOIN quote_symbol m ON m.provider = q.provider AND m.symbol = q.symbol\n  WHERE q.provider IN (${provider:sqlstring})\n    AND q.symbol IN (${symbol:sqlstring})\n    -- 기준일을 잡으려면 조회 구간보다 앞을 더 읽어야 한다.\n    AND q.bar_at >= $__timeFrom()::timestamptz - INTERVAL '7 days'\n    AND q.bar_at <= $__timeTo()::timestamptz\n), daily AS (\n  SELECT symbol, bar_at::date AS d,\n         (array_agg(close ORDER BY bar_at DESC))[1] AS day_close\n  FROM bars GROUP BY symbol, bar_at::date\n), baseline AS (\n  SELECT symbol, d, lag(day_close) OVER (PARTITION BY symbol ORDER BY d) AS prev_close\n  FROM daily\n)\nSELECT\n  b.bar_at AS time,\n  b.display AS metric,\n  (b.close - k.prev_close) / NULLIF(k.prev_close, 0) * 100 AS value\nFROM bars b\nJOIN baseline k ON k.symbol = b.symbol AND k.d = b.bar_at::date\nWHERE $__timeFilter(b.bar_at)\nORDER BY 1"
+        }
+      ]
+    },
+    {
+      "id": 5,
+      "type": "timeseries",
+      "title": "최근 ${window_min}분 변화율",
+      "description": "'방금 빠졌다' 를 재는 패널. 직전 거래일 대비 누적 변동률은 아침부터 빠져 있던 경우와 지금 급락한 경우를 구분하지 못한다. 여기서는 각 봉을 ${window_min}분 전 값과 비교한다. 점선이 위 표에서 쓰는 ±${threshold}% 임계값이다. 구간은 행 개수가 아니라 시간 기준(RANGE ... PRECEDING)이라 거래가 없던 분이 섞여 있어도 어긋나지 않는다. 조회 구간 맨 앞 ${window_min}분은 구간이 잘려 0에 가깝게 나온다.",
+      "datasource": {
+        "type": "postgres",
+        "uid": "${ds}"
+      },
+      "gridPos": {
+        "h": 9,
+        "w": 24,
+        "x": 0,
+        "y": 25
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percent",
+          "decimals": 2,
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1,
+            "fillOpacity": 10,
+            "showPoints": "never",
+            "spanNulls": true,
+            "gradientMode": "opacity",
+            "thresholdsStyle": {
+              "mode": "dashed"
+            }
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "transparent",
+                "value": null
+              },
+              {
+                "color": "orange",
+                "value": "${threshold}"
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "right",
+          "showLegend": true,
+          "calcs": [
+            "min",
+            "max"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "asc"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "format": "time_series",
+          "rawQuery": true,
+          "editorMode": "code",
+          "datasource": {
+            "type": "postgres",
+            "uid": "${ds}"
+          },
+          "rawSql": "WITH w AS (\n  SELECT q.bar_at, q.symbol, m.label || '(' || m.symbol || ')' AS display, q.close,\n    first_value(q.close) OVER (\n      PARTITION BY q.symbol ORDER BY q.bar_at\n      RANGE BETWEEN INTERVAL '${window_min} minutes' PRECEDING AND CURRENT ROW\n    ) AS open_w\n  FROM quote_bar q\n  -- 표시 이름을 마스터에서 가져온다. 원시 심볼을 화면에 그대로 쓰지 않는다.\n  JOIN quote_symbol m ON m.provider = q.provider AND m.symbol = q.symbol\n  WHERE q.provider IN (${provider:sqlstring})\n    AND q.symbol IN (${symbol:sqlstring})\n    AND $__timeFilter(q.bar_at)\n), moves AS (\n  SELECT bar_at, symbol, display, (close - open_w) / NULLIF(open_w, 0) * 100 AS pct\n  FROM w\n  WHERE open_w IS NOT NULL\n)\nSELECT bar_at AS time, display AS metric, pct AS value\nFROM moves\nORDER BY 1"
+        }
+      ]
+    },
+    {
+      "id": 6,
+      "type": "timeseries",
+      "title": "한국 정규장 시간대만",
+      "description": "이 수집의 가설을 보는 패널이다. 한국 정규장(09:00~15:30 KST) 봉만 남기고 그 구간의 시작을 0으로 잡아 다시 정규화한다. 미국 선물이 먼저 움직이고 코스피가 따라가는지를 여기서 본다. 미국 현물(SOX, VIX)은 이 시간대에 봉 자체가 없어 목록에서 사라지는 게 정상이다. 주의: 눈으로 보는 비교이지 선행 관계를 통계로 검증한 것이 아니다. 데이터가 몇 주치뿐이고 Yahoo 의 ^KS11 분봉 품질도 낮다(문서 §8.4).",
+      "datasource": {
+        "type": "postgres",
+        "uid": "${ds}"
+      },
+      "gridPos": {
+        "h": 9,
+        "w": 14,
+        "x": 0,
+        "y": 34
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percent",
+          "decimals": 2,
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 2,
+            "fillOpacity": 0,
+            "showPoints": "never",
+            "spanNulls": false
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "text",
+                "value": null
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "format": "time_series",
+          "rawQuery": true,
+          "editorMode": "code",
+          "datasource": {
+            "type": "postgres",
+            "uid": "${ds}"
+          },
+          "rawSql": "WITH session_bars AS (\n  SELECT q.bar_at, q.symbol, m.label || '(' || m.symbol || ')' AS display, q.close,\n         (q.bar_at AT TIME ZONE 'Asia/Seoul')::date AS kst_day\n  FROM quote_bar q\n  JOIN quote_symbol m ON m.provider = q.provider AND m.symbol = q.symbol\n  WHERE q.provider IN (${provider:sqlstring})\n    AND q.symbol IN (${symbol:sqlstring})\n    AND $__timeFilter(q.bar_at)\n    AND (q.bar_at AT TIME ZONE 'Asia/Seoul')::time BETWEEN '09:00' AND '15:30'\n    AND EXTRACT(DOW FROM q.bar_at AT TIME ZONE 'Asia/Seoul') BETWEEN 1 AND 5\n), anchored AS (\n  SELECT bar_at, symbol, display, close,\n    first_value(close) OVER (PARTITION BY symbol, kst_day ORDER BY bar_at) AS session_open\n  FROM session_bars\n)\nSELECT\n  bar_at AS time,\n  display AS metric,\n  (close - session_open) / NULLIF(session_open, 0) * 100 AS value\nFROM anchored\nORDER BY 1"
+        }
+      ]
+    },
+    {
+      "id": 7,
+      "type": "table",
+      "title": "수집 상태",
+      "description": "휴장과 '조용히 끊김' 을 구분하는 화면이다. 봉이 없는 것 자체는 정상이다. 미국 현물은 한국 장중 내내, 선물은 매일 06:00~07:00 KST 와 주말에 멈춘다. 그런데 지연이 며칠 단위로 벌어지면 제공처가 막힌 것이다. 지연은 조회 구간이 아니라 현재 시각 기준이다.",
+      "datasource": {
+        "type": "postgres",
+        "uid": "${ds}"
+      },
+      "gridPos": {
+        "h": 9,
+        "w": 10,
+        "x": 14,
+        "y": 34
+      },
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "align": "auto"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "text",
+                "value": null
+              }
+            ]
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "지연"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "s"
+              },
+              {
+                "id": "custom.cellOptions",
+                "value": {
+                  "type": "color-text"
+                }
+              },
+              {
+                "id": "thresholds",
+                "value": {
+                  "mode": "absolute",
+                  "steps": [
+                    {
+                      "color": "text",
+                      "value": null
+                    },
+                    {
+                      "color": "orange",
+                      "value": 86400
+                    },
+                    {
+                      "color": "red",
+                      "value": 259200
+                    }
+                  ]
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "showHeader": true,
+        "sortBy": [
+          {
+            "displayName": "지연",
+            "desc": true
+          }
+        ]
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "format": "table",
+          "rawQuery": true,
+          "editorMode": "code",
+          "datasource": {
+            "type": "postgres",
+            "uid": "${ds}"
+          },
+          "rawSql": "SELECT\n  m.label || '(' || m.symbol || ')' AS \"종목\",\n  count(*) AS \"봉 수\",\n  max(q.bar_at) AS \"마지막 봉\",\n  EXTRACT(EPOCH FROM (now() - max(q.bar_at))) AS \"지연\"\nFROM quote_bar q\nJOIN quote_symbol m ON m.provider = q.provider AND m.symbol = q.symbol\nWHERE q.provider IN (${provider:sqlstring})\n  AND q.symbol IN (${symbol:sqlstring})\n  AND $__timeFilter(q.bar_at)\nGROUP BY m.label, m.symbol\nORDER BY 1"
+        }
+      ]
+    }
+  ]
+}

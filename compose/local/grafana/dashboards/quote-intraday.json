@@ -104,6 +104,48 @@
         "options": []
       },
       {
+        "name": "session",
+        "label": "구간",
+        "type": "custom",
+        "hide": 0,
+        "includeAll": false,
+        "multi": false,
+        "description": "볼 구간을 고른다. 대시보드를 나누는 대신 여기서 고른다. 정규장 경계는 각 시장의 현지 시각으로 판정하므로 서머타임에도 어긋나지 않는다.",
+        "query": "전체 : all,한국 정규장 : kr,미국 정규장 : us,시간외 : off,주말 : weekend",
+        "current": {
+          "selected": true,
+          "text": "전체",
+          "value": "all"
+        },
+        "options": [
+          {
+            "selected": true,
+            "text": "전체",
+            "value": "all"
+          },
+          {
+            "selected": false,
+            "text": "한국 정규장",
+            "value": "kr"
+          },
+          {
+            "selected": false,
+            "text": "미국 정규장",
+            "value": "us"
+          },
+          {
+            "selected": false,
+            "text": "시간외",
+            "value": "off"
+          },
+          {
+            "selected": false,
+            "text": "주말",
+            "value": "weekend"
+          }
+        ]
+      },
+      {
         "name": "window_min",
         "label": "급변 판단 구간(분)",
         "description": "'방금 빠졌다' 를 재는 구간. 직전 거래일 대비 누적 변동률은 아침부터 빠져 있던 경우와 방금 빠진 경우를 구분하지 못한다. 이 값이 그 구분을 만든다.",
@@ -365,7 +407,7 @@
             "type": "postgres",
             "uid": "${ds}"
           },
-          "rawSql": "WITH w AS (\n  SELECT q.bar_at, q.symbol, m.label || '(' || m.symbol || ')' AS display, q.close,\n    first_value(q.close) OVER (\n      PARTITION BY q.symbol ORDER BY q.bar_at\n      RANGE BETWEEN INTERVAL '${window_min} minutes' PRECEDING AND CURRENT ROW\n    ) AS open_w\n  FROM quote_bar q\n  -- 표시 이름을 마스터에서 가져온다. 원시 심볼을 화면에 그대로 쓰지 않는다.\n  JOIN quote_symbol m ON m.provider = q.provider AND m.symbol = q.symbol\n  WHERE q.provider IN (${provider:sqlstring})\n    AND q.symbol IN (${symbol:sqlstring})\n    AND $__timeFilter(q.bar_at)\n), moves AS (\n  SELECT bar_at, symbol, display, (close - open_w) / NULLIF(open_w, 0) * 100 AS pct\n  FROM w\n  WHERE open_w IS NOT NULL\n)\n, hit AS (\n  SELECT *, lag(bar_at) OVER (PARTITION BY symbol ORDER BY bar_at) AS prev_at\n  FROM moves\n  WHERE abs(pct) >= ${threshold}\n), islands AS (\n  -- 연속한 분을 한 사건으로 묶는다. 10분 넘게 조용하면 다음 사건이다.\n  SELECT *,\n    sum(CASE WHEN prev_at IS NULL OR bar_at - prev_at > INTERVAL '10 minutes' THEN 1 ELSE 0 END)\n      OVER (PARTITION BY symbol ORDER BY bar_at) AS grp\n  FROM hit\n)\nSELECT\n  islands.display AS \"종목\",\n  m.kind AS \"종류\",\n  to_char(min(bar_at) AT TIME ZONE 'Asia/Seoul', 'MM-DD HH24:MI') AS \"시작(KST)\",\n  (EXTRACT(EPOCH FROM (max(bar_at) - min(bar_at))) / 60)::int AS \"지속(분)\",\n  min(pct) AS \"최대 낙폭\",\n  max(pct) AS \"최대 상승\",\n  CASE WHEN (min(bar_at) AT TIME ZONE 'Asia/Seoul')::time BETWEEN '09:00' AND '15:30'\n    AND EXTRACT(DOW FROM min(bar_at) AT TIME ZONE 'Asia/Seoul') BETWEEN 1 AND 5\n       THEN '한국장중' ELSE '' END AS \"구간\"\nFROM islands\nJOIN quote_symbol m ON m.symbol = islands.symbol\nGROUP BY islands.display, m.kind, grp\nORDER BY min(bar_at) DESC\nLIMIT 100"
+          "rawSql": "WITH w AS (\n  SELECT q.bar_at, q.symbol, m.label || '(' || m.symbol || ')' AS display, q.close,\n    first_value(q.close) OVER (\n      PARTITION BY q.symbol ORDER BY q.bar_at\n      RANGE BETWEEN INTERVAL '${window_min} minutes' PRECEDING AND CURRENT ROW\n    ) AS open_w\n  FROM quote_bar q\n  -- 표시 이름을 마스터에서 가져온다. 원시 심볼을 화면에 그대로 쓰지 않는다.\n  JOIN quote_symbol m ON m.provider = q.provider AND m.symbol = q.symbol\n  WHERE q.provider IN (${provider:sqlstring})\n    AND q.symbol IN (${symbol:sqlstring})\n    AND $__timeFilter(q.bar_at)\n), moves AS (\n  SELECT bar_at, symbol, display, (close - open_w) / NULLIF(open_w, 0) * 100 AS pct\n  FROM w\n  WHERE open_w IS NOT NULL\n)\n, hit AS (\n  SELECT *, lag(bar_at) OVER (PARTITION BY symbol ORDER BY bar_at) AS prev_at\n  FROM moves\n  WHERE abs(pct) >= ${threshold}\n  AND ('$session' = 'all'\n    OR ('$session' = 'kr' AND (bar_at AT TIME ZONE 'Asia/Seoul')::time BETWEEN '09:00' AND '15:30' AND EXTRACT(ISODOW FROM (bar_at AT TIME ZONE 'Asia/Seoul')) BETWEEN 1 AND 5)\n    OR ('$session' = 'us' AND (bar_at AT TIME ZONE 'America/New_York')::time BETWEEN '09:30' AND '16:00' AND EXTRACT(ISODOW FROM (bar_at AT TIME ZONE 'America/New_York')) BETWEEN 1 AND 5)\n    OR ('$session' = 'off' AND NOT ((bar_at AT TIME ZONE 'Asia/Seoul')::time BETWEEN '09:00' AND '15:30' AND EXTRACT(ISODOW FROM (bar_at AT TIME ZONE 'Asia/Seoul')) BETWEEN 1 AND 5) AND NOT ((bar_at AT TIME ZONE 'America/New_York')::time BETWEEN '09:30' AND '16:00' AND EXTRACT(ISODOW FROM (bar_at AT TIME ZONE 'America/New_York')) BETWEEN 1 AND 5))\n    OR ('$session' = 'weekend' AND EXTRACT(ISODOW FROM (bar_at AT TIME ZONE 'Asia/Seoul') - INTERVAL '7 hours') IN (6, 7)))\n), islands AS (\n  -- 연속한 분을 한 사건으로 묶는다. 10분 넘게 조용하면 다음 사건이다.\n  SELECT *,\n    sum(CASE WHEN prev_at IS NULL OR bar_at - prev_at > INTERVAL '10 minutes' THEN 1 ELSE 0 END)\n      OVER (PARTITION BY symbol ORDER BY bar_at) AS grp\n  FROM hit\n)\nSELECT\n  islands.display AS \"종목\",\n  m.kind AS \"종류\",\n  to_char(min(bar_at) AT TIME ZONE 'Asia/Seoul', 'MM-DD HH24:MI') AS \"시작(KST)\",\n  (EXTRACT(EPOCH FROM (max(bar_at) - min(bar_at))) / 60)::int AS \"지속(분)\",\n  min(pct) AS \"최대 낙폭\",\n  max(pct) AS \"최대 상승\",\n  CASE\n    WHEN (min(bar_at) AT TIME ZONE 'Asia/Seoul')::time BETWEEN '09:00' AND '15:30' AND EXTRACT(ISODOW FROM (min(bar_at) AT TIME ZONE 'Asia/Seoul')) BETWEEN 1 AND 5 THEN '한국장중'\n    WHEN (min(bar_at) AT TIME ZONE 'America/New_York')::time BETWEEN '09:30' AND '16:00' AND EXTRACT(ISODOW FROM (min(bar_at) AT TIME ZONE 'America/New_York')) BETWEEN 1 AND 5 THEN '미국장중'\n    ELSE '시간외'\n  END AS \"구간\"\nFROM islands\nJOIN quote_symbol m ON m.symbol = islands.symbol\nGROUP BY islands.display, m.kind, grp\nORDER BY min(bar_at) DESC\nLIMIT 100"
         }
       ]
     },
@@ -464,7 +506,7 @@
             "type": "postgres",
             "uid": "${ds}"
           },
-          "rawSql": "WITH w AS (\n  SELECT q.bar_at, q.symbol, m.label || '(' || m.symbol || ')' AS display, q.close,\n    first_value(q.close) OVER (\n      PARTITION BY q.symbol ORDER BY q.bar_at\n      RANGE BETWEEN INTERVAL '${window_min} minutes' PRECEDING AND CURRENT ROW\n    ) AS open_w\n  FROM quote_bar q\n  -- 표시 이름을 마스터에서 가져온다. 원시 심볼을 화면에 그대로 쓰지 않는다.\n  JOIN quote_symbol m ON m.provider = q.provider AND m.symbol = q.symbol\n  WHERE q.provider IN (${provider:sqlstring})\n    AND q.symbol IN (${symbol:sqlstring})\n    AND $__timeFilter(q.bar_at)\n), moves AS (\n  SELECT bar_at, symbol, display, (close - open_w) / NULLIF(open_w, 0) * 100 AS pct\n  FROM w\n  WHERE open_w IS NOT NULL\n)\nSELECT\n  display AS \"종목\",\n  percentile_cont(0.95) WITHIN GROUP (ORDER BY abs(pct)) AS \"상위 5%\",\n  percentile_cont(0.99) WITHIN GROUP (ORDER BY abs(pct)) AS \"상위 1%\",\n  min(pct) AS \"최대 낙폭\",\n  count(*) FILTER (WHERE pct <= -${threshold}) AS \"-${threshold}% 이하(분)\",\n  count(*) AS \"전체(분)\"\nFROM moves\nGROUP BY display\nORDER BY 1"
+          "rawSql": "WITH w AS (\n  SELECT q.bar_at, q.symbol, m.label || '(' || m.symbol || ')' AS display, q.close,\n    first_value(q.close) OVER (\n      PARTITION BY q.symbol ORDER BY q.bar_at\n      RANGE BETWEEN INTERVAL '${window_min} minutes' PRECEDING AND CURRENT ROW\n    ) AS open_w\n  FROM quote_bar q\n  -- 표시 이름을 마스터에서 가져온다. 원시 심볼을 화면에 그대로 쓰지 않는다.\n  JOIN quote_symbol m ON m.provider = q.provider AND m.symbol = q.symbol\n  WHERE q.provider IN (${provider:sqlstring})\n    AND q.symbol IN (${symbol:sqlstring})\n    AND $__timeFilter(q.bar_at)\n), moves AS (\n  SELECT bar_at, symbol, display, (close - open_w) / NULLIF(open_w, 0) * 100 AS pct\n  FROM w\n  WHERE open_w IS NOT NULL\n)\nSELECT\n  display AS \"종목\",\n  percentile_cont(0.95) WITHIN GROUP (ORDER BY abs(pct)) AS \"상위 5%\",\n  percentile_cont(0.99) WITHIN GROUP (ORDER BY abs(pct)) AS \"상위 1%\",\n  min(pct) AS \"최대 낙폭\",\n  count(*) FILTER (WHERE pct <= -${threshold}) AS \"-${threshold}% 이하(분)\",\n  count(*) AS \"전체(분)\"\nFROM moves\nWHERE TRUE\nAND ('$session' = 'all'\n  OR ('$session' = 'kr' AND (bar_at AT TIME ZONE 'Asia/Seoul')::time BETWEEN '09:00' AND '15:30' AND EXTRACT(ISODOW FROM (bar_at AT TIME ZONE 'Asia/Seoul')) BETWEEN 1 AND 5)\n  OR ('$session' = 'us' AND (bar_at AT TIME ZONE 'America/New_York')::time BETWEEN '09:30' AND '16:00' AND EXTRACT(ISODOW FROM (bar_at AT TIME ZONE 'America/New_York')) BETWEEN 1 AND 5)\n  OR ('$session' = 'off' AND NOT ((bar_at AT TIME ZONE 'Asia/Seoul')::time BETWEEN '09:00' AND '15:30' AND EXTRACT(ISODOW FROM (bar_at AT TIME ZONE 'Asia/Seoul')) BETWEEN 1 AND 5) AND NOT ((bar_at AT TIME ZONE 'America/New_York')::time BETWEEN '09:30' AND '16:00' AND EXTRACT(ISODOW FROM (bar_at AT TIME ZONE 'America/New_York')) BETWEEN 1 AND 5))\n  OR ('$session' = 'weekend' AND EXTRACT(ISODOW FROM (bar_at AT TIME ZONE 'Asia/Seoul') - INTERVAL '7 hours') IN (6, 7)))\nGROUP BY display\nORDER BY 1"
         }
       ]
     },
@@ -534,7 +576,7 @@
             "type": "postgres",
             "uid": "${ds}"
           },
-          "rawSql": "WITH bars AS (\n  SELECT q.bar_at, q.symbol, m.label || '(' || m.symbol || ')' AS display, q.close\n  FROM quote_bar q\n  JOIN quote_symbol m ON m.provider = q.provider AND m.symbol = q.symbol\n  WHERE q.provider IN (${provider:sqlstring})\n    AND q.symbol IN (${symbol:sqlstring})\n    -- 기준일을 잡으려면 조회 구간보다 앞을 더 읽어야 한다.\n    AND q.bar_at >= $__timeFrom()::timestamptz - INTERVAL '7 days'\n    AND q.bar_at <= $__timeTo()::timestamptz\n), daily AS (\n  SELECT symbol, bar_at::date AS d,\n         (array_agg(close ORDER BY bar_at DESC))[1] AS day_close\n  FROM bars GROUP BY symbol, bar_at::date\n), baseline AS (\n  SELECT symbol, d, lag(day_close) OVER (PARTITION BY symbol ORDER BY d) AS prev_close\n  FROM daily\n)\nSELECT\n  b.bar_at AS time,\n  b.display AS metric,\n  (b.close - k.prev_close) / NULLIF(k.prev_close, 0) * 100 AS value\nFROM bars b\nJOIN baseline k ON k.symbol = b.symbol AND k.d = b.bar_at::date\nWHERE $__timeFilter(b.bar_at)\nORDER BY 1"
+          "rawSql": "WITH bars AS (\n  SELECT q.bar_at, q.symbol, m.label || '(' || m.symbol || ')' AS display, q.close\n  FROM quote_bar q\n  JOIN quote_symbol m ON m.provider = q.provider AND m.symbol = q.symbol\n  WHERE q.provider IN (${provider:sqlstring})\n    AND q.symbol IN (${symbol:sqlstring})\n    -- 기준일을 잡으려면 조회 구간보다 앞을 더 읽어야 한다.\n    AND q.bar_at >= $__timeFrom()::timestamptz - INTERVAL '7 days'\n    AND q.bar_at <= $__timeTo()::timestamptz\n), daily AS (\n  SELECT symbol, bar_at::date AS d,\n         (array_agg(close ORDER BY bar_at DESC))[1] AS day_close\n  FROM bars GROUP BY symbol, bar_at::date\n), baseline AS (\n  SELECT symbol, d, lag(day_close) OVER (PARTITION BY symbol ORDER BY d) AS prev_close\n  FROM daily\n)\nSELECT\n  b.bar_at AS time,\n  b.display AS metric,\n  (b.close - k.prev_close) / NULLIF(k.prev_close, 0) * 100 AS value\nFROM bars b\nJOIN baseline k ON k.symbol = b.symbol AND k.d = b.bar_at::date\nWHERE $__timeFilter(b.bar_at)\nAND ('$session' = 'all'\n  OR ('$session' = 'kr' AND (b.bar_at AT TIME ZONE 'Asia/Seoul')::time BETWEEN '09:00' AND '15:30' AND EXTRACT(ISODOW FROM (b.bar_at AT TIME ZONE 'Asia/Seoul')) BETWEEN 1 AND 5)\n  OR ('$session' = 'us' AND (b.bar_at AT TIME ZONE 'America/New_York')::time BETWEEN '09:30' AND '16:00' AND EXTRACT(ISODOW FROM (b.bar_at AT TIME ZONE 'America/New_York')) BETWEEN 1 AND 5)\n  OR ('$session' = 'off' AND NOT ((b.bar_at AT TIME ZONE 'Asia/Seoul')::time BETWEEN '09:00' AND '15:30' AND EXTRACT(ISODOW FROM (b.bar_at AT TIME ZONE 'Asia/Seoul')) BETWEEN 1 AND 5) AND NOT ((b.bar_at AT TIME ZONE 'America/New_York')::time BETWEEN '09:30' AND '16:00' AND EXTRACT(ISODOW FROM (b.bar_at AT TIME ZONE 'America/New_York')) BETWEEN 1 AND 5))\n  OR ('$session' = 'weekend' AND EXTRACT(ISODOW FROM (b.bar_at AT TIME ZONE 'Asia/Seoul') - INTERVAL '7 hours') IN (6, 7)))\nORDER BY 1"
         }
       ]
     },
@@ -609,15 +651,15 @@
             "type": "postgres",
             "uid": "${ds}"
           },
-          "rawSql": "WITH w AS (\n  SELECT q.bar_at, q.symbol, m.label || '(' || m.symbol || ')' AS display, q.close,\n    first_value(q.close) OVER (\n      PARTITION BY q.symbol ORDER BY q.bar_at\n      RANGE BETWEEN INTERVAL '${window_min} minutes' PRECEDING AND CURRENT ROW\n    ) AS open_w\n  FROM quote_bar q\n  -- 표시 이름을 마스터에서 가져온다. 원시 심볼을 화면에 그대로 쓰지 않는다.\n  JOIN quote_symbol m ON m.provider = q.provider AND m.symbol = q.symbol\n  WHERE q.provider IN (${provider:sqlstring})\n    AND q.symbol IN (${symbol:sqlstring})\n    AND $__timeFilter(q.bar_at)\n), moves AS (\n  SELECT bar_at, symbol, display, (close - open_w) / NULLIF(open_w, 0) * 100 AS pct\n  FROM w\n  WHERE open_w IS NOT NULL\n)\nSELECT bar_at AS time, display AS metric, pct AS value\nFROM moves\nORDER BY 1"
+          "rawSql": "WITH w AS (\n  SELECT q.bar_at, q.symbol, m.label || '(' || m.symbol || ')' AS display, q.close,\n    first_value(q.close) OVER (\n      PARTITION BY q.symbol ORDER BY q.bar_at\n      RANGE BETWEEN INTERVAL '${window_min} minutes' PRECEDING AND CURRENT ROW\n    ) AS open_w\n  FROM quote_bar q\n  -- 표시 이름을 마스터에서 가져온다. 원시 심볼을 화면에 그대로 쓰지 않는다.\n  JOIN quote_symbol m ON m.provider = q.provider AND m.symbol = q.symbol\n  WHERE q.provider IN (${provider:sqlstring})\n    AND q.symbol IN (${symbol:sqlstring})\n    AND $__timeFilter(q.bar_at)\n), moves AS (\n  SELECT bar_at, symbol, display, (close - open_w) / NULLIF(open_w, 0) * 100 AS pct\n  FROM w\n  WHERE open_w IS NOT NULL\n)\nSELECT bar_at AS time, display AS metric, pct AS value\nFROM moves\nWHERE TRUE\nAND ('$session' = 'all'\n  OR ('$session' = 'kr' AND (bar_at AT TIME ZONE 'Asia/Seoul')::time BETWEEN '09:00' AND '15:30' AND EXTRACT(ISODOW FROM (bar_at AT TIME ZONE 'Asia/Seoul')) BETWEEN 1 AND 5)\n  OR ('$session' = 'us' AND (bar_at AT TIME ZONE 'America/New_York')::time BETWEEN '09:30' AND '16:00' AND EXTRACT(ISODOW FROM (bar_at AT TIME ZONE 'America/New_York')) BETWEEN 1 AND 5)\n  OR ('$session' = 'off' AND NOT ((bar_at AT TIME ZONE 'Asia/Seoul')::time BETWEEN '09:00' AND '15:30' AND EXTRACT(ISODOW FROM (bar_at AT TIME ZONE 'Asia/Seoul')) BETWEEN 1 AND 5) AND NOT ((bar_at AT TIME ZONE 'America/New_York')::time BETWEEN '09:30' AND '16:00' AND EXTRACT(ISODOW FROM (bar_at AT TIME ZONE 'America/New_York')) BETWEEN 1 AND 5))\n  OR ('$session' = 'weekend' AND EXTRACT(ISODOW FROM (bar_at AT TIME ZONE 'Asia/Seoul') - INTERVAL '7 hours') IN (6, 7)))\nORDER BY 1"
         }
       ]
     },
     {
       "id": 6,
       "type": "timeseries",
-      "title": "한국 정규장 시간대만",
-      "description": "이 수집의 가설을 보는 패널이다. 한국 정규장(09:00~15:30 KST) 봉만 남기고 그 구간의 시작을 0으로 잡아 다시 정규화한다. 미국 선물이 먼저 움직이고 코스피가 따라가는지를 여기서 본다. 미국 현물(SOX, VIX)은 이 시간대에 봉 자체가 없어 목록에서 사라지는 게 정상이다. 주의: 눈으로 보는 비교이지 선행 관계를 통계로 검증한 것이 아니다. 데이터가 몇 주치뿐이고 Yahoo 의 ^KS11 분봉 품질도 낮다(문서 §8.4).",
+      "title": "선택한 구간만 (${session:text}) — 구간 시작 = 0",
+      "description": "위 구간 선택을 따라간다. 고른 구간의 봉만 남기고 **구간마다 시작을 0으로 잡아** 다시 정규화하므로 여러 날(또는 여러 주말)을 겹쳐 비교할 수 있다. 한국 정규장을 고르면 미국 현물(SOX, VIX)은 그 시간대에 봉 자체가 없어 목록에서 사라지는 게 정상이다. 주말을 고르면 암호화폐만 남는다. 주의: 눈으로 보는 비교이지 선행 관계를 통계로 검증한 것이 아니다.",
       "datasource": {
         "type": "postgres",
         "uid": "${ds}"
@@ -672,7 +714,7 @@
             "type": "postgres",
             "uid": "${ds}"
           },
-          "rawSql": "WITH session_bars AS (\n  SELECT q.bar_at, q.symbol, m.label || '(' || m.symbol || ')' AS display, q.close,\n         (q.bar_at AT TIME ZONE 'Asia/Seoul')::date AS kst_day\n  FROM quote_bar q\n  JOIN quote_symbol m ON m.provider = q.provider AND m.symbol = q.symbol\n  WHERE q.provider IN (${provider:sqlstring})\n    AND q.symbol IN (${symbol:sqlstring})\n    AND $__timeFilter(q.bar_at)\n    AND (q.bar_at AT TIME ZONE 'Asia/Seoul')::time BETWEEN '09:00' AND '15:30'\n    AND EXTRACT(DOW FROM q.bar_at AT TIME ZONE 'Asia/Seoul') BETWEEN 1 AND 5\n), anchored AS (\n  SELECT bar_at, symbol, display, close,\n    first_value(close) OVER (PARTITION BY symbol, kst_day ORDER BY bar_at) AS session_open\n  FROM session_bars\n)\nSELECT\n  bar_at AS time,\n  display AS metric,\n  (close - session_open) / NULLIF(session_open, 0) * 100 AS value\nFROM anchored\nORDER BY 1"
+          "rawSql": "WITH scoped AS (\n  SELECT q.bar_at, q.symbol, m.label || '(' || m.symbol || ')' AS display, q.close,\n    CASE '$session'\n      -- 미 정규장은 KST 자정을 넘어가므로 뉴욕 날짜로 묶어야 하루가 안 쪼개진다.\n      WHEN 'us' THEN ((q.bar_at AT TIME ZONE 'America/New_York'))::date::text\n      -- 주말 하나의 식별자는 그 주 토요일이다.\n      WHEN 'weekend' THEN (date_trunc('week', (q.bar_at AT TIME ZONE 'Asia/Seoul') - INTERVAL '7 hours')\n                             + INTERVAL '5 days')::date::text\n      ELSE ((q.bar_at AT TIME ZONE 'Asia/Seoul'))::date::text\n    END AS bucket\n  FROM quote_bar q\n  JOIN quote_symbol m ON m.provider = q.provider AND m.symbol = q.symbol\n  WHERE q.provider IN (${provider:sqlstring})\n    AND q.symbol IN (${symbol:sqlstring})\n    AND $__timeFilter(q.bar_at)\n    AND ('$session' = 'all'\n      OR ('$session' = 'kr' AND (q.bar_at AT TIME ZONE 'Asia/Seoul')::time BETWEEN '09:00' AND '15:30' AND EXTRACT(ISODOW FROM (q.bar_at AT TIME ZONE 'Asia/Seoul')) BETWEEN 1 AND 5)\n      OR ('$session' = 'us' AND (q.bar_at AT TIME ZONE 'America/New_York')::time BETWEEN '09:30' AND '16:00' AND EXTRACT(ISODOW FROM (q.bar_at AT TIME ZONE 'America/New_York')) BETWEEN 1 AND 5)\n      OR ('$session' = 'off' AND NOT ((q.bar_at AT TIME ZONE 'Asia/Seoul')::time BETWEEN '09:00' AND '15:30' AND EXTRACT(ISODOW FROM (q.bar_at AT TIME ZONE 'Asia/Seoul')) BETWEEN 1 AND 5) AND NOT ((q.bar_at AT TIME ZONE 'America/New_York')::time BETWEEN '09:30' AND '16:00' AND EXTRACT(ISODOW FROM (q.bar_at AT TIME ZONE 'America/New_York')) BETWEEN 1 AND 5))\n      OR ('$session' = 'weekend' AND EXTRACT(ISODOW FROM (q.bar_at AT TIME ZONE 'Asia/Seoul') - INTERVAL '7 hours') IN (6, 7)))\n), anchored AS (\n  SELECT bar_at, display, close,\n    first_value(close) OVER (PARTITION BY symbol, bucket ORDER BY bar_at) AS bucket_open\n  FROM scoped\n)\nSELECT\n  bar_at AS time,\n  display AS metric,\n  (close - bucket_open) / NULLIF(bucket_open, 0) * 100 AS value\nFROM anchored\nORDER BY 1"
         }
       ]
     },

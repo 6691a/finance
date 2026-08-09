@@ -1,5 +1,5 @@
 <meta charset="utf-8">
-<title>수집 현황 — 25종 · 무엇을 · 언제 · 어디서</title>
+<title>수집 현황 — 30종 · 무엇을 · 언제 · 어디서</title>
 <style>
   :root {
     --bg: #ffffff;
@@ -177,11 +177,11 @@
       </div>
     </div>
     <div class="tl-row" style="margin-top:.9rem">
-      <div class="tl-label">해외 21종 수집</div>
+      <div class="tl-label">해외 25종 수집</div>
       <div class="tl-track"><div class="seg run" style="left:0;width:100%">5분마다 · 24시간</div></div>
     </div>
     <div class="tl-row">
-      <div class="tl-label">국내 4종 수집</div>
+      <div class="tl-label">국내 5종 수집</div>
       <div class="tl-track"><div class="seg run" style="left:33.33%;width:37.5%">5분마다 · 08:00 – 16:59</div></div>
     </div>
     <div class="tl-row">
@@ -222,7 +222,7 @@
   때문에 폴링 주기와 데이터 주기가 분리된다. 멱등 키는
   <code>(provider, symbol, bar_at)</code>이라 겹쳐 받아도 행이 늘지 않는다.</p>
 
-  <p>심볼 <strong>25종</strong>. 봉 수는 확인 시점 기준이고 계속 쌓인다.</p>
+  <p>심볼 <strong>30종</strong>. 봉 수는 확인 시점 기준이고 계속 쌓인다.</p>
   <div class="scroll">
   <table>
     <thead><tr>
@@ -233,6 +233,9 @@
       <tr><td><code>KOSPI200_FUT</code></td><td>코스피200 선물</td><td><span class="tag fut">지수선물</span></td><td><span class="tag kr">한국</span></td><td>KIS</td><td>평일 08–17시</td><td class="num">102</td></tr>
       <tr><td><code>SP500_FUT</code></td><td>S&amp;P500 선물</td><td><span class="tag fut">지수선물</span></td><td><span class="tag us">미국</span></td><td>Yahoo</td><td>24시간</td><td class="num">22,760</td></tr>
       <tr><td><code>NASDAQ100_FUT</code></td><td>나스닥100 선물</td><td><span class="tag fut">지수선물</span></td><td><span class="tag us">미국</span></td><td>Yahoo</td><td>24시간</td><td class="num">22,762</td></tr>
+      <tr><td><code>KOSDAQ150_FUT</code></td><td>코스닥150 선물</td><td><span class="tag fut">지수선물</span></td><td><span class="tag kr">한국</span></td><td>KIS</td><td>평일 08–17시</td><td class="num">신규</td></tr>
+      <tr><td><code>DOW_FUT</code></td><td>다우 선물</td><td><span class="tag fut">지수선물</span></td><td><span class="tag us">미국</span></td><td>Yahoo</td><td>24시간</td><td class="num">신규</td></tr>
+      <tr><td><code>RUSSELL2000_FUT</code></td><td>러셀2000 선물</td><td><span class="tag fut">지수선물</span></td><td><span class="tag us">미국</span></td><td>Yahoo</td><td>24시간</td><td class="num">신규</td></tr>
       <tr><td><code>KOSPI</code></td><td>코스피</td><td><span class="tag idx">지수</span></td><td><span class="tag kr">한국</span></td><td>KIS</td><td>평일 08–17시</td><td class="num">102</td></tr>
       <tr><td><code>KOSPI200</code></td><td>코스피200</td><td><span class="tag idx">지수</span></td><td><span class="tag kr">한국</span></td><td>KIS</td><td>평일 08–17시</td><td class="num">102</td></tr>
       <tr><td><code>KOSDAQ</code></td><td>코스닥</td><td><span class="tag idx">지수</span></td><td><span class="tag kr">한국</span></td><td>KIS</td><td>평일 08–17시</td><td class="num">102</td></tr>
@@ -255,6 +258,8 @@
       <tr><td><code>US10Y</code></td><td>미국 10년물 <strong>금리</strong></td><td><span class="tag rate">금리</span></td><td><span class="tag us">미국</span></td><td>Yahoo</td><td>미 정규장</td><td class="num">400</td></tr>
       <tr><td><code>US10Y_FUT</code></td><td>미 10년 국채선물 <strong>가격</strong></td><td><span class="tag rate">국채선물</span></td><td><span class="tag us">미국</span></td><td>Yahoo</td><td>24시간</td><td class="num">946</td></tr>
       <tr><td><code>TSMC_ADR</code></td><td>TSMC ADR</td><td><span class="tag eq">개별종목</span></td><td><span class="tag us">대만</span></td><td>Yahoo</td><td>미 정규장</td><td class="num">391</td></tr>
+      <tr><td><code>BTC</code></td><td>비트코인</td><td><span class="tag com">암호화폐</span></td><td><span class="tag rate">글로벌</span></td><td>Yahoo</td><td><strong>주말 포함 24시간</strong></td><td class="num">120</td></tr>
+      <tr><td><code>ETH</code></td><td>이더리움</td><td><span class="tag com">암호화폐</span></td><td><span class="tag rate">글로벌</span></td><td>Yahoo</td><td><strong>주말 포함 24시간</strong></td><td class="num">120</td></tr>
     </tbody>
   </table>
   </div>
@@ -396,6 +401,9 @@
       <tr><td><code>KOSPI200_FUT</code></td>
           <td><code>A01609</code><br><span style="color:var(--muted);font-size:.85em">날짜에서 계산한 월물</span></td>
           <td>선물옵션 분봉 <code>FHKIF03020200</code></td></tr>
+      <tr><td><code>KOSDAQ150_FUT</code></td>
+          <td><code>A06609</code><br><span style="color:var(--muted);font-size:.85em">상품 자릿수만 다르다</span></td>
+          <td>선물옵션 분봉 <code>FHKIF03020200</code></td></tr>
       <tr><td><code>KOSPI</code></td>
           <td><code>0001</code><br><span style="color:var(--muted);font-size:.85em">KRX 업종코드</span></td>
           <td>업종 분봉 <code>FHKUP03500200</code></td></tr>
@@ -475,7 +483,7 @@
     쓰는 값의 연결이 끊긴다. “구리가 빠졌네” 다음에 “쿼리에 뭘 넣지?”가 된다.
     <br><br>
     이름은 SQL에 박혀 있지 않고 <code>quote_symbol.label</code>에서 조인해 온다. 그래서
-    <strong>이름을 고치려면 마스터 한 행만 바꾸면 되고</strong>, 대시보드 다섯 개를 건드리지
+    <strong>이름을 고치려면 마스터 한 행만 바꾸면 되고</strong>, 대시보드 여섯 개를 건드리지
     않아도 다섯 화면에 동시에 반영된다. 심볼을 추가할 때 <code>label</code>이 곧 화면
     이름이라는 뜻이기도 하다.
   </div>
@@ -493,14 +501,14 @@
     분류했던 항목이 모두 위 표에 들어갔다. 유일한 예외는 <strong>항셍테크</strong>
     (<code>HSTECH</code>)로, <strong>Yahoo에 없어서</strong> 다른 소스가 필요하다.
     <br><br>
-    이 과정에서 <code>kind</code>가 둘에서 <strong>일곱</strong>으로 늘었다 —
+    이 과정에서 <code>kind</code>가 둘에서 <strong>여덟</strong>으로 늘었다 —
     <code>index</code> <code>index_future</code> <code>fx</code> <code>rate</code>
-    <code>bond_future</code> <code>commodity</code> <code>equity</code>.
+    <code>bond_future</code> <code>commodity</code> <code>equity</code> <code>crypto</code>.
     성격이 다른 값을 한 축에 겹치면 읽을 수 없기 때문이다.
   </div>
 
   <h3>구멍 1 — 다섯 심볼은 한국 정규장에 <span class="num">0</span>봉이다</h3>
-  <p>수집 중인 25종을 실제로 세어 봤다. 아래 다섯은 <strong>기록용이지 알림 신호가 아니다.</strong>
+  <p>25종이던 시점에 세어 본 값이다. 아래 다섯은 <strong>기록용이지 알림 신호가 아니다.</strong>
   한국 시간 09:00~15:30에 값이 하나도 들어오지 않는다.</p>
   <div class="scroll">
   <table>
@@ -518,11 +526,14 @@
   </div>
   <p><code>SOX</code>와 <code>US10Y</code>에는 24시간 짝을 붙여 뒀다
   (<code>NASDAQ100_FUT</code>, <code>US10Y_FUT</code>).
-  <strong>러셀만 짝이 없다.</strong> 같은 규칙을 한 심볼에만 안 쓴 것이다.</p>
+  러셀만 짝이 없었고 <strong>2026-08-09에 <code>RUSSELL2000_FUT</code>로 메웠다.</strong>
+  나머지 셋(<code>VIX</code> <code>SOX</code> <code>TSMC_ADR</code>)은 24시간 대체물이
+  없거나 이미 대리 지표가 있어 그대로 둔다.</p>
 
   <h3>구멍 2 — 주말 <span class="num">48</span>시간이 통째로 빈다</h3>
   <p>토 07:00 KST 이후 봉이 하나도 없고 월 07:00까지 그대로다. 주말에 지정학·정책 뉴스가
-  나오면 <strong>월요일 개장 전까지 시장 반응을 읽을 값이 없다.</strong></p>
+  나오면 <strong>월요일 개장 전까지 시장 반응을 읽을 값이 없었다.</strong>
+  2026-08-09에 <code>BTC</code>·<code>ETH</code>로 메웠다.</p>
   <div class="scroll">
   <table>
     <thead><tr><th>심볼</th><th class="num">주말 구간(토 07:00~일) 봉 수</th></tr></thead>
@@ -541,7 +552,15 @@
     지수라 반도체를 못 본다. 지금 구조로는 <strong>알림이 맞았는지 측정할 방법이 없다.</strong>
   </div>
 
-  <h3>붙일 것 — 1순위 (Enum 한 줄 + 마스터 시드 한 줄)</h3>
+  <h3>붙였다 — 1순위 <span class="tag idx">2026-08-09 구현</span></h3>
+  <div class="note">
+    <strong>구현 확인.</strong> 일요일 11:24 KST에 Yahoo DAG를 돌리니
+    <strong>25종 중 <code>BTC</code>·<code>ETH</code> 둘만 봉을 냈다</strong>(각 120봉).
+    나머지 23종은 최근 3시간 동안 0봉이다 — 구멍 2가 실제로 그렇다는 증거다.
+    <br><br>
+    KIS 쪽은 <code>KOSDAQ150_FUT=A06609</code>로 월물이 풀렸고, 금요일 구간을 조회하니
+    61봉(종가 1376.00, 전일종가 1365.80, 거래량 362)이 정상적으로 파싱됐다.
+  </div>
   <p>아래는 전부 <strong>실제 API를 불러 확인했다.</strong> 봉 수는 실측값이다.</p>
   <div class="scroll">
   <table>

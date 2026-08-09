@@ -3,7 +3,14 @@
 .env
 config.yaml
 
-docs/
+# 디렉터리째 막으면 안쪽 `!` 예외가 먹지 않는다. 그래서 `docs/*`다.
+docs/*
+# 이번 작업의 판단 근거는 문서에만 있다. 이 둘은 예외로 추적한다.
+!docs/quote-bar-intraday.md
+!docs/collection-map.html
+
+# 실행하면 앱키와 시세 응답이 출력에 남는다. 커밋하지 않는다.
+notebooks/
 
 compose/local/airflow/data/
 

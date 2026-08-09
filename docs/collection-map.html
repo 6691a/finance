@@ -1,0 +1,542 @@
+<meta charset="utf-8">
+<title>수집 현황 — 25종 · 무엇을 · 언제 · 어디서</title>
+<style>
+  :root {
+    --bg: #ffffff;
+    --panel: #f7f8fa;
+    --border: #e2e5ea;
+    --text: #1a1d21;
+    --muted: #6b7280;
+    --accent: #2563eb;
+    --kr: #d97706;
+    --us: #2563eb;
+    --fut: #7c3aed;
+    --idx: #0891b2;
+    --fx: #059669;
+    --rate: #64748b;
+    --grid: #eef0f3;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --bg: #14171a; --panel: #1c2025; --border: #2c3239; --text: #e6e8ea;
+      --muted: #9aa3ad; --accent: #60a5fa; --kr: #fbbf24; --us: #60a5fa;
+      --fut: #a78bfa; --idx: #22d3ee; --fx: #34d399; --rate: #94a3b8; --grid: #23282e;
+    }
+  }
+  :root[data-theme="dark"] {
+    --bg: #14171a; --panel: #1c2025; --border: #2c3239; --text: #e6e8ea;
+    --muted: #9aa3ad; --accent: #60a5fa; --kr: #fbbf24; --us: #60a5fa;
+    --fut: #a78bfa; --idx: #22d3ee; --fx: #34d399; --rate: #94a3b8; --grid: #23282e;
+  }
+
+  body {
+    background: var(--bg); color: var(--text);
+    font: 15px/1.65 -apple-system, BlinkMacSystemFont, "Apple SD Gothic Neo",
+          "Pretendard", "Noto Sans KR", Segoe UI, sans-serif;
+    margin: 0; padding: 2.5rem 1.5rem 5rem;
+  }
+  main { max-width: 1080px; margin: 0 auto; }
+  h1 { font-size: 1.75rem; margin: 0 0 .4rem; letter-spacing: -.02em; }
+  h2 {
+    font-size: 1.15rem; margin: 3rem 0 .9rem; padding-bottom: .5rem;
+    border-bottom: 1px solid var(--border); letter-spacing: -.01em;
+  }
+  h3 { font-size: .95rem; margin: 1.75rem 0 .6rem; color: var(--muted); font-weight: 600; }
+  p { margin: .6rem 0; }
+  .lede { color: var(--muted); margin-bottom: 0; }
+  code {
+    font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, monospace;
+    font-size: .85em; background: var(--panel);
+    padding: .12em .38em; border-radius: 4px; border: 1px solid var(--border);
+  }
+  .note {
+    background: var(--panel); border: 1px solid var(--border);
+    border-left: 3px solid var(--accent);
+    padding: .8rem 1rem; border-radius: 6px; margin: 1rem 0; font-size: .9rem;
+  }
+  .note strong { color: var(--text); }
+
+  .scroll { overflow-x: auto; margin: 1rem 0; }
+  table { border-collapse: collapse; width: 100%; font-size: .875rem; min-width: 640px; }
+  th, td { text-align: left; padding: .55rem .7rem; border-bottom: 1px solid var(--border); vertical-align: top; }
+  th { color: var(--muted); font-weight: 600; font-size: .8rem; white-space: nowrap; }
+  tbody tr:hover { background: var(--panel); }
+  td.num { text-align: right; font-variant-numeric: tabular-nums; }
+
+  .tag {
+    display: inline-block; font-size: .72rem; font-weight: 600;
+    padding: .1rem .45rem; border-radius: 4px; border: 1px solid currentColor;
+    white-space: nowrap;
+  }
+  .tag.kr { color: var(--kr); } .tag.us { color: var(--us); }
+  .tag.fut { color: var(--fut); } .tag.idx { color: var(--idx); }
+  .tag.fx { color: var(--fx); } .tag.rate { color: var(--rate); }
+  .tag.com { color: var(--kr); } .tag.eq { color: var(--idx); }
+
+  /* 24시간 타임라인 */
+  .tl { margin: 1.25rem 0 .5rem; }
+  .tl-row { display: grid; grid-template-columns: 132px 1fr; align-items: center; gap: .6rem; margin-bottom: .3rem; }
+  .tl-label { font-size: .8rem; color: var(--muted); text-align: right; }
+  .tl-track {
+    position: relative; height: 22px; background: var(--panel);
+    border: 1px solid var(--border); border-radius: 4px; overflow: hidden;
+  }
+  .tl-track::before {
+    content: ""; position: absolute; inset: 0;
+    background: repeating-linear-gradient(to right,
+      transparent 0, transparent calc(100%/24 - 1px),
+      var(--grid) calc(100%/24 - 1px), var(--grid) calc(100%/24));
+  }
+  .seg {
+    position: absolute; top: 3px; bottom: 3px; border-radius: 3px;
+    display: flex; align-items: center; justify-content: center;
+    font-size: .68rem; font-weight: 600; color: #fff; overflow: hidden; white-space: nowrap;
+  }
+  .seg.kr { background: var(--kr); } .seg.us { background: var(--us); }
+  .seg.fut { background: var(--fut); } .seg.idx { background: var(--idx); }
+  .seg.run { background: var(--accent); opacity: .85; }
+  .pin {
+    position: absolute; top: 0; bottom: 0; width: 3px;
+    background: var(--fx); border-radius: 2px;
+  }
+  .tl-axis { display: grid; grid-template-columns: 132px 1fr; gap: .6rem; margin-top: .35rem; }
+  .tl-ticks { display: flex; justify-content: space-between; font-size: .68rem; color: var(--muted); }
+  .legend { display: flex; flex-wrap: wrap; gap: .9rem; font-size: .78rem; color: var(--muted); margin-top: .9rem; }
+  .legend span::before {
+    content: ""; display: inline-block; width: 11px; height: 11px;
+    border-radius: 3px; margin-right: .35rem; vertical-align: -1px;
+  }
+  .legend .l-kr::before { background: var(--kr); }
+  .legend .l-us::before { background: var(--us); }
+  .legend .l-fut::before { background: var(--fut); }
+  .legend .l-idx::before { background: var(--idx); }
+  .legend .l-run::before { background: var(--accent); }
+  .legend .l-pin::before { background: var(--fx); width: 4px; }
+
+  footer { margin-top: 4rem; padding-top: 1rem; border-top: 1px solid var(--border);
+           font-size: .8rem; color: var(--muted); }
+  @media (max-width: 640px) {
+    .tl-row, .tl-axis { grid-template-columns: 84px 1fr; }
+    .tl-label { font-size: .72rem; }
+  }
+</style>
+
+<main>
+  <h1>수집 현황</h1>
+  <p class="lede">무엇을 · 언제 · 어디서 수집하는가. 기준 시각은 <strong>한국 시간(KST)</strong>이고
+  저장되는 값은 전부 UTC다.</p>
+
+  <div class="note">
+    <strong>원칙 — 국내에서 받을 수 있는 것은 국내를 우선한다.</strong>
+    한국투자증권(KIS)은 공식 API이고 국내 시세가 무료다. 미국 선물만 Yahoo를 쓰는데,
+    KIS의 CME <em>API</em> 시세료가 월 USD 221.10이라 이 용도에 맞지 않기 때문이다
+    (HTS/MTS는 무료지만 API 경로는 별도로 과금된다).
+  </div>
+
+  <h2>하루 — 무엇이 언제 움직이고, 언제 수집하는가</h2>
+
+  <div class="tl">
+    <div class="tl-row">
+      <div class="tl-label">코스피</div>
+      <div class="tl-track"><div class="seg kr" style="left:37.5%;width:27.08%">09:00 – 15:30</div></div>
+    </div>
+    <div class="tl-row">
+      <div class="tl-label">코스피200 선물</div>
+      <div class="tl-track"><div class="seg fut" style="left:37.5%;width:28.13%">09:00 – 15:45</div></div>
+    </div>
+    <div class="tl-row">
+      <div class="tl-label">미국 지수 (현물)</div>
+      <div class="tl-track">
+        <div class="seg idx" style="left:0;width:20.83%">– 05:00</div>
+        <div class="seg idx" style="left:93.75%;width:6.25%">22:30 –</div>
+      </div>
+    </div>
+    <div class="tl-row">
+      <div class="tl-label">미국 지수선물</div>
+      <div class="tl-track">
+        <div class="seg us" style="left:0;width:25%">– 06:00</div>
+        <div class="seg us" style="left:29.17%;width:70.83%">07:00 – (거의 24시간)</div>
+      </div>
+    </div>
+    <div class="tl-row">
+      <div class="tl-label">환율 · 미 금리</div>
+      <div class="tl-track">
+        <div class="seg" style="left:0;width:100%;background:var(--fx)">거의 24시간 (주말 제외)</div>
+      </div>
+    </div>
+    <div class="tl-row">
+      <div class="tl-label">원자재 · 국채선물</div>
+      <div class="tl-track">
+        <div class="seg" style="left:0;width:100%;background:var(--kr)">거의 24시간 (주말 제외)</div>
+      </div>
+    </div>
+    <div class="tl-row">
+      <div class="tl-label">아시아 지수</div>
+      <div class="tl-track">
+        <div class="seg idx" style="left:37.5%;width:33.3%">닛케이·대만·항셍·상하이 (09:00–16:00 언저리)</div>
+      </div>
+    </div>
+    <div class="tl-row" style="margin-top:.9rem">
+      <div class="tl-label">해외 21종 수집</div>
+      <div class="tl-track"><div class="seg run" style="left:0;width:100%">5분마다 · 24시간</div></div>
+    </div>
+    <div class="tl-row">
+      <div class="tl-label">국내 4종 수집</div>
+      <div class="tl-track"><div class="seg run" style="left:33.33%;width:37.5%">5분마다 · 08:00 – 16:59</div></div>
+    </div>
+    <div class="tl-row">
+      <div class="tl-label">일별 배치 3종</div>
+      <div class="tl-track">
+        <div class="pin" style="left:31.25%" title="07:30 fred_treasury_daily"></div>
+        <div class="pin" style="left:33.33%" title="08:00 ecos · exchange_rate"></div>
+      </div>
+    </div>
+    <div class="tl-axis">
+      <div></div>
+      <div class="tl-ticks">
+        <span>00</span><span>03</span><span>06</span><span>09</span>
+        <span>12</span><span>15</span><span>18</span><span>21</span><span>24</span>
+      </div>
+    </div>
+  </div>
+
+  <div class="legend">
+    <span class="l-kr">코스피 현물</span>
+    <span class="l-fut">코스피200 선물</span>
+    <span class="l-idx">미국 현물</span>
+    <span class="l-us">미국 선물</span>
+    <span class="l-run">수집 실행</span>
+    <span class="l-pin">일별 배치</span>
+  </div>
+
+  <div class="note">
+    <strong>한국 정규장(09:00–15:30)에 살아 있는 미국 신호는 선물뿐이다.</strong>
+    미국 현물은 그 시간 내내 멈춰 있다. 그래서 “한국 시간 14시에 반도체가 빠졌다”를 잡는
+    값은 <code>SOX</code>가 아니라 <code>NASDAQ100_FUT</code>이고, 한국 쪽 반응은
+    <code>KOSPI200_FUT</code>이 가장 빠르다. 미국 선물은 매일 06:00–07:00에 CME 정비 휴장이고
+    주말(토 06:00 ~ 월 07:00)에도 쉰다.
+  </div>
+
+  <h2>장중 1분봉 — <code>quote_bar</code></h2>
+  <p>5분마다 폴링하지만 저장 그레인은 <strong>1분</strong>이다. 한 번의 요청이 여러 봉을 주기
+  때문에 폴링 주기와 데이터 주기가 분리된다. 멱등 키는
+  <code>(provider, symbol, bar_at)</code>이라 겹쳐 받아도 행이 늘지 않는다.</p>
+
+  <p>심볼 <strong>25종</strong>. 봉 수는 확인 시점 기준이고 계속 쌓인다.</p>
+  <div class="scroll">
+  <table>
+    <thead><tr>
+      <th>심볼</th><th>이름</th><th>종류</th><th>국가</th><th>제공처</th>
+      <th>수집 시간(KST)</th><th class="num">봉</th>
+    </tr></thead>
+    <tbody>
+      <tr><td><code>KOSPI200_FUT</code></td><td>코스피200 선물</td><td><span class="tag fut">지수선물</span></td><td><span class="tag kr">한국</span></td><td>KIS</td><td>평일 08–17시</td><td class="num">102</td></tr>
+      <tr><td><code>SP500_FUT</code></td><td>S&amp;P500 선물</td><td><span class="tag fut">지수선물</span></td><td><span class="tag us">미국</span></td><td>Yahoo</td><td>24시간</td><td class="num">22,760</td></tr>
+      <tr><td><code>NASDAQ100_FUT</code></td><td>나스닥100 선물</td><td><span class="tag fut">지수선물</span></td><td><span class="tag us">미국</span></td><td>Yahoo</td><td>24시간</td><td class="num">22,762</td></tr>
+      <tr><td><code>KOSPI</code></td><td>코스피</td><td><span class="tag idx">지수</span></td><td><span class="tag kr">한국</span></td><td>KIS</td><td>평일 08–17시</td><td class="num">102</td></tr>
+      <tr><td><code>KOSPI200</code></td><td>코스피200</td><td><span class="tag idx">지수</span></td><td><span class="tag kr">한국</span></td><td>KIS</td><td>평일 08–17시</td><td class="num">102</td></tr>
+      <tr><td><code>KOSDAQ</code></td><td>코스닥</td><td><span class="tag idx">지수</span></td><td><span class="tag kr">한국</span></td><td>KIS</td><td>평일 08–17시</td><td class="num">102</td></tr>
+      <tr><td><code>NIKKEI225</code></td><td>닛케이225</td><td><span class="tag idx">지수</span></td><td><span class="tag kr">일본</span></td><td>Yahoo</td><td>24시간</td><td class="num">333</td></tr>
+      <tr><td><code>TAIEX</code></td><td>대만 가권지수</td><td><span class="tag idx">지수</span></td><td><span class="tag kr">대만</span></td><td>Yahoo</td><td>24시간</td><td class="num">271</td></tr>
+      <tr><td><code>HSI</code></td><td>항셍</td><td><span class="tag idx">지수</span></td><td><span class="tag kr">홍콩</span></td><td>Yahoo</td><td>24시간</td><td class="num">345</td></tr>
+      <tr><td><code>SSE_COMP</code></td><td>상하이종합</td><td><span class="tag idx">지수</span></td><td><span class="tag kr">중국</span></td><td>Yahoo</td><td>24시간</td><td class="num">240</td></tr>
+      <tr><td><code>SOX</code></td><td>필라델피아 반도체 지수</td><td><span class="tag idx">지수</span></td><td><span class="tag us">미국</span></td><td>Yahoo</td><td>24시간</td><td class="num">6,628</td></tr>
+      <tr><td><code>VIX</code></td><td>VIX 변동성 지수</td><td><span class="tag idx">지수</span></td><td><span class="tag us">미국</span></td><td>Yahoo</td><td>24시간</td><td class="num">13,172</td></tr>
+      <tr><td><code>RUSSELL2000</code></td><td>러셀2000</td><td><span class="tag idx">지수</span></td><td><span class="tag us">미국</span></td><td>Yahoo</td><td>24시간</td><td class="num">391</td></tr>
+      <tr><td><code>USDKRW</code></td><td>원/달러</td><td><span class="tag fx">환율</span></td><td><span class="tag kr">한국</span></td><td>Yahoo</td><td>24시간</td><td class="num">1,321</td></tr>
+      <tr><td><code>JPYKRW</code></td><td>원/엔</td><td><span class="tag fx">환율</span></td><td><span class="tag kr">한국</span></td><td>Yahoo</td><td>24시간</td><td class="num">270</td></tr>
+      <tr><td><code>USDJPY</code></td><td>엔/달러</td><td><span class="tag fx">환율</span></td><td><span class="tag kr">일본</span></td><td>Yahoo</td><td>24시간</td><td class="num">1,320</td></tr>
+      <tr><td><code>USDCNH</code></td><td>위안/달러(역외)</td><td><span class="tag fx">환율</span></td><td><span class="tag kr">중국</span></td><td>Yahoo</td><td>24시간</td><td class="num">1,320</td></tr>
+      <tr><td><code>DXY</code></td><td>달러인덱스</td><td><span class="tag fx">환율</span></td><td><span class="tag us">미국</span></td><td>Yahoo</td><td>24시간</td><td class="num">1,020</td></tr>
+      <tr><td><code>GOLD</code></td><td>금</td><td><span class="tag com">원자재</span></td><td><span class="tag us">미국</span></td><td>Yahoo</td><td>24시간</td><td class="num">1,020</td></tr>
+      <tr><td><code>SILVER</code></td><td>은</td><td><span class="tag com">원자재</span></td><td><span class="tag us">미국</span></td><td>Yahoo</td><td>24시간</td><td class="num">1,007</td></tr>
+      <tr><td><code>COPPER</code></td><td>구리</td><td><span class="tag com">원자재</span></td><td><span class="tag us">미국</span></td><td>Yahoo</td><td>24시간</td><td class="num">1,000</td></tr>
+      <tr><td><code>WTI</code></td><td>WTI 원유</td><td><span class="tag com">원자재</span></td><td><span class="tag us">미국</span></td><td>Yahoo</td><td>24시간</td><td class="num">1,020</td></tr>
+      <tr><td><code>US10Y</code></td><td>미국 10년물 <strong>금리</strong></td><td><span class="tag rate">금리</span></td><td><span class="tag us">미국</span></td><td>Yahoo</td><td>미 정규장</td><td class="num">400</td></tr>
+      <tr><td><code>US10Y_FUT</code></td><td>미 10년 국채선물 <strong>가격</strong></td><td><span class="tag rate">국채선물</span></td><td><span class="tag us">미국</span></td><td>Yahoo</td><td>24시간</td><td class="num">946</td></tr>
+      <tr><td><code>TSMC_ADR</code></td><td>TSMC ADR</td><td><span class="tag eq">개별종목</span></td><td><span class="tag us">대만</span></td><td>Yahoo</td><td>미 정규장</td><td class="num">391</td></tr>
+    </tbody>
+  </table>
+  </div>
+
+  <div class="note">
+    <strong>코스피200 현물과 선물을 함께 받는 이유는 베이시스다.</strong> 봉 단위 베이시스를
+    API가 주지 않아서 둘을 각각 받아 조회 쪽에서 뺀다. 확인 시점 15:32 기준
+    선물 979.35 − 현물 974.72 = <strong>+4.63</strong>.
+    <br><br>
+    <strong>금리는 변화율이 아니라 bp로 읽는다.</strong> <code>US10Y</code>가 4.66에서 4.70으로
+    가는 건 “+0.86%”가 아니라 “<strong>+4bp</strong>”다.
+    <br><br>
+    <strong><code>US10Y</code>와 <code>US10Y_FUT</code>를 같이 켜면 안 된다.</strong>
+    앞은 수익률(4.66<em>%</em>)이고 뒤는 가격(110<em>달러</em>)이라 같은 “미 10년물”인데
+    <strong>서로 반대로 움직인다.</strong> 그래서 <code>kind</code>를 각각
+    <code>rate</code>와 <code>bond_future</code>로 갈랐다.
+    <br><br>
+    <code>^TNX</code>(<code>US10Y</code>)는 미국 정규장에만 움직여 400봉이고
+    <code>ZN=F</code>(<code>US10Y_FUT</code>)는 946봉이다.
+    <strong>한국 장중에 살아 있는 미 금리 신호는 국채선물뿐이다.</strong>
+  </div>
+
+  <h3>제공처별 성질</h3>
+  <div class="scroll">
+  <table>
+    <thead><tr><th></th><th>Yahoo (미국)</th><th>KIS (국내)</th></tr></thead>
+    <tbody>
+      <tr><td>공식 여부</td><td>비공식. 언제든 막힐 수 있다</td><td>공식</td></tr>
+      <tr><td>인증</td><td>없음</td><td>앱키 → 24시간 토큰 (발급 횟수 제한)</td></tr>
+      <tr><td>한 번에</td><td>하루치 통째 (600봉+)</td><td><strong>102봉</strong></td></tr>
+      <tr><td>정렬</td><td>오름차순</td><td>최신순 (저장 전 뒤집음)</td></tr>
+      <tr><td>시각</td><td>epoch</td><td>KST 벽시계 <code>YYYYMMDD</code>+<code>HHMMSS</code></td></tr>
+      <tr><td>과거 보관</td><td>1분봉 <strong>약 30일</strong></td><td>페이징으로 조회</td></tr>
+      <tr><td>요청 도구</td><td>scrapling (기본 UA는 429)</td><td>stdlib <code>urlopen</code></td></tr>
+      <tr><td>오류 전달</td><td>HTTP 상태</td><td>본문 <code>rt_cd</code>. 500에 비표준 JSON</td></tr>
+    </tbody>
+  </table>
+  </div>
+
+  <h2>일별 지표 — <code>indicator_observation</code> 시계열 목록</h2>
+  <p>하루 한 값을 쌓는 리포트용 수집이다. 장중 알림용인 <code>quote_bar</code>와 목적이 다르다.
+  자연키는 <code>(provider, series_id, observation_date)</code>다.</p>
+
+  <div class="scroll">
+  <table>
+    <thead><tr>
+      <th>시계열</th><th>이름</th><th>종류</th><th>국가</th><th>제공처</th><th>수집 시각(KST)</th>
+    </tr></thead>
+    <tbody>
+      <tr><td><code>DGS3MO</code></td><td>미국 3개월물</td><td><span class="tag rate">국채</span></td>
+          <td><span class="tag us">미국</span></td><td>FRED</td><td rowspan="4">화–토 07:30</td></tr>
+      <tr><td><code>DGS2</code></td><td>미국 2년물</td><td><span class="tag rate">국채</span></td>
+          <td><span class="tag us">미국</span></td><td>FRED</td></tr>
+      <tr><td><code>DGS10</code></td><td>미국 10년물</td><td><span class="tag rate">국채</span></td>
+          <td><span class="tag us">미국</span></td><td>FRED</td></tr>
+      <tr><td><code>DGS30</code></td><td>미국 30년물</td><td><span class="tag rate">국채</span></td>
+          <td><span class="tag us">미국</span></td><td>FRED</td></tr>
+      <tr><td><code>KTB2Y</code></td><td>한국 2년물</td><td><span class="tag rate">국채</span></td>
+          <td><span class="tag kr">한국</span></td><td>ECOS</td><td rowspan="5">화–토 08:00</td></tr>
+      <tr><td><code>KTB3Y</code></td><td>한국 3년물</td><td><span class="tag rate">국채</span></td>
+          <td><span class="tag kr">한국</span></td><td>ECOS</td></tr>
+      <tr><td><code>KTB10Y</code></td><td>한국 10년물</td><td><span class="tag rate">국채</span></td>
+          <td><span class="tag kr">한국</span></td><td>ECOS</td></tr>
+      <tr><td><code>KTB30Y</code></td><td>한국 30년물</td><td><span class="tag rate">국채</span></td>
+          <td><span class="tag kr">한국</span></td><td>ECOS</td></tr>
+      <tr><td><code>CD91D</code></td><td>한국 CD 91일</td><td><span class="tag rate">단기</span></td>
+          <td><span class="tag kr">한국</span></td><td>ECOS</td></tr>
+    </tbody>
+  </table>
+  </div>
+
+  <div class="note">
+    수집 시각이 <strong>화–토</strong>인 이유는 미국 발표일 기준이기 때문이다. 미국 월요일
+    관측값이 KST로는 화요일 새벽에 나온다. 두 DAG 모두 최근 7일을 다시 조회해 휴장일과 발표
+    지연을 별도 캘린더 없이 흡수한다.
+  </div>
+
+  <h2>환율 — <code>exchange_rate</code></h2>
+  <div class="scroll">
+  <table>
+    <thead><tr><th>대상</th><th>제공처</th><th>수집 시각(KST)</th><th>비고</th></tr></thead>
+    <tbody>
+      <tr>
+        <td><span class="tag fx">통화별 고시 환율</span> 10종<br>
+            <code>AUD CAD CNY EUR GBP HKD JPY RUB TWD USD</code></td>
+        <td>하나은행 (HTML)</td>
+        <td>매일 08:00</td>
+        <td>회차별 고시. 멱등 키는 <code>(currency, date, time, round)</code></td>
+      </tr>
+    </tbody>
+  </table>
+  </div>
+
+  <h2>수집기가 실제로 담는 것</h2>
+
+  <h3>미국 4종 — Yahoo v8 chart</h3>
+  <p>심볼마다 <code>GET /v8/finance/chart/{심볼}?interval=1m&amp;range=1d</code> 한 번.
+  응답 하나가 <strong>그날 1분봉 전체(600봉 이상)</strong>를 준다. 5분마다 24시간 돈다.</p>
+  <div class="scroll">
+  <table>
+    <thead><tr><th>저장 심볼</th><th>Yahoo 심볼</th><th>정체</th></tr></thead>
+    <tbody>
+      <tr><td><code>SP500_FUT</code></td><td><code>ES=F</code></td>
+          <td>E-mini S&amp;P500 <strong>연속 선물</strong></td></tr>
+      <tr><td><code>NASDAQ100_FUT</code></td><td><code>NQ=F</code></td>
+          <td>E-mini 나스닥100 연속 선물</td></tr>
+      <tr><td><code>SOX</code></td><td><code>^SOX</code></td>
+          <td>필라델피아 반도체 <strong>현물 지수</strong></td></tr>
+      <tr><td><code>VIX</code></td><td><code>^VIX</code></td>
+          <td>CBOE 변동성 <strong>현물 지수</strong></td></tr>
+    </tbody>
+  </table>
+  </div>
+  <div class="scroll">
+  <table>
+    <thead><tr><th>응답에서 뽑는 값</th><th>저장 컬럼</th></tr></thead>
+    <tbody>
+      <tr><td><code>timestamp[i]</code> (epoch)</td><td><code>bar_at</code> — UTC로 변환</td></tr>
+      <tr><td><code>indicators.quote[0].open / high / low / close</code></td>
+          <td><code>open</code> <code>high</code> <code>low</code> <code>close</code></td></tr>
+      <tr><td><code>indicators.quote[0].volume</code></td><td><code>volume</code></td></tr>
+      <tr><td><code>meta.chartPreviousClose</code></td>
+          <td><code>previous_close</code> — 모든 봉에 같은 값이 박힌다</td></tr>
+      <tr><td>—</td><td><code>contract_code</code>는 <strong>NULL</strong>.
+          <code>ES=F</code>가 연속 심볼이라 월물 개념이 없다</td></tr>
+    </tbody>
+  </table>
+  </div>
+  <p><strong>받은 600봉을 다 쓰지 않는다.</strong> 최근 <code>lookback_minutes</code>(기본 15분)
+  안의 봉만 저장한다. 매번 전부 쓰면 폴링마다 수천 건의 의미 없는 UPDATE가 난다.</p>
+
+  <h3>국내 2종 — KIS. 대상마다 엔드포인트가 다르다</h3>
+  <p>한 번에 <strong>102봉</strong>만 온다. Yahoo와 가장 큰 차이다.
+  평일 08:00–16:59 KST에만 5분마다 돈다.</p>
+  <div class="scroll">
+  <table>
+    <thead><tr><th>저장 심볼</th><th>조회 코드</th><th>엔드포인트</th></tr></thead>
+    <tbody>
+      <tr><td><code>KOSPI200_FUT</code></td>
+          <td><code>A01609</code><br><span style="color:var(--muted);font-size:.85em">날짜에서 계산한 월물</span></td>
+          <td>선물옵션 분봉 <code>FHKIF03020200</code></td></tr>
+      <tr><td><code>KOSPI</code></td>
+          <td><code>0001</code><br><span style="color:var(--muted);font-size:.85em">KRX 업종코드</span></td>
+          <td>업종 분봉 <code>FHKUP03500200</code></td></tr>
+    </tbody>
+  </table>
+  </div>
+  <div class="scroll">
+  <table>
+    <thead><tr><th>값</th><th>선물 응답</th><th>지수 응답</th></tr></thead>
+    <tbody>
+      <tr><td>시가·고가·저가·종가</td>
+          <td><code>futs_oprc</code> <code>futs_hgpr</code><br><code>futs_lwpr</code> <code>futs_prpr</code></td>
+          <td><code>bstp_nmix_oprc</code> <code>bstp_nmix_hgpr</code><br><code>bstp_nmix_lwpr</code> <code>bstp_nmix_prpr</code></td></tr>
+      <tr><td>거래량</td><td><code>cntg_vol</code></td><td><code>cntg_vol</code></td></tr>
+      <tr><td>전일종가</td><td><code>futs_prdy_clpr</code></td><td><code>prdy_nmix</code></td></tr>
+      <tr><td>시각</td>
+          <td colspan="2"><code>stck_bsop_date</code>(<code>20260807</code>) +
+          <code>stck_cntg_hour</code>(<code>153000</code>) — <strong>KST 벽시계</strong>를 UTC로 변환</td></tr>
+      <tr><td><code>contract_code</code></td><td><code>A01609</code> 저장</td><td><strong>NULL</strong></td></tr>
+    </tbody>
+  </table>
+  </div>
+  <div class="note">
+    함정 둘. <strong>응답이 최신순이라</strong> 저장 전에 오름차순으로 뒤집는다.
+    그리고 업종 조회는 <code>FID_ETC_CLS_CODE=1</code>이어야 한다 — 기본값 <code>0</code>이면
+    시각이 <code>999999</code>(장마감)·<code>888888</code>(시간외)인 의사 봉이 섞여 들어와
+    시각 파싱이 깨진다.
+  </div>
+
+  <h3>월물은 하드코딩하지 않는다</h3>
+  <p>코스피200 선물은 연속 심볼이 없어 계약을 직접 지정해야 한다. 코드는
+  <code>A0</code> + 상품(<code>1</code>=정규) + 연도 끝자리 + 만기월이고, 분기물(3·6·9·12)에
+  만기는 만기월 <strong>두 번째 목요일</strong>이다. 날짜에서 계산한다.</p>
+  <div class="scroll">
+  <table>
+    <thead><tr><th>날짜</th><th>계약</th><th></th></tr></thead>
+    <tbody>
+      <tr><td>2026-09-10</td><td><code>A01609</code></td><td>만기 당일은 아직 거래된다</td></tr>
+      <tr><td>2026-09-11</td><td><code>A01612</code></td><td>롤오버</td></tr>
+      <tr><td>2026-12-11</td><td><code>A01703</code></td><td>연도 자릿수도 넘어간다</td></tr>
+    </tbody>
+  </table>
+  </div>
+  <p>미니(<code>A056</code>)가 아니라 <strong>정규 계약</strong>을 쓴다. 미니는 계약 크기가
+  1/5이고 거래량도 적다. 실제 월물을 <code>contract_code</code>에 저장하는 이유는, 월물이
+  바뀔 때 생기는 가격 갭이 시장 급변인지 롤오버인지 구분하기 위해서다.</p>
+
+  <h3>일별 배치 셋</h3>
+  <div class="scroll">
+  <table>
+    <thead><tr><th>수집 시각 (KST)</th><th>무엇을</th><th>어디서</th><th>저장</th></tr></thead>
+    <tbody>
+      <tr><td>화–토 07:30</td><td>미국 국채 금리 4종<br>3개월·2년·10년·30년</td>
+          <td>FRED</td><td><code>indicator_observation</code></td></tr>
+      <tr><td>화–토 08:00</td><td>국내 시장금리 5종<br>국고채 2·3·10·30년, CD 91일</td>
+          <td>한국은행 ECOS</td><td><code>indicator_observation</code></td></tr>
+      <tr><td>매일 08:00</td><td>고시 환율 10종<br>USD JPY EUR 등</td>
+          <td>하나은행 (HTML)</td><td><code>exchange_rate</code></td></tr>
+    </tbody>
+  </table>
+  </div>
+
+  <div class="note">
+    <strong>“새 봉 없음”은 정상이다.</strong> 24시간 도는 수집이라 조용한 구간이 상시 있다.
+    주말, CME 정비 시간, 한국 장 밖이 그렇다. 수집기는 <em>응답이 빈 것</em>(고장)과
+    <em>최근 구간에 새 봉이 없는 것</em>(휴장)을 구분한다. 뒤쪽은 성공으로 끝나고
+    <code>source_record</code>만 남는다. 조회했지만 값이 없는 구간과 아직 조회하지 않은
+    구간을 구분하기 위해서다.
+  </div>
+
+  <h2>화면 표시 규칙</h2>
+  <p>대시보드는 원시 심볼을 그대로 쓰지 않는다. <strong><code>구리(COPPER)</code></strong>
+  처럼 <strong>한국어를 앞에</strong> 두고 괄호에 심볼을 남긴다. 심볼 드롭다운, 패널 제목,
+  시계열 범례, 표의 값까지 전부 같은 형식이고 표의 컬럼명도 “심볼”이 아니라 “종목”이다.</p>
+  <div class="note">
+    <strong>괄호에 심볼을 남기는 이유.</strong> 이름만 두면 화면에서 본 것과 SQL·알림 설정에
+    쓰는 값의 연결이 끊긴다. “구리가 빠졌네” 다음에 “쿼리에 뭘 넣지?”가 된다.
+    <br><br>
+    이름은 SQL에 박혀 있지 않고 <code>quote_symbol.label</code>에서 조인해 온다. 그래서
+    <strong>이름을 고치려면 마스터 한 행만 바꾸면 되고</strong>, 대시보드 다섯 개를 건드리지
+    않아도 다섯 화면에 동시에 반영된다. 심볼을 추가할 때 <code>label</code>이 곧 화면
+    이름이라는 뜻이기도 하다.
+  </div>
+
+  <h2>계보 — <code>source_record</code></h2>
+  <p>수집 1회가 <code>source_record</code> 1건이다. 장중 폴링은 심볼마다 남기지 않고
+  <strong>폴링 1회를 1건</strong>으로 묶는다. 5분마다 영원히 도는 수집이라 심볼별로 남기면
+  계보 테이블이 수집 자체보다 빨리 커지기 때문이다. 원본 응답(<code>payload</code>)도
+  장중 수집에서는 저장하지 않는다 — 하루 수십 MB가 된다.</p>
+
+  <h2 id="planned">예정 — 아직 수집하지 않는 것</h2>
+
+  <div class="note">
+    <strong>1·2순위는 전부 구현했다.</strong> 로드맵에서 “심볼 한 줄이면 되는 것”으로
+    분류했던 항목이 모두 위 표에 들어갔다. 유일한 예외는 <strong>항셍테크</strong>
+    (<code>HSTECH</code>)로, <strong>Yahoo에 없어서</strong> 다른 소스가 필요하다.
+    <br><br>
+    이 과정에서 <code>kind</code>가 둘에서 <strong>일곱</strong>으로 늘었다 —
+    <code>index</code> <code>index_future</code> <code>fx</code> <code>rate</code>
+    <code>bond_future</code> <code>commodity</code> <code>equity</code>.
+    성격이 다른 값을 한 축에 겹치면 읽을 수 없기 때문이다.
+  </div>
+
+  <h3>남은 것 — <code>quote_bar</code>에 안 들어간다</h3>
+  <p>아래는 1분봉이 아니다. <strong>그레인과 계보 규칙이 달라 심볼 한 줄로 끝나지 않는다.</strong>
+  각각 새 테이블과 새 수집기가 필요하다.</p>
+  <div class="scroll">
+  <table>
+    <thead><tr><th>분류</th><th>내용</th><th>왜 다른가</th></tr></thead>
+    <tbody>
+      <tr><td>수급</td><td>외국인·기관 순매수, 선물 외국인 포지션,<br>프로그램 매매</td>
+          <td>일 단위 집계값이다. KIS API로 받을 수 있지만 저장 형태가 봉이 아니다</td></tr>
+      <tr><td>수급</td><td>공매도 잔고 · 대차잔고 · 신용융자</td>
+          <td><strong>공시가 T+2다.</strong> 관측일과 공시일을 따로 저장하지 않으면
+              백테스트가 미래를 훔친다(look-ahead bias). <code>published_at</code>이 필수다</td></tr>
+      <tr><td>이벤트</td><td>CPI · 고용 · FOMC · BOJ · 중국 PMI</td>
+          <td>발표 시각과 예상치·실제치를 갖는 캘린더 성격이다. 값이 아니라 사건이다</td></tr>
+      <tr><td>펀더멘털</td><td>TSMC 월매출, 관세청 반도체 수출액(10일 단위),<br>DRAM·NAND 현물가</td>
+          <td>월·순 단위 발표다. 크롤링이고 발표 지연을 함께 기록해야 한다</td></tr>
+      <tr><td>파생</td><td>KRX 야간선물</td>
+          <td>분봉 API로 오지 않는다. 야간 시각을 넣어도 정규장 마감으로 잘리고
+              <code>krx-ngt-*</code> REST는 404다. <strong>웹소켓 상주 프로세스가 필요하다</strong></td></tr>
+      <tr><td>지수</td><td>항셍테크</td>
+          <td>Yahoo에 <code>HSTECH</code>가 없다. KIS 해외지수나 다른 소스를 확인해야 한다</td></tr>
+    </tbody>
+  </table>
+  </div>
+
+  <div class="note">
+    <strong>지금 구조가 흡수하는 것과 아닌 것.</strong>
+    1분봉이고 <code>(제공처, 심볼, 시각)</code>으로 갈리는 값은 수집기 Enum 한 줄과 마스터
+    시드 한 줄이면 대시보드까지 저절로 따라온다. 실제로 이번에 12종을 붙이면서 대시보드
+    JSON은 원자재 하나를 새로 만든 것 말고 손대지 않았다.
+    <br><br>
+    반면 <em>발표 시각이 관측 시각과 다른</em> 값(공매도 잔고, 경제지표)은 그 구조에 담기지
+    않는다. 섞어 넣으면 나중에 백테스트가 조용히 틀린다.
+  </div>
+
+  <footer>
+    자동 생성이 아니라 손으로 쓴 문서다. 심볼이나 스케줄을 바꾸면 여기도 함께 고친다.<br>
+    설계 배경과 실측 근거는 <code>docs/quote-bar-intraday.md</code>에 있다.
+    기준일 2026-08-08.
+  </footer>
+</main>

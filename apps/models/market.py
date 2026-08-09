@@ -101,7 +101,12 @@ class QuoteBar(EntityBase):
     volume: Mapped[int | None] = mapped_column(
         BigInteger,
         nullable=True,
-        comment="봉 구간의 거래량. 제공처가 주지 않으면 NULL이다(지수 선물은 0으로 오기도 한다)",
+        comment=(
+            "봉 구간의 거래량. 제공처가 주는 값을 그대로 저장한다. "
+            "현물 지수처럼 거래량 개념이 없는 심볼은 제공처가 0을 실어 보내므로 0이 들어간다. "
+            "즉 0은 '거래가 없었다'와 '제공처가 거래량을 주지 않는다'를 구분하지 않는다. "
+            "거래량으로 판단하는 조회가 생기면 그때 심볼 종류로 갈라 읽는다"
+        ),
     )
     previous_close: Mapped[Decimal] = mapped_column(
         Numeric(18, 8),

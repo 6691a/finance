@@ -93,6 +93,7 @@ def response_for(body: bytes | None = None, contract: str = CONTRACT) -> KisResp
 class FakeCursor:
     def __init__(self) -> None:
         self.calls: list[tuple[str, tuple]] = []
+        self.batches = 0
 
     def __enter__(self) -> Self:
         return self
@@ -102,6 +103,11 @@ class FakeCursor:
 
     def execute(self, statement: str, parameters: tuple) -> None:
         self.calls.append((statement, parameters))
+
+    def executemany(self, statement: str, parameters) -> None:
+        # 배치 경로도 (문장, 파라미터) 한 쌍씩 남겨 행 단위 검증을 그대로 유지한다.
+        self.batches += 1
+        self.calls.extend((statement, tuple(row)) for row in parameters)
 
     def fetchone(self) -> tuple[int]:
         return (SOURCE_RECORD_ID,)
@@ -113,6 +119,18 @@ class FakeConnection:
 
     def cursor(self) -> FakeCursor:
         return self.recorded_cursor
+
+
+@pytest.fixture(autouse=True)
+def without_the_psycopg2_fast_path(monkeypatch):
+    """저장 테스트를 PEP 249 경로에 고정한다.
+
+    psycopg2가 설치돼 있으면 `store_bars`는 `execute_batch`를 탄다. 그건 문장을 묶어
+    보내므로 커서에 도착하는 SQL이 드라이버 사정에 따라 달라진다. 컬럼 순서 같은 이
+    모듈의 계약을 검증하려면 행 단위가 그대로 보이는 경로여야 한다.
+    `test_hana.py`가 먼저 쓴 방식이다.
+    """
+    monkeypatch.setattr("modules.upsert._execute_batch", None)
 
 
 def inserted_columns(statement: str) -> tuple[str, ...]:
@@ -333,16 +351,11 @@ def test_store_carries_fetch_failures_into_the_metadata():
     failure = SymbolOutcome(symbol="KOSPI200_FUT", contract_code=CONTRACT, status=500, error="boom")
     connection = FakeConnection()
 
-    _, outcomes = store_bars(connection, [response_for()], WINDOW_START, None, [failure])
+    _, outcomes = store_bars(connection, [response_for()], WINDOW_START, [failure])
 
     assert outcomes[0] == failure
     metadata = json.loads(connection.recorded_cursor.calls[0][1][8])
     assert metadata["symbols"][0]["error"] == "boom"
-
-
-def test_store_rejects_a_reversed_window():
-    with pytest.raises(ValueError, match="since must be before until"):
-        store_bars(FakeConnection(), [response_for()], COMPLETED_AT, WINDOW_START)
 
 
 def test_one_request_never_exceeds_the_kis_page_size():

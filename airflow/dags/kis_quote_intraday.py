@@ -223,7 +223,7 @@ def kis_quote_intraday():
 
         connection: Any = PostgresHook(postgres_conn_id=CONNECTION_ID).get_conn()
         try:
-            bar_count, outcomes = store_bars(connection, responses, since, None, failures)
+            bar_count, outcomes = store_bars(connection, responses, since, failures)
             connection.commit()
         except (KisPayloadError, KisResultError) as error:
             connection.rollback()

@@ -44,7 +44,7 @@
 import json
 import re
 from collections.abc import Sequence
-from datetime import UTC, date, datetime, time, timedelta
+from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal, InvalidOperation
 from enum import StrEnum
 from typing import Any, Protocol, Self
@@ -65,6 +65,7 @@ from pydantic import (
 )
 
 from modules.sql import read_sql
+from modules.upsert import execute_upserts
 
 KIS_BASE_URL = "https://openapi.koreainvestment.com:9443"
 SOURCE = "kis"
@@ -84,9 +85,6 @@ KST = ZoneInfo("Asia/Seoul")
 
 # KIS가 한 번에 돌려주는 최대 봉 수. 문서에 명시돼 있고 실측도 같다.
 MAX_BARS_PER_REQUEST = 102
-
-# 정규장 마감. 선물은 주식(15:30)보다 15분 늦다. 조회 기준 시각의 상한으로 쓴다.
-SESSION_CLOSE = time(15, 45)
 
 REQUEST_TIMEOUT_SECONDS = 30
 
@@ -123,8 +121,6 @@ class DomesticFuture(StrEnum):
     KOSPI200_FUT = ("KOSPI200_FUT", "1", "코스피200 선물")
 
 
-DOMESTIC_FUTURES: tuple[str, ...] = tuple(future.value for future in DomesticFuture)
-
 # KOSPI200 선물은 분기물이다. 미니와 달리 월물이 없다.
 CONTRACT_MONTHS: tuple[int, ...] = (3, 6, 9, 12)
 
@@ -159,8 +155,6 @@ class DomesticIndex(StrEnum):
     KOSDAQ = ("KOSDAQ", "1001", "코스닥")
 
 
-DOMESTIC_INDEXES: tuple[str, ...] = tuple(index.value for index in DomesticIndex)
-
 # 업종 분봉의 기타 구분 코드. **`1`이어야 한다.**
 # `0`을 쓰면 시각이 `999999`(장마감)와 `888888`(시간외)인 의사 봉이 섞여 들어와 시각 파싱이
 # 깨진다. 실측으로 확인했다.
@@ -173,6 +167,8 @@ class Cursor(Protocol):
     def __exit__(self, *args: object) -> bool | None: ...
 
     def execute(self, statement: str, parameters: Sequence[Any]) -> object: ...
+
+    def executemany(self, statement: str, parameters: Sequence[Sequence[Any]]) -> object: ...
 
     def fetchone(self) -> Any: ...
 
@@ -535,7 +531,7 @@ def _decimal(value: str, field: str) -> Decimal:
         raise KisPayloadError(f"KIS returned a non-numeric {field}: {value!r}") from error
 
 
-def parse_bars(body: bytes, since: datetime | None = None, until: datetime | None = None) -> ParsedBars:
+def parse_bars(body: bytes, since: datetime | None = None) -> ParsedBars:
     """유효한 1분봉을 뽑는다.
 
     **판정을 두 단계로 나눈다.** `yahoo.py`와 같은 이유다.
@@ -545,6 +541,10 @@ def parse_bars(body: bytes, since: datetime | None = None, until: datetime | Non
        조회 구간에 조용히 구멍이 남는다.
     2. **`since` 필터 결과가 0건인 것은 정상이다.** 봉은 있는데 최근 구간에 없다는 뜻이고
        그건 휴장이다(정규장 09:00~15:45 KST 밖).
+
+    상한(`until`)은 받지 않는다. KIS는 한 번에 102봉만 주고 백필 경로가 없어서 폴링이
+    항상 "지금 기준 최근 N분"만 저장하기 때문이다. Yahoo 쪽은 백필이 8일 창을 이어 붙이므로
+    경계 봉이 두 창에 겹치지 않게 상한이 필요하다.
 
     응답은 **최신순**이라 저장 전에 오름차순으로 뒤집는다.
     """
@@ -575,8 +575,6 @@ def parse_bars(body: bytes, since: datetime | None = None, until: datetime | Non
         if latest_bar_at is None or bar_at > latest_bar_at:
             latest_bar_at = bar_at
         if since is not None and bar_at < since:
-            continue
-        if until is not None and bar_at >= until:
             continue
 
         volume = raw.volume.strip()
@@ -623,7 +621,6 @@ def store_bars(
     connection: Connection,
     responses: Sequence[KisResponse],
     since: datetime,
-    until: datetime | None = None,
     failures: Sequence[SymbolOutcome] = (),
 ) -> tuple[int, tuple[SymbolOutcome, ...]]:
     """폴링 1회분을 저장하고 (저장한 봉 수, 심볼별 결과)를 돌려준다.
@@ -631,9 +628,6 @@ def store_bars(
     구조는 `yahoo.store_bars`와 같다. 폴링 1회가 `source_record` 1건이고, 원본은 남기지
     않으며, 봉이 0건이어도 계보 레코드는 남긴다. 다른 점은 월물 코드를 함께 저장한다는 것뿐이다.
     """
-    if until is not None and since >= until:
-        raise ValueError("since must be before until")
-
     started_at = min((response.started_at for response in responses), default=datetime.now(UTC))
     completed_at = max((response.completed_at for response in responses), default=started_at)
 
@@ -641,7 +635,7 @@ def store_bars(
     outcomes: list[SymbolOutcome] = list(failures)
     for response in responses:
         try:
-            result = parse_bars(response.body, since=since, until=until)
+            result = parse_bars(response.body, since=since)
         except (KisPayloadError, KisResultError) as error:
             outcomes.append(
                 SymbolOutcome(
@@ -670,7 +664,6 @@ def store_bars(
         {
             "interval": "1m",
             "window_start": since.isoformat(),
-            "window_end": until.isoformat() if until else None,
             "symbols": [outcome.model_dump() for outcome in outcomes],
         },
         ensure_ascii=False,
@@ -693,22 +686,26 @@ def store_bars(
             ),
         )
         source_record_id = cursor.fetchone()[0]
-        for response, bars in parsed:
-            for bar in bars:
-                cursor.execute(
-                    QUOTE_BAR_UPSERT,
-                    (
-                        SOURCE,
-                        response.symbol,
-                        bar.bar_at,
-                        bar.open,
-                        bar.high,
-                        bar.low,
-                        bar.close,
-                        bar.volume,
-                        bar.previous_close,
-                        response.contract_code,
-                        source_record_id,
-                    ),
+        # 봉마다 왕복하지 않고 묶어 보낸다. 폴링 1회가 계약·지수 합쳐 수백 행이다.
+        execute_upserts(
+            cursor,
+            QUOTE_BAR_UPSERT,
+            [
+                (
+                    SOURCE,
+                    response.symbol,
+                    bar.bar_at,
+                    bar.open,
+                    bar.high,
+                    bar.low,
+                    bar.close,
+                    bar.volume,
+                    bar.previous_close,
+                    response.contract_code,
+                    source_record_id,
                 )
+                for response, bars in parsed
+                for bar in bars
+            ],
+        )
     return bar_count, tuple(outcomes)

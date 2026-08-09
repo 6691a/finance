@@ -54,6 +54,7 @@ from pydantic import (
 from scrapling.fetchers import Fetcher
 
 from modules.sql import read_sql
+from modules.upsert import execute_upserts
 
 YAHOO_CHART_URL = "https://query1.finance.yahoo.com/v8/finance/chart/{symbol}"
 SOURCE = "yahoo"
@@ -152,15 +153,14 @@ class QuoteSymbol(StrEnum):
     TSMC_ADR = ("TSMC_ADR", "TSM", "TSMC ADR")
 
 
-QUOTE_SYMBOLS: tuple[str, ...] = tuple(symbol.value for symbol in QuoteSymbol)
-
-
 class Cursor(Protocol):
     def __enter__(self) -> Self: ...
 
     def __exit__(self, *args: object) -> bool | None: ...
 
     def execute(self, statement: str, parameters: Sequence[Any]) -> object: ...
+
+    def executemany(self, statement: str, parameters: Sequence[Sequence[Any]]) -> object: ...
 
     def fetchone(self) -> Any: ...
 
@@ -585,23 +585,27 @@ def store_bars(
             ),
         )
         source_record_id = cursor.fetchone()[0]
-        for response, bars in parsed:
-            for bar in bars:
-                cursor.execute(
-                    QUOTE_BAR_UPSERT,
-                    (
-                        SOURCE,
-                        response.symbol.value,
-                        bar.bar_at,
-                        bar.open,
-                        bar.high,
-                        bar.low,
-                        bar.close,
-                        bar.volume,
-                        bar.previous_close,
-                        # Yahoo 는 연속 심볼(`ES=F`)을 주므로 월물 코드가 없다. KIS 선물만 채운다.
-                        None,
-                        source_record_id,
-                    ),
+        # 봉마다 왕복하지 않고 묶어 보낸다. 백필은 한 번에 수만 행이라 차이가 크다.
+        execute_upserts(
+            cursor,
+            QUOTE_BAR_UPSERT,
+            [
+                (
+                    SOURCE,
+                    response.symbol.value,
+                    bar.bar_at,
+                    bar.open,
+                    bar.high,
+                    bar.low,
+                    bar.close,
+                    bar.volume,
+                    bar.previous_close,
+                    # Yahoo 는 연속 심볼(`ES=F`)을 주므로 월물 코드가 없다. KIS 선물만 채운다.
+                    None,
+                    source_record_id,
                 )
+                for response, bars in parsed
+                for bar in bars
+            ],
+        )
     return bar_count, tuple(outcomes)

@@ -103,6 +103,7 @@ class QuoteSymbolKind(StrEnum):
     BOND_FUTURE = "bond_future"
     COMMODITY = "commodity"
     EQUITY = "equity"
+    CRYPTO = "crypto"
 
 
 class QuoteSymbol(EntityBase):
@@ -123,6 +124,9 @@ class QuoteSymbol(EntityBase):
       `US10Y`는 4.66(%)이고 `ZN=F`는 110(달러)이다. 같은 "미 10년물"이라도 방향이 반대로
       움직이므로 한 패널에 겹치면 읽는 사람이 반드시 틀린다.
     - `commodity`(금·은·구리·유가)와 `equity`(개별 종목)도 각자 변동폭이 달라 따로 둔다.
+    - `crypto`는 **거래 시간대 자체가 다르다.** 다른 모든 값이 멈추는 주말 48시간에 이것만
+      움직여서, 같은 패널에 두면 나머지가 전부 직선으로 깔린다. 일중 변동폭도 지수의
+      몇 배라 축을 공유할 수 없다.
 
     관측값에서 이 테이블로 외래키를 걸지 않는다. 걸면 마스터 행이 없는 심볼을 수집기가
     저장하지 못해, Enum에만 추가하고 시드를 빠뜨린 순간 DAG가 죽는다. 대신
@@ -138,7 +142,7 @@ class QuoteSymbol(EntityBase):
             name="uq_quote_symbol_natural_key",
         ),
         CheckConstraint(
-            "kind IN ('index', 'index_future', 'fx', 'rate', 'bond_future', 'commodity', 'equity')",
+            "kind IN ('index', 'index_future', 'fx', 'rate', 'bond_future', 'commodity', 'equity', 'crypto')",
             name="ck_quote_symbol_kind",
         ),
         table_options(
@@ -166,7 +170,7 @@ class QuoteSymbol(EntityBase):
         ),
         nullable=False,
         comment=(
-            "값의 종류(index, index_future, fx, rate, bond_future, commodity, equity). "
+            "값의 종류(index, index_future, fx, rate, bond_future, commodity, equity, crypto). "
             "화면을 가르는 기준이다. 거래 시간대가 다르고 정상 변동폭의 자릿수도 달라 "
             "한 축에 겹치면 읽을 수 없다"
         ),

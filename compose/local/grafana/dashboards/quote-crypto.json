@@ -1,12 +1,12 @@
 {
-  "uid": "market-quote-index",
-  "title": "지수 장중",
-  "description": "현물 지수만 본다(quote_symbol.kind = 'index'). 현물은 각자의 정규장에만 움직인다. 미국 지수(SOX, VIX)는 KST 22:30~05:00, 코스피는 09:00~15:30 이다. 그래서 한국 정규장 음영 구간에서 미국 지수 선은 평평하다. 그게 정상이고, 그 구간을 채우려면 지수선물 대시보드를 본다. VIX 는 변동성 지수라 정상 변동폭이 다른 지수의 열 배쯤 된다. 같은 축에서 비교하면 나머지가 납작해지므로 필요할 때만 심볼 목록에서 켠다. 심볼 목록은 reference 마스터인 quote_symbol 에서 읽는다. 손으로 적지 않으므로 수집기 Enum 과 마스터 시드에 심볼을 추가하면 여기 저절로 나타난다. uid 는 바꾸지 않는다. 프로비저닝된 대시보드의 uid 를 바꾸면 Grafana 가 같은 파일로 두 번째 대시보드를 만들고 그 뒤로 갱신이 uid 충돌로 막힌다.",
+  "uid": "market-quote-crypto",
+  "title": "암호화폐 장중",
+  "description": "비트코인·이더리움 1분봉. 다른 모든 심볼이 멈추는 주말 48시간(토 07:00 ~ 월 07:00 KST)에 움직이는 유일한 값이라 화면을 따로 둔다. 일중 변동폭도 지수의 몇 배라 같은 축에 겹칠 수 없다.",
   "tags": [
     "market",
     "intraday",
     "quote",
-    "index"
+    "crypto"
   ],
   "editable": true,
   "schemaVersion": 39,
@@ -82,13 +82,13 @@
       {
         "name": "symbol",
         "label": "심볼",
-        "description": "이 대시보드가 보는 심볼. 목록을 손으로 적지 않고 quote_symbol 마스터에서 읽는다( AND kind = 'index'). 수집기 Enum 과 마스터 시드에 추가하면 여기 저절로 나타난다.",
+        "description": "이 대시보드가 보는 심볼. 목록을 손으로 적지 않고 quote_symbol 마스터에서 읽는다( AND kind = 'crypto'). 수집기 Enum 과 마스터 시드에 추가하면 여기 저절로 나타난다.",
         "type": "query",
         "datasource": {
           "type": "postgres",
           "uid": "${ds}"
         },
-        "query": "SELECT label || '(' || symbol || ')' AS \"__text\", symbol AS \"__value\" FROM quote_symbol WHERE provider IN (${provider:sqlstring}) AND kind = 'index' ORDER BY kind, symbol",
+        "query": "SELECT label || '(' || symbol || ')' AS \"__text\", symbol AS \"__value\" FROM quote_symbol WHERE provider IN (${provider:sqlstring}) AND kind = 'crypto' ORDER BY kind, symbol",
         "includeAll": true,
         "multi": true,
         "refresh": 1,
@@ -171,8 +171,8 @@
         "multi": false,
         "current": {
           "selected": true,
-          "text": "1.0",
-          "value": "1.0"
+          "text": "0.2",
+          "value": "0.2"
         },
         "options": []
       }

@@ -120,6 +120,9 @@ class QuoteSymbol(StrEnum):
 
     SP500_FUT = ("SP500_FUT", "ES=F", "S&P500 선물")
     NASDAQ100_FUT = ("NASDAQ100_FUT", "NQ=F", "나스닥100 선물")
+    # 다우는 풀사이즈가 상장폐지돼 `E-mini Dow $5`가 정규 계약이다(초소형은 `MYM`).
+    # 가치·경기민감 쪽이 무거워 ES·NQ와 갈리는 날이 있다.
+    DOW_FUT = ("DOW_FUT", "YM=F", "다우 선물")
     VIX = ("VIX", "^VIX", "VIX 변동성 지수")
     SOX = ("SOX", "^SOX", "필라델피아 반도체 지수")
     # 한국 정규장과 시간대가 겹치는 유일한 해외 현물이다. 그 구간에 살아 있는 다른 해외
@@ -141,6 +144,9 @@ class QuoteSymbol(StrEnum):
     HSI = ("HSI", "^HSI", "항셍")
     SSE_COMP = ("SSE_COMP", "000001.SS", "상하이종합")
     RUSSELL2000 = ("RUSSELL2000", "^RUT", "러셀2000")
+    # 현물 `^RUT`는 한국 정규장에 0봉이다(실측). `SOX`↔`NASDAQ100_FUT`,
+    # `US10Y`↔`US10Y_FUT`와 같은 짝을 러셀에만 안 만들어 뒀던 것을 채운다.
+    RUSSELL2000_FUT = ("RUSSELL2000_FUT", "RTY=F", "러셀2000 선물")
     # 미 10년 국채선물. `US10Y`(수익률)와 달리 **가격**이고 거의 24시간 거래된다.
     # 아시아 세션에 살아 있는 유일한 미 금리 신호라 둘 다 받는다.
     US10Y_FUT = ("US10Y_FUT", "ZN=F", "미 10년 국채선물")
@@ -151,6 +157,15 @@ class QuoteSymbol(StrEnum):
     WTI = ("WTI", "CL=F", "WTI 원유")
     # 반도체 공급망 참조가. 시그널 대상이 아니라 맥락용이다.
     TSMC_ADR = ("TSMC_ADR", "TSM", "TSMC ADR")
+    # **주말을 채우는 유일한 값이다.** 선물도 토 06:00 KST면 멈춰서 월요일 07:00까지
+    # 48시간 동안 봉이 하나도 없다(실측). 암호화폐는 그 구간에 1,628봉이 온다.
+    # 주말 뉴스에 위험선호가 꺾였는지를 월요일 개장 전에 볼 수 있는 유일한 창구다.
+    #
+    # `range=1d`는 67봉만 주는데 데이터가 없어서가 아니라 이 심볼의 "하루" 구간이
+    # 다르기 때문이다. `range=5d`는 5,828봉이 연속이다. 폴링 구간(15분)에는 지장 없고
+    # 백필할 때만 이 차이를 확인한다.
+    BTC = ("BTC", "BTC-USD", "비트코인")
+    ETH = ("ETH", "ETH-USD", "이더리움")
 
 
 class Cursor(Protocol):

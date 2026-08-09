@@ -119,9 +119,13 @@ class DomesticFuture(StrEnum):
         return member
 
     KOSPI200_FUT = ("KOSPI200_FUT", "1", "코스피200 선물")
+    # 코스피는 현물(`KOSPI200`)과 선물이 짝인데 코스닥은 현물뿐이었다. 반쪽을 채운다.
+    # `A06609`(코스닥150F 202609) 102봉으로 확인했다.
+    KOSDAQ150_FUT = ("KOSDAQ150_FUT", "6", "코스닥150 선물")
 
 
-# KOSPI200 선물은 분기물이다. 미니와 달리 월물이 없다.
+# KOSPI200·코스닥150 선물은 분기물이다. 미니와 달리 월물이 없다.
+# 둘 다 `A0x609`와 `A0x612`가 오고 그 사이 월물은 없는 것을 확인했다.
 CONTRACT_MONTHS: tuple[int, ...] = (3, 6, 9, 12)
 
 

@@ -11,6 +11,7 @@ from sqlalchemy import Table
 from apps.models.market import QuoteBar as QuoteBarModel
 from apps.models.raw import SourceRecord
 from modules.collectors.kis import (
+    CONTRACT_MONTHS,
     MAX_BARS_PER_REQUEST,
     QUOTE_BAR_UPSERT,
     SOURCE_RECORD_INSERT,
@@ -211,6 +212,20 @@ def test_contract_code_uses_the_regular_product_not_the_mini():
     # 미니(A056)는 계약 크기가 1/5이고 거래량도 적다. 정규(A016)를 써야 한다.
     assert DomesticFuture.KOSPI200_FUT.product_digit == "1"
     assert front_contract(DomesticFuture.KOSPI200_FUT, date(2026, 8, 8)).startswith("A01")
+
+
+def test_kosdaq150_resolves_to_the_contract_code_that_actually_answered():
+    # 상품 자릿수가 틀리면 조회가 0봉으로 끝난다. `A06609`(코스닥150F 202609)로 102봉을
+    # 받은 것을 확인했으므로 그 코드가 그대로 나와야 한다.
+    assert DomesticFuture.KOSDAQ150_FUT.product_digit == "6"
+    assert front_contract(DomesticFuture.KOSDAQ150_FUT, date(2026, 8, 8)) == "A06609"
+
+
+def test_every_future_shares_the_quarterly_roll():
+    # 분기물이라는 전제로 `front_contract`가 한 벌만 있다. 월물 상품을 넣으면 조용히
+    # 틀린 계약을 조회하므로 여기서 막는다.
+    for future in DomesticFuture:
+        assert front_contract(future, date(2026, 8, 8))[-2:] in {f"{month:02d}" for month in CONTRACT_MONTHS}
 
 
 def test_parse_reads_bars_in_utc_and_sorts_them_ascending():

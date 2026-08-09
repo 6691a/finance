@@ -489,7 +489,7 @@
   <h2 id="planned">예정 — 아직 수집하지 않는 것</h2>
 
   <div class="note">
-    <strong>1·2순위는 전부 구현했다.</strong> 로드맵에서 “심볼 한 줄이면 되는 것”으로
+    <strong>기존 로드맵의 1·2순위는 전부 구현했다.</strong> “심볼 한 줄이면 되는 것”으로
     분류했던 항목이 모두 위 표에 들어갔다. 유일한 예외는 <strong>항셍테크</strong>
     (<code>HSTECH</code>)로, <strong>Yahoo에 없어서</strong> 다른 소스가 필요하다.
     <br><br>
@@ -497,6 +497,121 @@
     <code>index</code> <code>index_future</code> <code>fx</code> <code>rate</code>
     <code>bond_future</code> <code>commodity</code> <code>equity</code>.
     성격이 다른 값을 한 축에 겹치면 읽을 수 없기 때문이다.
+  </div>
+
+  <h3>구멍 1 — 다섯 심볼은 한국 정규장에 <span class="num">0</span>봉이다</h3>
+  <p>수집 중인 25종을 실제로 세어 봤다. 아래 다섯은 <strong>기록용이지 알림 신호가 아니다.</strong>
+  한국 시간 09:00~15:30에 값이 하나도 들어오지 않는다.</p>
+  <div class="scroll">
+  <table>
+    <thead><tr><th>심볼</th><th class="num">한국장중</th><th class="num">전체</th></tr></thead>
+    <tbody>
+      <tr><td>러셀2000(<code>RUSSELL2000</code>)</td><td class="num"><strong>0</strong></td><td class="num">391</td></tr>
+      <tr><td>TSMC ADR(<code>TSMC_ADR</code>)</td><td class="num"><strong>0</strong></td><td class="num">391</td></tr>
+      <tr><td>미국 10년물 금리(<code>US10Y</code>)</td><td class="num"><strong>0</strong></td><td class="num">400</td></tr>
+      <tr><td>필라델피아 반도체(<code>SOX</code>)</td><td class="num"><strong>0</strong></td><td class="num">6,628</td></tr>
+      <tr><td>VIX 변동성 지수(<code>VIX</code>)</td><td class="num"><strong>0</strong></td><td class="num">13,172</td></tr>
+      <tr><td>나스닥100 선물(<code>NASDAQ100_FUT</code>)</td><td class="num">6,482</td><td class="num">23,001</td></tr>
+      <tr><td>S&amp;P500 선물(<code>SP500_FUT</code>)</td><td class="num">6,483</td><td class="num">22,999</td></tr>
+    </tbody>
+  </table>
+  </div>
+  <p><code>SOX</code>와 <code>US10Y</code>에는 24시간 짝을 붙여 뒀다
+  (<code>NASDAQ100_FUT</code>, <code>US10Y_FUT</code>).
+  <strong>러셀만 짝이 없다.</strong> 같은 규칙을 한 심볼에만 안 쓴 것이다.</p>
+
+  <h3>구멍 2 — 주말 <span class="num">48</span>시간이 통째로 빈다</h3>
+  <p>토 07:00 KST 이후 봉이 하나도 없고 월 07:00까지 그대로다. 주말에 지정학·정책 뉴스가
+  나오면 <strong>월요일 개장 전까지 시장 반응을 읽을 값이 없다.</strong></p>
+  <div class="scroll">
+  <table>
+    <thead><tr><th>심볼</th><th class="num">주말 구간(토 07:00~일) 봉 수</th></tr></thead>
+    <tbody>
+      <tr><td><code>ES=F</code> S&amp;P500 선물</td><td class="num">359 <span class="tag us">토 오전에 끊긴다</span></td></tr>
+      <tr><td><code>BTC-USD</code> 비트코인</td><td class="num"><strong>1,628</strong></td></tr>
+      <tr><td><code>ETH-USD</code> 이더리움</td><td class="num"><strong>1,628</strong></td></tr>
+    </tbody>
+  </table>
+  </div>
+
+  <h3>구멍 3 — 한국 반도체 데이터가 없다</h3>
+  <div class="note">
+    이 수집의 출발 질문은 <strong>“미국 반도체 선물이 빠지면 한국 반도체도 빠지는가”</strong>였다.
+    그런데 <strong>예측 대상이 수집되지 않는다.</strong> <code>KOSPI</code>·<code>KOSDAQ</code>은
+    지수라 반도체를 못 본다. 지금 구조로는 <strong>알림이 맞았는지 측정할 방법이 없다.</strong>
+  </div>
+
+  <h3>붙일 것 — 1순위 (Enum 한 줄 + 마스터 시드 한 줄)</h3>
+  <p>아래는 전부 <strong>실제 API를 불러 확인했다.</strong> 봉 수는 실측값이다.</p>
+  <div class="scroll">
+  <table>
+    <thead><tr><th>심볼</th><th>제공처 좌표</th><th class="num">실측 봉</th><th>왜</th></tr></thead>
+    <tbody>
+      <tr><td>코스닥150 선물<br><code>KOSDAQ150_FUT</code></td>
+          <td><span class="tag kr">KIS</span> 상품 자릿수 <code>6</code><br><code>A06609</code> = 코스닥150F 202609</td>
+          <td class="num">102</td>
+          <td>코스피는 현물+선물 짝인데 <strong>코스닥은 현물뿐이다.</strong> 반쪽을 채운다</td></tr>
+      <tr><td>러셀2000 선물<br><code>RUSSELL2000_FUT</code></td>
+          <td><span class="tag us">Yahoo</span> <code>RTY=F</code></td>
+          <td class="num">1,430</td>
+          <td>기존 <code>RUSSELL2000</code>이 한국 장중 0봉이다. 다른 심볼에 이미 쓴 규칙을 여기만 안 썼다</td></tr>
+      <tr><td>비트코인 · 이더리움<br><code>BTC</code> <code>ETH</code></td>
+          <td><span class="tag us">Yahoo</span> <code>BTC-USD</code> <code>ETH-USD</code></td>
+          <td class="num">5,828<br><span class="tag com">5일</span></td>
+          <td><strong>주말 48시간을 채우는 유일한 값이다.</strong> 위험선호가 주말에 꺾이면 월요일 개장 전에 알 수 있다</td></tr>
+      <tr><td>다우 선물<br><code>DOW_FUT</code></td>
+          <td><span class="tag us">Yahoo</span> <code>YM=F</code></td>
+          <td class="num">1,439</td>
+          <td>가치·경기민감 축. ES·NQ와 갈리는 날이 있다. <code>E-mini Dow $5</code>가 <strong>표준 계약</strong>이다(초소형은 <code>MYM</code>)</td></tr>
+    </tbody>
+  </table>
+  </div>
+  <p>암호화폐는 <code>kind</code>가 없다. <code>crypto</code>를 여덟 번째로 넣어야 하고
+  <code>ck_quote_symbol_kind</code> 제약 마이그레이션과 대시보드 하나가 따라온다.
+  나머지 셋은 기존 <code>kind</code>로 끝난다.</p>
+
+  <h3>붙일 것 — 2순위 (새 수집 함수가 필요하다)</h3>
+  <div class="note">
+    <strong>국내 반도체 개별주 — 삼성전자(<code>005930</code>) · SK하이닉스(<code>000660</code>).</strong>
+    가설의 정답지다. <code>kind</code>는 기존 <code>equity</code>를 그대로 쓴다(TSMC ADR이 이미 쓴다).
+    <br><br>
+    <code>FHKST03010200</code> /
+    <code>/uapi/domestic-stock/v1/quotations/inquire-time-itemchartprice</code> 로 확인했다.
+    한 요청에 <strong>30봉</strong>(선물 102봉, 업종지수 120봉과 다르다).
+    <code>FID_COND_MRKT_DIV_CODE</code>는 <code>J</code>(KRX)다 —
+    <code>NX</code>(NXT)·<code>UN</code>(통합)은 쓰지 않는다.
+    <br><br>
+    <strong>구현할 때 가장 먼저 걸리는 지점:</strong> 값 컬럼이 선물(<code>futs_*</code>)·
+    업종지수(<code>bstp_nmix_*</code>)와 다른 <strong>세 번째 이름 체계</strong>(<code>stck_*</code>)다.
+    전일종가도 <code>stck_prdy_clpr</code>이다.
+    <br><br>
+    부수 효과 하나 — <code>cntg_vol</code>은 <strong>진짜 거래량</strong>이다(삼성전자 85,585).
+    지수가 0을 실어 보내는 것과 달라, <code>volume</code>이 의미를 갖는 첫 심볼군이 된다.
+  </div>
+
+  <h3>3순위 · 권하지 않는 것</h3>
+  <div class="scroll">
+  <table>
+    <thead><tr><th>후보</th><th>판단</th></tr></thead>
+    <tbody>
+      <tr><td><code>ZT=F</code> <code>ZF=F</code> 2년·5년 국채선물 <span class="tag rate">1,438·1,439봉</span></td>
+          <td><strong>3순위.</strong> 장단기 금리차를 한국 장중에 본다. 지금은 10년만 있다</td></tr>
+      <tr><td><code>NG=F</code> 천연가스 <span class="tag com">1,439봉</span></td>
+          <td><strong>3순위.</strong> 2차 신호다</td></tr>
+      <tr><td><code>A04609</code> 변동성 선물</td>
+          <td><strong>제외.</strong> 5봉만 온다. 유동성이 없다</td></tr>
+      <tr><td><code>A08609</code> KRX300 선물 <span class="tag idx">102봉</span></td>
+          <td><strong>제외.</strong> KOSPI200과 겹친다</td></tr>
+      <tr><td><code>^KQ11</code> 코스닥(Yahoo) <span class="tag idx">361봉</span></td>
+          <td><strong>제외.</strong> 국내 우선 원칙 위반이다. KIS에 이미 있다</td></tr>
+      <tr><td><code>000300.SS</code> CSI300 · <code>^HSCE</code> 항셍중국기업</td>
+          <td><strong>제외.</strong> <code>SSE_COMP</code>·<code>HSI</code>와 겹친다</td></tr>
+      <tr><td><code>EURUSD=X</code></td>
+          <td><strong>제외.</strong> <code>DXY</code>의 58%가 유로다</td></tr>
+      <tr><td>국채 3년·10년 선물(국내)</td>
+          <td><code>A0[0-9]6xx</code> 전 자릿수 스캔에 없다. 다른 시장 구분 코드를 찾아야 한다</td></tr>
+    </tbody>
+  </table>
   </div>
 
   <h3>남은 것 — <code>quote_bar</code>에 안 들어간다</h3>
@@ -524,6 +639,25 @@
   </table>
   </div>
 
+  <h3>곁가지 — 국내 과거 분봉은 받을 수 있다</h3>
+  <p>국내 시계열은 지금 <strong>102봉</strong>뿐이다(2026-08-08 시작). Yahoo는 23,001봉이다.
+  이 상태로는 리드-래그 상관을 볼 수 없다. 확인해 보니 <strong>선물과 주식은 과거를 채울 수 있다.</strong></p>
+  <div class="scroll">
+  <table>
+    <thead><tr><th>대상</th><th>과거 조회</th><th>확인한 방법</th></tr></thead>
+    <tbody>
+      <tr><td>선물</td><td><strong>된다</strong></td>
+          <td><code>FID_INPUT_DATE_1=20260807</code>, <code>FID_INPUT_HOUR_1=150000</code> → 102봉</td></tr>
+      <tr><td>주식</td><td><strong>된다</strong></td>
+          <td>별도 TR <code>FHKST03010230</code>(<code>inquire-time-dailychartprice</code>) → 2026-08-06 120봉</td></tr>
+      <tr><td>업종지수</td><td><strong>안 된다</strong></td>
+          <td>이 엔드포인트의 <code>FID_INPUT_HOUR_1</code>은 기준 시각이 아니라 <strong>봉 간격</strong>이다</td></tr>
+    </tbody>
+  </table>
+  </div>
+  <p>즉 지수만 앞으로 쌓이는 것을 기다려야 한다. <code>kis_quote_intraday</code>가
+  지금 그 인자를 쓰지 않을 뿐이다.</p>
+
   <div class="note">
     <strong>지금 구조가 흡수하는 것과 아닌 것.</strong>
     1분봉이고 <code>(제공처, 심볼, 시각)</code>으로 갈리는 값은 수집기 Enum 한 줄과 마스터
@@ -537,6 +671,6 @@
   <footer>
     자동 생성이 아니라 손으로 쓴 문서다. 심볼이나 스케줄을 바꾸면 여기도 함께 고친다.<br>
     설계 배경과 실측 근거는 <code>docs/quote-bar-intraday.md</code>에 있다.
-    기준일 2026-08-08.
+    기준일 2026-08-09.
   </footer>
 </main>

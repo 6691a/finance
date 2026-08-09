@@ -7,7 +7,10 @@ from tests.helpers import NO_REVISION_REASON, head_sql, revision_files
 pytestmark = pytest.mark.skipif(not revision_files(), reason=NO_REVISION_REASON)
 
 # 현물과 선물이 각각 최소 하나는 있어야 한다. 한쪽이 비면 그 대시보드가 통째로 빈다.
-EXPECTED_FUTURES = {"SP500_FUT", "NASDAQ100_FUT", "KOSPI200_FUT"}
+EXPECTED_FUTURES = {
+    "SP500_FUT", "NASDAQ100_FUT", "DOW_FUT", "RUSSELL2000_FUT",
+    "KOSPI200_FUT", "KOSDAQ150_FUT",
+}
 EXPECTED_INDEXES = {
     "VIX", "SOX", "KOSPI", "KOSPI200", "KOSDAQ",
     "NIKKEI225", "TAIEX", "HSI", "SSE_COMP", "RUSSELL2000",
@@ -18,6 +21,8 @@ EXPECTED_RATES = {"US10Y"}
 EXPECTED_BOND_FUTURES = {"US10Y_FUT"}
 EXPECTED_COMMODITIES = {"GOLD", "SILVER", "COPPER", "WTI"}
 EXPECTED_EQUITIES = {"TSMC_ADR"}
+# 주말 48시간에 움직이는 유일한 값이다. 나머지가 전부 멈춰 있어 축을 공유할 수 없다.
+EXPECTED_CRYPTO = {"BTC", "ETH"}
 
 ALL_EXPECTED = (
     EXPECTED_FUTURES
@@ -27,6 +32,7 @@ ALL_EXPECTED = (
     | EXPECTED_BOND_FUTURES
     | EXPECTED_COMMODITIES
     | EXPECTED_EQUITIES
+    | EXPECTED_CRYPTO
 )
 
 
@@ -47,7 +53,10 @@ def test_quote_symbol_master_splits_spot_from_futures(capsys):
     assert "CONSTRAINT uq_quote_symbol_natural_key UNIQUE (provider, symbol)" in sql
     # kind 를 늘릴 때마다 CHECK 를 다시 만든다. PostgreSQL native enum 을 안 쓰는 대신
     # 치르는 비용이고, 대신 값 추가가 트랜잭션 안에서 끝난다.
-    assert "kind IN ('index', 'index_future', 'fx', 'rate', 'bond_future', 'commodity', 'equity')" in sql
+    assert (
+        "kind IN ('index', 'index_future', 'fx', 'rate', 'bond_future', 'commodity', 'equity', 'crypto')"
+        in sql
+    )
 
 
 @pytest.mark.parametrize("symbol", sorted(ALL_EXPECTED))
@@ -94,6 +103,7 @@ def test_yields_are_seeded_as_rate(symbol, capsys):
         [(s, "bond_future") for s in EXPECTED_BOND_FUTURES]
         + [(s, "commodity") for s in EXPECTED_COMMODITIES]
         + [(s, "equity") for s in EXPECTED_EQUITIES]
+        + [(s, "crypto") for s in EXPECTED_CRYPTO]
     ),
 )
 def test_tier2_symbols_carry_their_own_kind(symbol, kind, capsys):

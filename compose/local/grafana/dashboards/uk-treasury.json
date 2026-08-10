@@ -1,0 +1,467 @@
+{
+  "uid": "market-uk-gilt",
+  "title": "영국 국채 금리",
+  "description": "indicator_observation 테이블의 잉글랜드은행 국채 금리(gilt 5·10·20년)를 만기별로 조회한다. 모든 패널이 provider = 'boe' 를 함께 건다. 만기 목록은 indicator_series 마스터에서 읽으므로 시계열을 늘려도 이 대시보드를 고칠 일이 없다. IADB의 명목 par yield 노드가 일별로 고시하는 만기는 이 셋뿐이라 2년물 패널은 없다. 데이터소스는 상단 `데이터소스` 변수로 바꾼다.",
+  "tags": [
+    "market",
+    "rate",
+    "boe"
+  ],
+  "editable": true,
+  "schemaVersion": 39,
+  "version": 1,
+  "refresh": "5m",
+  "time": {
+    "from": "now-3M",
+    "to": "now"
+  },
+  "timezone": "browser",
+  "templating": {
+    "list": [
+      {
+        "name": "ds",
+        "label": "데이터소스",
+        "description": "indicator_observation 을 읽을 postgres 데이터소스. 모든 패널이 이 값을 쓰므로 여기 하나만 바꾸면 대시보드 전체가 다른 DB를 본다. 프로비저닝된 데이터소스는 compose/local/grafana/provisioning/datasources 에 있다.",
+        "type": "datasource",
+        "query": "postgres",
+        "current": {
+          "selected": true,
+          "text": "news2",
+          "value": "news2-postgres"
+        },
+        "hide": 0,
+        "options": [],
+        "refresh": 1
+      },
+      {
+        "name": "series",
+        "label": "만기",
+        "description": "잉글랜드은행 시계열. 표시는 마스터의 label 이고 값은 저장된 series_id 다. 목록을 손으로 적지 않는다. 수집 대상과 ID는 modules.collectors.boe 의 GiltSeries 가 정한다.",
+        "type": "query",
+        "datasource": {
+          "type": "postgres",
+          "uid": "${ds}"
+        },
+        "query": "SELECT label AS \"__text\", series_id AS \"__value\" FROM indicator_series WHERE provider = 'boe' ORDER BY maturity_months",
+        "includeAll": true,
+        "multi": true,
+        "refresh": 1,
+        "current": {
+          "selected": true,
+          "text": [
+            "All"
+          ],
+          "value": [
+            "$__all"
+          ]
+        },
+        "options": []
+      }
+    ]
+  },
+  "panels": [
+    {
+      "id": 1,
+      "type": "stat",
+      "title": "${series:text} 최신 금리",
+      "description": "선택 구간의 마지막 관측값. 주말과 영국 공휴일(bank holiday)에는 IADB에 행이 없으므로 직전 영업일 값이 그대로 남는다.",
+      "datasource": {
+        "type": "postgres",
+        "uid": "${ds}"
+      },
+      "repeat": "series",
+      "repeatDirection": "h",
+      "maxPerRow": 3,
+      "gridPos": {
+        "h": 5,
+        "w": 8,
+        "x": 0,
+        "y": 0
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percent",
+          "decimals": 3,
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "text",
+                "value": null
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "orientation": "auto",
+        "textMode": "auto",
+        "colorMode": "none",
+        "graphMode": "area",
+        "justifyMode": "auto"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "format": "time_series",
+          "rawQuery": true,
+          "editorMode": "code",
+          "datasource": {
+            "type": "postgres",
+            "uid": "${ds}"
+          },
+          "rawSql": "SELECT\n  observed_at AS time,\n  value\nFROM (\n  SELECT\n    observation_date::timestamp AT TIME ZONE 'UTC' AS observed_at,\n    value\n  FROM indicator_observation\n  WHERE provider = 'boe'\n    AND series_id = ${series:sqlstring}\n) AS observations\nWHERE $__timeFilter(observed_at)\nORDER BY 1"
+        }
+      ]
+    },
+    {
+      "id": 2,
+      "type": "timeseries",
+      "title": "만기별 금리 추이",
+      "description": "관측일은 영국 영업일이다. 주말과 영국 공휴일에는 행이 없다. 값은 명목 par yield이고 제로쿠폰 수익률이 아니다.",
+      "datasource": {
+        "type": "postgres",
+        "uid": "${ds}"
+      },
+      "gridPos": {
+        "h": 10,
+        "w": 24,
+        "x": 0,
+        "y": 5
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percent",
+          "decimals": 3,
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "drawStyle": "line",
+            "lineInterpolation": "linear",
+            "lineWidth": 2,
+            "fillOpacity": 0,
+            "showPoints": "auto",
+            "pointSize": 4,
+            "spanNulls": true,
+            "axisSoftMin": null,
+            "scaleDistribution": {
+              "type": "linear"
+            }
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "right",
+          "showLegend": true,
+          "calcs": [
+            "lastNotNull",
+            "min",
+            "max"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "format": "time_series",
+          "rawQuery": true,
+          "editorMode": "code",
+          "datasource": {
+            "type": "postgres",
+            "uid": "${ds}"
+          },
+          "rawSql": "SELECT\n  observed_at AS time,\n  value,\n  label AS metric\nFROM (\n  SELECT\n    o.observation_date::timestamp AT TIME ZONE 'UTC' AS observed_at,\n    o.value,\n    s.label\n  FROM indicator_observation o\n  JOIN indicator_series s\n    ON s.provider = o.provider\n   AND s.series_id = o.series_id\n  WHERE o.provider = 'boe'\n    AND o.series_id IN (${series:sqlstring})\n) AS observations\nWHERE $__timeFilter(observed_at)\nORDER BY 1"
+        }
+      ]
+    },
+    {
+      "id": 3,
+      "type": "barchart",
+      "title": "최신 수익률 곡선",
+      "description": "가장 최근 고시값을 만기 순으로 세운다. 만기 변수와 무관하게 마스터에 있는 영국 시계열 전부를 그린다. 점이 셋뿐이라 곡선이라기보다 세 점의 기울기다.",
+      "datasource": {
+        "type": "postgres",
+        "uid": "${ds}"
+      },
+      "gridPos": {
+        "h": 9,
+        "w": 12,
+        "x": 0,
+        "y": 15
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percent",
+          "decimals": 3,
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "lineWidth": 1,
+            "fillOpacity": 80,
+            "gradientMode": "none",
+            "axisPlacement": "auto"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "orientation": "auto",
+        "showValue": "auto",
+        "stacking": "none",
+        "groupWidth": 0.7,
+        "barWidth": 0.9,
+        "xTickLabelRotation": 0,
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": false
+        },
+        "tooltip": {
+          "mode": "single",
+          "sort": "none"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "format": "table",
+          "rawQuery": true,
+          "editorMode": "code",
+          "datasource": {
+            "type": "postgres",
+            "uid": "${ds}"
+          },
+          "rawSql": "SELECT\n  (s.maturity_months / 12) || '년' AS \"만기\",\n  latest.value AS \"금리\"\nFROM indicator_series s\nJOIN LATERAL (\n  SELECT o.value\n  FROM indicator_observation o\n  WHERE o.provider = s.provider\n    AND o.series_id = s.series_id\n  ORDER BY o.observation_date DESC\n  LIMIT 1\n) AS latest ON true\nWHERE s.provider = 'boe'\nORDER BY s.maturity_months"
+        }
+      ]
+    },
+    {
+      "id": 4,
+      "type": "timeseries",
+      "title": "장단기 금리차 (20년 - 5년)",
+      "description": "0 아래로 내려가면 금리 역전이다. 두 시계열이 같은 날 모두 고시된 날만 그린다. `만기` 변수와 무관하게 항상 20년과 5년을 쓴다. 다른 나라 대시보드가 쓰는 10년-2년은 IADB에 2년물이 없어 만들 수 없다.",
+      "datasource": {
+        "type": "postgres",
+        "uid": "${ds}"
+      },
+      "gridPos": {
+        "h": 9,
+        "w": 12,
+        "x": 12,
+        "y": 15
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percent",
+          "decimals": 3,
+          "color": {
+            "mode": "thresholds"
+          },
+          "custom": {
+            "drawStyle": "line",
+            "lineInterpolation": "linear",
+            "lineWidth": 2,
+            "fillOpacity": 15,
+            "showPoints": "never",
+            "spanNulls": true,
+            "gradientMode": "none",
+            "thresholdsStyle": {
+              "mode": "line"
+            },
+            "scaleDistribution": {
+              "type": "linear"
+            }
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "red",
+                "value": null
+              },
+              {
+                "color": "green",
+                "value": 0
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": false
+        },
+        "tooltip": {
+          "mode": "single",
+          "sort": "none"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "format": "time_series",
+          "rawQuery": true,
+          "editorMode": "code",
+          "datasource": {
+            "type": "postgres",
+            "uid": "${ds}"
+          },
+          "rawSql": "SELECT\n  observed_at AS time,\n  twenty_year - five_year AS \"20Y-5Y\"\nFROM (\n  SELECT\n    observation_date::timestamp AT TIME ZONE 'UTC' AS observed_at,\n    max(value) FILTER (WHERE series_id = 'GILT20Y') AS twenty_year,\n    max(value) FILTER (WHERE series_id = 'GILT5Y') AS five_year\n  FROM indicator_observation\n  WHERE provider = 'boe'\n    AND series_id IN ('GILT20Y', 'GILT5Y')\n  GROUP BY 1\n) AS spread\nWHERE $__timeFilter(observed_at)\n  AND twenty_year IS NOT NULL\n  AND five_year IS NOT NULL\nORDER BY 1"
+        }
+      ]
+    },
+    {
+      "id": 5,
+      "type": "table",
+      "title": "만기별 최신 관측값과 수집 계보",
+      "description": "시계열마다 가장 최근 행 하나. `source_record`를 조인해 그 값이 어느 조회에서 왔는지 보여 준다. 수집 시각은 UTC이고 관측일은 영국 영업일이다. IADB는 세 시계열을 한 응답에 담아 주므로 원천 식별자가 시계열이 아니라 조회 단위(`gilt_nominal_par_yields`)다.",
+      "datasource": {
+        "type": "postgres",
+        "uid": "${ds}"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 24,
+        "x": 0,
+        "y": 24
+      },
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "align": "auto",
+            "cellOptions": {
+              "type": "auto"
+            }
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "금리"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "percent"
+              },
+              {
+                "id": "decimals",
+                "value": 3
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "showHeader": true,
+        "cellHeight": "sm",
+        "footer": {
+          "show": false,
+          "reducer": [
+            "sum"
+          ],
+          "countRows": false,
+          "fields": ""
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "format": "table",
+          "rawQuery": true,
+          "editorMode": "code",
+          "datasource": {
+            "type": "postgres",
+            "uid": "${ds}"
+          },
+          "rawSql": "SELECT DISTINCT ON (o.series_id)\n  s.label AS \"만기\",\n  o.observation_date AS \"관측일\",\n  o.value AS \"금리\",\n  o.unit AS \"단위\",\n  o.series_id AS \"시계열 ID\",\n  r.source AS \"제공처\",\n  r.source_key AS \"원천 조회\",\n  r.completed_at AS \"수집 시각(UTC)\",\n  r.record_count AS \"수집 행 수\"\nFROM indicator_observation o\nJOIN indicator_series s\n  ON s.provider = o.provider\n AND s.series_id = o.series_id\nJOIN source_record r ON r.id = o.source_record_id\nWHERE o.provider = 'boe'\n  AND o.series_id IN (${series:sqlstring})\nORDER BY o.series_id, o.observation_date DESC"
+        }
+      ]
+    },
+    {
+      "id": 6,
+      "type": "timeseries",
+      "title": "수집 실행별 정규화 행 수",
+      "description": "`source_record`에 남은 수집 계보. IADB는 세 시계열을 한 응답에 담아 주므로 실행마다 점이 하나다. 정상 실행이면 최근 7일 × 만기 셋, 즉 9~15행이 나온다. 요청 자체는 구간보다 14일 앞에서부터 하지만 저장은 구간 안만 한다.",
+      "datasource": {
+        "type": "postgres",
+        "uid": "${ds}"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 24,
+        "x": 0,
+        "y": 32
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "decimals": 0,
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "drawStyle": "points",
+            "pointSize": 6,
+            "lineWidth": 0,
+            "fillOpacity": 0,
+            "showPoints": "always",
+            "spanNulls": false,
+            "scaleDistribution": {
+              "type": "linear"
+            }
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "format": "time_series",
+          "rawQuery": true,
+          "editorMode": "code",
+          "datasource": {
+            "type": "postgres",
+            "uid": "${ds}"
+          },
+          "rawSql": "SELECT\n  completed_at AS time,\n  record_count AS value,\n  source_key AS metric\nFROM source_record\nWHERE source = 'boe'\n  AND $__timeFilter(completed_at)\nORDER BY 1"
+        }
+      ]
+    }
+  ]
+}

@@ -41,6 +41,7 @@ def normalized(sql: str) -> str:
         sql = pattern.sub("", sql)
     return sql.replace(*UNIFIED_GROUP_BY)
 
+
 SESSION_VALUES = ("all", "kr", "us", "off", "weekend")
 
 

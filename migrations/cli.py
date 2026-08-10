@@ -60,6 +60,15 @@ def _parser() -> argparse.ArgumentParser:
     revision.add_argument("-m", "--message", nargs="+")
     revision.add_argument("--autogenerate", action="store_true")
 
+    # Branches appear when two lines of work each add a revision on top of the
+    # same parent. Alembic then refuses `head` because it cannot choose one, so
+    # every command that targets `head` fails until the branches are joined.
+    merge = subparsers.add_parser("merge")
+    merge.add_argument("-m", "--message", nargs="+")
+    # Defaults to every open head, which is what joining a branch means. A
+    # subset is only useful with three or more heads.
+    merge.add_argument("--revisions", nargs="+", default=["heads"])
+
     return parser
 
 
@@ -74,6 +83,12 @@ def main(argv: Sequence[str] | None = None) -> None:
         alembic_command.upgrade(config, args.revision)
     elif args.command == "downgrade":
         alembic_command.downgrade(config, args.revision)
+    elif args.command == "merge":
+        alembic_command.merge(
+            config,
+            revisions=args.revisions,
+            message=" ".join(args.message) if args.message else None,
+        )
     else:
         alembic_command.revision(
             config,

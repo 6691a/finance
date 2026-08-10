@@ -8,12 +8,24 @@ pytestmark = pytest.mark.skipif(not revision_files(), reason=NO_REVISION_REASON)
 
 # 현물과 선물이 각각 최소 하나는 있어야 한다. 한쪽이 비면 그 대시보드가 통째로 빈다.
 EXPECTED_FUTURES = {
-    "SP500_FUT", "NASDAQ100_FUT", "DOW_FUT", "RUSSELL2000_FUT",
-    "KOSPI200_FUT", "KOSDAQ150_FUT",
+    "SP500_FUT",
+    "NASDAQ100_FUT",
+    "DOW_FUT",
+    "RUSSELL2000_FUT",
+    "KOSPI200_FUT",
+    "KOSDAQ150_FUT",
 }
 EXPECTED_INDEXES = {
-    "VIX", "SOX", "KOSPI", "KOSPI200", "KOSDAQ",
-    "NIKKEI225", "TAIEX", "HSI", "SSE_COMP", "RUSSELL2000",
+    "VIX",
+    "SOX",
+    "KOSPI",
+    "KOSPI200",
+    "KOSDAQ",
+    "NIKKEI225",
+    "TAIEX",
+    "HSI",
+    "SSE_COMP",
+    "RUSSELL2000",
 }
 EXPECTED_FX = {"USDKRW", "USDJPY", "DXY", "USDCNH", "JPYKRW"}
 EXPECTED_RATES = {"US10Y"}
@@ -53,10 +65,7 @@ def test_quote_symbol_master_splits_spot_from_futures(capsys):
     assert "CONSTRAINT uq_quote_symbol_natural_key UNIQUE (provider, symbol)" in sql
     # kind 를 늘릴 때마다 CHECK 를 다시 만든다. PostgreSQL native enum 을 안 쓰는 대신
     # 치르는 비용이고, 대신 값 추가가 트랜잭션 안에서 끝난다.
-    assert (
-        "kind IN ('index', 'index_future', 'fx', 'rate', 'bond_future', 'commodity', 'equity', 'crypto')"
-        in sql
-    )
+    assert "kind IN ('index', 'index_future', 'fx', 'rate', 'bond_future', 'commodity', 'equity', 'crypto')" in sql
 
 
 @pytest.mark.parametrize("symbol", sorted(ALL_EXPECTED))
@@ -139,10 +148,17 @@ def test_domestic_symbols_belong_to_the_domestic_collector():
     assert not ({"KOSPI", "KOSPI200_FUT"} & yahoo_symbols)
 
 
-def test_kospi_was_moved_from_yahoo_to_kis(capsys):
-    # 제공처를 옮기는 마이그레이션이 있어야 마스터 행이 kis로 간다. 없으면 대시보드가
-    # 코스피를 yahoo 밑에서 찾다가 빈 화면을 보여 준다.
+def test_kospi_is_seeded_under_the_domestic_collector(capsys):
+    # 마스터 행이 kis 밑에 있어야 한다. yahoo 밑에 있으면 대시보드가 코스피를 거기서
+    # 찾다가 빈 화면을 보여 준다. 조회 쿼리는 provider 를 함께 걸기 때문이다.
+    #
+    # 예전에는 제공처를 옮기는 UPDATE 가 있는지를 봤다. 리비전을 하나로 합치면서 그
+    # 이력이 사라졌으므로 이력이 아니라 결과를 본다.
     sql = head_sql(capsys)
 
-    assert "UPDATE quote_symbol SET provider = 'kis'" in sql
-    assert "DELETE FROM quote_bar WHERE provider = 'yahoo' AND symbol = 'KOSPI'" in sql
+    for symbol in ("KOSPI", "KOSPI200", "KOSPI200_FUT"):
+        assert (
+            f"INSERT INTO quote_symbol (provider, symbol, kind, country, country_name, label) VALUES ('kis', '{symbol}'"
+            in sql
+        )
+        assert f"VALUES ('yahoo', '{symbol}'" not in sql

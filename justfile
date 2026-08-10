@@ -29,6 +29,12 @@ migrate +args:
 makemigrations message:
     uv run python -m migrations.cli revision --autogenerate -m "{{message}}"
 
+# Join every open head into one revision. Needed after two branches each added
+# a revision on top of the same parent, which makes `head` ambiguous.
+# Example: `just mergemigrations "merge jgb seed into quote symbol chain"`.
+mergemigrations message:
+    uv run python -m migrations.cli merge -m "{{message}}"
+
 # New Fernet key for compose/local/airflow/.env.
 fernet:
     uv run --quiet --no-project --with cryptography python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"

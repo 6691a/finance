@@ -35,7 +35,7 @@ Yahoo v8 chart는 비공식 API다. 키가 없고 비용도 없지만 언제든 
 import json
 import math
 from collections.abc import Sequence
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, date, datetime, time, timedelta
 from decimal import Decimal, InvalidOperation
 from enum import StrEnum
 from typing import Any, Protocol, Self
@@ -76,6 +76,11 @@ MAX_BACKFILL_DAYS = 8
 # 상수로 두는 건 백필 요청을 미리 막기 위해서다. 실측으로 확인한 값이라 제공처가 조용히
 # 바꿀 수 있고, 그때는 `parse_bars`가 Yahoo의 오류 메시지를 그대로 올려 준다.
 BAR_RETENTION_DAYS = 30
+
+# 백필 구간을 받는 DAG param 이름. 오류 메시지가 사용자에게 이 이름으로 나가야 해서
+# 파싱을 하는 이 모듈이 들고 있는다. DAG는 `params` 정의에 같은 값을 쓴다.
+BACKFILL_START_PARAM = "backfill_start"
+BACKFILL_END_PARAM = "backfill_end"
 
 REQUEST_TIMEOUT_SECONDS = 30
 
@@ -359,6 +364,48 @@ def backfill_windows(start: datetime, end: datetime) -> tuple[tuple[datetime, da
     return tuple(windows)
 
 
+def _param_date(name: str, value: object) -> date:
+    try:
+        return date.fromisoformat(str(value))
+    except ValueError as error:
+        raise ValueError(f"{name} must be an ISO date (YYYY-MM-DD)") from error
+
+
+def resolve_backfill_period(params: dict[str, Any]) -> tuple[datetime, datetime] | None:
+    """백필 구간. 파라미터가 없으면 `None`이고 그때는 평소대로 폴링한다.
+
+    종료일은 **포함**이다. 사용자가 준 날짜의 하루 끝까지 받는다. 저장 쪽 경계는 열려
+    있으므로(`bar_at < until`) 다음 날 00:00을 상한으로 넘긴다.
+
+    잘못된 입력은 `ValueError`로 올린다. 재시도해도 같은 값이라는 판단과 그걸
+    `AirflowFailException`으로 바꾸는 일은 DAG가 한다.
+    """
+    start_value = params.get(BACKFILL_START_PARAM)
+    end_value = params.get(BACKFILL_END_PARAM)
+    if not start_value and not end_value:
+        return None
+    if not start_value or not end_value:
+        raise ValueError(f"{BACKFILL_START_PARAM} and {BACKFILL_END_PARAM} must be given together")
+
+    start_date = _param_date(BACKFILL_START_PARAM, start_value)
+    end_date = _param_date(BACKFILL_END_PARAM, end_value)
+    if start_date > end_date:
+        raise ValueError(f"{BACKFILL_START_PARAM} ({start_date}) is after {BACKFILL_END_PARAM} ({end_date})")
+
+    start = datetime.combine(start_date, time.min, tzinfo=UTC)
+    end = datetime.combine(end_date, time.min, tzinfo=UTC) + timedelta(days=1)
+
+    # Yahoo는 1분봉을 약 30일만 보관한다. 그보다 과거는 요청해도 데이터가 없으므로 미리
+    # 막는다. 조용한 0건으로 끝나면 백필이 됐는지 안 됐는지 알 수 없다.
+    earliest = datetime.now(UTC) - timedelta(days=BAR_RETENTION_DAYS)
+    if start < earliest:
+        raise ValueError(
+            f"Yahoo keeps only {BAR_RETENTION_DAYS} days of 1m bars; "
+            f"{BACKFILL_START_PARAM} must not be earlier than {earliest.date()}"
+        )
+    return start, end
+
+
 def build_url(symbol: QuoteSymbol, window: tuple[datetime, datetime] | None = None) -> str:
     """호출 URL. 비밀이 없으므로 로그와 예외 메시지에 남겨도 된다.
 
@@ -466,9 +513,7 @@ def parse_bars(body: bytes, since: datetime | None = None, until: datetime | Non
     if mismatched:
         raise YahooPayloadError(f"Yahoo quote arrays do not line up with {expected} timestamps: {mismatched}")
     if arrays.volume and len(arrays.volume) != expected:
-        raise YahooPayloadError(
-            f"Yahoo volume array does not line up with {expected} timestamps: {len(arrays.volume)}"
-        )
+        raise YahooPayloadError(f"Yahoo volume array does not line up with {expected} timestamps: {len(arrays.volume)}")
 
     bars: list[QuoteBar] = []
     latest_bar_at: datetime | None = None

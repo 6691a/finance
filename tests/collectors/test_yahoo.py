@@ -10,6 +10,7 @@ from sqlalchemy import Table
 from apps.models.market import QuoteBar as QuoteBarModel
 from apps.models.raw import SourceRecord
 from modules.collectors.yahoo import (
+    BAR_RETENTION_DAYS,
     MAX_BACKFILL_DAYS,
     QUOTE_BAR_UPSERT,
     SOURCE_RECORD_INSERT,
@@ -20,6 +21,7 @@ from modules.collectors.yahoo import (
     backfill_windows,
     build_url,
     parse_bars,
+    resolve_backfill_period,
     store_bars,
 )
 
@@ -488,3 +490,57 @@ def test_parse_surfaces_the_reason_yahoo_rejected_the_range():
 
     with pytest.raises(YahooPayloadError, match="1m data not available"):
         parse_bars(body)
+
+
+# --- 백필 구간 파싱 ---------------------------------------------------------
+#
+# 여기가 조용히 틀리면 예외가 아니라 빈 결과나 하루 누락으로 나타나서 대시보드를 열기
+# 전까지 모른다. DAG는 이 함수의 `ValueError`를 `AirflowFailException`으로 바꾸기만 한다.
+
+
+def period(start: str | None = None, end: str | None = None) -> dict[str, object]:
+    return {"backfill_start": start, "backfill_end": end}
+
+
+def test_no_backfill_params_means_ordinary_polling():
+    assert resolve_backfill_period(period()) is None
+    assert resolve_backfill_period({}) is None
+
+
+def test_backfill_covers_the_whole_end_day():
+    # 종료일은 포함이고 저장 경계는 열려 있다(`bar_at < until`). 그래서 상한이 다음 날 00:00이다.
+    # 여기가 하루 어긋나면 마지막 날이 통째로 비고 아무 것도 실패하지 않는다.
+    yesterday = (datetime.now(UTC) - timedelta(days=1)).date()
+    start, end = resolve_backfill_period(period(str(yesterday), str(yesterday)))
+
+    assert start == datetime.combine(yesterday, datetime.min.time(), tzinfo=UTC)
+    assert end == start + timedelta(days=1)
+
+
+@pytest.mark.parametrize(
+    "params",
+    [period(start="2026-07-10"), period(end="2026-07-31")],
+    ids=["start_only", "end_only"],
+)
+def test_backfill_needs_both_ends(params):
+    with pytest.raises(ValueError, match="together"):
+        resolve_backfill_period(params)
+
+
+def test_backfill_rejects_a_reversed_period():
+    today = datetime.now(UTC).date()
+    with pytest.raises(ValueError, match="is after"):
+        resolve_backfill_period(period(str(today), str(today - timedelta(days=3))))
+
+
+def test_backfill_rejects_a_value_that_is_not_a_date():
+    with pytest.raises(ValueError, match="ISO date"):
+        resolve_backfill_period(period("2026-07-32", "2026-07-31"))
+
+
+def test_backfill_stops_before_yahoo_stops_keeping_bars():
+    # Yahoo는 1분봉을 약 30일만 보관한다. 넘겨서 요청하면 오류가 아니라 빈 응답이 와서
+    # 백필이 됐는지 안 됐는지 알 수 없다. 그래서 태스크가 시작하기 전에 막는다.
+    too_old = (datetime.now(UTC) - timedelta(days=BAR_RETENTION_DAYS + 1)).date()
+    with pytest.raises(ValueError, match=str(BAR_RETENTION_DAYS)):
+        resolve_backfill_period(period(str(too_old), str(datetime.now(UTC).date())))

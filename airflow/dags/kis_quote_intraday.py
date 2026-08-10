@@ -72,7 +72,6 @@ KOSPI200 선물은 분기물(3·6·9·12)이고 만기는 만기월 **두 번째
 토큰은 **발급 횟수 제한이 있어** Airflow Variable 에 캐시한다. 폴링마다 발급하지 않는다.
 """
 
-import json
 import logging
 import os
 from datetime import UTC, datetime, timedelta
@@ -92,10 +91,10 @@ from modules.collectors.kis import (
     KisPayloadError,
     KisResultError,
     SymbolOutcome,
+    access_token,
     fetch_bars,
     fetch_index_bars,
     front_contract,
-    issue_token,
     store_bars,
 )
 from modules.utility import KST_TIMEZONE
@@ -103,12 +102,6 @@ from modules.utility import KST_TIMEZONE
 logger = logging.getLogger(__name__)
 
 CONNECTION_ID = "news"
-
-# 토큰을 담아 두는 Airflow Variable. 발급 횟수 제한이 있어 폴링마다 받을 수 없다.
-TOKEN_VARIABLE = "kis_access_token"
-
-# 만료 직전에 미리 갈아 끼운다. 폴링 도중 만료돼 401이 나는 걸 줄인다.
-TOKEN_REFRESH_MARGIN = timedelta(minutes=30)
 
 LOOKBACK_MINUTES = 15
 LOOKBACK_MINUTES_PARAM = "lookback_minutes"
@@ -125,30 +118,13 @@ def _credentials() -> tuple[SecretStr, SecretStr]:
     return SecretStr(app_key), SecretStr(app_secret)
 
 
-def access_token(app_key: SecretStr, app_secret: SecretStr, force: bool = False) -> SecretStr:
-    """캐시된 토큰. 없거나 만료가 가까우면 새로 받아 Variable 에 넣는다.
+def cached_access_token(app_key: SecretStr, app_secret: SecretStr, force: bool = False) -> SecretStr:
+    """토큰 캐시에 Airflow `Variable`을 저장소로 물린다.
 
-    `force=True`는 401을 만났을 때 쓴다. 캐시가 살아 있어도 다시 받는다.
+    캐시 판정과 재발급은 `modules.collectors.kis.access_token`이 한다. 여기 남는 것은
+    저장소를 고르는 일뿐이다.
     """
-    if not force:
-        cached = Variable.get(TOKEN_VARIABLE, default=None)
-        if cached:
-            try:
-                stored = json.loads(cached)
-                expires_at = datetime.fromisoformat(stored["expires_at"])
-                if expires_at - TOKEN_REFRESH_MARGIN > datetime.now(UTC):
-                    return SecretStr(stored["token"])
-            except (ValueError, KeyError, TypeError):
-                # 캐시가 깨졌으면 그냥 새로 받는다. 값을 로그에 찍지 않는다.
-                logger.warning("Cached KIS token is unreadable; issuing a new one")
-
-    token, expires_at = issue_token(app_key, app_secret)
-    Variable.set(
-        TOKEN_VARIABLE,
-        json.dumps({"token": token.get_secret_value(), "expires_at": expires_at.isoformat()}),
-    )
-    logger.info("Issued a new KIS token (expires %s)", expires_at.isoformat())
-    return token
+    return access_token(Variable, app_key, app_secret, force=force)
 
 
 @dag(
@@ -185,7 +161,7 @@ def kis_quote_intraday():
             raise AirflowFailException(f"{LOOKBACK_MINUTES_PARAM} must be between 1 and {MAX_BARS_PER_REQUEST}")
 
         app_key, app_secret = _credentials()
-        token = access_token(app_key, app_secret)
+        token = cached_access_token(app_key, app_secret)
 
         now = datetime.now(UTC)
         since = now - timedelta(minutes=lookback_minutes)
@@ -271,7 +247,7 @@ def _fetch(token, app_key, app_secret, target, contract, now):
         if error.status != 401:
             raise
         logger.warning("KIS returned 401; reissuing the token once")
-        return call(access_token(app_key, app_secret, force=True))
+        return call(cached_access_token(app_key, app_secret, force=True))
 
 
 kis_quote_intraday = kis_quote_intraday()

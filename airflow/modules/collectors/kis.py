@@ -42,6 +42,7 @@
 """
 
 import json
+import logging
 import re
 from collections.abc import Sequence
 from datetime import UTC, date, datetime, timedelta
@@ -67,11 +68,19 @@ from pydantic import (
 from modules.sql import read_sql
 from modules.upsert import execute_upserts
 
+logger = logging.getLogger(__name__)
+
 KIS_BASE_URL = "https://openapi.koreainvestment.com:9443"
 SOURCE = "kis"
 SOURCE_KEY = "intraday_1m"
 
 TOKEN_PATH = "/oauth2/tokenP"
+
+# 발급한 토큰을 담아 두는 키. 발급 횟수 제한이 있어 폴링마다 받을 수 없다.
+TOKEN_CACHE_KEY = "kis_access_token"
+
+# 만료 직전에 미리 갈아 끼운다. 폴링 도중 만료돼 401이 나는 걸 줄인다.
+TOKEN_REFRESH_MARGIN = timedelta(minutes=30)
 
 # 선물옵션 분봉. 값 컬럼이 `futs_*`다.
 FUTURE_CHART_PATH = "/uapi/domestic-futureoption/v1/quotations/inquire-time-fuopchartprice"
@@ -179,6 +188,18 @@ class Cursor(Protocol):
 
 class Connection(Protocol):
     def cursor(self) -> Cursor: ...
+
+
+class TokenStore(Protocol):
+    """토큰 캐시가 쓰는 저장소. 운영에서는 Airflow `Variable`이 그대로 들어맞는다.
+
+    이 모듈이 `airflow`를 import하지 않게 하려고 구조적 타입으로 받는다. 덕분에 캐시
+    판정을 Airflow 없이 테스트할 수 있다.
+    """
+
+    def get(self, key: str, default: str | None = None) -> str | None: ...
+
+    def set(self, key: str, value: str) -> None: ...
 
 
 class KisHTTPError(RuntimeError):
@@ -410,7 +431,35 @@ def issue_token(app_key: SecretStr, app_secret: SecretStr) -> tuple[SecretStr, d
     return SecretStr(token), expires_at.astimezone(UTC)
 
 
-def _get(token: SecretStr, app_key: SecretStr, app_secret: SecretStr, path: str, tr_id: str, query: dict) -> tuple[bytes, int]:
+def access_token(store: TokenStore, app_key: SecretStr, app_secret: SecretStr, force: bool = False) -> SecretStr:
+    """캐시된 토큰. 없거나 만료가 가까우면 새로 받아 `store`에 넣는다.
+
+    `force=True`는 401을 만났을 때 쓴다. 캐시가 살아 있어도 다시 받는다.
+    """
+    if not force:
+        cached = store.get(TOKEN_CACHE_KEY, default=None)
+        if cached:
+            try:
+                stored = json.loads(cached)
+                expires_at = datetime.fromisoformat(stored["expires_at"])
+                if expires_at - TOKEN_REFRESH_MARGIN > datetime.now(UTC):
+                    return SecretStr(stored["token"])
+            except (ValueError, KeyError, TypeError):
+                # 캐시가 깨졌으면 그냥 새로 받는다. 값을 로그에 찍지 않는다.
+                logger.warning("Cached KIS token is unreadable; issuing a new one")
+
+    token, expires_at = issue_token(app_key, app_secret)
+    store.set(
+        TOKEN_CACHE_KEY,
+        json.dumps({"token": token.get_secret_value(), "expires_at": expires_at.isoformat()}),
+    )
+    logger.info("Issued a new KIS token (expires %s)", expires_at.isoformat())
+    return token
+
+
+def _get(
+    token: SecretStr, app_key: SecretStr, app_secret: SecretStr, path: str, tr_id: str, query: dict
+) -> tuple[bytes, int]:
     """분봉 조회 한 번. 선물과 지수가 같은 헤더 규약을 쓴다."""
     request = Request(
         f"{KIS_BASE_URL}{path}?{urlencode(query)}",

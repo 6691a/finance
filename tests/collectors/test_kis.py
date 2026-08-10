@@ -6,20 +6,24 @@ from typing import Self
 from zoneinfo import ZoneInfo
 
 import pytest
+from pydantic import SecretStr
 from sqlalchemy import Table
 
 from apps.models.market import QuoteBar as QuoteBarModel
 from apps.models.raw import SourceRecord
+from modules.collectors import kis
 from modules.collectors.kis import (
     CONTRACT_MONTHS,
     MAX_BARS_PER_REQUEST,
     QUOTE_BAR_UPSERT,
     SOURCE_RECORD_INSERT,
+    TOKEN_REFRESH_MARGIN,
     DomesticFuture,
     KisPayloadError,
     KisResponse,
     KisResultError,
     SymbolOutcome,
+    access_token,
     expiry_date,
     front_contract,
     parse_bars,
@@ -198,7 +202,7 @@ def test_expiry_is_the_second_thursday(year, month, expected):
 @pytest.mark.parametrize(
     ("today", "expected"),
     [
-        (date(2026, 8, 8), "A01609"),   # 9월물 만기 전
+        (date(2026, 8, 8), "A01609"),  # 9월물 만기 전
         (date(2026, 9, 10), "A01609"),  # 만기 당일은 아직 거래된다
         (date(2026, 9, 11), "A01612"),  # 만기 다음 날 롤오버
         (date(2026, 12, 11), "A01703"),  # 해가 바뀌면 연도 자릿수가 6에서 7로 넘어간다
@@ -394,3 +398,82 @@ def test_session_window_covers_the_korean_futures_hours():
     closing = datetime(2026, 8, 7, 15, 45, tzinfo=KST).astimezone(UTC)
 
     assert closing - opening == timedelta(hours=6, minutes=45)
+
+
+# --- 토큰 캐시 --------------------------------------------------------------
+#
+# 발급 횟수에 제한이 있어 폴링마다 받을 수 없다. 캐시가 틀려도 예외가 아니라 발급 제한으로
+# 나타나서 늦게 안다. 저장소는 구조적 타입이라 Airflow `Variable` 없이 검증한다.
+
+
+class FakeStore:
+    """`TokenStore`를 만족하는 최소 구현. 운영에서는 Airflow `Variable`이 들어간다."""
+
+    def __init__(self, stored: str | None = None) -> None:
+        self.stored = stored
+        self.writes = 0
+
+    def get(self, key: str, default: str | None = None) -> str | None:
+        return self.stored if self.stored is not None else default
+
+    def set(self, key: str, value: str) -> None:
+        self.stored = value
+        self.writes += 1
+
+
+def cached_token(token: str, expires_in: timedelta) -> str:
+    return json.dumps({"token": token, "expires_at": (datetime.now(UTC) + expires_in).isoformat()})
+
+
+@pytest.fixture
+def issued(monkeypatch):
+    """발급 호출을 센다. 실제 KIS 발급은 횟수 제한이 있어 여기서는 절대 부르지 않는다."""
+    calls = []
+
+    def fake_issue_token(app_key: SecretStr, app_secret: SecretStr):
+        calls.append(app_key)
+        return SecretStr("fresh"), datetime.now(UTC) + timedelta(hours=24)
+
+    monkeypatch.setattr(kis, "issue_token", fake_issue_token)
+    return calls
+
+
+def token_for(store: FakeStore, *, force: bool = False) -> SecretStr:
+    return access_token(store, SecretStr("key"), SecretStr("secret"), force=force)
+
+
+def test_a_live_cached_token_is_reused(issued):
+    store = FakeStore(cached_token("cached", timedelta(hours=12)))
+
+    assert token_for(store).get_secret_value() == "cached"
+    assert issued == []
+
+
+def test_a_token_close_to_expiry_is_replaced_before_it_dies(issued):
+    # 만료 직전 토큰을 그대로 쓰면 폴링 도중 401이 난다. 여유분 안쪽이면 미리 갈아 끼운다.
+    store = FakeStore(cached_token("stale", TOKEN_REFRESH_MARGIN - timedelta(minutes=1)))
+
+    assert token_for(store).get_secret_value() == "fresh"
+    assert len(issued) == 1
+    assert json.loads(store.stored)["token"] == "fresh"
+
+
+@pytest.mark.parametrize(
+    "stored",
+    [None, "not json", json.dumps({"token": "x"}), json.dumps({"token": "x", "expires_at": "언젠가"})],
+    ids=["empty", "broken_json", "missing_expiry", "unparsable_expiry"],
+)
+def test_an_unusable_cache_falls_back_to_issuing(issued, stored):
+    # 캐시가 깨졌다고 태스크가 죽으면 안 된다. 새로 받고 캐시를 덮어쓴다.
+    store = FakeStore(stored)
+
+    assert token_for(store).get_secret_value() == "fresh"
+    assert len(issued) == 1
+
+
+def test_force_ignores_a_live_cache(issued):
+    # 401을 만났을 때 쓰는 경로다. 캐시가 살아 있어도 다시 받아야 그 401을 벗어난다.
+    store = FakeStore(cached_token("cached", timedelta(hours=12)))
+
+    assert token_for(store, force=True).get_secret_value() == "fresh"
+    assert len(issued) == 1

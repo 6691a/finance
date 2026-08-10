@@ -82,7 +82,7 @@ Yahoo chart는 요청 한 번에 하루치 1분봉을 통째로 돌려준다. �
 """
 
 import logging
-from datetime import UTC, date, datetime, time, timedelta
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 import pendulum
@@ -91,12 +91,14 @@ from airflow.providers.postgres.hooks.postgres import PostgresHook
 from airflow.sdk import Param, dag, get_current_context, task
 
 from modules.collectors.yahoo import (
-    BAR_RETENTION_DAYS,
+    BACKFILL_END_PARAM,
+    BACKFILL_START_PARAM,
     QuoteSymbol,
     SymbolOutcome,
     YahooHTTPError,
     backfill_windows,
     fetch_bars,
+    resolve_backfill_period,
     store_bars,
 )
 from modules.utility import KST_TIMEZONE
@@ -111,50 +113,20 @@ CONNECTION_ID = "news"
 LOOKBACK_MINUTES = 15
 
 LOOKBACK_MINUTES_PARAM = "lookback_minutes"
-BACKFILL_START_PARAM = "backfill_start"
-BACKFILL_END_PARAM = "backfill_end"
 
 # 설정 오류라 재시도해도 같은 결과인 HTTP 상태.
 UNRECOVERABLE_STATUSES = frozenset({400, 401, 403, 404})
 
 
-def _parse_param_date(name: str, value: object) -> date:
-    try:
-        return date.fromisoformat(str(value))
-    except ValueError as error:
-        raise AirflowFailException(f"{name} must be an ISO date (YYYY-MM-DD)") from error
+def backfill_period(params: dict[str, Any]) -> tuple[datetime, datetime] | None:
+    """`modules.collectors.yahoo.resolve_backfill_period`의 실패를 재시도 불가로 분류한다.
 
-
-def resolve_backfill_period(params: dict[str, Any]) -> tuple[datetime, datetime] | None:
-    """백필 구간. 파라미터가 없으면 `None`이고 그때는 평소대로 폴링한다.
-
-    종료일은 **포함**이다. 사용자가 준 날짜의 하루 끝까지 받는다. 저장 쪽 경계는 열려
-    있으므로(`bar_at < until`) 다음 날 00:00을 상한으로 넘긴다.
+    잘못된 백필 파라미터는 다시 돌려도 같은 값이라 즉시 실패시킨다.
     """
-    start_value = params.get(BACKFILL_START_PARAM)
-    end_value = params.get(BACKFILL_END_PARAM)
-    if not start_value and not end_value:
-        return None
-    if not start_value or not end_value:
-        raise AirflowFailException(f"{BACKFILL_START_PARAM} and {BACKFILL_END_PARAM} must be given together")
-
-    start_date = _parse_param_date(BACKFILL_START_PARAM, start_value)
-    end_date = _parse_param_date(BACKFILL_END_PARAM, end_value)
-    if start_date > end_date:
-        raise AirflowFailException(f"{BACKFILL_START_PARAM} ({start_date}) is after {BACKFILL_END_PARAM} ({end_date})")
-
-    start = datetime.combine(start_date, time.min, tzinfo=UTC)
-    end = datetime.combine(end_date, time.min, tzinfo=UTC) + timedelta(days=1)
-
-    # Yahoo는 1분봉을 약 30일만 보관한다. 그보다 과거는 요청해도 데이터가 없으므로 미리
-    # 막는다. 조용한 0건으로 끝나면 백필이 됐는지 안 됐는지 알 수 없다.
-    earliest = datetime.now(UTC) - timedelta(days=BAR_RETENTION_DAYS)
-    if start < earliest:
-        raise AirflowFailException(
-            f"Yahoo keeps only {BAR_RETENTION_DAYS} days of 1m bars; "
-            f"{BACKFILL_START_PARAM} must not be earlier than {earliest.date()}"
-        )
-    return start, end
+    try:
+        return resolve_backfill_period(params)
+    except ValueError as error:
+        raise AirflowFailException(str(error)) from error
 
 
 @dag(
@@ -209,7 +181,7 @@ def yahoo_quote_intraday():
         context = get_current_context()
         params = dict(context.get("params") or {})
 
-        backfill = resolve_backfill_period(params)
+        backfill = backfill_period(params)
         if backfill is None:
             lookback_minutes = int(params.get(LOOKBACK_MINUTES_PARAM) or LOOKBACK_MINUTES)
             if lookback_minutes < 1:

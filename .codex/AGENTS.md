@@ -39,7 +39,7 @@
 - 외부 입력은 Pydantic으로 검증하고, 시각은 timezone-aware UTC이며, 주석은 한국어로 쓴다.
 - `dags/`에는 스케줄, 재시도, 태스크 매핑, Hook 사용, 실패 분류만 둔다. 파싱·검증·저장 규칙은 `modules/`에 둔다.
 - 의존성은 Airflow 환경에 있는 것만 쓴다. 표준 라이브러리, Pydantic, PEP 249 연결이다. SQLAlchemy 모델과 `core.config`는 import하지 않는다.
-- 테이블 정의의 원본은 백엔드의 `apps/models`다. 수집기는 문자열 SQL을 쓰므로 `tests/collectors/test_fred.py`와 `tests/collectors/test_ecos.py`가 INSERT 컬럼과 `ON CONFLICT` 키를 모델 metadata와 대조한다.
+- 테이블 정의의 원본은 백엔드의 `apps/models`다. 수집기는 문자열 SQL을 쓰므로 `tests/collectors/test_fred.py`, `test_ecos.py`, `test_mof.py`, `test_boe.py`, `test_ecb.py`가 INSERT 컬럼과 `ON CONFLICT` 키를 모델 metadata와 대조한다.
 
 ## 수집기 작성 규칙
 
@@ -48,13 +48,22 @@
 - 시각 필드는 `AwareDatetime`으로 받고 validator에서 UTC로 정규화한다.
 - 허용 값이 정해진 필드는 validator로 막는다. 예: 시계열 ID는 `TREASURY_SERIES` 안의 값만 받는다.
 - 제공처가 잘못된 식별자에도 정상 응답으로 답하면 식별자를 Enum으로 좁혀 요청 전에 막는다. ECOS는 없는 항목코드에도 데이터 없음(`INFO-200`)으로 답해서 오타가 조용한 0건이 된다.
-- API 키는 `SecretStr`로 받는다. URL에 키가 들어가므로 예외 메시지와 로그에 URL을 넣지 않는다.
+- API 키는 `SecretStr`로 받는다. URL에 키가 들어가므로 예외 메시지와 로그에 URL을 넣지 않는다. 인증이 없는 제공처(재무성)는 반대로 URL을 그대로 남긴다. 감출 게 없는데 감추면 디버깅만 어려워진다.
+- 제공처가 파일을 여러 개로 쪼개 고시하면 어느 파일을 받을지도 수집 규칙이라 `modules/`가 정한다. 재무성은 이번 달치(`jgbcm.csv`)와 과거 전체(`data/jgbcm_all.csv`)가 겹치지 않아 구간이 달 경계를 넘으면 둘 다 받아야 한다. `mof.fetch_curves`가 그 판단을 한다.
+- 수집 단위가 시계열이 아니라 파일이나 조회 한 번이면 `source_record`도 그 단위로 남기고 `source_key`에 파일 이름(`jgbcm`)이나 조회 이름(`gilt_nominal_par_yields`, `YC.B.U2.EUR.4F.G_N_A.SV_C_YM`)을 넣는다. 시계열마다 태스크를 매핑하지 않는다.
+- 원본이 JSON이 아니면 `payload`에 넣지 않는다. 컬럼 타입이 jsonb다. 어느 파일이 어느 구간을 담고 있었는지를 `metadata`에 남긴다.
+- 응답에 우리가 요청하지 않은 식별자가 섞여 오면 실패시킨다. ECB는 `KEY` 칸을 매 행 대조해 `G_N_C`(전체 발행자) 곡선이 AAA 곡선에 섞이는 것을 막는다.
+- 제공처가 값 없음과 잘못된 식별자를 **같은 응답으로** 알리면 조회 구간 앞에 패딩을 붙여 영업일이 반드시 들어가게 한다. BoE IADB는 둘 다 HTTP 200에 HTML 오류 페이지로 답한다. `boe.FETCH_PADDING_DAYS`가 14일을 붙이고 저장은 구간 안만 한다. 패딩을 붙이고도 오류 페이지면 식별자나 구간이 틀린 것이다. 반대로 둘이 갈리는 제공처(ECB는 값 없음이 HTTP 200 빈 본문, 없는 키가 404)에는 패딩을 붙이지 않는다.
+- 제공처가 자기 나라 표기로 날짜를 주면 그 변환도 수집기가 하고 모르는 표기는 실패시킨다. 재무성은 和暦(`R8.8.3` = 2026-08-03)을 쓴다.
+- 로케일을 타는 표기는 표를 직접 둔다. `strptime`/`strftime`의 `%b`, `%a`는 실행 환경의 `LC_TIME`을 타므로 컨테이너 로케일이 바뀌면 조용히 실패한다. BoE의 `03 Aug 2026`은 `boe.MONTH_NAMES`가 읽는다.
+- 날짜 문자열은 모양을 먼저 보고 파싱한다. `date.fromisoformat`은 `2026-W32` 같은 ISO 주 표기도 받아 그 주의 월요일로 바꾼다. 주간·월간 빈도의 값이 섞이면 조용히 엉뚱한 날짜가 된다(`ecb.ISO_DATE_PATTERN`).
+- 조회 구간 계산은 `modules/period.py`에 한 벌만 둔다. 이 모듈은 Airflow를 import하지 않는다. 실패는 `PeriodError`로 올리고 `AirflowFailException`으로 바꾸는 건 DAG가 한다.
 - 외부 오류는 재시도 가능 여부로 나눠 올린다. HTTP 상태, 응답 형식, 연결 실패를 각각 다른 예외로 구분하고 판단은 DAG가 한다.
 - 제공처가 실패를 HTTP 상태가 아니라 본문으로 알리면 그 코드를 담는 예외를 따로 둔다(`EcosResultError`). 수집기는 코드를 해석하지 않고 DAG가 재시도 여부를 정한다.
 - 응답이 페이지 단위로 잘릴 수 있으면 제공처가 알려 준 전체 건수와 받은 행 수를 대조해 잘림을 실패로 만든다. 조용히 잘린 응답은 조회 구간에 구멍을 남긴다.
 - HTML 수집은 scrapling을 쓴다. 요청은 `Fetcher`(curl_cffi), 파싱은 `Selector`다. `impersonate`로 실제 브라우저 지문을 흉내 내므로 앞단 WAF에 막히지 않는다. 페이지가 JavaScript로 표를 그릴 때만 `DynamicFetcher`나 `StealthyFetcher`를 쓴다. 이건 브라우저를 띄우므로 기본값이 아니다.
-- 표를 위치(index)로 읽으면 칸 수를 상수로 두고 응답마다 검증한다. 사이트가 열을 추가하면 값이 조용히 옆 칸으로 밀린다. 칸 수 검사가 먼저 실패해야 그걸 알 수 있다.
-- 기준 예시는 `airflow/modules/collectors/fred.py`와 `airflow/dags/fred_treasury_daily.py`, HTML 쪽은 `airflow/modules/collectors/hana.py`와 `airflow/dags/exchange_rate_daily.py`다. 본문으로 실패를 알리는 API는 `airflow/modules/collectors/ecos.py`와 `airflow/dags/ecos_market_rate_daily.py`를 본다.
+- 표를 위치(index)로 읽으면 칸 수를 상수로 두고 응답마다 검증한다. 사이트가 열을 추가하면 값이 조용히 옆 칸으로 밀린다. 칸 수 검사가 먼저 실패해야 그걸 알 수 있다. CSV도 같고, 저장하지 않는 열까지 헤더 전체를 대조한다(`mof.EXPECTED_HEADER`).
+- 기준 예시는 `airflow/modules/collectors/fred.py`와 `airflow/dags/fred_treasury_daily.py`, HTML 쪽은 `airflow/modules/collectors/hana.py`와 `airflow/dags/exchange_rate_daily.py`다. 본문으로 실패를 알리는 API는 `airflow/modules/collectors/ecos.py`와 `airflow/dags/ecos_market_rate_daily.py`, 인증 없는 CSV 파일은 `airflow/modules/collectors/mof.py`와 `airflow/dags/mof_jgb_daily.py`, `boe.py`, `ecb.py`를 본다.
 
 ## 마이그레이션 라우팅 규칙
 
@@ -132,7 +141,7 @@ API, 크롤링, 웹소켓 수집 결과의 출처와 상태를 가볍게 보존�
 
 여러 제공처에서 추출한 지표 관측값을 날짜와 단위와 함께 조회 가능한 형태로 누적 저장한다. `(provider, series_id, observation_date)`를 고유키로 사용하고 `source_record_id`로 근거 수집 레코드와 연결한다.
 
-- `provider`는 그 값을 준 제공처(`fred`, `ecos`)이며 같은 수집의 `source_record.source`와 같은 값이다.
+- `provider`는 그 값을 준 제공처(`fred`, `ecos`, `mof`, `boe`, `ecb`)이며 같은 수집의 `source_record.source`와 같은 값이다.
 - `series_id`는 **제공처 안에서만 고유하다.** 그래서 자연키에 `provider`가 함께 들어간다.
 - `series_id`는 사람이 읽을 수 있어야 한다. FRED의 `DGS10`처럼 제공처 ID가 이미 읽히면 그대로 쓰고, ECOS 항목코드(`010210000`)처럼 숫자뿐이면 `KTB10Y` 같은 ID를 만들어 저장한다. 제공처의 원본 좌표는 수집기 Enum이 들고 있다가 요청에 쓰고 `source_record.metadata`에 남긴다.
 - 조회하는 쪽도 `provider`를 함께 건다. `series_id` 하나로 거는 쿼리는 제공처가 늘어나면 조용히 틀린다.
@@ -142,8 +151,10 @@ API, 크롤링, 웹소켓 수집 결과의 출처와 상태를 가볍게 보존�
 
 `indicator_observation`의 시계열이 어느 나라 무슨 금리인지 설명하는 마스터다. `(provider, series_id)`가 자연키이고 대시보드가 이 키로 관측값을 조인한다.
 
-- 존재 이유는 나라를 추가할 때 조회 쪽을 안 고치기 위해서다. 국가·만기를 조회 쿼리가 알고 있으면 나라가 늘 때마다 대시보드 SQL을 고쳐야 한다.
+- 존재 이유는 나라를 추가할 때 조회 쪽을 안 고치기 위해서다. 국가·만기를 조회 쿼리가 알고 있으면 나라가 늘 때마다 대시보드 SQL을 고쳐야 한다. 영국과 유로 지역을 붙일 때 통합 대시보드는 한 줄도 고치지 않았다.
+- `country`는 ISO 3166-1 alpha-2다. 유로 지역처럼 나라가 아닌 통화권은 `XM`을 쓰고 `country_name`에 `유로 지역`을 넣는다.
 - `kind`가 국채(`government_bond`)와 단기 자금시장 금리(`money_market`)를 가른다. `maturity_months`는 비교와 정렬 기준이며 91일물은 3으로 둔다.
+- 국가 비교 패널의 만기 목록은 두 나라 이상이 가진 만기로 좁힌다(`HAVING count(DISTINCT country) > 1`). 일본 40년이나 유로 지역 6개월처럼 한 나라만 고시하는 만기는 골라도 비교할 대상이 없다.
 - 관측값에서 이 테이블로 외래키를 걸지 않는다. 걸면 마스터 행이 없는 시계열을 수집기가 저장하지 못해 Enum에만 추가한 순간 DAG가 죽는다. `tests/migrations/test_indicator_series_catalog.py`가 Enum과 시드를 대조한다.
 - 시계열을 늘릴 때는 수집기 Enum과 마스터 시드를 같은 커밋에서 함께 늘린다. 시드는 마이그레이션이 넣고 리비전 파일에서 앱 코드를 import하지 않는다.
 - `unit`은 제공처 표기가 아니라 정규화한 표기다. 연이율 퍼센트는 제공처가 `Percent`든 `연%`든 `Percent`로 저장해야 두 나라 금리를 한 쿼리로 비교할 수 있다.

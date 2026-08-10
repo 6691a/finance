@@ -1,7 +1,10 @@
 import pytest
 
+from modules.collectors.boe import GiltSeries
+from modules.collectors.ecb import EuroYieldSeries
 from modules.collectors.ecos import MarketRateSeries
 from modules.collectors.fred import TREASURY_SERIES
+from modules.collectors.mof import JgbSeries
 from tests.helpers import NO_REVISION_REASON, head_sql, revision_files
 
 pytestmark = pytest.mark.skipif(not revision_files(), reason=NO_REVISION_REASON)
@@ -31,3 +34,42 @@ def test_every_ecos_series_has_a_master_row(series, capsys):
     sql = head_sql(capsys)
 
     assert f"'ecos', '{series.value}'" in sql
+
+
+@pytest.mark.parametrize("series", list(JgbSeries))
+def test_every_mof_series_has_a_master_row(series, capsys):
+    sql = head_sql(capsys)
+
+    assert f"'mof', '{series.value}'" in sql
+
+
+@pytest.mark.parametrize("series", list(GiltSeries))
+def test_every_boe_series_has_a_master_row(series, capsys):
+    sql = head_sql(capsys)
+
+    assert f"'boe', '{series.value}'" in sql
+
+
+@pytest.mark.parametrize("series", list(EuroYieldSeries))
+def test_every_ecb_series_has_a_master_row(series, capsys):
+    sql = head_sql(capsys)
+
+    assert f"'ecb', '{series.value}'" in sql
+
+
+@pytest.mark.parametrize(
+    ("provider", "series", "country", "country_name"),
+    [
+        *[("mof", series, "JP", "일본") for series in JgbSeries],
+        *[("boe", series, "GB", "영국") for series in GiltSeries],
+        # 유로 지역은 나라가 아니라 통화권이다. ISO 국가 코드가 아니라 XM이 들어간다.
+        *[("ecb", series, "XM", "유로 지역") for series in EuroYieldSeries],
+    ],
+)
+def test_the_master_row_keeps_the_maturity_the_collector_declares(provider, series, country, country_name, capsys):
+    # 만기가 어긋나면 국가 비교 패널이 다른 만기를 같은 줄에 그린다. DAG는 죽지 않는다.
+    sql = head_sql(capsys)
+
+    assert (
+        f"'{provider}', '{series.value}', '{country}', '{country_name}', {series.maturity_months}, 'government_bond'"
+    ) in sql

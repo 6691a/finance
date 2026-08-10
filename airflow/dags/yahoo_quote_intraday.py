@@ -159,6 +159,8 @@ def resolve_backfill_period(params: dict[str, Any]) -> tuple[datetime, datetime]
 
 @dag(
     dag_id="yahoo_quote_intraday",
+    dag_display_name="🌐 해외 지수·선물 1분봉 (Yahoo)",
+    description="5분마다 Yahoo에서 해외 지수·선물 1분봉을 받아 저장한다. 한국 장중 미국 선물 변동 감시용이다.",
     # 시간 창을 두지 않는다. 한국 장중의 미국 선물 변동이 이 수집의 핵심이라
     # 미국 장 시간에만 도는 스케줄로는 목적을 못 이룬다.
     schedule="*/5 * * * *",
@@ -195,7 +197,7 @@ def resolve_backfill_period(params: dict[str, Any]) -> tuple[datetime, datetime]
     tags=["yahoo", "market", "intraday"],
 )
 def yahoo_quote_intraday():
-    @task
+    @task(task_display_name="1분봉 수집·저장")
     def collect() -> int:
         """심볼 전부를 한 번 훑어 `source_record` 1건과 그에 딸린 봉을 저장한다.
 

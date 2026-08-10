@@ -156,6 +156,8 @@ def resolve_quotation_date(context: Mapping[str, Any]) -> date:
 
 @dag(
     dag_id="exchange_rate_daily",
+    dag_display_name="💱 하나은행 고시 환율",
+    description="하나은행 고시 환율을 통화별로 매일 받아 exchange_rate에 회차 단위로 쌓는다.",
     schedule="0 8 * * *",  # KST 매일 08:00 = UTC 전날 23:00
     # 고시일자는 실행 시각의 전날이다. 첫 run이 `EARLIEST_QUOTATION_DATE`(KST 2026-07-01)를
     # 수집하려면 start_date가 그 다음 날 08:00이어야 한다. 하루 앞으로 당기면 첫 run이
@@ -177,7 +179,7 @@ def resolve_quotation_date(context: Mapping[str, Any]) -> date:
     tags=["hana", "exchange-rate", "daily"],
 )
 def exchange_rate_daily():
-    @task
+    @task(task_display_name="통화별 고시 수집·저장")
     def collect(currency: str) -> int:
         context = get_current_context()
         quotation_date = resolve_quotation_date(context)

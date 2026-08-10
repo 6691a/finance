@@ -125,6 +125,8 @@ UNRECOVERABLE_STATUSES = frozenset({400, 401, 403, 404})
 
 @dag(
     dag_id="fred_treasury_daily",
+    dag_display_name="🇺🇸 미국 국채 금리 (FRED)",
+    description="FRED에서 미국 국채 만기별 금리를 매일 받아 market.indicator_observation에 쌓는다.",
     schedule="30 7 * * 2-6",  # KST 화~토 07:30 = UTC 월~금 22:30
     start_date=pendulum.datetime(2026, 8, 4, tz=KST_TIMEZONE),  # KST 2026-08-04 00:00 = UTC 2026-08-03 15:00
     catchup=False,
@@ -157,7 +159,7 @@ UNRECOVERABLE_STATUSES = frozenset({400, 401, 403, 404})
     tags=["fred", "macro", "daily"],
 )
 def fred_treasury_daily():
-    @task
+    @task(task_display_name="시계열 수집·저장")
     def collect(series_id: str) -> int:
         context = get_current_context()
         try:

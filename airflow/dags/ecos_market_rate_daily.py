@@ -148,6 +148,8 @@ def is_unrecoverable_result(code: str) -> bool:
 
 @dag(
     dag_id="ecos_market_rate_daily",
+    dag_display_name="🇰🇷 국내 시장금리 (ECOS)",
+    description="한국은행 ECOS에서 국고채·CD 등 국내 시장금리를 매일 받아 market.indicator_observation에 쌓는다.",
     schedule="0 8 * * 2-6",  # KST 화~토 08:00 = UTC 월~금 23:00
     start_date=pendulum.datetime(2026, 8, 7, tz=KST_TIMEZONE),  # KST 2026-08-07 00:00 = UTC 2026-08-06 15:00
     catchup=False,
@@ -180,7 +182,7 @@ def is_unrecoverable_result(code: str) -> bool:
     tags=["ecos", "macro", "daily"],
 )
 def ecos_market_rate_daily():
-    @task
+    @task(task_display_name="시계열 수집·저장")
     def collect(series: str) -> int:
         context = get_current_context()
         try:

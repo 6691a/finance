@@ -158,6 +158,8 @@ def resolve_source_file(value: object) -> MofFile | None:
 
 @dag(
     dag_id="mof_jgb_daily",
+    dag_display_name="🇯🇵 일본 국채 금리 (재무성 JGB)",
+    description="일본 재무성 CSV에서 JGB 만기별 금리를 매일 받아 market.indicator_observation에 쌓는다.",
     schedule="20 8 * * 2-6",  # KST 화~토 08:20 = UTC 월~금 23:20
     start_date=pendulum.datetime(2026, 8, 7, tz=KST_TIMEZONE),  # KST 2026-08-07 00:00 = UTC 2026-08-06 15:00
     catchup=False,
@@ -197,7 +199,7 @@ def resolve_source_file(value: object) -> MofFile | None:
     tags=["mof", "macro", "daily"],
 )
 def mof_jgb_daily():
-    @task
+    @task(task_display_name="JGB 수집·저장")
     def collect() -> int:
         context = get_current_context()
         try:

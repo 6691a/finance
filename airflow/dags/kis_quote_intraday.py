@@ -153,6 +153,8 @@ def access_token(app_key: SecretStr, app_secret: SecretStr, force: bool = False)
 
 @dag(
     dag_id="kis_quote_intraday",
+    dag_display_name="📈 국내 지수·선물 1분봉 (KIS)",
+    description="국내 정규장 동안 5분마다 KIS에서 지수·지수선물 1분봉을 받아 저장한다.",
     # KST 평일 08:00~16:59 = UTC 평일 23:00~07:59. 국내 정규장(09:00~15:45)을 앞뒤로 감싼다.
     # 야간장이 이 API 로 오지 않으므로 밤새 돌 이유가 없다.
     schedule="*/5 8-16 * * 1-5",
@@ -174,15 +176,13 @@ def access_token(app_key: SecretStr, app_secret: SecretStr, force: bool = False)
     tags=["kis", "market", "intraday", "korea"],
 )
 def kis_quote_intraday():
-    @task
+    @task(task_display_name="1분봉 수집·저장")
     def collect() -> int:
         context = get_current_context()
         params = dict(context.get("params") or {})
         lookback_minutes = int(params.get(LOOKBACK_MINUTES_PARAM) or LOOKBACK_MINUTES)
         if not 1 <= lookback_minutes <= MAX_BARS_PER_REQUEST:
-            raise AirflowFailException(
-                f"{LOOKBACK_MINUTES_PARAM} must be between 1 and {MAX_BARS_PER_REQUEST}"
-            )
+            raise AirflowFailException(f"{LOOKBACK_MINUTES_PARAM} must be between 1 and {MAX_BARS_PER_REQUEST}")
 
         app_key, app_secret = _credentials()
         token = access_token(app_key, app_secret)

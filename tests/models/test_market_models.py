@@ -1,3 +1,5 @@
+from datetime import date
+
 from sqlalchemy import BigInteger, UniqueConstraint
 from sqlalchemy import Enum as SqlEnum
 
@@ -178,3 +180,81 @@ def test_market_session_documents_every_column():
 
     assert MarketSession.__table__.comment == "시장별·날짜별 개장 여부와 결제일을 저장하는 테이블"
     assert all(column.comment for column in MarketSession.__table__.columns)
+
+
+def test_disclosure_event_keeps_the_receipt_date_and_the_detection_time_apart():
+    from apps.models.market import DisclosureEvent
+
+    columns = DisclosureEvent.__table__.c
+
+    # 접수일은 날짜뿐이라 시각으로 꾸미지 않는다.
+    assert columns.receipt_date.type.python_type is date
+    # 최초 감지 시각은 항상 있고 UTC다.
+    assert columns.detected_at.nullable is False
+    assert columns.detected_at.type.timezone is True
+    # 분 단위 접수 시각은 저장하지 않는다. 공식 RSS로는 과거를 채울 수 없다.
+    assert "published_at" not in columns
+
+
+def test_disclosure_event_keeps_its_natural_key_and_lineage_reference():
+    from apps.models.market import DisclosureEvent
+
+    table = DisclosureEvent.__table__
+    unique_columns = {
+        tuple(column.name for column in constraint.columns)
+        for constraint in table.constraints
+        if isinstance(constraint, UniqueConstraint)
+    }
+
+    assert ("provider", "rcept_no") in unique_columns
+    foreign_key = next(iter(table.c.source_record_id.foreign_keys))
+    assert foreign_key.target_fullname == "source_record.id"
+    assert foreign_key.ondelete == "RESTRICT"
+
+
+def test_earnings_fact_is_not_tied_to_disclosure_event_by_a_foreign_key():
+    from apps.models.market import EarningsFact
+
+    table = EarningsFact.__table__
+
+    # 실적 추출 실패가 공시 이벤트 수집을 막지 않도록 rcept_no로만 잇는다.
+    assert table.c.rcept_no.foreign_keys == set()
+    assert {foreign_key.target_fullname for foreign_key in table.c.source_record_id.foreign_keys} == {
+        "source_record.id"
+    }
+
+
+def test_earnings_fact_closed_value_sets_are_enums_without_native_types():
+    from apps.models.market import AmountBasis, EarningsFact, EarningsMetric, EarningsReleaseType, StatementScope
+
+    columns = EarningsFact.__table__.c
+    pairs = (
+        (columns.release_type, EarningsReleaseType),
+        (columns.statement_scope, StatementScope),
+        (columns.amount_basis, AmountBasis),
+        (columns.metric, EarningsMetric),
+    )
+    for column, enum in pairs:
+        assert isinstance(column.type, SqlEnum)
+        assert column.type.native_enum is False
+        assert set(column.type.enums) == {member.value for member in enum}
+
+
+def test_earnings_fact_allows_missing_comparisons_but_not_missing_amounts():
+    from apps.models.market import EarningsFact
+
+    columns = EarningsFact.__table__.c
+
+    assert columns.current_amount.nullable is False
+    # 전년 동기가 없는 공시가 있다. 0으로 바꾸지 않는다.
+    assert columns.prior_year_amount.nullable is True
+    # 잠정실적은 원문 표에서 읽으므로 계정 ID가 없다.
+    assert columns.source_account_id.nullable is True
+
+
+def test_dart_tables_document_every_column():
+    from apps.models.market import DisclosureEvent, EarningsFact
+
+    for model in (DisclosureEvent, EarningsFact):
+        assert model.__table__.comment
+        assert all(column.comment for column in model.__table__.columns)

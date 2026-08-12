@@ -44,7 +44,7 @@
 import json
 import logging
 import re
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal, InvalidOperation
 from enum import StrEnum
@@ -457,10 +457,22 @@ def access_token(store: TokenStore, app_key: SecretStr, app_secret: SecretStr, f
     return token
 
 
-def _get(
-    token: SecretStr, app_key: SecretStr, app_secret: SecretStr, path: str, tr_id: str, query: dict
-) -> tuple[bytes, int]:
-    """분봉 조회 한 번. 선물과 지수가 같은 헤더 규약을 쓴다."""
+def send_get(
+    token: SecretStr,
+    app_key: SecretStr,
+    app_secret: SecretStr,
+    path: str,
+    tr_id: str,
+    query: dict,
+    tr_cont: str = "",
+) -> tuple[bytes, int, Mapping[str, str]]:
+    """KIS GET 조회 한 번. 모든 엔드포인트가 같은 헤더 규약을 쓴다.
+
+    **응답 헤더를 함께 돌려준다.** 연속조회 여부(`tr_cont`)가 본문이 아니라 헤더에 오기
+    때문이다. 분봉 조회는 헤더를 보지 않지만 휴장일·결제일 조회는 이 값으로 다음 장을 받는다.
+
+    `tr_cont`는 요청에도 들어간다. 첫 장은 빈 문자열이고 다음 장부터 `N`이다.
+    """
     request = Request(
         f"{KIS_BASE_URL}{path}?{urlencode(query)}",
         headers={
@@ -470,18 +482,19 @@ def _get(
             "appsecret": app_secret.get_secret_value(),
             "tr_id": tr_id,
             "custtype": "P",
+            "tr_cont": tr_cont,
         },
         method="GET",
     )
     try:
         with urlopen(request, timeout=REQUEST_TIMEOUT_SECONDS) as response:
-            return response.read(), response.status
+            return response.read(), response.status, dict(response.headers)
     except HTTPError as error:
         # KIS는 실패를 500으로 내면서 본문에 사유를 담는다. 본문에는 비밀이 없으므로 읽어서
         # 메시지로 올린다. 헤더에 있는 앱키는 예외에 실리지 않는다.
         raise KisHTTPError(error.code, _extract_message(error.read())) from None
     except URLError as error:
-        raise ConnectionError(f"KIS chart request failed: {error.reason}") from None
+        raise ConnectionError(f"KIS request failed: {error.reason}") from None
 
 
 def fetch_bars(
@@ -498,7 +511,7 @@ def fetch_bars(
     """
     reference = until.astimezone(KST)
     started_at = datetime.now(UTC)
-    body, status = _get(
+    body, status, _ = send_get(
         token,
         app_key,
         app_secret,
@@ -539,7 +552,7 @@ def fetch_index_bars(
     의사 봉이 섞여 들어와 시각 파싱이 깨진다.
     """
     started_at = datetime.now(UTC)
-    body, status = _get(
+    body, status, _ = send_get(
         token,
         app_key,
         app_secret,

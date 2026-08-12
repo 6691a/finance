@@ -74,11 +74,11 @@ KOSPI200 선물은 분기물(3·6·9·12)이고 만기는 만기월 **두 번째
 
 import logging
 import os
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
 from typing import Any
 
 import pendulum
-from airflow.exceptions import AirflowFailException
+from airflow.exceptions import AirflowFailException, AirflowSkipException
 from airflow.providers.postgres.hooks.postgres import PostgresHook
 from airflow.sdk import Param, Variable, dag, get_current_context, task
 from pydantic import SecretStr
@@ -97,6 +97,7 @@ from modules.collectors.kis import (
     front_contract,
     store_bars,
 )
+from modules.market_session import krx_open_day
 from modules.utility import KST_TIMEZONE
 
 logger = logging.getLogger(__name__)
@@ -116,6 +117,19 @@ def _credentials() -> tuple[SecretStr, SecretStr]:
     if not app_key or not app_secret:
         raise AirflowFailException("KIS_APP_KEY and KIS_APP_SECRET are required")
     return SecretStr(app_key), SecretStr(app_secret)
+
+
+def _closed_today(today_kst: date) -> bool:
+    """확정 휴장일이면 `True`.
+
+    행이 없거나 아직 판정하지 않았으면 `False`다. **모르면 수집을 계속한다.** 캘린더 수집이
+    실패했다는 이유로 진짜 거래일 데이터를 잃는 것이 빈 요청 몇 번보다 나쁘다.
+    """
+    connection: Any = PostgresHook(postgres_conn_id=CONNECTION_ID).get_conn()
+    try:
+        return krx_open_day(connection, today_kst) is False
+    finally:
+        connection.close()
 
 
 def cached_access_token(app_key: SecretStr, app_secret: SecretStr, force: bool = False) -> SecretStr:
@@ -160,12 +174,15 @@ def kis_quote_intraday():
         if not 1 <= lookback_minutes <= MAX_BARS_PER_REQUEST:
             raise AirflowFailException(f"{LOOKBACK_MINUTES_PARAM} must be between 1 and {MAX_BARS_PER_REQUEST}")
 
-        app_key, app_secret = _credentials()
-        token = cached_access_token(app_key, app_secret)
-
         now = datetime.now(UTC)
         since = now - timedelta(minutes=lookback_minutes)
         today_kst = now.astimezone(KST_TIMEZONE).date()
+
+        if _closed_today(today_kst):
+            raise AirflowSkipException(f"KRX is closed on {today_kst}")
+
+        app_key, app_secret = _credentials()
+        token = cached_access_token(app_key, app_secret)
 
         # 선물은 월물을 계산해 넣고, 지수는 업종코드로 바로 부른다. 엔드포인트가 다르다.
         jobs: list[tuple[str, str | None, object]] = [

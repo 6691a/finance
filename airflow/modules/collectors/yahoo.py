@@ -173,6 +173,22 @@ class QuoteSymbol(StrEnum):
     ETH = ("ETH", "ETH-USD", "이더리움")
 
 
+# 미국 현물장 달력을 따르는 심볼. 미국 확정 휴장일에는 이것만 요청에서 뺀다.
+#
+# 선물·환율·원자재는 휴장일에도 거의 24시간 거래되고, 아시아 지수와 암호화폐는 미국 달력과
+# 무관하다. 그래서 DAG 전체를 멈추지 않고 이 목록만 거른다. `^VIX`와 `^SOX`는 CBOE·나스닥
+# 산출이지만 미국 현물장과 같은 날 쉬고, `TSM`은 뉴욕 상장 ADR이다.
+US_EQUITY_SYMBOLS: frozenset[str] = frozenset(
+    {
+        QuoteSymbol.VIX.value,
+        QuoteSymbol.SOX.value,
+        QuoteSymbol.US10Y.value,
+        QuoteSymbol.RUSSELL2000.value,
+        QuoteSymbol.TSMC_ADR.value,
+    }
+)
+
+
 class Cursor(Protocol):
     def __enter__(self) -> Self: ...
 

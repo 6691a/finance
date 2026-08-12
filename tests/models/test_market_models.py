@@ -119,3 +119,62 @@ def test_market_models_document_table_and_column_purposes():
         "unit": "지표 값의 단위(예: Percent)",
         "source_record_id": "근거가 되는 source_record 레코드 ID",
     }
+
+
+def test_market_session_keeps_its_natural_key_and_two_lineage_references():
+    from apps.models.market import MarketSession
+
+    table = MarketSession.__table__
+    unique_columns = {
+        tuple(column.name for column in constraint.columns)
+        for constraint in table.constraints
+        if isinstance(constraint, UniqueConstraint)
+    }
+
+    assert ("market_code", "session_date") in unique_columns
+    # 판정을 만든 수집과 그 행을 보강한 수집이 각각 남는다.
+    assert table.c.source_record_id.nullable is False
+    assert table.c.verification_source_record_id.nullable is True
+    for column in (table.c.source_record_id, table.c.verification_source_record_id):
+        foreign_key = next(iter(column.foreign_keys))
+        assert foreign_key.target_fullname == "source_record.id"
+        assert foreign_key.ondelete == "RESTRICT"
+
+
+def test_market_session_closed_value_sets_are_enums_without_native_types():
+    from apps.models.market import MarketCode, MarketSession, SessionVerifier
+
+    columns = MarketSession.__table__.c
+
+    for column, enum in ((columns.market_code, MarketCode), (columns.verified_by, SessionVerifier)):
+        assert isinstance(column.type, SqlEnum)
+        # PostgreSQL native enum은 값 추가·삭제 마이그레이션 비용이 커서 쓰지 않는다.
+        assert column.type.native_enum is False
+        assert column.type.length == 20
+        assert set(column.type.enums) == {member.value for member in enum}
+
+    assert MarketCode.US_EQUITY.value == "US_EQUITY"
+    assert {member.value for member in SessionVerifier} == {"kis", "nyse"}
+
+
+def test_market_session_verdict_is_nullable_so_unknown_days_do_not_block_collection():
+    from apps.models.market import MarketSession
+
+    columns = MarketSession.__table__.c
+
+    # 모르는 날은 NULL이고 장중 수집기는 그 값을 개장과 같게 다룬다.
+    assert columns.effective_open_day.nullable is True
+    assert columns.verified_by.nullable is True
+    # KIS 국내 원본은 미국 행에서 비어 있다.
+    for name in ("kis_open_day", "kis_business_day", "kis_trading_day", "kis_settlement_day", "kis_weekday_code"):
+        assert columns[name].nullable is True
+    # 결제일은 국내 행에서 비어 있다.
+    assert columns.local_settlement_date.nullable is True
+    assert columns.domestic_settlement_date.nullable is True
+
+
+def test_market_session_documents_every_column():
+    from apps.models.market import MarketSession
+
+    assert MarketSession.__table__.comment == "시장별·날짜별 개장 여부와 결제일을 저장하는 테이블"
+    assert all(column.comment for column in MarketSession.__table__.columns)

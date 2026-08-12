@@ -84,6 +84,7 @@ Yahoo chart는 요청 한 번에 하루치 1분봉을 통째로 돌려준다. �
 import logging
 from datetime import UTC, datetime, timedelta
 from typing import Any
+from zoneinfo import ZoneInfo
 
 import pendulum
 from airflow.exceptions import AirflowFailException
@@ -93,6 +94,7 @@ from airflow.sdk import Param, dag, get_current_context, task
 from modules.collectors.yahoo import (
     BACKFILL_END_PARAM,
     BACKFILL_START_PARAM,
+    US_EQUITY_SYMBOLS,
     QuoteSymbol,
     SymbolOutcome,
     YahooHTTPError,
@@ -101,6 +103,7 @@ from modules.collectors.yahoo import (
     resolve_backfill_period,
     store_bars,
 )
+from modules.market_session import us_equity_open_day
 from modules.utility import KST_TIMEZONE
 
 logger = logging.getLogger(__name__)
@@ -109,6 +112,9 @@ logger = logging.getLogger(__name__)
 # `AIRFLOW_CONN_NEWS`가 갖는다.
 CONNECTION_ID = "news"
 
+# 미국 현물장 개장 여부를 물을 때 쓰는 날짜의 기준 시간대.
+NEW_YORK_TIMEZONE = ZoneInfo("America/New_York")
+
 # 폴링 주기보다 넉넉히 잡는다. 한두 번 걸러도 다음 run이 구멍을 메운다.
 LOOKBACK_MINUTES = 15
 
@@ -116,6 +122,30 @@ LOOKBACK_MINUTES_PARAM = "lookback_minutes"
 
 # 설정 오류라 재시도해도 같은 결과인 HTTP 상태.
 UNRECOVERABLE_STATUSES = frozenset({400, 401, 403, 404})
+
+
+def polling_symbols() -> tuple[QuoteSymbol, ...]:
+    """이 폴링이 요청할 심볼.
+
+    **판정 날짜는 지금 시각의 `America/New_York` 날짜다.** 이 DAG는 24시간 돌고 미국 정규장은
+    KST로 전날 22:30에 시작해 당일 05:00에 끝나므로, KST 날짜로 물으면 세션의 절반이 엉뚱한
+    날을 본다.
+
+    확정 휴장(`False`)일 때만 미국 현물 심볼을 뺀다. 행이 없거나 아직 판정하지 않았으면
+    전부 받는다. 백필은 과거 구간 자체가 대상이라 이 필터를 타지 않는다.
+    """
+    session_date = datetime.now(UTC).astimezone(NEW_YORK_TIMEZONE).date()
+    connection: Any = PostgresHook(postgres_conn_id=CONNECTION_ID).get_conn()
+    try:
+        open_day = us_equity_open_day(connection, session_date)
+    finally:
+        connection.close()
+
+    if open_day is not False:
+        return tuple(QuoteSymbol)
+
+    logger.info("US equities are closed on %s; skipping %s", session_date, sorted(US_EQUITY_SYMBOLS))
+    return tuple(symbol for symbol in QuoteSymbol if symbol.value not in US_EQUITY_SYMBOLS)
 
 
 def backfill_period(params: dict[str, Any]) -> tuple[datetime, datetime] | None:
@@ -190,15 +220,18 @@ def yahoo_quote_intraday():
             # 상한이 없어 방금 만들어진 봉까지 들어간다.
             spans = ((datetime.now(UTC) - timedelta(minutes=lookback_minutes), None),)
             request_windows: tuple[tuple[datetime, datetime] | None, ...] = (None,)
+            symbols = polling_symbols()
         else:
             # 요청 하나가 8일까지만 담으므로 구간을 쪼갠다. 창마다 요청과 저장이 한 번씩이다.
             windows = backfill_windows(*backfill)
             spans = windows
             request_windows = windows
+            # 백필은 과거 구간 자체가 대상이라 오늘의 캘린더로 막지 않는다.
+            symbols = tuple(QuoteSymbol)
             logger.info("Backfilling %s..%s in %s window(s)", backfill[0].date(), backfill[1].date(), len(windows))
 
         return sum(
-            collect_window(since, until, request_window)
+            collect_window(since, until, request_window, symbols)
             for (since, until), request_window in zip(spans, request_windows, strict=True)
         )
 
@@ -209,6 +242,7 @@ def collect_window(
     since: datetime,
     until: datetime | None,
     request_window: tuple[datetime, datetime] | None,
+    symbols: tuple[QuoteSymbol, ...],
 ) -> int:
     """창 하나를 받아 저장한다. `source_record` 1건이 여기서 생긴다.
 
@@ -217,7 +251,7 @@ def collect_window(
     """
     responses = []
     failures: list[SymbolOutcome] = []
-    for symbol in QuoteSymbol:
+    for symbol in symbols:
         try:
             responses.append(fetch_bars(symbol, request_window))
         except YahooHTTPError as error:

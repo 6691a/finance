@@ -258,3 +258,50 @@ def test_dart_tables_document_every_column():
     for model in (DisclosureEvent, EarningsFact):
         assert model.__table__.comment
         assert all(column.comment for column in model.__table__.columns)
+
+
+def test_market_movement_snapshot_keeps_its_natural_key_and_lineage():
+    from apps.models.market import MarketMovementSnapshot
+
+    table = MarketMovementSnapshot.__table__
+    unique_columns = {
+        tuple(column.name for column in constraint.columns)
+        for constraint in table.constraints
+        if isinstance(constraint, UniqueConstraint)
+    }
+
+    assert ("provider", "symbol", "observed_at") in unique_columns
+    foreign_key = next(iter(table.c.source_record_id.foreign_keys))
+    assert foreign_key.target_fullname == "source_record.id"
+    assert foreign_key.ondelete == "RESTRICT"
+
+
+def test_market_movement_symbol_matches_the_quote_bar_vocabulary():
+    from apps.models.market import MovementMarket
+    from modules.collectors.kis import MOVEMENT_INDEXES
+
+    # 값이 quote_bar.symbol 과 글자 그대로 같아야 두 테이블을 한 키로 잇는다.
+    assert {member.value for member in MovementMarket} == {index.value for index in MOVEMENT_INDEXES}
+
+
+def test_market_movement_stores_counts_raw_without_ratios():
+    from apps.models.market import MarketMovementSnapshot
+
+    columns = {column.name for column in MarketMovementSnapshot.__table__.columns}
+
+    assert {
+        "upper_limit_count",
+        "rising_count",
+        "unchanged_count",
+        "falling_count",
+        "lower_limit_count",
+    } <= columns
+    # 상승이 상한가를 포함하는지 확인 전이라 비율·합계를 저장하지 않는다.
+    assert not [name for name in columns if "ratio" in name or "total" in name]
+
+
+def test_market_movement_documents_every_column():
+    from apps.models.market import MarketMovementSnapshot
+
+    assert MarketMovementSnapshot.__table__.comment
+    assert all(column.comment for column in MarketMovementSnapshot.__table__.columns)

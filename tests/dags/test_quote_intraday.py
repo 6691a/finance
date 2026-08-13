@@ -13,3 +13,12 @@ def test_the_dags_stay_on_their_intended_schedules():
     # 24시간이어야 하고, KIS 는 국내 정규장만 감싸면 된다.
     assert yahoo_quote_intraday.yahoo_quote_intraday.schedule == "*/5 * * * *"
     assert kis_quote_intraday.kis_quote_intraday.schedule == "*/5 8-16 * * 1-5"
+
+
+def test_the_kis_dag_separates_bars_from_the_movement_snapshot():
+    tasks = kis_quote_intraday.kis_quote_intraday.task_dict
+
+    # 분포 실패가 분봉 저장을 막지 않도록 태스크를 나눈다. 서로 의존하지 않는다.
+    assert set(tasks) == {"collect", "collect_movement"}
+    assert tasks["collect"].upstream_task_ids == set()
+    assert tasks["collect_movement"].upstream_task_ids == set()

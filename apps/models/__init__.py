@@ -3,6 +3,7 @@ from apps.models.market import (
     DisclosureEvent,
     EarningsFact,
     IndicatorObservation,
+    MarketMovementSnapshot,
     MarketSession,
     QuoteBar,
 )
@@ -16,6 +17,7 @@ __all__ = [
     "IndicatorObservation",
     "IndicatorSeries",
     "Instrument",
+    "MarketMovementSnapshot",
     "MarketSession",
     "QuoteBar",
     "QuoteSymbol",

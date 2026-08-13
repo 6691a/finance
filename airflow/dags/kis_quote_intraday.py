@@ -30,6 +30,19 @@
 그래서 **평일 08:00~16:59 KST 에만 돈다.** 개장 전후로 여유를 두되 밤새 빈 호출을 하지
 않는다. 미국 쪽처럼 24시간 돌 이유가 없다.
 
+## 태스크 둘
+
+`collect`가 1분봉을, `collect_movement`가 코스피·코스닥의 상승·보합·하락 종목 수를 받는다.
+둘을 나눈 이유는 분포 실패가 분봉 저장을 막지 않게 하려는 것이다. 휴장일 skip 판정도 각자
+한다. 한쪽에만 걸면 다른 쪽이 휴장일에 그대로 돈다.
+
+분포는 전 종목을 순회해 계산하지 않는다. 지수 현재가 응답(`FHPUP02100000`)이 이미 다섯
+종목 수를 준다. **개장 전과 마감 뒤에는 그 다섯 값이 0으로 리셋되므로 저장하지 않는다**
+(실측). 장중에는 상승·보합·하락의 합이 전 종목이라 all-zero가 나올 수 없어서, all-zero는
+분포가 아니라 "장 밖"이라는 뜻이다.
+
+설계 문서는 `docs/kis-market-movement-distribution.md`다.
+
 ## 5분마다 도는데 왜 1분 데이터가 쌓이는가
 
 KIS 분봉은 한 번에 **102봉**을 준다. 1분봉이면 1시간 40분치라 5분 폴링에 넉넉하다.
@@ -85,6 +98,7 @@ from pydantic import SecretStr
 
 from modules.collectors.kis import (
     MAX_BARS_PER_REQUEST,
+    MOVEMENT_INDEXES,
     DomesticFuture,
     DomesticIndex,
     KisHTTPError,
@@ -94,8 +108,10 @@ from modules.collectors.kis import (
     access_token,
     fetch_bars,
     fetch_index_bars,
+    fetch_index_price,
     front_contract,
     store_bars,
+    store_market_movement,
 )
 from modules.market_session import krx_open_day
 from modules.utility import KST_TIMEZONE
@@ -124,12 +140,19 @@ def _closed_today(today_kst: date) -> bool:
 
     행이 없거나 아직 판정하지 않았으면 `False`다. **모르면 수집을 계속한다.** 캘린더 수집이
     실패했다는 이유로 진짜 거래일 데이터를 잃는 것이 빈 요청 몇 번보다 나쁘다.
+
+    **두 태스크가 함께 쓴다.** 한쪽에만 걸면 다른 쪽이 휴장일에 그대로 돈다.
     """
     connection: Any = PostgresHook(postgres_conn_id=CONNECTION_ID).get_conn()
     try:
         return krx_open_day(connection, today_kst) is False
     finally:
         connection.close()
+
+
+def _skip_when_closed(today_kst: date) -> None:
+    if _closed_today(today_kst):
+        raise AirflowSkipException(f"KRX is closed on {today_kst}")
 
 
 def cached_access_token(app_key: SecretStr, app_secret: SecretStr, force: bool = False) -> SecretStr:
@@ -178,8 +201,7 @@ def kis_quote_intraday():
         since = now - timedelta(minutes=lookback_minutes)
         today_kst = now.astimezone(KST_TIMEZONE).date()
 
-        if _closed_today(today_kst):
-            raise AirflowSkipException(f"KRX is closed on {today_kst}")
+        _skip_when_closed(today_kst)
 
         app_key, app_secret = _credentials()
         token = cached_access_token(app_key, app_secret)
@@ -241,10 +263,65 @@ def kis_quote_intraday():
         )
         return bar_count
 
+    @task(task_display_name="상승·보합·하락 분포")
+    def collect_movement() -> int:
+        """코스피·코스닥의 종목 분포를 한 번 찍는다.
+
+        가격 봉 태스크와 분리한다. 분포 실패가 분봉 저장을 막지 않게 하려는 것이고, 그래서
+        휴장일 skip 판정도 여기서 따로 한다.
+        """
+        now = datetime.now(UTC)
+        today_kst = now.astimezone(KST_TIMEZONE).date()
+        _skip_when_closed(today_kst)
+
+        app_key, app_secret = _credentials()
+        token = cached_access_token(app_key, app_secret)
+
+        responses = []
+        failures: list[SymbolOutcome] = []
+        for index in MOVEMENT_INDEXES:
+            try:
+                responses.append(_fetch(token, app_key, app_secret, index, None, now, price=True))
+            except KisHTTPError as error:
+                if error.status in UNRECOVERABLE_STATUSES:
+                    raise AirflowFailException(f"{index.value}: {error}") from error
+                logger.warning("%s movement failed with HTTP %s", index.value, error.status)
+                failures.append(SymbolOutcome(symbol=index.value, status=error.status, error=str(error)))
+            except ConnectionError as error:
+                logger.warning("%s movement failed to connect: %s", index.value, error)
+                failures.append(SymbolOutcome(symbol=index.value, error=str(error)))
+
+        if not responses:
+            raise ConnectionError("Every KIS index price request failed")
+
+        # 이 조회에는 원천 시각이 없다. 응답을 받은 분으로 찍는다.
+        observed_at = now.replace(second=0, microsecond=0)
+
+        connection: Any = PostgresHook(postgres_conn_id=CONNECTION_ID).get_conn()
+        try:
+            stored, outcomes = store_market_movement(connection, responses, observed_at, failures)
+            connection.commit()
+        except (KisPayloadError, KisResultError) as error:
+            connection.rollback()
+            raise AirflowFailException(str(error)) from error
+        except Exception:
+            connection.rollback()
+            raise
+        finally:
+            connection.close()
+
+        if not [outcome for outcome in outcomes if outcome.error is None]:
+            raise AirflowFailException("Every index failed to parse; see source_record metadata")
+
+        # 0건은 정상이다. 개장 전과 마감 뒤에는 다섯 값이 모두 0으로 리셋돼 저장하지 않는다.
+        logger.info("Stored %s movement snapshot(s) at %s", stored, observed_at.isoformat())
+        return stored
+
     collect()
+    collect_movement()
 
 
-def _fetch(token, app_key, app_secret, target, contract, now):
+def _fetch(token, app_key, app_secret, target, contract, now, price: bool = False):
     """분봉을 받는다. 401 이면 토큰을 한 번만 재발급하고 다시 시도한다.
 
     선물이면 월물 코드로 선물 엔드포인트를, 지수면 업종 엔드포인트를 부른다.
@@ -254,6 +331,8 @@ def _fetch(token, app_key, app_secret, target, contract, now):
     """
 
     def call(active):
+        if price:
+            return fetch_index_price(active, app_key, app_secret, target)
         if isinstance(target, DomesticIndex):
             return fetch_index_bars(active, app_key, app_secret, target)
         return fetch_bars(active, app_key, app_secret, target, contract, now)

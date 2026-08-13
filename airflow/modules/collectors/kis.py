@@ -90,6 +90,11 @@ FUTURE_CHART_TR_ID = "FHKIF03020200"
 INDEX_CHART_PATH = "/uapi/domestic-stock/v1/quotations/inquire-time-indexchartprice"
 INDEX_CHART_TR_ID = "FHKUP03500200"
 
+# 업종 현재가. 상승·보합·하락 종목 수가 여기 들어 있어 전 종목을 순회할 필요가 없다.
+INDEX_PRICE_PATH = "/uapi/domestic-stock/v1/quotations/inquire-index-price"
+INDEX_PRICE_TR_ID = "FHPUP02100000"
+INDEX_PRICE_SOURCE_KEY = "inquire_index_price"
+
 KST = ZoneInfo("Asia/Seoul")
 
 # KIS가 한 번에 돌려주는 최대 봉 수. 문서에 명시돼 있고 실측도 같다.
@@ -166,6 +171,11 @@ class DomesticIndex(StrEnum):
     # 봉 단위 베이시스는 API가 주지 않으므로 둘을 각각 받아 조회 쪽에서 뺀다.
     KOSPI200 = ("KOSPI200", "2001", "코스피200")
     KOSDAQ = ("KOSDAQ", "1001", "코스닥")
+
+
+# 상승·보합·하락 분포를 저장하는 지수. `DomesticIndex`에는 코스피200도 있지만 그것은
+# 코스피의 부분집합이라 시장 전반의 분포가 아니다. 순회하지 않고 명시적으로 고른다.
+MOVEMENT_INDEXES: tuple[DomesticIndex, ...] = (DomesticIndex.KOSPI, DomesticIndex.KOSDAQ)
 
 
 # 업종 분봉의 기타 구분 코드. **`1`이어야 한다.**
@@ -576,6 +586,38 @@ def fetch_index_bars(
     )
 
 
+def fetch_index_price(
+    token: SecretStr,
+    app_key: SecretStr,
+    app_secret: SecretStr,
+    index: DomesticIndex,
+) -> KisResponse:
+    """지수 현재가를 받아 온다. 여기서 쓰는 것은 상승·보합·하락 종목 수뿐이다.
+
+    지수 값과 거래량은 이미 `quote_bar`가 갖고 있어 다시 저장하지 않는다.
+    """
+    started_at = datetime.now(UTC)
+    body, status, _ = send_get(
+        token,
+        app_key,
+        app_secret,
+        INDEX_PRICE_PATH,
+        INDEX_PRICE_TR_ID,
+        {
+            "FID_COND_MRKT_DIV_CODE": "U",  # U = 업종. 분봉 조회와 같은 구분이다
+            "FID_INPUT_ISCD": index.index_code,
+        },
+    )
+    return KisResponse(
+        symbol=index.value,
+        contract_code=None,
+        body=body,
+        status=status,
+        started_at=started_at,
+        completed_at=datetime.now(UTC),
+    )
+
+
 def _extract_message(raw: bytes) -> str:
     """오류 본문에서 `msg_cd`/`msg1`을 긁는다.
 
@@ -664,9 +706,101 @@ def parse_bars(body: bytes, since: datetime | None = None) -> ParsedBars:
     return ParsedBars(bars=tuple(bars), latest_bar_at=latest_bar_at, contract_name=payload.output1.name.strip())
 
 
+class MarketMovement(BaseModel):
+    """한 지수의 상승·보합·하락 종목 분포.
+
+    다섯 값을 날것으로 보존한다. **상한가는 상승에 포함된다**(실측). 그래서 전체 종목 수는
+    상승+보합+하락이고 다섯 값을 더하면 상·하한가가 이중 계산된다. 그 계산은 조회 쪽이
+    하고 여기서는 비율이나 3분류를 만들지 않는다.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    symbol: str
+    observed_at: AwareDatetime
+    upper_limit_count: int = Field(ge=0)
+    rising_count: int = Field(ge=0)
+    unchanged_count: int = Field(ge=0)
+    falling_count: int = Field(ge=0)
+    lower_limit_count: int = Field(ge=0)
+
+    @field_validator("observed_at")
+    @classmethod
+    def _utc(cls, value: datetime) -> datetime:
+        return value.astimezone(UTC)
+
+    @property
+    def closed(self) -> bool:
+        """장 밖의 리셋 상태.
+
+        **장중에는 상승·보합·하락의 합이 전 종목이라 all-zero가 나올 수 없다.** 그래서
+        다섯 값이 모두 0이면 분포가 아니라 "장이 안 열려 있다"는 뜻이다(실측: 마감 뒤 응답이
+        종목 수와 거래량을 0으로 돌려주고 지수 값만 전일 종가로 남는다).
+        """
+        return not any(
+            (
+                self.upper_limit_count,
+                self.rising_count,
+                self.unchanged_count,
+                self.falling_count,
+                self.lower_limit_count,
+            )
+        )
+
+
+def _count(value: str | None, field: str) -> int:
+    """종목 수 한 칸. 값이 공백으로 패딩돼 오고 쉼표가 붙는 경우도 있다."""
+    text = (value or "").strip().replace(",", "")
+    if not text:
+        return 0
+    try:
+        count = int(text)
+    except ValueError:
+        raise KisPayloadError(f"KIS returned a non-numeric {field}: {value!r}") from None
+    if count < 0:
+        raise KisPayloadError(f"KIS returned a negative {field}: {value!r}")
+    return count
+
+
+def parse_market_movement(response: KisResponse, observed_at: datetime) -> MarketMovement:
+    """지수 현재가 응답에서 다섯 종목 수를 읽는다.
+
+    `observed_at`은 제공처가 준 시각이 아니라 **응답을 받은 시각**이다. 이 조회에는 원천
+    체결 시각이 없어서 호출자가 분 단위로 절삭해 넘긴다.
+    """
+    try:
+        payload = json.loads(response.body)
+    except json.JSONDecodeError as error:
+        raise KisPayloadError(f"KIS returned a non-JSON index price body: {error}") from None
+    if not isinstance(payload, dict):
+        raise KisPayloadError("KIS returned an index price body that is not an object")
+
+    code = str(payload.get("rt_cd", ""))
+    if code != "0":
+        raise KisResultError(code, str(payload.get("msg1", "")).strip())
+
+    output = payload.get("output")
+    if not isinstance(output, dict):
+        raise KisPayloadError("KIS index price response has no output object")
+
+    try:
+        return MarketMovement(
+            symbol=response.symbol,
+            observed_at=observed_at,
+            upper_limit_count=_count(output.get("uplm_issu_cnt"), "uplm_issu_cnt"),
+            rising_count=_count(output.get("ascn_issu_cnt"), "ascn_issu_cnt"),
+            unchanged_count=_count(output.get("stnr_issu_cnt"), "stnr_issu_cnt"),
+            falling_count=_count(output.get("down_issu_cnt"), "down_issu_cnt"),
+            lower_limit_count=_count(output.get("lslm_issu_cnt"), "lslm_issu_cnt"),
+        )
+    except ValidationError as error:
+        raise KisPayloadError("KIS returned an invalid movement distribution") from error
+
+
 # 쿼리는 `sql/` 볼륨에 둔다. 배포 Airflow가 `/opt/airflow/sql`로 마운트하는 폴더다.
 SOURCE_RECORD_INSERT = read_sql("postgres", "source_record", "insert.sql")
 QUOTE_BAR_UPSERT = read_sql("postgres", "quote_bar", "upsert.sql")
+MARKET_MOVEMENT_UPSERT = read_sql("postgres", "market_movement_snapshot", "upsert.sql")
 
 
 class SymbolOutcome(BaseModel):
@@ -775,3 +909,88 @@ def store_bars(
             ],
         )
     return bar_count, tuple(outcomes)
+
+
+def store_market_movement(
+    connection: Connection,
+    responses: Sequence[KisResponse],
+    observed_at: datetime,
+    failures: Sequence[SymbolOutcome] = (),
+) -> tuple[int, tuple[SymbolOutcome, ...]]:
+    """분포 조회 1회분을 저장하고 (저장한 행 수, 지수별 결과)를 돌려준다.
+
+    **장 밖의 all-zero 응답은 행을 만들지 않는다.** 계보 레코드는 남겨서 "조회했지만 장이
+    닫혀 있었다"와 "아직 조회하지 않았다"를 구분한다.
+
+    한 지수가 실패해도 다른 지수는 저장한다. 판정은 `source_record.metadata`에 남는다.
+    """
+    started_at = min((response.started_at for response in responses), default=observed_at)
+    completed_at = max((response.completed_at for response in responses), default=started_at)
+
+    movements: list[MarketMovement] = []
+    outcomes: list[SymbolOutcome] = list(failures)
+    closed: list[str] = []
+    for response in responses:
+        try:
+            movement = parse_market_movement(response, observed_at)
+        except (KisPayloadError, KisResultError) as error:
+            outcomes.append(SymbolOutcome(symbol=response.symbol, status=response.status, error=str(error)))
+            continue
+
+        if movement.closed:
+            closed.append(response.symbol)
+        else:
+            movements.append(movement)
+        outcomes.append(
+            SymbolOutcome(
+                symbol=response.symbol,
+                status=response.status,
+                bar_count=0 if movement.closed else 1,
+            )
+        )
+
+    metadata = json.dumps(
+        {
+            "observed_at": observed_at.isoformat(),
+            # 장 밖이라 저장하지 않은 지수. 실패와 구분해서 남긴다.
+            "closed_symbols": closed,
+            "symbols": [outcome.model_dump() for outcome in outcomes],
+        },
+        ensure_ascii=False,
+    )
+
+    with connection.cursor() as cursor:
+        cursor.execute(
+            SOURCE_RECORD_INSERT,
+            (
+                "api",
+                SOURCE,
+                INDEX_PRICE_SOURCE_KEY,
+                started_at,
+                completed_at,
+                "succeeded" if len(outcomes) > len(failures) else "failed",
+                len(movements),
+                # 원본은 남기지 않는다. 5분마다 도는 조회라 계보가 분포보다 빨리 커진다.
+                None,
+                metadata,
+            ),
+        )
+        source_record_id = cursor.fetchone()[0]
+        execute_upserts(
+            cursor,
+            MARKET_MOVEMENT_UPSERT,
+            [
+                (
+                    movement.symbol,
+                    movement.observed_at,
+                    movement.upper_limit_count,
+                    movement.rising_count,
+                    movement.unchanged_count,
+                    movement.falling_count,
+                    movement.lower_limit_count,
+                    source_record_id,
+                )
+                for movement in movements
+            ],
+        )
+    return len(movements), tuple(outcomes)

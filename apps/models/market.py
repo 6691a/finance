@@ -9,6 +9,7 @@ from sqlalchemy import (
     DateTime,
     ForeignKey,
     Index,
+    Integer,
     Numeric,
     Text,
     UniqueConstraint,
@@ -551,4 +552,113 @@ class EarningsFact(EntityBase):
         ForeignKey("source_record.id", ondelete="RESTRICT"),
         nullable=False,
         comment="숫자를 얻은 원문 또는 재무제표 API 조회의 source_record 레코드 ID",
+    )
+
+
+class MovementMarket(StrEnum):
+    """상승·보합·하락 분포를 주는 지수.
+
+    값이 `quote_bar.symbol`(`DomesticIndex`)과 글자 그대로 같다. 같은 값을 다른 이름으로
+    부르면 "코스피 지수 봉"과 "코스피 종목 분포"를 잇는 조회가 대응표를 들고 다녀야 한다.
+
+    `quote_bar.symbol`이 열린 `Text`인 것과 달리 여기는 Enum이다. 저쪽은 제공처마다 값
+    집합이 달라지는 열린 식별자이고 이쪽은 분포를 고시하는 지수 둘로 닫혀 있다.
+    코스피200은 분포 대상이 아니다.
+    """
+
+    KOSPI = "KOSPI"
+    KOSDAQ = "KOSDAQ"
+
+
+class MarketMovementSnapshot(EntityBase):
+    """코스피·코스닥의 상승·보합·하락 종목 수를 분 단위로 누적한다.
+
+    **지수가 올랐다는 사실만으로는 소수 대형주가 끌어올린 장인지 시장 전반이 오른 장인지
+    알 수 없다.** 그 구분이 이 테이블의 존재 이유다. `quote_bar`가 지수 값을 갖고 여기는
+    그 값을 만든 종목들의 분포를 갖는다.
+
+    전 종목을 순회해 계산하지 않는다. KIS 지수 API가 이미 다섯 종목 수를 준다.
+
+    **다섯 값이 모두 0인 응답은 저장하지 않는다.** 장 시작 전과 마감 후에는 종목 수가 0으로
+    리셋되는데(실측), 장중에는 상승·보합·하락의 합이 전 종목이라 all-zero가 나올 수 없다.
+    그래서 all-zero는 분포가 아니라 "장 밖"이라는 뜻이다. 그 판정은 수집기가 한다.
+
+    **상한가는 상승에 포함된다**(실측: 상한가가 3→4로 늘어난 순간에 상승+보합+하락 합이
+    그대로였다). 그래서 전체 종목 수는 `rising + unchanged + falling`이고 다섯 값을 더하면
+    상·하한가가 이중 계산된다. 그래도 다섯 값을 날것으로 보존하고 비율이나 3분류를 저장하지
+    않는다. 합계가 전 종목 수라는 제약도 걸지 않는다. 거래정지로 셋 어디에도 안 들어가는
+    종목이 생길 수 있고, 그때 제약이 수집을 막는 것이 값을 잃는 것보다 나쁘다.
+
+    설계 문서는 `docs/kis-market-movement-distribution.md`다.
+    """
+
+    __tablename__ = "market_movement_snapshot"
+    __table_args__ = (
+        UniqueConstraint(
+            "provider",
+            "symbol",
+            "observed_at",
+            name="uq_market_movement_snapshot_natural_key",
+        ),
+        CheckConstraint(
+            "symbol IN ('KOSPI', 'KOSDAQ')",
+            name="ck_market_movement_snapshot_symbol",
+        ),
+        CheckConstraint(
+            "upper_limit_count >= 0 AND rising_count >= 0 AND unchanged_count >= 0 "
+            "AND falling_count >= 0 AND lower_limit_count >= 0",
+            name="ck_market_movement_snapshot_counts_not_negative",
+        ),
+        Index("ix_market_movement_snapshot_source_record_id", "source_record_id"),
+        table_options(
+            comment="코스피·코스닥의 상승·보합·하락 종목 수를 분 단위로 누적하는 테이블",
+            database="default",
+        ),
+    )
+
+    provider: Mapped[str] = mapped_column(
+        Text,
+        nullable=False,
+        comment="데이터 제공처 식별자(kis). 같은 수집의 source_record.source와 같은 값이다",
+    )
+    symbol: Mapped[MovementMarket] = mapped_column(
+        SqlEnum(
+            MovementMarket,
+            native_enum=False,
+            length=20,
+            values_callable=lambda enum: [member.value for member in enum],
+        ),
+        nullable=False,
+        comment="분포를 고시한 지수(KOSPI, KOSDAQ). quote_bar.symbol과 같은 값이다",
+    )
+    observed_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        comment=(
+            "관측이 속한 1분의 시작 시각(UTC). REST는 응답을 받은 시각을 분 단위로 절삭한 값이라 "
+            "제공처가 준 원천 시각이 아니다. 과거 분포를 복구하는 백필 값으로 쓰지 않는다"
+        ),
+    )
+    upper_limit_count: Mapped[int] = mapped_column(
+        Integer,
+        nullable=False,
+        comment="상한가 종목 수. 상승 종목 수 안에 포함된 부분집합이다(실측). 강조 표시용으로 따로 보존한다",
+    )
+    rising_count: Mapped[int] = mapped_column(
+        Integer,
+        nullable=False,
+        comment="상승 종목 수. 상한가를 포함한다. 보합·하락과 더하면 그날 거래 종목 수가 된다",
+    )
+    unchanged_count: Mapped[int] = mapped_column(Integer, nullable=False, comment="보합 종목 수")
+    falling_count: Mapped[int] = mapped_column(Integer, nullable=False, comment="하락 종목 수")
+    lower_limit_count: Mapped[int] = mapped_column(
+        Integer,
+        nullable=False,
+        comment="하한가 종목 수. 하락 종목 수에 포함되는지는 아직 확인하지 못했다(관측 내내 0이었다)",
+    )
+    source_record_id: Mapped[int] = mapped_column(
+        BigInteger,
+        ForeignKey("source_record.id", ondelete="RESTRICT"),
+        nullable=False,
+        comment="이 행을 마지막으로 갱신한 수집의 source_record 레코드 ID",
     )

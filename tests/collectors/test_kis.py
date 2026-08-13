@@ -9,16 +9,20 @@ import pytest
 from pydantic import SecretStr
 from sqlalchemy import Table
 
+from apps.models.market import MarketMovementSnapshot
 from apps.models.market import QuoteBar as QuoteBarModel
 from apps.models.raw import SourceRecord
 from modules.collectors import kis
 from modules.collectors.kis import (
     CONTRACT_MONTHS,
+    MARKET_MOVEMENT_UPSERT,
     MAX_BARS_PER_REQUEST,
+    MOVEMENT_INDEXES,
     QUOTE_BAR_UPSERT,
     SOURCE_RECORD_INSERT,
     TOKEN_REFRESH_MARGIN,
     DomesticFuture,
+    DomesticIndex,
     KisPayloadError,
     KisResponse,
     KisResultError,
@@ -27,7 +31,9 @@ from modules.collectors.kis import (
     expiry_date,
     front_contract,
     parse_bars,
+    parse_market_movement,
     store_bars,
+    store_market_movement,
 )
 
 KST = ZoneInfo("Asia/Seoul")
@@ -477,3 +483,147 @@ def test_force_ignores_a_live_cache(issued):
 
     assert token_for(store, force=True).get_secret_value() == "fresh"
     assert len(issued) == 1
+
+
+def index_price_payload(
+    upper: str = "3",
+    rising: str = "  512",
+    unchanged: str = "71",
+    falling: str = "355",
+    lower: str = "0",
+    rt_cd: str = "0",
+    msg1: str = "정상처리 되었습니다.",
+) -> bytes:
+    """지수 현재가 응답. 실측 필드 이름과 공백 패딩을 그대로 옮겼다."""
+    return json.dumps(
+        {
+            "rt_cd": rt_cd,
+            "msg_cd": "MCA00000",
+            "msg1": msg1,
+            "output": {
+                "bstp_nmix_prpr": "6579.04",
+                "acml_vol": "412345",
+                "acml_tr_pbmn": "9876543210",
+                "uplm_issu_cnt": upper,
+                "ascn_issu_cnt": rising,
+                "stnr_issu_cnt": unchanged,
+                "down_issu_cnt": falling,
+                "lslm_issu_cnt": lower,
+            },
+        }
+    ).encode()
+
+
+def index_price_response(symbol: str = "KOSPI", **kwargs) -> KisResponse:
+    return KisResponse(
+        symbol=symbol,
+        contract_code=None,
+        body=index_price_payload(**kwargs),
+        status=200,
+        started_at=STARTED_AT,
+        completed_at=COMPLETED_AT,
+    )
+
+
+OBSERVED_AT = datetime(2026, 8, 12, 4, 30, tzinfo=UTC)
+
+
+def movement_upserts(cursor: FakeCursor) -> list[tuple]:
+    return [parameters for statement, parameters in cursor.calls if "INSERT INTO market_movement_snapshot" in statement]
+
+
+def test_market_movement_upsert_matches_the_model_and_its_natural_key():
+    table = MarketMovementSnapshot.__table__
+    columns = inserted_columns(MARKET_MOVEMENT_UPSERT)
+
+    assert set(columns) <= {column.name for column in table.columns}
+    assert required_columns(table) <= set(columns)
+    # provider 는 SQL 에 리터럴로 박혀 있다.
+    assert placeholder_count(MARKET_MOVEMENT_UPSERT) == len(columns) - 1
+    assert "ON CONFLICT (provider, symbol, observed_at)" in MARKET_MOVEMENT_UPSERT
+
+
+def test_movement_targets_exclude_kospi200():
+    # 코스피200은 코스피의 부분집합이라 시장 전반의 분포가 아니다.
+    assert MOVEMENT_INDEXES == (DomesticIndex.KOSPI, DomesticIndex.KOSDAQ)
+    assert DomesticIndex.KOSPI200 not in MOVEMENT_INDEXES
+
+
+def test_movement_parses_padded_counts():
+    movement = parse_market_movement(index_price_response(), OBSERVED_AT)
+
+    assert (movement.upper_limit_count, movement.rising_count) == (3, 512)
+    assert (movement.unchanged_count, movement.falling_count, movement.lower_limit_count) == (71, 355, 0)
+    assert movement.observed_at == OBSERVED_AT
+    assert movement.closed is False
+
+
+def test_all_zero_counts_mean_the_market_is_closed():
+    # 실측: 장 밖에서는 다섯 값과 거래량이 0으로 리셋되고 지수 값만 전일 종가로 남는다.
+    movement = parse_market_movement(
+        index_price_response(upper="0", rising="0", unchanged="0", falling="0", lower="0"), OBSERVED_AT
+    )
+
+    assert movement.closed is True
+
+
+def test_a_single_zero_is_a_normal_value():
+    # 보합 0은 장중에 있을 수 있다. all-zero 만 장 밖이다.
+    movement = parse_market_movement(index_price_response(unchanged="0"), OBSERVED_AT)
+
+    assert movement.closed is False
+    assert movement.unchanged_count == 0
+
+
+@pytest.mark.parametrize("value", ["-1", "abc"])
+def test_bad_counts_fail_instead_of_being_stored(value):
+    with pytest.raises(KisPayloadError):
+        parse_market_movement(index_price_response(rising=value), OBSERVED_AT)
+
+
+def test_movement_result_code_failure_is_raised():
+    with pytest.raises(KisResultError) as error:
+        parse_market_movement(index_price_response(rt_cd="1", msg1="조회할 수 없습니다"), OBSERVED_AT)
+
+    assert error.value.code == "1"
+
+
+def test_store_movement_writes_one_row_per_index():
+    connection = FakeConnection()
+    responses = [index_price_response("KOSPI"), index_price_response("KOSDAQ", rising="900")]
+
+    stored, outcomes = store_market_movement(connection, responses, OBSERVED_AT)
+
+    assert stored == 2
+    upserts = movement_upserts(connection.recorded_cursor)
+    assert [row[0] for row in upserts] == ["KOSPI", "KOSDAQ"]
+    assert upserts[0] == ("KOSPI", OBSERVED_AT, 3, 512, 71, 355, 0, SOURCE_RECORD_ID)
+    assert {outcome.error for outcome in outcomes} == {None}
+
+
+def test_closed_market_leaves_a_lineage_record_but_no_rows():
+    connection = FakeConnection()
+    closed = index_price_response(upper="0", rising="0", unchanged="0", falling="0", lower="0")
+
+    stored, outcomes = store_market_movement(connection, [closed], OBSERVED_AT)
+
+    assert stored == 0
+    assert movement_upserts(connection.recorded_cursor) == []
+    # 조회했지만 장이 닫혀 있었다는 사실은 남는다.
+    statement, parameters = connection.recorded_cursor.calls[0]
+    assert "INSERT INTO source_record" in statement
+    assert parameters[2] == "inquire_index_price"
+    assert parameters[5] == "succeeded"
+    assert json.loads(parameters[8])["closed_symbols"] == [closed.symbol]
+    assert {outcome.error for outcome in outcomes} == {None}
+
+
+def test_one_index_failing_does_not_drop_the_other():
+    connection = FakeConnection()
+    responses = [index_price_response("KOSPI"), index_price_response("KOSDAQ", rt_cd="1", msg1="권한 없음")]
+
+    stored, outcomes = store_market_movement(connection, responses, OBSERVED_AT)
+
+    assert stored == 1
+    assert [row[0] for row in movement_upserts(connection.recorded_cursor)] == ["KOSPI"]
+    assert [outcome.symbol for outcome in outcomes if outcome.error] == ["KOSDAQ"]

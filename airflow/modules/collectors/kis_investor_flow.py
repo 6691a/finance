@@ -584,6 +584,9 @@ class StockTradeDailyRow(BaseModel):
     model_config = ConfigDict(frozen=True)
 
     business_date: date
+    open_price: Decimal
+    high_price: Decimal
+    low_price: Decimal
     close_price: Decimal
     accumulated_volume: int
     accumulated_trade_amount: Decimal
@@ -614,6 +617,9 @@ class StockTradeDailyRow(BaseModel):
 
         values: dict[str, Any] = {
             "business_date": business_date,
+            "open_price": _decimal(row.get("stck_oprc"), "stck_oprc"),
+            "high_price": _decimal(row.get("stck_hgpr"), "stck_hgpr"),
+            "low_price": _decimal(row.get("stck_lwpr"), "stck_lwpr"),
             "close_price": _decimal(row.get("stck_clpr"), "stck_clpr"),
             "accumulated_volume": _int(row.get("acml_vol"), "acml_vol"),
             # 이 칸만 원 단위다. 투자자별 대금은 백만원이다(실측).
@@ -628,6 +634,12 @@ class StockTradeDailyRow(BaseModel):
             )
         for name, field in INSTITUTION_PARTS + OTHER_PARTS:
             values[f"{name}_net_buy_qty"] = _int(row.get(field), field)
+
+        # 일봉 네 값의 대소가 맞는지 본다. 필드를 잘못 짚으면 고가가 저가보다 낮아진다.
+        # 값이 0인 행은 상장 전이나 거래정지라 검사에서 뺀다.
+        candle = (values["open_price"], values["high_price"], values["low_price"], values["close_price"])
+        if all(candle) and not (values["low_price"] <= min(candle) and values["high_price"] >= max(candle)):
+            raise KisPayloadError(f"daily candle is inconsistent on {business_date}: {candle}")
 
         registered = values["foreign_registered_net_buy_qty"] + values["foreign_unregistered_net_buy_qty"]
         if registered != values["foreign_net_buy_qty"]:
@@ -755,6 +767,9 @@ def store_stock_trade_daily(connection: Connection, fetch: StockTradeDailyFetch)
                 (
                     fetch.stock_code,
                     row.business_date,
+                    row.open_price,
+                    row.high_price,
+                    row.low_price,
                     row.close_price,
                     row.accumulated_volume,
                     row.accumulated_trade_amount,

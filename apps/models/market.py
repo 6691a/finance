@@ -1373,6 +1373,10 @@ class StockInvestorTradeDaily(EntityBase):
 
     매도·매수 총량은 12분류 전부 응답에 있지만 저장하지 않는다. 확정값에서 읽는 것은 방향과
     규모이고, 회전율이 필요해지면 재호출 없이 컬럼만 늘린다.
+
+    **일봉 네 값도 같은 응답에 있어 함께 저장한다.** 수급과 가격은 겹쳐 봐야 읽힌다. 외국인이
+    파는 날 주가가 버텼는지 밀렸는지가 그 자체로 신호다. 지금 종목 가격을 담는 곳이 여기뿐이라
+    일봉이 이 테이블에 얹혀 있다. 종목 분봉이 생기면 그쪽으로 옮긴다.
     """
 
     __tablename__ = "stock_investor_trade_daily"
@@ -1398,6 +1402,15 @@ class StockInvestorTradeDaily(EntityBase):
     business_date: Mapped[date] = mapped_column(
         nullable=False,
         comment="거래일(stck_bsop_date). KRX 영업일 기준이며 시각은 담지 않는다",
+    )
+    open_price: Mapped[Decimal] = mapped_column(
+        Numeric(18, 4), nullable=False, comment="시가(stck_oprc). 단위는 원"
+    )
+    high_price: Mapped[Decimal] = mapped_column(
+        Numeric(18, 4), nullable=False, comment="고가(stck_hgpr). 단위는 원"
+    )
+    low_price: Mapped[Decimal] = mapped_column(
+        Numeric(18, 4), nullable=False, comment="저가(stck_lwpr). 단위는 원"
     )
     close_price: Mapped[Decimal] = mapped_column(
         Numeric(18, 4), nullable=False, comment="종가(stck_clpr). 단위는 원. 수급과 가격을 한 화면에서 겹치려고 저장한다"

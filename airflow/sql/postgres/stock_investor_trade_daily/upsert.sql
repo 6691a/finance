@@ -9,6 +9,9 @@ INSERT INTO stock_investor_trade_daily (
     provider,
     stock_code,
     business_date,
+    open_price,
+    high_price,
+    low_price,
     close_price,
     accumulated_volume,
     accumulated_trade_amount,
@@ -30,8 +33,11 @@ INSERT INTO stock_investor_trade_daily (
     institution_net_buy_amount,
     individual_net_buy_amount,
     source_record_id
-) VALUES ('kis', %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+) VALUES ('kis', %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
 ON CONFLICT ON CONSTRAINT uq_stock_investor_trade_daily_natural_key DO UPDATE SET
+    open_price = EXCLUDED.open_price,
+    high_price = EXCLUDED.high_price,
+    low_price = EXCLUDED.low_price,
     close_price = EXCLUDED.close_price,
     accumulated_volume = EXCLUDED.accumulated_volume,
     accumulated_trade_amount = EXCLUDED.accumulated_trade_amount,

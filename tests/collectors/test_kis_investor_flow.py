@@ -378,6 +378,9 @@ def test_no_delta_is_stored():
 # 모두 성립하는 실제 값이다.
 DAILY_ROW = {
     "stck_bsop_date": "20260814",
+    "stck_oprc": "275000",
+    "stck_hgpr": "275500",
+    "stck_lwpr": "266000",
     "stck_clpr": "274500",
     "acml_vol": "21668266",
     "acml_tr_pbmn": "5874118816500",
@@ -421,6 +424,7 @@ def test_daily_trade_reads_every_investor_category(monkeypatch):
     assert row.foreign_unregistered_net_buy_qty == -9040
     assert row.pension_fund_net_buy_qty == 27343
     assert row.close_price == Decimal(274500)
+    assert (row.open_price, row.high_price, row.low_price) == (Decimal(275000), Decimal(275500), Decimal(266000))
     assert row.foreign_net_buy_amount == Decimal(1336152)
 
 
@@ -526,3 +530,28 @@ def test_the_daily_amount_unit_is_recorded_as_million_won():
 
     assert "백만원" in table.columns["foreign_net_buy_amount"].comment
     assert "원이다" in table.columns["accumulated_trade_amount"].comment
+
+
+@pytest.mark.parametrize(
+    "overrides",
+    [
+        {"stck_hgpr": "265000"},  # 고가가 저가보다 낮다
+        {"stck_lwpr": "276000"},  # 저가가 종가보다 높다
+    ],
+)
+def test_daily_trade_rejects_an_inconsistent_candle(monkeypatch, overrides):
+    """필드를 잘못 짚으면 값이 그럴듯한 자리에 들어가 그림만 이상해진다."""
+    monkeypatch.setattr(kis_investor_flow, "send_get", fake_send_get(body(output2=[daily_row(**overrides)])))
+
+    with pytest.raises(KisPayloadError, match="daily candle is inconsistent"):
+        fetch_stock_trade_daily(TOKEN, APP_KEY, APP_SECRET, SAMSUNG, BUSINESS_DATE)
+
+
+def test_a_candle_of_zeros_passes(monkeypatch):
+    """상장 전이나 거래정지 구간은 네 값이 0으로 온다. 그것까지 실패시키면 백필이 멈춘다."""
+    flat = daily_row(stck_oprc="0", stck_hgpr="0", stck_lwpr="0", stck_clpr="0")
+    monkeypatch.setattr(kis_investor_flow, "send_get", fake_send_get(body(output2=[flat])))
+
+    row = fetch_stock_trade_daily(TOKEN, APP_KEY, APP_SECRET, SAMSUNG, BUSINESS_DATE).rows[0]
+
+    assert row.high_price == Decimal(0)

@@ -945,6 +945,75 @@
           "rawSql": "SELECT\n  (t.business_date + TIME '00:00') AT TIME ZONE 'Asia/Seoul' AS time,\n  COALESCE(named.name, t.stock_code) || ' ' || label AS metric,\n  value\nFROM stock_investor_trade_daily AS t\nLEFT JOIN LATERAL (\n  SELECT i.name\n  FROM instrument AS i\n  WHERE i.ticker = t.stock_code\n  LIMIT 1\n) AS named ON TRUE\nCROSS JOIN LATERAL (VALUES\n  ('금융투자', t.securities_net_buy_qty),\n  ('투자신탁', t.investment_trust_net_buy_qty),\n  ('사모펀드', t.private_equity_net_buy_qty),\n  ('은행', t.bank_net_buy_qty),\n  ('보험', t.insurance_net_buy_qty),\n  ('종금', t.merchant_bank_net_buy_qty),\n  ('기금', t.pension_fund_net_buy_qty)\n) AS category(label, value)\nWHERE t.provider = 'kis'\n  AND t.stock_code IN (${stock:sqlstring})\n  AND t.business_date BETWEEN ($__timeFrom()::timestamptz AT TIME ZONE 'Asia/Seoul')::date\n                          AND ($__timeTo()::timestamptz AT TIME ZONE 'Asia/Seoul')::date\nORDER BY 1, 2"
         }
       ]
+    },
+    {
+      "id": 10,
+      "type": "candlestick",
+      "title": "$stock 일봉",
+      "description": "수급과 같은 응답에 들어 있던 값이라 호출 없이 저장한다. 외국인이 파는 날 주가가 버텼는지 밀렸는지는 순매수만 봐서는 알 수 없다. 단위는 원. **종목마다 패널이 하나씩 복제된다.** 캔들은 한 종목만 그릴 수 있다.",
+      "datasource": {
+        "type": "postgres",
+        "uid": "${ds}"
+      },
+      "gridPos": {
+        "h": 10,
+        "w": 12,
+        "x": 0,
+        "y": 71
+      },
+      "repeat": "stock",
+      "repeatDirection": "h",
+      "maxPerRow": 2,
+      "fieldConfig": {
+        "defaults": {
+          "unit": "currencyKRW",
+          "decimals": 0,
+          "custom": {
+            "lineWidth": 1,
+            "fillOpacity": 80
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "text",
+                "value": null
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "mode": "candles+volume",
+        "candleStyle": "candles",
+        "colorStrategy": "open-close",
+        "colors": {
+          "up": "green",
+          "down": "red",
+          "flat": "gray"
+        },
+        "includeAllFields": false,
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": false,
+          "calcs": []
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "format": "time_series",
+          "rawQuery": true,
+          "editorMode": "code",
+          "datasource": {
+            "type": "postgres",
+            "uid": "${ds}"
+          },
+          "rawSql": "SELECT\n  (t.business_date + TIME '00:00') AT TIME ZONE 'Asia/Seoul' AS time,\n  t.open_price AS \"open\",\n  t.high_price AS \"high\",\n  t.low_price AS \"low\",\n  t.close_price AS \"close\",\n  t.accumulated_volume AS \"volume\"\nFROM stock_investor_trade_daily AS t\nWHERE t.provider = 'kis'\n  AND t.stock_code = '$stock'\n  AND t.business_date BETWEEN ($__timeFrom()::timestamptz AT TIME ZONE 'Asia/Seoul')::date\n                          AND ($__timeTo()::timestamptz AT TIME ZONE 'Asia/Seoul')::date\nORDER BY 1"
+        }
+      ]
     }
   ]
 }

@@ -177,3 +177,29 @@ def test_the_confirmed_panels_follow_the_stock_variable(dashboard):
         sql = statements(dashboard)[f"{panel_id}A"]
         assert "t.stock_code IN (${stock:sqlstring})" in sql
         assert "COALESCE(named.name," in sql
+
+
+def test_the_candle_panel_is_repeated_per_stock(dashboard):
+    """캔들은 한 패널에 한 종목만 그릴 수 있다.
+
+    여러 종목을 IN 으로 넣으면 행이 섞여 캔들이 뒤엉킨다. 패널을 복제해야 한다.
+    """
+    panel = next(p for p in dashboard["panels"] if p["id"] == 10)
+    sql = statements(dashboard)["10A"]
+
+    assert panel["type"] == "candlestick"
+    assert panel["repeat"] == "stock"
+    assert "t.stock_code = '$stock'" in sql
+    assert "IN (${stock:sqlstring})" not in sql
+
+
+def test_the_candle_panel_reads_all_four_prices(dashboard):
+    sql = statements(dashboard)["10A"]
+
+    for column, alias in (
+        ("open_price", "open"),
+        ("high_price", "high"),
+        ("low_price", "low"),
+        ("close_price", "close"),
+    ):
+        assert f't.{column} AS "{alias}"' in sql, column

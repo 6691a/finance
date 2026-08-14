@@ -9,9 +9,11 @@ from apps.models.market import (
     KrxStockCreditBalanceDaily,
     KrxStockSecuritiesLendingDaily,
     KrxStockShortSaleDaily,
+    MarketInvestorFlowSnapshot,
     MarketMovementSnapshot,
     MarketSession,
     QuoteBar,
+    StockInvestorEstimateSnapshot,
 )
 from apps.models.raw import SourceRecord
 from apps.models.reference import IndicatorSeries, Instrument, QuoteSymbol
@@ -29,9 +31,11 @@ __all__ = [
     "KrxStockCreditBalanceDaily",
     "KrxStockSecuritiesLendingDaily",
     "KrxStockShortSaleDaily",
+    "MarketInvestorFlowSnapshot",
     "MarketMovementSnapshot",
     "MarketSession",
     "QuoteBar",
     "QuoteSymbol",
     "SourceRecord",
+    "StockInvestorEstimateSnapshot",
 ]

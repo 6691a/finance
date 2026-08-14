@@ -346,3 +346,30 @@ def test_positioning_tables_document_every_column():
     ):
         assert model.__table__.comment
         assert all(column.comment for column in model.__table__.columns)
+
+
+def test_investor_flow_tables_keep_the_shared_vocabularies():
+    from apps.models.market import KrxMarket, MarketInvestorFlowSnapshot, StockInvestorEstimateSnapshot
+
+    # 종목은 6자리 코드, 시장은 KrxMarket. 셋째 어휘를 만들지 않는다.
+    assert "stock_code" in StockInvestorEstimateSnapshot.__table__.c
+    assert "target" not in StockInvestorEstimateSnapshot.__table__.c
+    market_column = MarketInvestorFlowSnapshot.__table__.c.market_code
+    assert set(market_column.type.enums) == {member.value for member in KrxMarket}
+
+
+def test_the_estimate_table_names_itself_an_estimate():
+    from apps.models.market import StockInvestorEstimateSnapshot
+
+    # 확정치가 아니라는 것이 이름과 주석에 드러나야 화면이 잘못 부르지 않는다.
+    assert "estimate" in StockInvestorEstimateSnapshot.__tablename__
+    assert "추정" in StockInvestorEstimateSnapshot.__table__.comment
+    assert "source_time_code" in StockInvestorEstimateSnapshot.__table__.c
+
+
+def test_investor_flow_tables_document_every_column():
+    from apps.models.market import MarketInvestorFlowSnapshot, StockInvestorEstimateSnapshot
+
+    for model in (StockInvestorEstimateSnapshot, MarketInvestorFlowSnapshot):
+        assert model.__table__.comment
+        assert all(column.comment for column in model.__table__.columns)

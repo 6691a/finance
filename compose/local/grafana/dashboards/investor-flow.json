@@ -1,0 +1,814 @@
+{
+  "uid": "investor-flow",
+  "title": "외국인·기관·개인 수급",
+  "description": "가격이 '얼마에 거래됐나'이고 포지션이 '누가 들고 있나'라면 이 화면은 '지금 누가 사고 누가 파나'다. **지수가 오르는데 외국인이 팔고 개인이 받는 장과 외국인이 사는 장은 다음 날이 다르다.** 시장 값은 장중 누적이라 5분 변화량은 화면이 lag()로 계산한다. 종목 값은 KIS가 하루 몇 차례 집계하는 **추정치**이며 시각이 아니라 슬롯 코드로만 구분된다. **수량과 대금의 배율이 두 API에서 다르고 아직 확정하지 못해 축에 단위를 붙이지 않았다.** uid 는 바꾸지 않는다. 프로비저닝된 대시보드의 uid 를 바꾸면 Grafana 가 같은 파일로 두 번째 대시보드를 만들고 그 뒤로 갱신이 uid 충돌로 막힌다. 수집 설계는 docs/kis-investor-flow.md 에 있다.",
+  "tags": [
+    "kis",
+    "market",
+    "intraday",
+    "korea",
+    "investor"
+  ],
+  "editable": true,
+  "schemaVersion": 39,
+  "version": 1,
+  "refresh": "5m",
+  "time": {
+    "from": "now-2d",
+    "to": "now"
+  },
+  "timezone": "browser",
+  "annotations": {
+    "list": [
+      {
+        "name": "한국 정규장",
+        "enable": true,
+        "hide": false,
+        "iconColor": "orange",
+        "datasource": {
+          "type": "postgres",
+          "uid": "${ds}"
+        },
+        "target": {
+          "format": "table",
+          "rawQuery": true,
+          "editorMode": "code",
+          "rawSql": "SELECT\n  (session_date + TIME '09:00') AT TIME ZONE 'Asia/Seoul' AS time,\n  (session_date + TIME '15:30') AT TIME ZONE 'Asia/Seoul' AS \"timeEnd\",\n  '한국 정규장' AS text\nFROM market_session\nWHERE market_code = 'KRX'\n  AND effective_open_day\n  AND session_date BETWEEN ($__timeFrom()::timestamptz AT TIME ZONE 'Asia/Seoul')::date\n                       AND ($__timeTo()::timestamptz AT TIME ZONE 'Asia/Seoul')::date"
+        }
+      }
+    ]
+  },
+  "templating": {
+    "list": [
+      {
+        "name": "ds",
+        "label": "데이터소스",
+        "description": "수급 테이블을 읽을 postgres 데이터소스. 모든 패널이 이 값을 쓴다.",
+        "type": "datasource",
+        "query": "postgres",
+        "refresh": 1,
+        "hide": 0,
+        "current": {
+          "selected": true,
+          "text": "news2",
+          "value": "news2-postgres"
+        },
+        "options": []
+      },
+      {
+        "name": "market",
+        "label": "시장",
+        "description": "수급을 볼 시장. 저장된 값에서 읽는다. 코스닥 조회 코드를 아직 확인하지 못해 지금은 코스피뿐이다.",
+        "type": "query",
+        "datasource": {
+          "type": "postgres",
+          "uid": "${ds}"
+        },
+        "query": "SELECT DISTINCT market_code FROM market_investor_flow_snapshot WHERE provider = 'kis' ORDER BY 1",
+        "includeAll": false,
+        "multi": false,
+        "refresh": 1,
+        "current": {
+          "selected": true,
+          "text": "KOSPI",
+          "value": "KOSPI"
+        },
+        "options": []
+      },
+      {
+        "name": "stock",
+        "label": "종목",
+        "description": "종목 추정을 볼 대상. 화면에는 이름이 나오고 조회에는 종목코드가 나간다. 이름은 reference.instrument 마스터가 들고 있다.",
+        "type": "query",
+        "datasource": {
+          "type": "postgres",
+          "uid": "${ds}"
+        },
+        "query": "SELECT name AS __text, ticker AS __value FROM instrument WHERE is_watched ORDER BY name",
+        "includeAll": true,
+        "multi": true,
+        "refresh": 1,
+        "current": {
+          "selected": true,
+          "text": [
+            "All"
+          ],
+          "value": [
+            "$__all"
+          ]
+        },
+        "options": []
+      }
+    ]
+  },
+  "panels": [
+    {
+      "id": 1,
+      "type": "stat",
+      "title": "${market:text} 누적 순매수 (최신)",
+      "description": "선택 구간 마지막 스냅샷의 투자자별 누적 순매수. 셋을 더하면 대략 0이 된다. 누가 팔면 누군가는 받기 때문이다. **단위는 KIS 표기 그대로다.** 배율을 확정하지 못해 환산하지 않는다.",
+      "datasource": {
+        "type": "postgres",
+        "uid": "${ds}"
+      },
+      "gridPos": {
+        "h": 5,
+        "w": 24,
+        "x": 0,
+        "y": 0
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "locale",
+          "decimals": 0,
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "blue",
+                "value": null
+              },
+              {
+                "color": "red",
+                "value": 0
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "orientation": "horizontal",
+        "textMode": "auto",
+        "colorMode": "value",
+        "graphMode": "area",
+        "justifyMode": "auto"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "format": "time_series",
+          "rawQuery": true,
+          "editorMode": "code",
+          "datasource": {
+            "type": "postgres",
+            "uid": "${ds}"
+          },
+          "rawSql": "SELECT\n  observed_at AS time,\n  foreign_net_buy_qty AS \"외국인\",\n  institution_net_buy_qty AS \"기관\",\n  individual_net_buy_qty AS \"개인\"\nFROM market_investor_flow_snapshot\nWHERE provider = 'kis'\n  AND market_code = '$market'\n  AND $__timeFilter(observed_at)\nORDER BY 1"
+        }
+      ]
+    },
+    {
+      "id": 2,
+      "type": "timeseries",
+      "title": "${market:text} 누적 순매수 추이",
+      "description": "장중 누적값 그대로다. 선이 벌어지는 방향이 그날의 수급 구도다. 델타는 저장하지 않고 아래 패널이 계산한다.",
+      "datasource": {
+        "type": "postgres",
+        "uid": "${ds}"
+      },
+      "gridPos": {
+        "h": 9,
+        "w": 12,
+        "x": 0,
+        "y": 5
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "locale",
+          "decimals": 0,
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 2,
+            "fillOpacity": 8,
+            "showPoints": "never",
+            "spanNulls": false,
+            "axisLabel": "KIS 표기 (단위 미확정)"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "text",
+                "value": null
+              }
+            ]
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "외국인"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "orange"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "기관"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "green"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "개인"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "purple"
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "showLegend": true,
+          "calcs": [
+            "lastNotNull",
+            "min",
+            "max"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "none"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "format": "time_series",
+          "rawQuery": true,
+          "editorMode": "code",
+          "datasource": {
+            "type": "postgres",
+            "uid": "${ds}"
+          },
+          "rawSql": "SELECT\n  observed_at AS time,\n  foreign_net_buy_qty AS \"외국인\",\n  institution_net_buy_qty AS \"기관\",\n  individual_net_buy_qty AS \"개인\"\nFROM market_investor_flow_snapshot\nWHERE provider = 'kis'\n  AND market_code = '$market'\n  AND $__timeFilter(observed_at)\nORDER BY 1"
+        }
+      ]
+    },
+    {
+      "id": 3,
+      "type": "timeseries",
+      "title": "${market:text} 구간 순매수 (직전 스냅샷 대비)",
+      "description": "**누적값의 차이를 화면이 계산한다.** 수집기가 델타를 저장하면 재수집·누락이 있을 때 복구가 어려워지므로 저장은 누적 그대로 두고 조회에서 `lag()`로 뺀다. **거래일로 나눠서 뺀다** — 누적값은 장마다 0에서 다시 시작하므로 날짜를 넘어 빼면 하루 첫 스냅샷에 전날 마지막값만큼의 가짜 급변이 생긴다. 그래서 하루의 첫 스냅샷은 비어 있다.",
+      "datasource": {
+        "type": "postgres",
+        "uid": "${ds}"
+      },
+      "gridPos": {
+        "h": 9,
+        "w": 12,
+        "x": 12,
+        "y": 5
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "locale",
+          "decimals": 0,
+          "custom": {
+            "drawStyle": "bars",
+            "lineWidth": 1,
+            "fillOpacity": 70,
+            "showPoints": "never",
+            "spanNulls": false,
+            "axisLabel": "KIS 표기 (단위 미확정)"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "text",
+                "value": null
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "showLegend": true,
+          "calcs": [
+            "sum",
+            "min",
+            "max"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "none"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "format": "time_series",
+          "rawQuery": true,
+          "editorMode": "code",
+          "datasource": {
+            "type": "postgres",
+            "uid": "${ds}"
+          },
+          "rawSql": "SELECT\n  observed_at AS time,\n  -- 누적값은 장마다 0에서 다시 시작한다. 거래일로 나누지 않으면 하루 첫\n  -- 스냅샷의 차이가 전날 마지막값을 뺀 값이 되어 거대한 가짜 급변이 생긴다.\n  foreign_net_buy_qty\n    - lag(foreign_net_buy_qty) OVER (PARTITION BY session_day ORDER BY observed_at) AS \"외국인\",\n  institution_net_buy_qty\n    - lag(institution_net_buy_qty) OVER (PARTITION BY session_day ORDER BY observed_at) AS \"기관\",\n  individual_net_buy_qty\n    - lag(individual_net_buy_qty) OVER (PARTITION BY session_day ORDER BY observed_at) AS \"개인\"\nFROM (\n  SELECT *, (observed_at AT TIME ZONE 'Asia/Seoul')::date AS session_day\n  FROM market_investor_flow_snapshot\n) AS s\nWHERE provider = 'kis'\n  AND market_code = '$market'\n  AND $__timeFilter(observed_at)\nORDER BY 1"
+        }
+      ]
+    },
+    {
+      "id": 7,
+      "type": "timeseries",
+      "title": "${market:text} 기관 세부 누적 순매수",
+      "description": "위 패널의 '기관'을 일곱으로 쪼갠 것이다. 일곱의 합이 기관계와 같다. 연기금이 사는 장과 투신이 파는 장은 다음 날이 다르다. 기타법인·기타단체는 기관이 아니라 여기 없지만 저장은 한다. 개인 + 외국인 + 기관계 + 기타법인 + 기타단체 = 0이다.",
+      "datasource": {
+        "type": "postgres",
+        "uid": "${ds}"
+      },
+      "gridPos": {
+        "h": 9,
+        "w": 24,
+        "x": 0,
+        "y": 14
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "locale",
+          "decimals": 0,
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 2,
+            "fillOpacity": 0,
+            "showPoints": "never",
+            "spanNulls": false,
+            "axisLabel": "KIS 표기 (단위 미확정)"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "text",
+                "value": null
+              }
+            ]
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "금융투자"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "blue"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "투자신탁"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "green"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "사모펀드"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "purple"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "은행"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "yellow"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "보험"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "orange"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "종금"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "red"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "기금"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "super-light-blue"
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "showLegend": true,
+          "calcs": [
+            "lastNotNull",
+            "min",
+            "max"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "none"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "format": "time_series",
+          "rawQuery": true,
+          "editorMode": "code",
+          "datasource": {
+            "type": "postgres",
+            "uid": "${ds}"
+          },
+          "rawSql": "SELECT\n  observed_at AS time,\n  securities_net_buy_qty AS \"금융투자\",\n  investment_trust_net_buy_qty AS \"투자신탁\",\n  private_equity_net_buy_qty AS \"사모펀드\",\n  bank_net_buy_qty AS \"은행\",\n  insurance_net_buy_qty AS \"보험\",\n  merchant_bank_net_buy_qty AS \"종금\",\n  pension_fund_net_buy_qty AS \"기금\"\nFROM market_investor_flow_snapshot\nWHERE provider = 'kis'\n  AND market_code = '$market'\n  AND $__timeFilter(observed_at)\nORDER BY 1"
+        }
+      ]
+    },
+    {
+      "id": 4,
+      "type": "timeseries",
+      "title": "${market:text} 지수 대 외국인 누적 순매수",
+      "description": "**이 화면의 핵심 패널이다.** 지수(왼쪽 축)가 오르는데 외국인 누적 순매수(오른쪽 축)가 내려가면 소수 주체가 지수를 끌고 개인이 받는 장이다. 지수는 `quote_bar`에서 오고 시장 코드가 `quote_bar.symbol`과 같은 값이라 대응표 없이 붙는다.",
+      "datasource": {
+        "type": "postgres",
+        "uid": "${ds}"
+      },
+      "gridPos": {
+        "h": 10,
+        "w": 24,
+        "x": 0,
+        "y": 23
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "decimals": 2,
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 2,
+            "fillOpacity": 0,
+            "showPoints": "never",
+            "spanNulls": false,
+            "axisLabel": "지수"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "text",
+                "value": null
+              }
+            ]
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "외국인 누적 순매수"
+            },
+            "properties": [
+              {
+                "id": "custom.axisPlacement",
+                "value": "right"
+              },
+              {
+                "id": "custom.axisLabel",
+                "value": "외국인 누적 (단위 미확정)"
+              },
+              {
+                "id": "custom.fillOpacity",
+                "value": 10
+              },
+              {
+                "id": "unit",
+                "value": "locale"
+              },
+              {
+                "id": "decimals",
+                "value": 0
+              },
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "orange"
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "none"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "format": "time_series",
+          "rawQuery": true,
+          "editorMode": "code",
+          "datasource": {
+            "type": "postgres",
+            "uid": "${ds}"
+          },
+          "rawSql": "SELECT\n  bar_at AS time,\n  close AS \"지수\"\nFROM quote_bar\nWHERE provider = 'kis'\n  AND symbol = '$market'\n  AND $__timeFilter(bar_at)\nORDER BY 1"
+        },
+        {
+          "refId": "B",
+          "format": "time_series",
+          "rawQuery": true,
+          "editorMode": "code",
+          "datasource": {
+            "type": "postgres",
+            "uid": "${ds}"
+          },
+          "rawSql": "SELECT\n  observed_at AS time,\n  foreign_net_buy_qty AS \"외국인 누적 순매수\"\nFROM market_investor_flow_snapshot\nWHERE provider = 'kis'\n  AND market_code = '$market'\n  AND $__timeFilter(observed_at)\nORDER BY 1"
+        }
+      ]
+    },
+    {
+      "id": 5,
+      "type": "table",
+      "title": "종목 추정 순매수 (갱신 시각별)",
+      "description": "**추정치다.** KIS가 장중에 하루 몇 차례 집계하는 값이라 실시간 수급이 아니다. 값은 그 시각까지의 **당일 누적**이라 아래로 갈수록 쌓인다(실측 삼성전자 외국인 09:30 1,059,000 → 14:30 4,405,000). **시각은 화면에서만 붙인다.** 응답이 주는 것은 갱신 회차 코드뿐이라 저장은 그 코드 그대로 두고 여기서 공식 갱신 시각으로 옮겨 보여 준다. 대응은 실측으로 확인했다 — 첫 회차에는 기관이 0인데 기관은 10:00부터 집계하기 때문이다. **제공처가 회차를 바꾸면 모르는 코드는 `슬롯 N`으로 그대로 나온다.** 틀린 시각을 지어내지 않기 위해서다. 합계는 외국인과 기관의 합이며 수집기가 그것을 검증한다.",
+      "datasource": {
+        "type": "postgres",
+        "uid": "${ds}"
+      },
+      "gridPos": {
+        "h": 11,
+        "w": 24,
+        "x": 0,
+        "y": 33
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "locale",
+          "decimals": 0,
+          "custom": {
+            "align": "auto",
+            "cellOptions": {
+              "type": "auto"
+            },
+            "filterable": true
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "text",
+                "value": null
+              }
+            ]
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byRegexp",
+              "options": "외국인|기관|합계"
+            },
+            "properties": [
+              {
+                "id": "custom.cellOptions",
+                "value": {
+                  "type": "color-text"
+                }
+              },
+              {
+                "id": "thresholds",
+                "value": {
+                  "mode": "absolute",
+                  "steps": [
+                    {
+                      "color": "blue",
+                      "value": null
+                    },
+                    {
+                      "color": "text",
+                      "value": 0
+                    },
+                    {
+                      "color": "red",
+                      "value": 1
+                    }
+                  ]
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "showHeader": true,
+        "cellHeight": "sm",
+        "footer": {
+          "show": false,
+          "reducer": [
+            "sum"
+          ],
+          "countRows": false,
+          "fields": ""
+        },
+        "sortBy": [
+          {
+            "displayName": "거래일",
+            "desc": true
+          }
+        ]
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "format": "table",
+          "rawQuery": true,
+          "editorMode": "code",
+          "datasource": {
+            "type": "postgres",
+            "uid": "${ds}"
+          },
+          "rawSql": "SELECT\n  e.business_date AS \"거래일\",\n  CASE e.source_time_code\n    WHEN '1' THEN '09:30'\n    WHEN '2' THEN '10:00'\n    WHEN '3' THEN '11:20'\n    WHEN '4' THEN '13:20'\n    WHEN '5' THEN '14:30'\n    ELSE '슬롯 ' || e.source_time_code\n  END AS \"갱신 시각\",\n  COALESCE(named.name, e.stock_code) AS \"종목\",\n  e.foreign_net_buy_qty AS \"외국인\",\n  e.institution_net_buy_qty AS \"기관\",\n  e.total_net_buy_qty AS \"합계\",\n  e.collected_at AS \"수집 시각\"\nFROM stock_investor_estimate_snapshot AS e\nLEFT JOIN LATERAL (\n  SELECT i.name\n  FROM instrument AS i\n  WHERE i.ticker = e.stock_code\n  LIMIT 1\n) AS named ON TRUE\nWHERE e.provider = 'kis'\n  AND e.stock_code IN (${stock:sqlstring})\n  AND e.business_date BETWEEN ($__timeFrom()::timestamptz AT TIME ZONE 'Asia/Seoul')::date\n                          AND ($__timeTo()::timestamptz AT TIME ZONE 'Asia/Seoul')::date\n-- 정렬은 시각 문자열이 아니라 회차 코드로 한다. 문자열로 정렬하면 순서가 뒤섞인다.\nORDER BY e.business_date DESC, e.source_time_code DESC, \"종목\""
+        }
+      ]
+    },
+    {
+      "id": 6,
+      "type": "timeseries",
+      "title": "종목 추정 순매수 — 거래일별 마지막 갱신",
+      "description": "거래일마다 가장 나중 슬롯의 값만 골라 추이로 본다. 슬롯이 시각이 아니라서 하루 안의 변화는 위 표로 보고, 여기서는 날짜 사이의 방향만 읽는다. 슬롯이 클수록 나중 갱신이고 값이 당일 누적이라, 마지막 슬롯이 그날의 최종 추정치다.",
+      "datasource": {
+        "type": "postgres",
+        "uid": "${ds}"
+      },
+      "gridPos": {
+        "h": 9,
+        "w": 24,
+        "x": 0,
+        "y": 44
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "locale",
+          "decimals": 0,
+          "custom": {
+            "drawStyle": "bars",
+            "lineWidth": 1,
+            "fillOpacity": 70,
+            "showPoints": "never",
+            "spanNulls": false,
+            "axisLabel": "추정 순매수"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "text",
+                "value": null
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "showLegend": true,
+          "calcs": [
+            "lastNotNull"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "none"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "format": "time_series",
+          "rawQuery": true,
+          "editorMode": "code",
+          "datasource": {
+            "type": "postgres",
+            "uid": "${ds}"
+          },
+          "rawSql": "WITH latest AS (\n  -- 거래일마다 가장 나중 슬롯 하나만 고른다. 슬롯 코드가 클수록 나중 갱신이다.\n  SELECT DISTINCT ON (e.stock_code, e.business_date)\n    e.stock_code, e.business_date, e.foreign_net_buy_qty, e.institution_net_buy_qty\n  FROM stock_investor_estimate_snapshot AS e\n  WHERE e.provider = 'kis'\n    AND e.stock_code IN (${stock:sqlstring})\n    AND e.business_date BETWEEN ($__timeFrom()::timestamptz AT TIME ZONE 'Asia/Seoul')::date\n                            AND ($__timeTo()::timestamptz AT TIME ZONE 'Asia/Seoul')::date\n  ORDER BY e.stock_code, e.business_date, e.source_time_code DESC\n)\nSELECT\n  (latest.business_date + TIME '00:00') AT TIME ZONE 'Asia/Seoul' AS time,\n  COALESCE(named.name, latest.stock_code) || ' 외국인' AS metric,\n  latest.foreign_net_buy_qty AS value\nFROM latest\nLEFT JOIN LATERAL (\n  SELECT i.name\n  FROM instrument AS i\n  WHERE i.ticker = latest.stock_code\n  LIMIT 1\n) AS named ON TRUE\nORDER BY 1, 2"
+        }
+      ]
+    }
+  ]
+}

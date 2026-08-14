@@ -809,6 +809,142 @@
           "rawSql": "WITH latest AS (\n  -- 거래일마다 가장 나중 슬롯 하나만 고른다. 슬롯 코드가 클수록 나중 갱신이다.\n  SELECT DISTINCT ON (e.stock_code, e.business_date)\n    e.stock_code, e.business_date, e.foreign_net_buy_qty, e.institution_net_buy_qty\n  FROM stock_investor_estimate_snapshot AS e\n  WHERE e.provider = 'kis'\n    AND e.stock_code IN (${stock:sqlstring})\n    AND e.business_date BETWEEN ($__timeFrom()::timestamptz AT TIME ZONE 'Asia/Seoul')::date\n                            AND ($__timeTo()::timestamptz AT TIME ZONE 'Asia/Seoul')::date\n  ORDER BY e.stock_code, e.business_date, e.source_time_code DESC\n)\nSELECT\n  (latest.business_date + TIME '00:00') AT TIME ZONE 'Asia/Seoul' AS time,\n  COALESCE(named.name, latest.stock_code) || ' 외국인' AS metric,\n  latest.foreign_net_buy_qty AS value\nFROM latest\nLEFT JOIN LATERAL (\n  SELECT i.name\n  FROM instrument AS i\n  WHERE i.ticker = latest.stock_code\n  LIMIT 1\n) AS named ON TRUE\nORDER BY 1, 2"
         }
       ]
+    },
+    {
+      "id": 8,
+      "type": "timeseries",
+      "title": "종목 확정 순매수 (일별)",
+      "description": "장 마감 뒤 확정값이다. 위의 추정 패널과 값이 다르며 **합치거나 같은 축에 그리지 않는다.** 추정에는 개인이 없고 회차도 다섯뿐이다. 단위는 주.",
+      "datasource": {
+        "type": "postgres",
+        "uid": "${ds}"
+      },
+      "gridPos": {
+        "h": 9,
+        "w": 24,
+        "x": 0,
+        "y": 53
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "locale",
+          "decimals": 0,
+          "custom": {
+            "drawStyle": "bars",
+            "lineWidth": 1,
+            "fillOpacity": 70,
+            "showPoints": "never",
+            "spanNulls": false,
+            "axisLabel": "확정 순매수 (주)"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "text",
+                "value": null
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "showLegend": true,
+          "calcs": [
+            "lastNotNull",
+            "sum"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "none"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "format": "time_series",
+          "rawQuery": true,
+          "editorMode": "code",
+          "datasource": {
+            "type": "postgres",
+            "uid": "${ds}"
+          },
+          "rawSql": "SELECT\n  (t.business_date + TIME '00:00') AT TIME ZONE 'Asia/Seoul' AS time,\n  COALESCE(named.name, t.stock_code) || ' ' || label AS metric,\n  value\nFROM stock_investor_trade_daily AS t\nLEFT JOIN LATERAL (\n  SELECT i.name\n  FROM instrument AS i\n  WHERE i.ticker = t.stock_code\n  LIMIT 1\n) AS named ON TRUE\nCROSS JOIN LATERAL (VALUES\n  ('외국인', t.foreign_net_buy_qty),\n  ('기관', t.institution_net_buy_qty),\n  ('개인', t.individual_net_buy_qty)\n) AS category(label, value)\nWHERE t.provider = 'kis'\n  AND t.stock_code IN (${stock:sqlstring})\n  AND t.business_date BETWEEN ($__timeFrom()::timestamptz AT TIME ZONE 'Asia/Seoul')::date\n                          AND ($__timeTo()::timestamptz AT TIME ZONE 'Asia/Seoul')::date\nORDER BY 1, 2"
+        }
+      ]
+    },
+    {
+      "id": 9,
+      "type": "timeseries",
+      "title": "종목 확정 기관 세부 (일별)",
+      "description": "확정값의 기관계를 일곱으로 쪼갠 것이다. 일곱의 합이 기관계와 같다. 단위는 주.",
+      "datasource": {
+        "type": "postgres",
+        "uid": "${ds}"
+      },
+      "gridPos": {
+        "h": 9,
+        "w": 24,
+        "x": 0,
+        "y": 62
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "locale",
+          "decimals": 0,
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 2,
+            "fillOpacity": 0,
+            "showPoints": "never",
+            "spanNulls": false,
+            "axisLabel": "확정 순매수 (주)"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "text",
+                "value": null
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "showLegend": true,
+          "calcs": [
+            "lastNotNull",
+            "sum"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "none"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "format": "time_series",
+          "rawQuery": true,
+          "editorMode": "code",
+          "datasource": {
+            "type": "postgres",
+            "uid": "${ds}"
+          },
+          "rawSql": "SELECT\n  (t.business_date + TIME '00:00') AT TIME ZONE 'Asia/Seoul' AS time,\n  COALESCE(named.name, t.stock_code) || ' ' || label AS metric,\n  value\nFROM stock_investor_trade_daily AS t\nLEFT JOIN LATERAL (\n  SELECT i.name\n  FROM instrument AS i\n  WHERE i.ticker = t.stock_code\n  LIMIT 1\n) AS named ON TRUE\nCROSS JOIN LATERAL (VALUES\n  ('금융투자', t.securities_net_buy_qty),\n  ('투자신탁', t.investment_trust_net_buy_qty),\n  ('사모펀드', t.private_equity_net_buy_qty),\n  ('은행', t.bank_net_buy_qty),\n  ('보험', t.insurance_net_buy_qty),\n  ('종금', t.merchant_bank_net_buy_qty),\n  ('기금', t.pension_fund_net_buy_qty)\n) AS category(label, value)\nWHERE t.provider = 'kis'\n  AND t.stock_code IN (${stock:sqlstring})\n  AND t.business_date BETWEEN ($__timeFrom()::timestamptz AT TIME ZONE 'Asia/Seoul')::date\n                          AND ($__timeTo()::timestamptz AT TIME ZONE 'Asia/Seoul')::date\nORDER BY 1, 2"
+        }
+      ]
     }
   ]
 }

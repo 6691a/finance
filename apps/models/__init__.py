@@ -14,6 +14,7 @@ from apps.models.market import (
     MarketSession,
     QuoteBar,
     StockInvestorEstimateSnapshot,
+    StockInvestorTradeDaily,
 )
 from apps.models.raw import SourceRecord
 from apps.models.reference import IndicatorSeries, Instrument, QuoteSymbol
@@ -38,4 +39,5 @@ __all__ = [
     "QuoteSymbol",
     "SourceRecord",
     "StockInvestorEstimateSnapshot",
+    "StockInvestorTradeDaily",
 ]

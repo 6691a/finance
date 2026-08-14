@@ -8,11 +8,16 @@ import pytest
 from pydantic import SecretStr
 from sqlalchemy import Table
 
-from apps.models.market import MarketInvestorFlowSnapshot, StockInvestorEstimateSnapshot
+from apps.models.market import (
+    MarketInvestorFlowSnapshot,
+    StockInvestorEstimateSnapshot,
+    StockInvestorTradeDaily,
+)
 from apps.models.raw import SourceRecord
 from modules.collectors import kis_investor_flow
 from modules.collectors.kis import KisPayloadError, KisResultError
 from modules.collectors.kis_investor_flow import (
+    DAILY_TRADE_UPSERT,
     MARKET_FLOW_UPSERT,
     SOURCE_RECORD_INSERT,
     STOCK_ESTIMATE_UPSERT,
@@ -20,8 +25,10 @@ from modules.collectors.kis_investor_flow import (
     InvestorFlowStock,
     fetch_market_flow,
     fetch_stock_estimates,
+    fetch_stock_trade_daily,
     store_market_flow,
     store_stock_estimates,
+    store_stock_trade_daily,
 )
 
 SOURCE_RECORD_ID = 41
@@ -164,6 +171,7 @@ def rows_for(cursor: FakeCursor, table: str) -> list[tuple]:
     [
         (STOCK_ESTIMATE_UPSERT, StockInvestorEstimateSnapshot),
         (MARKET_FLOW_UPSERT, MarketInvestorFlowSnapshot),
+        (DAILY_TRADE_UPSERT, StockInvestorTradeDaily),
         (SOURCE_RECORD_INSERT, SourceRecord),
     ],
 )
@@ -364,3 +372,157 @@ def test_no_delta_is_stored():
     columns = {column.name for column in MarketInvestorFlowSnapshot.__table__.columns}
 
     assert not [name for name in columns if "delta" in name or "change" in name]
+
+
+# 2026-08-14 실측(005930). 응답은 101필드이고 우리가 읽는 것은 그중 22칸이다. 네 항등식이
+# 모두 성립하는 실제 값이다.
+DAILY_ROW = {
+    "stck_bsop_date": "20260814",
+    "stck_clpr": "274500",
+    "acml_vol": "21668266",
+    "acml_tr_pbmn": "5874118816500",
+    "frgn_ntby_qty": "4913432",
+    "frgn_reg_ntby_qty": "4922472",
+    "frgn_nreg_ntby_qty": "-9040",
+    "prsn_ntby_qty": "-3049224",
+    "orgn_ntby_qty": "-1830920",
+    "scrt_ntby_qty": "-1390485",
+    "ivtr_ntby_qty": "107489",
+    "pe_fund_ntby_vol": "-511711",
+    "bank_ntby_qty": "19391",
+    "insu_ntby_qty": "-82201",
+    "mrbn_ntby_qty": "-746",
+    "fund_ntby_qty": "27343",
+    "etc_ntby_qty": "-33288",
+    "etc_corp_ntby_vol": "-33288",
+    "etc_orgt_ntby_vol": "0",
+    "frgn_ntby_tr_pbmn": "1336152",
+    "orgn_ntby_tr_pbmn": "-497830",
+    "prsn_ntby_tr_pbmn": "-829331",
+}
+
+DAILY_ROW_PREVIOUS = DAILY_ROW | {"stck_bsop_date": "20260813", "stck_clpr": "268000"}
+
+
+def daily_row(**overrides) -> dict[str, str]:
+    return DAILY_ROW | overrides
+
+
+def test_daily_trade_reads_every_investor_category(monkeypatch):
+    """장중 추정에는 개인이 없다. 확정값에서 12분류가 다 오는 것이 이 조회의 이유다."""
+    monkeypatch.setattr(kis_investor_flow, "send_get", fake_send_get(body(output2=[DAILY_ROW])))
+
+    fetch = fetch_stock_trade_daily(TOKEN, APP_KEY, APP_SECRET, SAMSUNG, BUSINESS_DATE)
+
+    row = fetch.rows[0]
+    assert row.business_date == date(2026, 8, 14)
+    assert row.individual_net_buy_qty == -3049224
+    assert row.foreign_registered_net_buy_qty == 4922472
+    assert row.foreign_unregistered_net_buy_qty == -9040
+    assert row.pension_fund_net_buy_qty == 27343
+    assert row.close_price == Decimal(274500)
+    assert row.foreign_net_buy_amount == Decimal(1336152)
+
+
+@pytest.mark.parametrize(
+    ("overrides", "message"),
+    [
+        ({"frgn_reg_ntby_qty": "4922473"}, "foreign parts do not add up"),
+        ({"fund_ntby_qty": "27344"}, "institution parts do not add up"),
+        ({"etc_ntby_qty": "-33289"}, "other parts do not add up"),
+        ({"prsn_ntby_qty": "-3049225", "etc_ntby_qty": "-33288"}, "do not close to zero"),
+    ],
+)
+def test_daily_trade_enforces_all_four_identities(monkeypatch, overrides, message):
+    """네 항등식이 실측으로 성립했다. 깨지면 필드 뜻이 바뀐 것이라 저장하지 않는다."""
+    monkeypatch.setattr(kis_investor_flow, "send_get", fake_send_get(body(output2=[daily_row(**overrides)])))
+
+    with pytest.raises(KisPayloadError, match=message):
+        fetch_stock_trade_daily(TOKEN, APP_KEY, APP_SECRET, SAMSUNG, BUSINESS_DATE)
+
+
+def test_daily_trade_sends_the_market_division_and_end_date(monkeypatch):
+    """시장 구분 하나로 코스피와 코스닥을 함께 받는다. 시장별 코드를 찾을 필요가 없다."""
+    send = fake_send_get(body(output2=[DAILY_ROW]))
+    monkeypatch.setattr(kis_investor_flow, "send_get", send)
+
+    fetch_stock_trade_daily(TOKEN, APP_KEY, APP_SECRET, SAMSUNG, BUSINESS_DATE)
+
+    assert send.sent[0]["tr_id"] == "FHPTJ04160001"
+    assert send.sent[0]["query"] == {
+        "FID_COND_MRKT_DIV_CODE": "J",
+        "FID_INPUT_ISCD": "005930",
+        "FID_INPUT_DATE_1": "20260814",
+        "FID_ORG_ADJ_PRC": "",
+        "FID_ETC_CLS_CODE": "",
+    }
+
+
+def test_daily_trade_rejects_rows_after_the_end_date(monkeypatch):
+    """요청 날짜가 구간의 끝이라는 전제 위에서 백필이 날짜를 뒤로 건다.
+
+    끝보다 뒤의 거래일이 섞이면 그 전제가 깨진 것이고, 백필이 같은 구간을 맴돌게 된다.
+    """
+    ahead = daily_row(stck_bsop_date="20260817")
+    monkeypatch.setattr(kis_investor_flow, "send_get", fake_send_get(body(output2=[ahead])))
+
+    with pytest.raises(KisPayloadError, match="returned rows after"):
+        fetch_stock_trade_daily(TOKEN, APP_KEY, APP_SECRET, SAMSUNG, BUSINESS_DATE)
+
+
+def test_daily_trade_rejects_duplicated_business_dates(monkeypatch):
+    monkeypatch.setattr(kis_investor_flow, "send_get", fake_send_get(body(output2=[DAILY_ROW, DAILY_ROW])))
+
+    with pytest.raises(KisPayloadError, match="duplicated business dates"):
+        fetch_stock_trade_daily(TOKEN, APP_KEY, APP_SECRET, SAMSUNG, BUSINESS_DATE)
+
+
+def test_daily_trade_rejects_an_unreadable_date(monkeypatch):
+    monkeypatch.setattr(
+        kis_investor_flow, "send_get", fake_send_get(body(output2=[daily_row(stck_bsop_date="2026-08-14")]))
+    )
+
+    with pytest.raises(KisPayloadError, match="unreadable stck_bsop_date"):
+        fetch_stock_trade_daily(TOKEN, APP_KEY, APP_SECRET, SAMSUNG, BUSINESS_DATE)
+
+
+def test_store_daily_trade_writes_one_row_per_business_date(monkeypatch):
+    monkeypatch.setattr(
+        kis_investor_flow, "send_get", fake_send_get(body(output2=[DAILY_ROW, DAILY_ROW_PREVIOUS]))
+    )
+    fetch = fetch_stock_trade_daily(TOKEN, APP_KEY, APP_SECRET, SAMSUNG, BUSINESS_DATE)
+    connection = FakeConnection()
+
+    assert store_stock_trade_daily(connection, fetch) == 2
+
+    rows = rows_for(connection.recorded_cursor, "stock_investor_trade_daily")
+    assert [row[1] for row in rows] == [date(2026, 8, 14), date(2026, 8, 13)]
+    assert all(row[0] == "005930" for row in rows)
+    assert all(row[-1] == SOURCE_RECORD_ID for row in rows)
+
+
+def test_store_daily_trade_records_the_covered_range(monkeypatch):
+    """백필이 어디까지 갔는지 계보만 보고 읽을 수 있어야 한다."""
+    monkeypatch.setattr(
+        kis_investor_flow, "send_get", fake_send_get(body(output2=[DAILY_ROW, DAILY_ROW_PREVIOUS]))
+    )
+    fetch = fetch_stock_trade_daily(TOKEN, APP_KEY, APP_SECRET, SAMSUNG, BUSINESS_DATE)
+    connection = FakeConnection()
+    store_stock_trade_daily(connection, fetch)
+
+    record = rows_for(connection.recorded_cursor, "source_record")[0]
+    metadata = json.loads(record[-1])
+    assert record[2] == "investor_trade_by_stock_daily"
+    assert metadata["covered_from"] == "2026-08-13"
+    assert metadata["covered_to"] == "2026-08-14"
+
+
+def test_the_daily_amount_unit_is_recorded_as_million_won():
+    """실측으로 확정한 배율이다. 원으로 오해하면 화면이 백만 배 작게 그린다.
+
+    같은 응답 안에서 acml_tr_pbmn만 원이라 한 벌로 환산하면 안 된다.
+    """
+    table = StockInvestorTradeDaily.__table__
+
+    assert "백만원" in table.columns["foreign_net_buy_amount"].comment
+    assert "원이다" in table.columns["accumulated_trade_amount"].comment

@@ -40,7 +40,8 @@ def test_every_panel_reads_the_selected_datasource(dashboard):
 
 def test_every_query_pins_the_provider(dashboard):
     for key, sql in statements(dashboard).items():
-        if "market_investor_flow_snapshot" in sql or "stock_investor_estimate_snapshot" in sql or "quote_bar" in sql:
+        tables = ("market_investor_flow_snapshot", "stock_investor_estimate_snapshot", "stock_investor_trade_daily", "quote_bar")
+        if any(table in sql for table in tables):
             assert "provider = 'kis'" in sql, key
 
 
@@ -143,3 +144,36 @@ def test_the_index_panel_joins_on_the_market_symbol(dashboard):
 
     assert "FROM quote_bar" in index_sql
     assert "symbol = '$market'" in index_sql
+
+
+def test_the_confirmed_panels_are_not_labelled_as_estimates(dashboard):
+    """추정과 확정을 합치면 안 된다. 값이 다르고 분류 수도 다르다."""
+    for panel_id in (8, 9):
+        panel = next(p for p in dashboard["panels"] if p["id"] == panel_id)
+        text = panel["title"] + panel["description"]
+        assert "확정" in text
+        sql = statements(dashboard)[f"{panel_id}A"]
+        # 한 패널이 두 테이블을 섞어 읽지 않는다.
+        assert "stock_investor_trade_daily" in sql
+        assert "stock_investor_estimate_snapshot" not in sql
+
+
+def test_the_confirmed_panels_say_the_unit(dashboard):
+    """이 API에서 단위가 확정됐다. 수량은 주다."""
+    for panel_id in (8, 9):
+        panel = next(p for p in dashboard["panels"] if p["id"] == panel_id)
+        assert "주" in panel["fieldConfig"]["defaults"]["custom"]["axisLabel"]
+
+
+def test_the_confirmed_breakdown_shows_all_seven_parts(dashboard):
+    sql = statements(dashboard)["9A"]
+
+    for label in ("금융투자", "투자신탁", "사모펀드", "은행", "보험", "종금", "기금"):
+        assert label in sql, label
+
+
+def test_the_confirmed_panels_follow_the_stock_variable(dashboard):
+    for panel_id in (8, 9):
+        sql = statements(dashboard)[f"{panel_id}A"]
+        assert "t.stock_code IN (${stock:sqlstring})" in sql
+        assert "COALESCE(named.name," in sql

@@ -10,7 +10,7 @@ from pathlib import Path
 
 import pytest
 
-from apps.models.market import MovementMarket
+from apps.models.market import KrxMarket
 
 DASHBOARD = Path(__file__).resolve().parents[2] / "compose/local/grafana/dashboards/market-movement.json"
 
@@ -62,7 +62,7 @@ def test_the_symbol_variable_matches_the_stored_vocabulary(dashboard):
     # 값을 손으로 적지 않고 저장된 것에서 읽는다. 시장이 늘면 화면이 따라온다.
     assert "SELECT DISTINCT symbol FROM market_movement_snapshot" in variable["query"]
     assert variable["multi"] is True
-    assert {member.value for member in MovementMarket} == {"KOSPI", "KOSDAQ"}
+    assert {member.value for member in KrxMarket} == {"KOSPI", "KOSDAQ"}
 
 
 def test_the_index_panel_joins_on_the_same_symbol(dashboard):

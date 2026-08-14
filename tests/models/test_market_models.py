@@ -277,11 +277,11 @@ def test_market_movement_snapshot_keeps_its_natural_key_and_lineage():
 
 
 def test_market_movement_symbol_matches_the_quote_bar_vocabulary():
-    from apps.models.market import MovementMarket
+    from apps.models.market import KrxMarket
     from modules.collectors.kis import MOVEMENT_INDEXES
 
     # 값이 quote_bar.symbol 과 글자 그대로 같아야 두 테이블을 한 키로 잇는다.
-    assert {member.value for member in MovementMarket} == {index.value for index in MOVEMENT_INDEXES}
+    assert {member.value for member in KrxMarket} == {index.value for index in MOVEMENT_INDEXES}
 
 
 def test_market_movement_stores_counts_raw_without_ratios():
@@ -305,3 +305,44 @@ def test_market_movement_documents_every_column():
 
     assert MarketMovementSnapshot.__table__.comment
     assert all(column.comment for column in MarketMovementSnapshot.__table__.columns)
+
+
+def test_positioning_tables_share_the_stock_code_vocabulary():
+    from apps.models.market import (
+        DisclosureEvent,
+        KrxCreditBalanceRankingDaily,
+        KrxStockCreditBalanceDaily,
+        KrxStockSecuritiesLendingDaily,
+        KrxStockShortSaleDaily,
+    )
+
+    # 공시와 포지션을 한 키로 이으려면 같은 이름의 같은 체계여야 한다.
+    for model in (
+        KrxStockCreditBalanceDaily,
+        KrxStockShortSaleDaily,
+        KrxStockSecuritiesLendingDaily,
+        KrxCreditBalanceRankingDaily,
+    ):
+        assert "stock_code" in model.__table__.c
+        assert "symbol" not in model.__table__.c
+    assert "stock_code" in DisclosureEvent.__table__.c
+
+
+def test_positioning_tables_document_every_column():
+    from apps.models.market import (
+        KrxCreditBalanceRankingDaily,
+        KrxMarketFundsDaily,
+        KrxStockCreditBalanceDaily,
+        KrxStockSecuritiesLendingDaily,
+        KrxStockShortSaleDaily,
+    )
+
+    for model in (
+        KrxStockCreditBalanceDaily,
+        KrxCreditBalanceRankingDaily,
+        KrxMarketFundsDaily,
+        KrxStockShortSaleDaily,
+        KrxStockSecuritiesLendingDaily,
+    ):
+        assert model.__table__.comment
+        assert all(column.comment for column in model.__table__.columns)

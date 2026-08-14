@@ -1,0 +1,692 @@
+{
+  "uid": "market-positioning",
+  "title": "신용·공매도·대차 포지션",
+  "description": "가격이 '얼마에 거래됐나'라면 이 화면은 '누가 어떤 포지션으로 들고 있나'다. 신용융자 잔고가 쌓인 종목은 하락할 때 반대매매가 나오고, 공매도와 대차 잔고는 되사야 할 물량이다. **금액 단위가 API마다 다르고 일부는 아직 확정하지 못해서 수량과 비율을 앞세운다.** 대차 금액은 백만원, 공매도 대금은 원으로 실측했고 신용잔고 금액과 증시자금 금액은 미확정이라 단위를 붙이지 않는다. uid 는 바꾸지 않는다. 프로비저닝된 대시보드의 uid 를 바꾸면 Grafana 가 같은 파일로 두 번째 대시보드를 만들고 그 뒤로 갱신이 uid 충돌로 막힌다. 수집 설계는 docs/kis-market-positioning-daily.md 에 있다.",
+  "tags": [
+    "kis",
+    "market",
+    "daily",
+    "korea",
+    "positioning"
+  ],
+  "editable": true,
+  "schemaVersion": 39,
+  "version": 1,
+  "refresh": "30m",
+  "time": {
+    "from": "now-90d",
+    "to": "now"
+  },
+  "timezone": "browser",
+  "templating": {
+    "list": [
+      {
+        "name": "ds",
+        "label": "데이터소스",
+        "description": "krx_* 포지션 테이블을 읽을 postgres 데이터소스. 모든 패널이 이 값을 쓴다.",
+        "type": "datasource",
+        "query": "postgres",
+        "refresh": 1,
+        "hide": 0,
+        "current": {
+          "selected": true,
+          "text": "news2",
+          "value": "news2-postgres"
+        },
+        "options": []
+      },
+      {
+        "name": "stock",
+        "label": "종목",
+        "description": "수집 대상 종목. **화면에는 이름이 나오고 조회에는 종목코드가 나간다.** 이름은 reference.instrument 마스터가 들고 있어서 대시보드마다 코드→이름 대응을 복사하지 않는다. 값(ticker)은 disclosure_event.stock_code 와 같은 체계라 공시 화면과 같은 키로 이어진다.",
+        "type": "query",
+        "datasource": {
+          "type": "postgres",
+          "uid": "${ds}"
+        },
+        "query": "SELECT name AS __text, ticker AS __value FROM instrument WHERE is_watched ORDER BY name",
+        "includeAll": true,
+        "multi": true,
+        "refresh": 1,
+        "sort": 1,
+        "current": {
+          "selected": true,
+          "text": [
+            "All"
+          ],
+          "value": [
+            "$__all"
+          ]
+        },
+        "options": []
+      },
+      {
+        "name": "universe",
+        "label": "순위 대상",
+        "description": "신용잔고 상위를 어느 모집단에서 볼지. 0000이 전체이고 1001이 코스닥이다(실측). **필터를 걸지 않으면 두 모집단이 한 표에 섞인다.**",
+        "type": "custom",
+        "query": "전체 : 0000, 코스닥 : 1001",
+        "includeAll": false,
+        "multi": false,
+        "current": {
+          "selected": true,
+          "text": "전체",
+          "value": "0000"
+        },
+        "options": []
+      }
+    ]
+  },
+  "panels": [
+    {
+      "id": 1,
+      "type": "stat",
+      "title": "${stock:text} 융자 잔고",
+      "description": "가장 최근 거래일의 신용융자 잔고 수량. 이 물량이 쌓인 종목은 주가가 빠질 때 반대매매가 나온다. **금액이 아니라 수량이다.** 신용잔고 금액의 단위를 아직 확정하지 못했다. 제목의 종목 이름은 instrument 마스터에서 온다.",
+      "datasource": {
+        "type": "postgres",
+        "uid": "${ds}"
+      },
+      "repeat": "stock",
+      "repeatDirection": "h",
+      "maxPerRow": 4,
+      "gridPos": {
+        "h": 5,
+        "w": 6,
+        "x": 0,
+        "y": 0
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "locale",
+          "decimals": 0,
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "text",
+                "value": null
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "orientation": "auto",
+        "textMode": "auto",
+        "colorMode": "none",
+        "graphMode": "area",
+        "justifyMode": "auto"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "format": "time_series",
+          "rawQuery": true,
+          "editorMode": "code",
+          "datasource": {
+            "type": "postgres",
+            "uid": "${ds}"
+          },
+          "rawSql": "SELECT\n  (trade_date + TIME '00:00') AT TIME ZONE 'Asia/Seoul' AS time,\n  loan_balance_quantity AS \"융자 잔고(주)\"\nFROM krx_stock_credit_balance_daily\nWHERE provider = 'kis'\n  AND stock_code = ${stock:sqlstring}\n  AND trade_date BETWEEN ($__timeFrom()::timestamptz AT TIME ZONE 'Asia/Seoul')::date\n                     AND ($__timeTo()::timestamptz AT TIME ZONE 'Asia/Seoul')::date\nORDER BY 1"
+        }
+      ]
+    },
+    {
+      "id": 2,
+      "type": "stat",
+      "title": "${stock:text} 공매도 비중",
+      "description": "가장 최근 **발표된** 영업일의 공매도 거래량 비중. 당일 행은 장중에 0으로 오는데(실측) 그건 '공매도가 없었다'가 아니라 '아직 발표 전'이라 화면에서 뺀다. 제목의 종목 이름은 instrument 마스터에서 온다.",
+      "datasource": {
+        "type": "postgres",
+        "uid": "${ds}"
+      },
+      "repeat": "stock",
+      "repeatDirection": "h",
+      "maxPerRow": 4,
+      "gridPos": {
+        "h": 5,
+        "w": 6,
+        "x": 12,
+        "y": 0
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percent",
+          "decimals": 2,
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "text",
+                "value": null
+              },
+              {
+                "color": "orange",
+                "value": 5
+              },
+              {
+                "color": "red",
+                "value": 10
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "orientation": "auto",
+        "textMode": "auto",
+        "colorMode": "value",
+        "graphMode": "area",
+        "justifyMode": "auto"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "format": "time_series",
+          "rawQuery": true,
+          "editorMode": "code",
+          "datasource": {
+            "type": "postgres",
+            "uid": "${ds}"
+          },
+          "rawSql": "SELECT\n  (business_date + TIME '00:00') AT TIME ZONE 'Asia/Seoul' AS time,\n  short_sale_volume_ratio AS \"공매도 비중\"\nFROM krx_stock_short_sale_daily\nWHERE provider = 'kis'\n  AND stock_code = ${stock:sqlstring}\n  AND business_date BETWEEN ($__timeFrom()::timestamptz AT TIME ZONE 'Asia/Seoul')::date\n                        AND ($__timeTo()::timestamptz AT TIME ZONE 'Asia/Seoul')::date\n  -- 마지막 영업일 행이 0이면 아직 발표 전이다. 0으로 그리지 않는다.\n  AND NOT (\n    short_sale_quantity = 0\n    AND business_date = (\n      SELECT max(latest.business_date)\n      FROM krx_stock_short_sale_daily AS latest\n      WHERE latest.provider = 'kis' AND latest.stock_code = ${stock:sqlstring}\n    )\n  )\nORDER BY 1"
+        }
+      ]
+    },
+    {
+      "id": 3,
+      "type": "timeseries",
+      "title": "신용융자 잔고 수량",
+      "description": "종목별 융자 잔고 추이. 잔고가 계단식으로 늘다가 주가가 꺾이면 반대매매 구간이 된다. 거래일(`trade_date`) 기준이며 결제일이 아니다. 두 날짜는 통상 2영업일 차이다(실측).",
+      "datasource": {
+        "type": "postgres",
+        "uid": "${ds}"
+      },
+      "gridPos": {
+        "h": 9,
+        "w": 12,
+        "x": 0,
+        "y": 5
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "locale",
+          "decimals": 0,
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 2,
+            "fillOpacity": 10,
+            "showPoints": "auto",
+            "spanNulls": false,
+            "axisLabel": "주"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "text",
+                "value": null
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "showLegend": true,
+          "calcs": [
+            "lastNotNull",
+            "min",
+            "max"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "format": "time_series",
+          "rawQuery": true,
+          "editorMode": "code",
+          "datasource": {
+            "type": "postgres",
+            "uid": "${ds}"
+          },
+          "rawSql": "SELECT\n  (c.trade_date + TIME '00:00') AT TIME ZONE 'Asia/Seoul' AS time,\n  COALESCE(named.name, c.stock_code) AS metric,\n  c.loan_balance_quantity AS value\nFROM krx_stock_credit_balance_daily AS c\nLEFT JOIN LATERAL (\n  SELECT i.name\n  FROM instrument AS i\n  WHERE i.ticker = c.stock_code\n  LIMIT 1\n) AS named ON TRUE\nWHERE c.provider = 'kis'\n  AND c.stock_code IN (${stock:sqlstring})\n  AND c.trade_date BETWEEN ($__timeFrom()::timestamptz AT TIME ZONE 'Asia/Seoul')::date\n                     AND ($__timeTo()::timestamptz AT TIME ZONE 'Asia/Seoul')::date\nORDER BY 1, 2"
+        }
+      ]
+    },
+    {
+      "id": 4,
+      "type": "timeseries",
+      "title": "대차 잔고 수량",
+      "description": "대차 잔고는 **공매도의 재고**다. 빌려 둔 주식이 늘면 공매도로 나올 여지가 커지고, 줄면 되사서 갚았다는 뜻이다. 공매도 비중과 함께 봐야 뜻이 산다.",
+      "datasource": {
+        "type": "postgres",
+        "uid": "${ds}"
+      },
+      "gridPos": {
+        "h": 9,
+        "w": 12,
+        "x": 12,
+        "y": 5
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "locale",
+          "decimals": 0,
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 2,
+            "fillOpacity": 10,
+            "showPoints": "auto",
+            "spanNulls": false,
+            "axisLabel": "주"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "text",
+                "value": null
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "showLegend": true,
+          "calcs": [
+            "lastNotNull",
+            "min",
+            "max"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "format": "time_series",
+          "rawQuery": true,
+          "editorMode": "code",
+          "datasource": {
+            "type": "postgres",
+            "uid": "${ds}"
+          },
+          "rawSql": "SELECT\n  (l.business_date + TIME '00:00') AT TIME ZONE 'Asia/Seoul' AS time,\n  COALESCE(named.name, l.stock_code) AS metric,\n  l.balance_quantity AS value\nFROM krx_stock_securities_lending_daily AS l\nLEFT JOIN LATERAL (\n  SELECT i.name\n  FROM instrument AS i\n  WHERE i.ticker = l.stock_code\n  LIMIT 1\n) AS named ON TRUE\nWHERE l.provider = 'kis'\n  AND l.stock_code IN (${stock:sqlstring})\n  AND l.business_date BETWEEN ($__timeFrom()::timestamptz AT TIME ZONE 'Asia/Seoul')::date\n                        AND ($__timeTo()::timestamptz AT TIME ZONE 'Asia/Seoul')::date\nORDER BY 1, 2"
+        }
+      ]
+    },
+    {
+      "id": 5,
+      "type": "timeseries",
+      "title": "공매도 거래량 비중",
+      "description": "일별 공매도 비중(%). 아직 발표되지 않은 마지막 행은 뺀다. **공매도가 실제로 0인 날은 남긴다** — 공매도 금지 같은 제도 변화가 그 모양이라 지우면 안 된다.",
+      "datasource": {
+        "type": "postgres",
+        "uid": "${ds}"
+      },
+      "gridPos": {
+        "h": 9,
+        "w": 24,
+        "x": 0,
+        "y": 14
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percent",
+          "decimals": 2,
+          "custom": {
+            "drawStyle": "bars",
+            "lineWidth": 1,
+            "fillOpacity": 70,
+            "showPoints": "never",
+            "spanNulls": false,
+            "axisLabel": "비중(%)"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "text",
+                "value": null
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "showLegend": true,
+          "calcs": [
+            "lastNotNull",
+            "mean",
+            "max"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "format": "time_series",
+          "rawQuery": true,
+          "editorMode": "code",
+          "datasource": {
+            "type": "postgres",
+            "uid": "${ds}"
+          },
+          "rawSql": "SELECT\n  (s.business_date + TIME '00:00') AT TIME ZONE 'Asia/Seoul' AS time,\n  COALESCE(named.name, s.stock_code) AS metric,\n  s.short_sale_volume_ratio AS value\nFROM krx_stock_short_sale_daily AS s\nLEFT JOIN LATERAL (\n  SELECT i.name\n  FROM instrument AS i\n  WHERE i.ticker = s.stock_code\n  LIMIT 1\n) AS named ON TRUE\nWHERE s.provider = 'kis'\n  AND s.stock_code IN (${stock:sqlstring})\n  AND s.business_date BETWEEN ($__timeFrom()::timestamptz AT TIME ZONE 'Asia/Seoul')::date\n                          AND ($__timeTo()::timestamptz AT TIME ZONE 'Asia/Seoul')::date\n  -- 미발표 상태의 마지막 행만 뺀다. 진짜 0인 날은 남긴다(공매도 금지 구간이 그 모양이다).\n  AND NOT (\n    s.short_sale_quantity = 0\n    AND s.business_date = (\n      SELECT max(latest.business_date)\n      FROM krx_stock_short_sale_daily AS latest\n      WHERE latest.provider = 'kis' AND latest.stock_code = s.stock_code\n    )\n  )\nORDER BY 1, 2"
+        }
+      ]
+    },
+    {
+      "id": 6,
+      "type": "timeseries",
+      "title": "시장 자금",
+      "description": "고객예탁금은 시장에 들어와 대기 중인 돈이고 신용융자 잔고는 빌려서 산 돈이다. 예탁금이 줄면서 신용이 늘면 위험이 쌓인다. **금액 단위를 확정하지 못해 축에 단위를 붙이지 않았다.** 포털 표기는 억원이지만 대조하지 못했다. 추세를 보는 용도다.",
+      "datasource": {
+        "type": "postgres",
+        "uid": "${ds}"
+      },
+      "gridPos": {
+        "h": 9,
+        "w": 24,
+        "x": 0,
+        "y": 23
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "locale",
+          "decimals": 0,
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 2,
+            "fillOpacity": 5,
+            "showPoints": "never",
+            "spanNulls": false,
+            "axisLabel": "KIS 표기 (단위 미확정)"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "text",
+                "value": null
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "showLegend": true,
+          "calcs": [
+            "lastNotNull",
+            "min",
+            "max"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "none"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "format": "time_series",
+          "rawQuery": true,
+          "editorMode": "code",
+          "datasource": {
+            "type": "postgres",
+            "uid": "${ds}"
+          },
+          "rawSql": "SELECT\n  (business_date + TIME '00:00') AT TIME ZONE 'Asia/Seoul' AS time,\n  customer_deposit AS \"고객예탁금\",\n  credit_loan_balance AS \"신용융자 잔고\",\n  securities_lending_amount AS \"대차 금액\"\nFROM krx_market_funds_daily\nWHERE provider = 'kis'\n  AND business_date BETWEEN ($__timeFrom()::timestamptz AT TIME ZONE 'Asia/Seoul')::date\n                        AND ($__timeTo()::timestamptz AT TIME ZONE 'Asia/Seoul')::date\nORDER BY 1"
+        }
+      ]
+    },
+    {
+      "id": 7,
+      "type": "table",
+      "title": "신용잔고 상위 — ${universe:text} (최신 기준일)",
+      "description": "융자잔고금액이 많은 종목 순위. **과거 기준일 조회가 없는 API라 운영 시작일부터만 쌓인다.** 증가율은 기준일과 비교일 사이의 값이고 저장된 값을 그대로 보여 준다. 종목코드에 영문자가 섞인 것(신주인수권증서·ETN 등)도 정상이다. 종목명은 순위 응답이 준 값을 그대로 쓴다. 마스터에 없는 종목이 섞이기 때문이다.",
+      "datasource": {
+        "type": "postgres",
+        "uid": "${ds}"
+      },
+      "gridPos": {
+        "h": 12,
+        "w": 24,
+        "x": 0,
+        "y": 41
+      },
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "align": "auto",
+            "cellOptions": {
+              "type": "auto"
+            },
+            "filterable": true
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "text",
+                "value": null
+              }
+            ]
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byRegexp",
+              "options": ".*증가율.*"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "percent"
+              },
+              {
+                "id": "decimals",
+                "value": 2
+              },
+              {
+                "id": "custom.cellOptions",
+                "value": {
+                  "type": "color-text"
+                }
+              },
+              {
+                "id": "thresholds",
+                "value": {
+                  "mode": "absolute",
+                  "steps": [
+                    {
+                      "color": "blue",
+                      "value": null
+                    },
+                    {
+                      "color": "text",
+                      "value": 0
+                    },
+                    {
+                      "color": "red",
+                      "value": 5
+                    }
+                  ]
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "융자 잔고율"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "percent"
+              },
+              {
+                "id": "decimals",
+                "value": 2
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "showHeader": true,
+        "cellHeight": "sm",
+        "footer": {
+          "show": false,
+          "reducer": [
+            "sum"
+          ],
+          "countRows": false,
+          "fields": ""
+        },
+        "sortBy": [
+          {
+            "displayName": "순위",
+            "desc": false
+          }
+        ]
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "format": "table",
+          "rawQuery": true,
+          "editorMode": "code",
+          "datasource": {
+            "type": "postgres",
+            "uid": "${ds}"
+          },
+          "rawSql": "SELECT\n  rank AS \"순위\",\n  stock_code AS \"종목코드\",\n  stock_name AS \"종목명\",\n  close_price AS \"현재가\",\n  loan_balance_quantity AS \"융자 잔고(주)\",\n  loan_balance_rate AS \"융자 잔고율\",\n  loan_balance_growth_rate AS \"융자 증가율\",\n  short_loan_balance_growth_rate AS \"대주 증가율\",\n  standard_date AS \"기준일\",\n  comparison_date AS \"비교일\"\nFROM krx_credit_balance_ranking_daily\nWHERE provider = 'kis'\n  -- 모집단을 고르지 않으면 전체와 코스닥이 한 표에 섞인다.\n  AND universe_code = '$universe'\n  -- 기준일이 하나뿐인 스냅샷이라 그 모집단의 최신 한 벌만 본다.\n  AND standard_date = (\n    SELECT max(latest.standard_date)\n    FROM krx_credit_balance_ranking_daily AS latest\n    WHERE latest.provider = 'kis' AND latest.universe_code = '$universe'\n  )\nORDER BY rank"
+        }
+      ]
+    },
+    {
+      "id": 8,
+      "type": "timeseries",
+      "title": "시장 대차 잔고 (코스피·코스닥)",
+      "description": "종목 둘만 보면 안 보이는 축이다. 시장 전체로 빌린 주식이 쌓이는지 풀리는지를 본다. **합계는 저장하지 않는다** — 제공처가 주는 전체 값이 두 시장의 정확한 합이라(실측 5영업일) 유도되는 값을 한 벌 더 두지 않았다. 필요하면 두 선을 더한다. 시장 신용융자 잔고는 코스피/코스닥으로 갈 수 없어 '시장 자금' 패널에 한 줄로 있다.",
+      "datasource": {
+        "type": "postgres",
+        "uid": "${ds}"
+      },
+      "gridPos": {
+        "h": 9,
+        "w": 24,
+        "x": 0,
+        "y": 32
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "locale",
+          "decimals": 0,
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 2,
+            "fillOpacity": 10,
+            "showPoints": "auto",
+            "spanNulls": false,
+            "axisLabel": "주"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "text",
+                "value": null
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "showLegend": true,
+          "calcs": [
+            "lastNotNull",
+            "min",
+            "max"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "format": "time_series",
+          "rawQuery": true,
+          "editorMode": "code",
+          "datasource": {
+            "type": "postgres",
+            "uid": "${ds}"
+          },
+          "rawSql": "SELECT\n  (business_date + TIME '00:00') AT TIME ZONE 'Asia/Seoul' AS time,\n  market_code AS metric,\n  balance_quantity AS value\nFROM krx_market_securities_lending_daily\nWHERE provider = 'kis'\n  AND business_date BETWEEN ($__timeFrom()::timestamptz AT TIME ZONE 'Asia/Seoul')::date\n                        AND ($__timeTo()::timestamptz AT TIME ZONE 'Asia/Seoul')::date\nORDER BY 1, 2"
+        }
+      ]
+    }
+  ]
+}

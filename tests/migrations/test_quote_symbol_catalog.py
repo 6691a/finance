@@ -1,6 +1,6 @@
 import pytest
 
-from modules.collectors.kis import DomesticFuture, DomesticIndex
+from modules.collectors.kis import DomesticFuture, DomesticIndex, DomesticStock
 from modules.collectors.yahoo import QuoteSymbol
 from tests.helpers import NO_REVISION_REASON, head_sql, revision_files
 
@@ -32,7 +32,9 @@ EXPECTED_RATES = {"US10Y"}
 # 수익률이 아니라 가격이다. 같은 "미 10년물"이라도 US10Y 와 반대로 움직인다.
 EXPECTED_BOND_FUTURES = {"US10Y_FUT"}
 EXPECTED_COMMODITIES = {"GOLD", "SILVER", "COPPER", "WTI"}
-EXPECTED_EQUITIES = {"TSMC_ADR"}
+# 개별 종목은 심볼이 6자리 종목코드다. 공시·수급·포지션이 전부 그 코드를 키로 써서,
+# 봉만 이름을 쓰면 한 화면에서 조인이 안 된다. TSMC ADR 만 Yahoo 티커 쪽 이름을 쓴다.
+EXPECTED_EQUITIES = {"TSMC_ADR", "005930", "000660"}
 # 주말 48시간에 움직이는 유일한 값이다. 나머지가 전부 멈춰 있어 축을 공유할 수 없다.
 EXPECTED_CRYPTO = {"BTC", "ETH"}
 
@@ -54,6 +56,7 @@ def collected_symbols() -> set[str]:
         {symbol.value for symbol in QuoteSymbol}
         | {future.value for future in DomesticFuture}
         | {index.value for index in DomesticIndex}
+        | {stock.value for stock in DomesticStock}
     )
 
 
@@ -162,3 +165,21 @@ def test_kospi_is_seeded_under_the_domestic_collector(capsys):
             in sql
         )
         assert f"VALUES ('yahoo', '{symbol}'" not in sql
+
+
+def test_stock_symbols_match_the_other_collectors():
+    """봉과 수급을 한 화면에서 겹치려면 종목 식별자가 같아야 한다."""
+    from modules.collectors.dart import DartCompany
+    from modules.collectors.kis_investor_flow import InvestorFlowStock
+
+    codes = {stock.value for stock in DomesticStock}
+
+    assert codes == {stock.value for stock in InvestorFlowStock}
+    assert codes == {company.value for company in DartCompany}
+
+
+@pytest.mark.parametrize("symbol", sorted({"005930", "000660"}))
+def test_stock_symbols_are_seeded_under_the_domestic_collector(symbol, capsys):
+    sql = head_sql(capsys)
+
+    assert f"VALUES ('kis', '{symbol}', 'equity'" in sql

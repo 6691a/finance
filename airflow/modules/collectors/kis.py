@@ -45,7 +45,7 @@ import json
 import logging
 import re
 from collections.abc import Mapping, Sequence
-from datetime import UTC, date, datetime, timedelta
+from datetime import UTC, date, datetime, time, timedelta
 from decimal import Decimal, InvalidOperation
 from enum import StrEnum
 from typing import Any, Protocol, Self
@@ -89,6 +89,25 @@ FUTURE_CHART_TR_ID = "FHKIF03020200"
 # 업종(지수) 분봉. 값 컬럼이 `bstp_nmix_*`라 선물과 다르다.
 INDEX_CHART_PATH = "/uapi/domestic-stock/v1/quotations/inquire-time-indexchartprice"
 INDEX_CHART_TR_ID = "FHKUP03500200"
+
+# 종목 분봉. **일자별 조회를 쓴다.** 당일 조회(`FHKST03010200`)와 값이 갈리는데,
+# 장중 한복판 봉은 둘이 완전히 같고 마감 동시호가 구간에서만 다르다. 당일 조회는 15:30 봉에
+# 동시호가 물량을 두 번 실어(실측: 2,730,280 = 2 × 1,365,140) 하루 합이 누적 거래량을 넘는다.
+# 호출 수도 일자별이 4배 적다(한 번에 120봉 대 30봉).
+STOCK_CHART_PATH = "/uapi/domestic-stock/v1/quotations/inquire-time-dailychartprice"
+STOCK_CHART_TR_ID = "FHKST03010230"
+STOCK_BARS_SOURCE_KEY = "stock_minute_bars"
+
+# 한 번에 오는 봉 수(실측). 정규장 381봉을 덮으려면 네 번이면 된다.
+STOCK_BARS_PER_CALL = 120
+
+# 한 거래일에 허용하는 최대 호출 수. 커서가 앞으로 나아가지 않을 때의 안전장치다.
+MAX_STOCK_BAR_CALLS = 6
+
+# 정규장 경계(KST). 이 밖의 봉은 저장하지 않는다. 15:32 같은 시간외 체결이 섞이면 한 심볼의
+# 시계열에 성격이 다른 거래가 들어간다(실측: 005930 2026-08-14에 153200 봉 11,196,308주).
+SESSION_FIRST_BAR = time(9, 0)
+SESSION_LAST_BAR = time(15, 30)
 
 # 업종 현재가. 상승·보합·하락 종목 수가 여기 들어 있어 전 종목을 순회할 필요가 없다.
 INDEX_PRICE_PATH = "/uapi/domestic-stock/v1/quotations/inquire-index-price"
@@ -171,6 +190,29 @@ class DomesticIndex(StrEnum):
     # 봉 단위 베이시스는 API가 주지 않으므로 둘을 각각 받아 조회 쪽에서 뺀다.
     KOSPI200 = ("KOSPI200", "2001", "코스피200")
     KOSDAQ = ("KOSDAQ", "1001", "코스닥")
+
+
+class DomesticStock(StrEnum):
+    """분봉을 받을 개별 종목. 값이 한국거래소 6자리 코드다.
+
+    **`quote_bar.symbol`에 이 값을 그대로 넣는다.** 지수와 선물은 `KOSPI`·`KOSPI200_FUT`처럼
+    이름을 쓰지만 종목은 코드를 쓴다. 공시·수급·포지션 테이블이 전부 `stock_code` 6자리를
+    키로 쓰고 있어, 봉만 이름을 쓰면 화면에서 조인이 안 된다. 사람이 읽을 이름은
+    `quote_symbol` 마스터와 `instrument`가 갖는다.
+
+    `tests/collectors/test_kis.py`가 다른 수집기 Enum과 이 값들을 대조한다.
+    """
+
+    label: str
+
+    def __new__(cls, code: str, label: str) -> Self:
+        member = str.__new__(cls, code)
+        member._value_ = code
+        member.label = label
+        return member
+
+    SAMSUNG_ELECTRONICS = ("005930", "삼성전자")
+    SK_HYNIX = ("000660", "SK하이닉스")
 
 
 # 상승·보합·하락 분포를 저장하는 지수. `DomesticIndex`에는 코스피200도 있지만 그것은
@@ -310,9 +352,9 @@ class ParsedBars(BaseModel):
 class KisRawBar(BaseModel):
     """`output2` 한 건. 값은 전부 문자열로 오고 공백 패딩이 붙기도 한다.
 
-    **선물과 지수는 값 컬럼 이름이 다르다.** 선물은 `futs_*`, 업종지수는 `bstp_nmix_*`다.
-    둘을 모두 선택으로 받고 `price()`가 있는 쪽을 고른다. 응답마다 한쪽만 오므로 둘 다
-    비어 있으면 계약이 깨진 것이다.
+    **대상마다 값 컬럼 이름이 다르다.** 선물은 `futs_*`, 업종지수는 `bstp_nmix_*`, 개별
+    종목은 `stck_*`다. 셋을 모두 선택으로 받고 `prices()`가 채워진 쪽을 고른다. 응답마다
+    한 종류만 오므로 셋 다 비어 있으면 계약이 깨진 것이다.
     """
 
     model_config = ConfigDict(frozen=True, extra="ignore")
@@ -331,13 +373,20 @@ class KisRawBar(BaseModel):
     index_low: str = Field(default="", alias="bstp_nmix_lwpr")
     index_close: str = Field(default="", alias="bstp_nmix_prpr")
 
+    stock_open: str = Field(default="", alias="stck_oprc")
+    stock_high: str = Field(default="", alias="stck_hgpr")
+    stock_low: str = Field(default="", alias="stck_lwpr")
+    stock_close: str = Field(default="", alias="stck_prpr")
+
     def prices(self) -> tuple[str, str, str, str]:
-        """(시가, 고가, 저가, 종가). 선물이든 지수든 채워진 쪽을 돌려준다."""
+        """(시가, 고가, 저가, 종가). 선물·지수·종목 중 채워진 쪽을 돌려준다."""
         if self.futures_close.strip():
             return (self.futures_open, self.futures_high, self.futures_low, self.futures_close)
         if self.index_close.strip():
             return (self.index_open, self.index_high, self.index_low, self.index_close)
-        raise KisPayloadError("KIS bar has neither futures nor index prices")
+        if self.stock_close.strip():
+            return (self.stock_open, self.stock_high, self.stock_low, self.stock_close)
+        raise KisPayloadError("KIS bar has no futures, index, or stock prices")
 
 
 class KisChartHead(BaseModel):
@@ -760,6 +809,186 @@ def _count(value: str | None, field: str) -> int:
     if count < 0:
         raise KisPayloadError(f"KIS returned a negative {field}: {value!r}")
     return count
+
+
+class StockBarFetch(BaseModel):
+    """한 종목·한 거래일의 분봉 수집 결과."""
+
+    model_config = ConfigDict(frozen=True)
+
+    stock_code: str
+    business_date: date
+    bars: tuple[QuoteBar, ...]
+    call_count: int
+    started_at: AwareDatetime
+    completed_at: AwareDatetime
+
+
+def _stock_bar_rows(body: bytes) -> tuple[KisRawBar, ...]:
+    try:
+        payload = KisChartPayload.model_validate_json(body)
+    except ValidationError as error:
+        raise KisPayloadError("KIS response is not a valid chart payload") from error
+    if payload.rt_cd and payload.rt_cd != "0":
+        raise KisResultError(payload.msg_cd, payload.msg1.strip())
+    return payload.output2
+
+
+def fetch_stock_bars(
+    token: SecretStr,
+    app_key: SecretStr,
+    app_secret: SecretStr,
+    stock: DomesticStock,
+    business_date: date,
+    previous_close: Decimal,
+) -> StockBarFetch:
+    """한 종목의 하루치 정규장 1분봉을 받는다.
+
+    한 응답이 120봉이라 정규장 381봉을 덮으려면 커서를 뒤로 걸며 네 번 부른다. 다음 커서는
+    이번 응답에서 **그 거래일에 속한** 가장 이른 봉의 1분 전이다.
+
+    **응답에 전 거래일 봉이 섞여 온다.** 09:00 이전을 요청하면 직전 세션의 뒷부분이 딸려
+    온다(실측: 2026-08-14를 훑으면 2026-08-13의 13:42~15:32가 99봉 들어온다). 날짜로 거르지
+    않고 시각만 키로 쓰면 전날 값이 그날 봉을 덮어써서 하루 합이 누적 거래량과 어긋난다.
+
+    `previous_close`를 호출자가 넘긴다. 응답의 `output1`은 요청한 날짜와 무관하게 **지금
+    시세**를 담고 있어(실측: 2026-07-03을 요청해도 `acml_vol`이 오늘 값이다) 백필에서 쓰면
+    모든 봉에 오늘의 전일종가가 박힌다.
+
+    **마감 동시호가가 15:30 봉에 없는 날이 있다.** 보통은 하루 봉 거래량 합이 그날 누적
+    거래량과 0.05% 안에서 맞는데, 2026-08-13 005930은 15:19가 마지막 봉이고 동시호가가
+    15:32에 찍혀 31%가 빈다. 그 15:32 행은 같은 값(11,196,308주)이 다른 날짜 응답에도
+    나와서 믿을 수 없다. 그래서 정규장 밖은 그대로 버리고 **봉 합이 누적 거래량과 맞는다고
+    약속하지 않는다.** 지어낸 봉을 넣는 것보다 빈 쪽이 낫다.
+    """
+    started_at = datetime.now(UTC)
+    stamp = business_date.strftime("%Y%m%d")
+    cursor = SESSION_LAST_BAR
+    seen: dict[time, QuoteBar] = {}
+    calls = 0
+
+    while calls < MAX_STOCK_BAR_CALLS:
+        body, _, _ = send_get(
+            token,
+            app_key,
+            app_secret,
+            STOCK_CHART_PATH,
+            STOCK_CHART_TR_ID,
+            {
+                "FID_COND_MRKT_DIV_CODE": "J",  # J = KRX. NX(NXT)와 UN(통합)은 쓰지 않는다
+                "FID_INPUT_ISCD": stock.value,
+                "FID_INPUT_DATE_1": stamp,
+                "FID_INPUT_HOUR_1": cursor.strftime("%H%M%S"),
+                "FID_PW_DATA_INCU_YN": "Y",
+                "FID_FAKE_TICK_INCU_YN": "N",  # 허봉 제외
+            },
+        )
+        calls += 1
+        rows = _stock_bar_rows(body)
+        if not rows:
+            break
+
+        same_day = [row for row in rows if row.business_date.strip() == stamp]
+        if not same_day:
+            break
+
+        earliest = min(_bar_time(row) for row in same_day)
+        for row in same_day:
+            moment = _bar_time(row)
+            if not (SESSION_FIRST_BAR <= moment <= SESSION_LAST_BAR):
+                continue
+            seen[moment] = _stock_bar(row, business_date, moment, previous_close)
+
+        if earliest <= SESSION_FIRST_BAR:
+            break
+        cursor = (datetime.combine(business_date, earliest) - timedelta(minutes=1)).time()
+
+    bars = tuple(seen[moment] for moment in sorted(seen))
+    return StockBarFetch(
+        stock_code=stock.value,
+        business_date=business_date,
+        bars=bars,
+        call_count=calls,
+        started_at=started_at,
+        completed_at=datetime.now(UTC),
+    )
+
+
+def _bar_time(row: KisRawBar) -> time:
+    stamp = row.contract_hour.strip()
+    # 벽시계 시각만 온다. 날짜와 시간대는 `_stock_bar`가 붙인다.
+    if len(stamp) != 6 or not stamp.isdigit():
+        raise KisPayloadError(f"KIS returned an unparsable bar time: {stamp!r}")
+    try:
+        return time(int(stamp[:2]), int(stamp[2:4]), int(stamp[4:]))
+    except ValueError as error:
+        raise KisPayloadError(f"KIS returned an unparsable bar time: {stamp!r}") from error
+
+
+def _stock_bar(row: KisRawBar, business_date: date, moment: time, previous_close: Decimal) -> QuoteBar:
+    open_, high, low, close = row.prices()
+    volume = row.volume.strip()
+    try:
+        return QuoteBar(
+            bar_at=datetime.combine(business_date, moment, tzinfo=KST).astimezone(UTC),
+            open=_decimal(open_, "open"),
+            high=_decimal(high, "high"),
+            low=_decimal(low, "low"),
+            close=_decimal(close, "close"),
+            volume=int(volume) if volume else None,
+            previous_close=previous_close,
+        )
+    except ValidationError as error:
+        raise KisPayloadError("KIS returned an invalid stock bar") from error
+
+
+def store_stock_bars(connection: Connection, fetch: StockBarFetch) -> int:
+    """한 종목·한 거래일의 봉을 저장한다. 겹치는 봉은 갱신된다."""
+    with connection.cursor() as cursor:
+        cursor.execute(
+            SOURCE_RECORD_INSERT,
+            (
+                "api",
+                SOURCE,
+                STOCK_BARS_SOURCE_KEY,
+                fetch.started_at,
+                fetch.completed_at,
+                "succeeded",
+                len(fetch.bars),
+                None,
+                json.dumps(
+                    {
+                        "stock_code": fetch.stock_code,
+                        "business_date": fetch.business_date.isoformat(),
+                        "interval": "1m",
+                        "call_count": fetch.call_count,
+                    },
+                    ensure_ascii=False,
+                ),
+            ),
+        )
+        source_record_id = cursor.fetchone()[0]
+        execute_upserts(
+            cursor,
+            QUOTE_BAR_UPSERT,
+            [
+                (
+                    SOURCE,
+                    fetch.stock_code,
+                    bar.bar_at,
+                    bar.open,
+                    bar.high,
+                    bar.low,
+                    bar.close,
+                    bar.volume,
+                    bar.previous_close,
+                    None,  # 종목은 월물이 없다
+                    source_record_id,
+                )
+                for bar in fetch.bars
+            ],
+        )
+    return len(fetch.bars)
 
 
 def parse_market_movement(response: KisResponse, observed_at: datetime) -> MarketMovement:

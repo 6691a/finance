@@ -19,21 +19,26 @@ from modules.collectors.kis import (
     MAX_BARS_PER_REQUEST,
     MOVEMENT_INDEXES,
     QUOTE_BAR_UPSERT,
+    SESSION_FIRST_BAR,
+    SESSION_LAST_BAR,
     SOURCE_RECORD_INSERT,
     TOKEN_REFRESH_MARGIN,
     DomesticFuture,
     DomesticIndex,
+    DomesticStock,
     KisPayloadError,
     KisResponse,
     KisResultError,
     SymbolOutcome,
     access_token,
     expiry_date,
+    fetch_stock_bars,
     front_contract,
     parse_bars,
     parse_market_movement,
     store_bars,
     store_market_movement,
+    store_stock_bars,
 )
 
 KST = ZoneInfo("Asia/Seoul")
@@ -627,3 +632,175 @@ def test_one_index_failing_does_not_drop_the_other():
     assert stored == 1
     assert [row[0] for row in movement_upserts(connection.recorded_cursor)] == ["KOSPI"]
     assert [outcome.symbol for outcome in outcomes if outcome.error] == ["KOSDAQ"]
+
+
+# 2026-08-14 005930 실측을 줄인 것이다. 한 응답이 120봉이고 시각은 최신순으로 온다.
+STOCK_DATE = date(2026, 8, 14)
+TOKEN = SecretStr("token")
+APP_KEY = SecretStr("key")
+APP_SECRET = SecretStr("secret")
+
+
+def stock_row(hour: str, business_date: str = "20260814", volume: str = "1000", close: str = "274500") -> dict:
+    return {
+        "stck_bsop_date": business_date,
+        "stck_cntg_hour": hour,
+        "stck_oprc": close,
+        "stck_hgpr": close,
+        "stck_lwpr": close,
+        "stck_prpr": close,
+        "cntg_vol": volume,
+        "acml_tr_pbmn": "5874118816500",
+    }
+
+
+def stock_body(rows: list[dict]) -> bytes:
+    return json.dumps(
+        {
+            "rt_cd": "0",
+            "msg_cd": "MCA00000",
+            "msg1": "정상처리 되었습니다.",
+            # output1 은 조회한 날짜가 아니라 지금 시세다. 그래서 전일종가를 여기서 읽지 않는다.
+            "output1": {"hts_kor_isnm": "삼성전자", "stck_prdy_clpr": "268000", "acml_vol": "21669476"},
+            "output2": rows,
+        },
+        ensure_ascii=False,
+    ).encode()
+
+
+def fake_stock_send(pages: list[list[dict]]):
+    sent: list[dict] = []
+    remaining = list(pages)
+
+    def send(token, app_key, app_secret, path, tr_id, query, tr_cont=""):
+        sent.append({"path": path, "tr_id": tr_id, "query": dict(query)})
+        rows = remaining.pop(0) if remaining else []
+        return stock_body(rows), 200, {}
+
+    send.sent = sent  # type: ignore[attr-defined]
+    return send
+
+
+def test_stock_bars_walk_the_session_backwards(monkeypatch):
+    """한 응답이 120봉이라 정규장을 덮으려면 커서를 뒤로 걸어야 한다."""
+    send = fake_stock_send(
+        [
+            [stock_row("153000"), stock_row("120000")],
+            [stock_row("115900"), stock_row("090000")],
+        ]
+    )
+    monkeypatch.setattr(kis, "send_get", send)
+
+    fetch = fetch_stock_bars(TOKEN, APP_KEY, APP_SECRET, DomesticStock.SAMSUNG_ELECTRONICS, STOCK_DATE, Decimal(268000))
+
+    assert fetch.call_count == 2
+    assert [call["query"]["FID_INPUT_HOUR_1"] for call in send.sent] == ["153000", "115900"]
+    assert send.sent[0]["tr_id"] == "FHKST03010230"
+    # KRX 만 본다. NX(NXT)와 UN(통합)은 쓰지 않는다.
+    assert send.sent[0]["query"]["FID_COND_MRKT_DIV_CODE"] == "J"
+    # 저장은 오름차순이다.
+    assert [bar.bar_at.astimezone(KST).strftime("%H%M%S") for bar in fetch.bars] == [
+        "090000",
+        "115900",
+        "120000",
+        "153000",
+    ]
+
+
+def test_stock_bars_drop_the_previous_session(monkeypatch):
+    """09:00 이전을 요청하면 직전 세션의 뒷부분이 딸려 온다(실측 99봉).
+
+    시각만 키로 쓰면 전날 값이 그날 봉을 덮어써서 하루 합이 누적 거래량과 어긋난다.
+    """
+    send = fake_stock_send(
+        [
+            [
+                stock_row("090100", volume="500"),
+                stock_row("151900", business_date="20260813", volume="99999"),
+            ],
+            [stock_row("090000", volume="700")],
+        ]
+    )
+    monkeypatch.setattr(kis, "send_get", send)
+
+    fetch = fetch_stock_bars(TOKEN, APP_KEY, APP_SECRET, DomesticStock.SAMSUNG_ELECTRONICS, STOCK_DATE, Decimal(268000))
+
+    assert [bar.volume for bar in fetch.bars] == [700, 500]
+    assert all(bar.bar_at.astimezone(KST).date() == STOCK_DATE for bar in fetch.bars)
+
+
+def test_stock_bars_keep_only_the_regular_session(monkeypatch):
+    """15:32 같은 시간외 체결이 섞이면 한 심볼의 시계열에 성격이 다른 거래가 들어간다."""
+    send = fake_stock_send([[stock_row("153200", volume="11196308"), stock_row("153000"), stock_row("090000")]])
+    monkeypatch.setattr(kis, "send_get", send)
+
+    fetch = fetch_stock_bars(TOKEN, APP_KEY, APP_SECRET, DomesticStock.SAMSUNG_ELECTRONICS, STOCK_DATE, Decimal(268000))
+
+    hours = [bar.bar_at.astimezone(KST).time() for bar in fetch.bars]
+    assert hours == [SESSION_FIRST_BAR, SESSION_LAST_BAR]
+
+
+def test_stock_bars_stop_when_a_day_is_empty(monkeypatch):
+    """휴장일은 0봉으로 온다. 실패가 아니다."""
+    send = fake_stock_send([[]])
+    monkeypatch.setattr(kis, "send_get", send)
+
+    fetch = fetch_stock_bars(TOKEN, APP_KEY, APP_SECRET, DomesticStock.SAMSUNG_ELECTRONICS, STOCK_DATE, Decimal(268000))
+
+    assert fetch.bars == ()
+    assert fetch.call_count == 1
+
+
+def test_stock_bars_never_call_forever(monkeypatch):
+    """커서가 나아가지 않아도 호출이 무한히 늘지 않는다."""
+    send = fake_stock_send([[stock_row("153000")] for _ in range(20)])
+    monkeypatch.setattr(kis, "send_get", send)
+
+    fetch = fetch_stock_bars(TOKEN, APP_KEY, APP_SECRET, DomesticStock.SAMSUNG_ELECTRONICS, STOCK_DATE, Decimal(268000))
+
+    assert fetch.call_count == kis.MAX_STOCK_BAR_CALLS
+
+
+def test_stock_bars_carry_the_previous_close_given_by_the_caller(monkeypatch):
+    """응답의 output1 은 요청한 날짜와 무관하게 지금 시세다(실측).
+
+    그대로 쓰면 백필한 모든 봉에 오늘의 전일종가가 박힌다.
+    """
+    send = fake_stock_send([[stock_row("090000")]])
+    monkeypatch.setattr(kis, "send_get", send)
+
+    fetch = fetch_stock_bars(TOKEN, APP_KEY, APP_SECRET, DomesticStock.SAMSUNG_ELECTRONICS, STOCK_DATE, Decimal(111))
+
+    assert fetch.bars[0].previous_close == Decimal(111)
+
+
+def test_store_stock_bars_writes_the_stock_code_as_the_symbol(monkeypatch):
+    """봉과 수급을 한 화면에서 겹치려면 심볼이 종목코드여야 한다."""
+    send = fake_stock_send([[stock_row("090000"), stock_row("090100")]])
+    monkeypatch.setattr(kis, "send_get", send)
+    fetch = fetch_stock_bars(TOKEN, APP_KEY, APP_SECRET, DomesticStock.SAMSUNG_ELECTRONICS, STOCK_DATE, Decimal(268000))
+    connection = FakeConnection()
+
+    assert store_stock_bars(connection, fetch) == 2
+
+    rows = [args for statement, args in connection.recorded_cursor.calls if "INSERT INTO quote_bar" in statement]
+    assert [row[1] for row in rows] == ["005930", "005930"]
+    assert all(row[0] == "kis" for row in rows)
+    # 종목은 월물이 없다.
+    assert all(row[9] is None for row in rows)
+
+
+def test_store_stock_bars_records_the_call_count(monkeypatch):
+    """호출 수가 계보에 남아야 한 거래일에 몇 번 물어봤는지 나중에 읽을 수 있다."""
+    send = fake_stock_send([[stock_row("153000")], [stock_row("090000")]])
+    monkeypatch.setattr(kis, "send_get", send)
+    fetch = fetch_stock_bars(TOKEN, APP_KEY, APP_SECRET, DomesticStock.SAMSUNG_ELECTRONICS, STOCK_DATE, Decimal(268000))
+    connection = FakeConnection()
+    store_stock_bars(connection, fetch)
+
+    record = next(args for statement, args in connection.recorded_cursor.calls if "INSERT INTO source_record" in statement)
+    metadata = json.loads(record[-1])
+    assert record[2] == "stock_minute_bars"
+    assert metadata["business_date"] == "2026-08-14"
+    assert metadata["call_count"] == 2
+    assert metadata["interval"] == "1m"

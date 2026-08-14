@@ -4,8 +4,7 @@
 받는다. 추정은 하루 다섯 회차뿐이고 개인이 없지만, 확정값은 12개 분류가 전부 있고 외국인이
 등록·미등록으로 갈리며 대금 단위까지 확정돼 있다(백만원).
 
-수집 규칙은 `modules/collectors/kis_investor_flow.py`에 있고 설계 문서는
-`docs/kis-investor-flow.md`다.
+수집 규칙은 `modules/collectors/kis_investor_flow.py`에 있다.
 
 ## 한 번 부르면 30 거래일이 온다
 

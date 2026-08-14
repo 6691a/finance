@@ -2,7 +2,7 @@
 
 저장 대상은 `market_session` 테이블이다. 정의의 원본은 백엔드의 `apps/models/market.py`이며
 여기 SQL의 컬럼 이름은 `tests/collectors/test_kis_market_calendar.py`가 그 모델 metadata와
-대조한다. 설계 문서는 `docs/kis-market-session-calendar.md`다.
+대조한다.
 
 토큰 발급과 HTTP는 `kis.py`가 이미 갖고 있어 그대로 쓴다. 여기 있는 것은 이 두 조회에만
 있는 규칙이다.

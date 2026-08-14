@@ -1,7 +1,7 @@
 {
   "uid": "dart-disclosure",
   "title": "공시·실적 (DART)",
-  "description": "삼성전자·SK하이닉스의 DART 공시와 실적을 본다. 다른 대시보드가 전부 가격·금리인 것과 달리 여기는 이벤트 축이다. 실적 발표일을 모르면 그 시각의 급변을 시장 신호로 오독한다. disclosure_event 와 earnings_fact 를 읽으며 어느 DB를 볼지는 상단 '데이터소스' 드롭다운이 정한다. uid 는 바꾸지 않는다. 프로비저닝된 대시보드의 uid 를 바꾸면 Grafana 가 같은 파일로 두 번째 대시보드를 만들고 그 뒤로 갱신이 uid 충돌로 막힌다. 수집 설계는 docs/dart-disclosure-earnings.md 에 있다.",
+  "description": "삼성전자·SK하이닉스의 DART 공시와 실적을 본다. 다른 대시보드가 전부 가격·금리인 것과 달리 여기는 이벤트 축이다. 실적 발표일을 모르면 그 시각의 급변을 시장 신호로 오독한다. disclosure_event 와 earnings_fact 를 읽으며 어느 DB를 볼지는 상단 '데이터소스' 드롭다운이 정한다. uid 는 바꾸지 않는다. 프로비저닝된 대시보드의 uid 를 바꾸면 Grafana 가 같은 파일로 두 번째 대시보드를 만들고 그 뒤로 갱신이 uid 충돌로 막힌다.",
   "tags": [
     "dart",
     "disclosure",

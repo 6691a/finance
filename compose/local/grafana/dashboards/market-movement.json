@@ -1,7 +1,7 @@
 {
   "uid": "market-movement",
     "title": "상승·보합·하락 종목 분포",
-  "description": "코스피·코스닥에서 오른 종목이 몇이고 내린 종목이 몇인지 본다. **지수만 보면 소수 대형주가 끌어올린 장과 시장 전반이 오른 장을 구분할 수 없다.** 그 구분이 이 화면의 존재 이유다. market_movement_snapshot 을 읽고 지수 값은 quote_bar 에서 가져와 겹친다. 두 테이블의 symbol 값이 같아서 대응표 없이 조인된다. uid 는 바꾸지 않는다. 프로비저닝된 대시보드의 uid 를 바꾸면 Grafana 가 같은 파일로 두 번째 대시보드를 만들고 그 뒤로 갱신이 uid 충돌로 막힌다. 수집 설계는 docs/kis-market-movement-distribution.md 에 있다.",
+  "description": "코스피·코스닥에서 오른 종목이 몇이고 내린 종목이 몇인지 본다. **지수만 보면 소수 대형주가 끌어올린 장과 시장 전반이 오른 장을 구분할 수 없다.** 그 구분이 이 화면의 존재 이유다. market_movement_snapshot 을 읽고 지수 값은 quote_bar 에서 가져와 겹친다. 두 테이블의 symbol 값이 같아서 대응표 없이 조인된다. uid 는 바꾸지 않는다. 프로비저닝된 대시보드의 uid 를 바꾸면 Grafana 가 같은 파일로 두 번째 대시보드를 만들고 그 뒤로 갱신이 uid 충돌로 막힌다.",
   "tags": [
     "kis",
     "market",

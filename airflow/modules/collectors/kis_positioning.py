@@ -10,7 +10,7 @@
 
 저장 대상은 `krx_*` 다섯 테이블이다. 정의의 원본은 백엔드의 `apps/models/market.py`이며
 여기 SQL의 컬럼 이름은 `tests/collectors/test_kis_positioning.py`가 그 모델 metadata와
-대조한다. 설계 문서는 `docs/kis-market-positioning-daily.md`다.
+대조한다.
 
 아래 계약은 2026-08-13에 운영 키로 확인했다.
 

@@ -89,8 +89,6 @@ class MarketSession(EntityBase):
     해외결제일자조회는 미국 행의 결제일만 채우고 판정에는 손대지 않는다. 그 API는 휴장한
     나라의 행을 아예 주지 않고 미래 날짜에는 0건으로 답해서(실측), 그것만으로는 미국 휴장일
     행이 영원히 생기지 않고 오늘 이후를 미리 알 수도 없기 때문이다.
-
-    설계 문서는 `docs/kis-market-session-calendar.md`다.
     """
 
     __tablename__ = "market_session"
@@ -306,8 +304,6 @@ class DisclosureEvent(EntityBase):
     50건뿐이라 실측에서 1시간 35분치만 덮었고, 우리가 저장한 공시와 겹치는 접수번호가
     하나도 없었다. 2분 폴링의 `detected_at`이 이미 그만한 해상도를 주므로 호출 하나와
     계보 행 하나를 매 폴링에 더할 이유가 없다.
-
-    설계 문서는 `docs/dart-disclosure-earnings.md`다.
     """
 
     __tablename__ = "disclosure_event"
@@ -591,8 +587,6 @@ class MarketMovementSnapshot(EntityBase):
     상·하한가가 이중 계산된다. 그래도 다섯 값을 날것으로 보존하고 비율이나 3분류를 저장하지
     않는다. 합계가 전 종목 수라는 제약도 걸지 않는다. 거래정지로 셋 어디에도 안 들어가는
     종목이 생길 수 있고, 그때 제약이 수집을 막는 것이 값을 잃는 것보다 나쁘다.
-
-    설계 문서는 `docs/kis-market-movement-distribution.md`다.
     """
 
     __tablename__ = "market_movement_snapshot"
@@ -675,8 +669,6 @@ class KrxStockCreditBalanceDaily(EntityBase):
     저장하면 사용자가 보는 추이가 실제 거래일에서 이틀씩 밀린다.
 
     금액과 비율은 KIS 표기를 그대로 둔다. 수집기에서 억원이나 소수 비율로 바꾸지 않는다.
-
-    설계 문서는 `docs/kis-market-positioning-daily.md`다.
     """
 
     __tablename__ = "krx_stock_credit_balance_daily"
@@ -1085,8 +1077,6 @@ class KrxMarketSecuritiesLendingDaily(EntityBase):
 
     **합계는 저장하지 않는다.** 조회 분류 `5`가 전체를 주는데 5영업일 내내 코스피와 코스닥의
     정확한 합이었다. 유도되는 값을 한 벌 더 두면 둘이 어긋날 때 어느 쪽이 맞는지 알 수 없다.
-
-    설계 문서는 `docs/kis-market-positioning-daily.md`다.
     """
 
     __tablename__ = "krx_market_securities_lending_daily"
@@ -1164,8 +1154,6 @@ class StockInvestorEstimateSnapshot(EntityBase):
 
     **슬롯 코드를 시각으로 환산하지 않는다.** 공식 예제가 갱신 시각이 변동될 수 있다고
     밝히고 있어, 우리가 표를 만들면 그 표가 틀리는 날 조용히 어긋난다.
-
-    설계 문서는 `docs/kis-investor-flow.md`다.
     """
 
     __tablename__ = "stock_investor_estimate_snapshot"

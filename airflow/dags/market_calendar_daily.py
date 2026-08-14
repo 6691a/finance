@@ -15,8 +15,6 @@
 그래서 그것만으로는 미국 휴장일 행이 영원히 생기지 않고 오늘 이후를 미리 알 수도 없다.
 NYSE 페이지는 3년치를 미리 고시한다.
 
-설계 문서는 `docs/kis-market-session-calendar.md`다.
-
 ## 태스크
 
 - `domestic_holiday` — 독립 실행. 오늘부터 앞으로 1년치 KRX 거래일을 저장한다.

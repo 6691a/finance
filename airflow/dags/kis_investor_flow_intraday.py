@@ -4,8 +4,7 @@
 파나"**다. 지수가 오르는데 외국인이 팔고 개인이 받는 장과, 외국인이 사는 장은 다음 날이
 다르다.
 
-수집 규칙은 `modules/collectors/kis_investor_flow.py`에 있고 설계 문서는
-`docs/kis-investor-flow.md`다.
+수집 규칙은 `modules/collectors/kis_investor_flow.py`에 있다.
 
 ## 두 조회의 주기가 다르다
 

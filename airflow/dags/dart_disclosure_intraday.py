@@ -3,8 +3,7 @@
 지금까지의 수집이 전부 가격과 금리였다. 이 DAG는 **이벤트 축**을 채운다. 실적 발표나 공시를
 모르면 그 시각의 급변을 시장 신호로 오독한다.
 
-결과는 `disclosure_event`와 `earnings_fact`에 쌓인다. 설계 문서는
-`docs/dart-disclosure-earnings.md`다.
+결과는 `disclosure_event`와 `earnings_fact`에 쌓인다.
 
 ## 태스크
 

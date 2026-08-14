@@ -10,10 +10,8 @@
 `kis_positioning.py`와 같은 이유로 모듈을 나눴다.
 
 저장 대상은 `stock_investor_estimate_snapshot`, `market_investor_flow_snapshot`,
-`stock_investor_trade_daily`다. 정의의
-원본은 백엔드의 `apps/models/market.py`이며 여기 SQL의 컬럼 이름은
-`tests/collectors/test_kis_investor_flow.py`가 그 모델 metadata와 대조한다. 설계 문서는
-`docs/kis-investor-flow.md`다.
+`stock_investor_trade_daily`다. 정의의 원본은 백엔드의 `apps/models/market.py`이며 여기 SQL의
+컬럼 이름은 `tests/collectors/test_kis_investor_flow.py`가 그 모델 metadata와 대조한다.
 
 아래 계약은 2026-08-14 장중에 운영 키로 확인했다.
 

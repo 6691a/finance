@@ -8,8 +8,7 @@
 불러도 판단력이 생기지 않고 오히려 미완성 당일 값을 확정치처럼 보이게 한다. 그래서 다음
 영업일 아침에 한 번만 돈다.
 
-수집 규칙은 `modules/collectors/kis_positioning.py`에 있고 설계 문서는
-`docs/kis-market-positioning-daily.md`다.
+수집 규칙은 `modules/collectors/kis_positioning.py`에 있다.
 
 ## 다섯 호출이 각자 다른 날짜 규칙을 쓴다
 

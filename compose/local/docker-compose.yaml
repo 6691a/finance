@@ -1,6 +1,7 @@
 services:
   db:
-    image: pgvector/pgvector:pg17
+    image: paradedb/paradedb:0.25.2-pg17
+    command: postgres -c shared_preload_libraries=pg_search
     environment:
       POSTGRES_DB: news2
       POSTGRES_USER: news2

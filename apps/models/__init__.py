@@ -1,3 +1,4 @@
+from apps.models.content import Document, DocumentIndicator, DocumentInstrument, DocumentSource
 from apps.models.finance import ExchangeRate
 from apps.models.market import (
     DisclosureEvent,
@@ -13,6 +14,7 @@ from apps.models.market import (
     MarketMovementSnapshot,
     MarketSession,
     QuoteBar,
+    QuoteDaily,
     StockInvestorEstimateSnapshot,
     StockInvestorTradeDaily,
 )
@@ -21,6 +23,10 @@ from apps.models.reference import IndicatorSeries, Instrument, QuoteSymbol
 
 __all__ = [
     "DisclosureEvent",
+    "Document",
+    "DocumentIndicator",
+    "DocumentInstrument",
+    "DocumentSource",
     "EarningsFact",
     "ExchangeRate",
     "IndicatorObservation",
@@ -36,6 +42,7 @@ __all__ = [
     "MarketMovementSnapshot",
     "MarketSession",
     "QuoteBar",
+    "QuoteDaily",
     "QuoteSymbol",
     "SourceRecord",
     "StockInvestorEstimateSnapshot",

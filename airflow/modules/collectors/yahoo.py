@@ -40,6 +40,7 @@ from decimal import Decimal, InvalidOperation
 from enum import StrEnum
 from typing import Any, Protocol, Self
 from urllib.parse import quote, urlencode
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from curl_cffi.curl import CurlError
 from pydantic import (
@@ -143,6 +144,11 @@ class QuoteSymbol(StrEnum):
     USDJPY = ("USDJPY", "JPY=X", "엔/달러")
     DXY = ("DXY", "DX-Y.NYB", "달러인덱스")
     # 역외 위안. 시장 스트레스를 본토(CNY)보다 빨리 반영한다.
+    #
+    # **이 심볼만 일봉 과거가 없다.** `interval=1d`를 `range=max`로 요청해도 오늘 하루만
+    # 온다(실측 2026-08-15). 분봉은 정상이라 장중 감시에는 지장이 없지만, 상관 분석의
+    # 표본은 운영 시작일부터만 쌓인다. 본토 `CNY=X`는 10년치가 오므로 과거가 꼭 필요하면
+    # 그쪽을 별도 심볼로 추가한다. 역외와 본토는 값의 뜻이 달라 대체하지 않는다.
     USDCNH = ("USDCNH", "CNH=X", "위안/달러(역외)")
     JPYKRW = ("JPYKRW", "JPYKRW=X", "원/엔")
     # 중화권·소형주 지수. 한국 장중과 겹치는 아시아 심리 지표를 넓힌다.
@@ -288,6 +294,9 @@ class YahooMeta(BaseModel):
     # 직전 정규장 종가. 알림이 쓰는 변동률의 분모다. 이름이 둘인데 1분봉 응답에는
     # `chartPreviousClose`가 항상 있고 `previousClose`는 상품에 따라 빠진다.
     chart_previous_close: float = Field(alias="chartPreviousClose")
+    # 그 심볼의 기준 시장 시간대(IANA). 일봉을 거래일로 바꿀 때 쓴다. 1분봉 경로는 쓰지 않아서
+    # 선택 필드로 둔다. 값이 없을 때 실패시키는 것은 `parse_daily_bars`의 몫이다.
+    exchange_timezone_name: str | None = Field(default=None, alias="exchangeTimezoneName")
 
 
 class YahooChartResult(BaseModel):
@@ -443,10 +452,15 @@ def build_url(symbol: QuoteSymbol, window: tuple[datetime, datetime] | None = No
 
 def fetch_bars(symbol: QuoteSymbol, window: tuple[datetime, datetime] | None = None) -> YahooResponse:
     """한 심볼의 1분봉 응답을 받아 온다. 파싱은 하지 않는다."""
+    return _request(symbol, build_url(symbol, window))
+
+
+def _request(symbol: QuoteSymbol, url: str) -> YahooResponse:
+    """chart 엔드포인트를 한 번 부른다. 1분봉과 일봉이 같은 엔드포인트를 쓴다."""
     started_at = datetime.now(UTC)
     try:
         response = Fetcher.get(
-            build_url(symbol, window),
+            url,
             impersonate=IMPERSONATE,
             timeout=REQUEST_TIMEOUT_SECONDS,
         )
@@ -678,6 +692,247 @@ def store_bars(
                     bar.previous_close,
                     # Yahoo 는 연속 심볼(`ES=F`)을 주므로 월물 코드가 없다. KIS 선물만 채운다.
                     None,
+                    source_record_id,
+                )
+                for response, bars in parsed
+                for bar in bars
+            ],
+        )
+    return bar_count, tuple(outcomes)
+
+
+# ---------------------------------------------------------------------------
+# 일봉
+#
+# 1분봉과 같은 엔드포인트를 `interval=1d`로 부른다. 목적이 달라서 저장 테이블과 계보 키를
+# 나눈다. 1분봉은 장중 알림용이고 제공처가 30일치만 주는 반면, 일봉은 상관 분석용이고
+# 심볼당 한 번에 십수 년이 온다(실측: `range=10y`에 ^SOX 2,514행, USDKRW=X 2,611행).
+# ---------------------------------------------------------------------------
+
+DAILY_SOURCE_KEY = "daily_1d"
+DAILY_INTERVAL = "1d"
+
+# 한 번에 받을 기간. 심볼당 요청 하나로 끝나므로 짧게 잡을 이유가 없다.
+DAILY_RANGE = "10y"
+
+# Yahoo가 받는 기간 표기. 오타를 요청 전에 막는다. 잘못된 값에도 200에 빈 결과가 오므로
+# 응답만으로는 오타와 휴장을 가를 수 없다.
+DAILY_RANGES: frozenset[str] = frozenset({"1y", "2y", "5y", "10y", "max"})
+
+
+class DailyBar(BaseModel):
+    """정규화한 일봉 1건."""
+
+    model_config = ConfigDict(frozen=True)
+
+    business_date: date
+    open: Decimal
+    high: Decimal
+    low: Decimal
+    close: Decimal
+    volume: int | None
+
+    @field_validator("open", "high", "low", "close")
+    @classmethod
+    def require_finite(cls, value: Decimal) -> Decimal:
+        if not value.is_finite():
+            raise ValueError("quote value must be a finite number")
+        return value
+
+
+class ParsedDailyBars(BaseModel):
+    """한 심볼의 일봉 파싱 결과."""
+
+    model_config = ConfigDict(frozen=True)
+
+    bars: tuple[DailyBar, ...]
+    timezone_name: str
+
+
+def build_daily_url(symbol: QuoteSymbol, range_: str = DAILY_RANGE) -> str:
+    """일봉 호출 URL. 비밀이 없으므로 로그와 예외 메시지에 남겨도 된다."""
+    if range_ not in DAILY_RANGES:
+        raise ValueError(f"range must be one of {sorted(DAILY_RANGES)}, got {range_!r}")
+    base = YAHOO_CHART_URL.format(symbol=quote(symbol.yahoo_symbol, safe=""))
+    return f"{base}?{urlencode({'interval': DAILY_INTERVAL, 'range': range_})}"
+
+
+def fetch_daily_bars(symbol: QuoteSymbol, range_: str = DAILY_RANGE) -> YahooResponse:
+    """한 심볼의 일봉 응답을 받아 온다. 파싱은 하지 않는다."""
+    return _request(symbol, build_daily_url(symbol, range_))
+
+
+def parse_daily_bars(body: bytes) -> ParsedDailyBars:
+    """유효한 일봉을 뽑는다.
+
+    **거래일은 UTC 날짜가 아니다.** 응답의 `timestamp`는 그 시장이 문을 연 순간이고, 어느
+    달력 날짜에 속하는지는 시장의 시간대가 정한다. USDKRW의 2016-08-14T23:00Z 봉은 런던
+    기준으로 8월 15일이다. UTC 날짜로 저장하면 하루씩 밀린다.
+
+    **고정 offset(`gmtoffset`)을 쓰지 않고 IANA 시간대를 쓴다.** 응답이 주는 offset은 응답을
+    받은 시점의 값이라 10년치에 그대로 적용하면 서머타임 기간이 반대로 어긋난다. 런던이
+    그렇다. 겨울 봉은 00:00Z, 여름 봉은 전날 23:00Z에 오는데 한쪽 offset을 전부에 적용하면
+    절반이 하루 밀린다.
+
+    마지막 봉은 아직 장이 열려 있으면 미완성이다. 그대로 저장한다. 멱등 키가
+    `(provider, symbol, business_date)`라 다음 실행이 확정값으로 덮는다.
+
+    값이 `None`이거나 `NaN`인 날은 건너뛴다. 거래가 없던 날이다.
+    """
+    try:
+        payload = YahooChartPayload.model_validate_json(body)
+    except ValidationError as error:
+        raise YahooPayloadError(f"Yahoo returned an unexpected chart payload: {error}") from None
+
+    if payload.chart.result is None or not payload.chart.result:
+        detail = payload.chart.error
+        reason = f"{detail.code}: {detail.description}" if detail else "no result"
+        raise YahooPayloadError(f"Yahoo returned no chart result ({reason})")
+
+    result = payload.chart.result[0]
+    if not result.timestamp:
+        raise YahooPayloadError("Yahoo returned a chart result without timestamps")
+
+    timezone_name = result.meta.exchange_timezone_name
+    if not timezone_name:
+        # 시간대가 없으면 봉을 달력 날짜에 놓을 수 없다. 추측해서 저장하면 하루씩 밀린 값이
+        # 조용히 쌓인다.
+        raise YahooPayloadError("Yahoo returned a chart result without an exchange timezone")
+    try:
+        market_zone = ZoneInfo(timezone_name)
+    except (ZoneInfoNotFoundError, ValueError) as error:
+        raise YahooPayloadError(f"Yahoo returned an unknown exchange timezone: {timezone_name!r}") from error
+
+    arrays = result.indicators.quote[0]
+
+    # 봉은 위치로 읽는다. 배열 길이가 어긋나면 값이 조용히 옆 칸으로 밀린다. 1분봉 경로와
+    # 같은 검사다.
+    expected = len(result.timestamp)
+    lengths = {
+        "open": len(arrays.open),
+        "high": len(arrays.high),
+        "low": len(arrays.low),
+        "close": len(arrays.close),
+    }
+    mismatched = {name: length for name, length in lengths.items() if length != expected}
+    if mismatched:
+        raise YahooPayloadError(f"Yahoo quote arrays do not line up with {expected} timestamps: {mismatched}")
+    if arrays.volume and len(arrays.volume) != expected:
+        raise YahooPayloadError(f"Yahoo volume array does not line up with {expected} timestamps: {len(arrays.volume)}")
+
+    bars: list[DailyBar] = []
+    for index, epoch in enumerate(result.timestamp):
+        values = (arrays.open[index], arrays.high[index], arrays.low[index], arrays.close[index])
+        if any(value is None or math.isnan(value) for value in values):
+            # 거래가 없던 날. 결측이지 오류가 아니다.
+            continue
+
+        raw_volume = arrays.volume[index] if arrays.volume else None
+        try:
+            bar = DailyBar(
+                business_date=datetime.fromtimestamp(epoch, UTC).astimezone(market_zone).date(),
+                open=_decimal(values[0]),
+                high=_decimal(values[1]),
+                low=_decimal(values[2]),
+                close=_decimal(values[3]),
+                volume=None if raw_volume is None or math.isnan(raw_volume) else int(raw_volume),
+            )
+        except ValidationError as error:
+            raise YahooPayloadError(f"Yahoo returned an invalid daily bar for {result.meta.symbol}") from error
+        bars.append(bar)
+
+    if not bars:
+        # 봉 배열은 있는데 값이 전부 결측이다. 정상 응답으로 볼 수 없다.
+        raise YahooPayloadError(f"Yahoo returned no usable daily bars for {result.meta.symbol}")
+
+    return ParsedDailyBars(bars=tuple(bars), timezone_name=timezone_name)
+
+
+QUOTE_DAILY_UPSERT = read_sql("postgres", "quote_daily", "upsert.sql")
+
+
+def store_daily_bars(
+    connection: Connection,
+    responses: Sequence[YahooResponse],
+    range_: str = DAILY_RANGE,
+    failures: Sequence[SymbolOutcome] = (),
+) -> tuple[int, tuple[SymbolOutcome, ...]]:
+    """일봉 수집 1회분을 저장하고 (저장한 봉 수, 심볼별 결과)를 돌려준다.
+
+    `store_bars`와 같은 규칙을 따른다. 파싱을 먼저 끝내 형식 오류인 심볼은 아무 것도 쓰지
+    않고, 심볼 하나가 깨져도 나머지는 저장하며, 0건이어도 `source_record`를 남긴다.
+    계보 레코드는 수집 1회에 1건이고 `source_key`가 `daily_1d`라 1분봉 수집과 섞이지 않는다.
+    """
+    started_at = min((response.started_at for response in responses), default=datetime.now(UTC))
+    completed_at = max((response.completed_at for response in responses), default=started_at)
+
+    parsed: list[tuple[YahooResponse, tuple[DailyBar, ...]]] = []
+    outcomes: list[SymbolOutcome] = list(failures)
+    for response in responses:
+        try:
+            result = parse_daily_bars(response.body)
+        except YahooPayloadError as error:
+            outcomes.append(
+                SymbolOutcome(
+                    symbol=response.symbol.value,
+                    yahoo_symbol=response.symbol.yahoo_symbol,
+                    status=response.status,
+                    error=str(error),
+                )
+            )
+            continue
+
+        parsed.append((response, result.bars))
+        outcomes.append(
+            SymbolOutcome(
+                symbol=response.symbol.value,
+                yahoo_symbol=response.symbol.yahoo_symbol,
+                status=response.status,
+                bar_count=len(result.bars),
+                latest_bar_at=result.bars[-1].business_date.isoformat() if result.bars else None,
+            )
+        )
+
+    bar_count = sum(len(bars) for _, bars in parsed)
+    metadata = json.dumps(
+        {
+            "interval": DAILY_INTERVAL,
+            "range": range_,
+            "symbols": [outcome.model_dump() for outcome in outcomes],
+        },
+        ensure_ascii=False,
+    )
+
+    with connection.cursor() as cursor:
+        cursor.execute(
+            SOURCE_RECORD_INSERT,
+            (
+                "api",
+                SOURCE,
+                DAILY_SOURCE_KEY,
+                started_at,
+                completed_at,
+                "succeeded" if parsed else "failed",
+                bar_count,
+                # 원본은 남기지 않는다. 심볼당 10년치가 수백 KB다.
+                None,
+                metadata,
+            ),
+        )
+        source_record_id = cursor.fetchone()[0]
+        execute_upserts(
+            cursor,
+            QUOTE_DAILY_UPSERT,
+            [
+                (
+                    SOURCE,
+                    response.symbol.value,
+                    bar.business_date,
+                    bar.open,
+                    bar.high,
+                    bar.low,
+                    bar.close,
+                    bar.volume,
                     source_record_id,
                 )
                 for response, bars in parsed

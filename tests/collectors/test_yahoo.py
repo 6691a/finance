@@ -1,6 +1,6 @@
 import json
 import re
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 from typing import Self
 
@@ -8,21 +8,28 @@ import pytest
 from sqlalchemy import Table
 
 from apps.models.market import QuoteBar as QuoteBarModel
+from apps.models.market import QuoteDaily as QuoteDailyModel
 from apps.models.raw import SourceRecord
 from modules.collectors.yahoo import (
     BAR_RETENTION_DAYS,
+    DAILY_RANGE,
+    DAILY_SOURCE_KEY,
     MAX_BACKFILL_DAYS,
     QUOTE_BAR_UPSERT,
+    QUOTE_DAILY_UPSERT,
     SOURCE_RECORD_INSERT,
     QuoteSymbol,
     SymbolOutcome,
     YahooPayloadError,
     YahooResponse,
     backfill_windows,
+    build_daily_url,
     build_url,
     parse_bars,
+    parse_daily_bars,
     resolve_backfill_period,
     store_bars,
+    store_daily_bars,
 )
 
 SOURCE_RECORD_ID = 1
@@ -544,3 +551,199 @@ def test_backfill_stops_before_yahoo_stops_keeping_bars():
     too_old = (datetime.now(UTC) - timedelta(days=BAR_RETENTION_DAYS + 1)).date()
     with pytest.raises(ValueError, match=str(BAR_RETENTION_DAYS)):
         resolve_backfill_period(period(str(too_old), str(datetime.now(UTC).date())))
+
+
+# ---------------------------------------------------------------------------
+# 일봉
+# ---------------------------------------------------------------------------
+
+# 런던 서머타임과 표준시를 각각 대표하는 봉. 같은 시간대에서도 UTC 날짜와 거래일이
+# 어긋나는 쪽과 맞는 쪽이 하나씩 있어야 offset 고정 계산의 오류가 드러난다.
+LONDON_SUMMER_EPOCH = int(datetime(2026, 7, 14, 23, 0, tzinfo=UTC).timestamp())
+LONDON_WINTER_EPOCH = int(datetime(2026, 1, 14, 0, 0, tzinfo=UTC).timestamp())
+
+
+def daily_chart_payload(
+    timestamps: list[int] | None = None,
+    opens: list[float | None] | None = None,
+    highs: list[float | None] | None = None,
+    lows: list[float | None] | None = None,
+    closes: list[float | None] | None = None,
+    volumes: list[float | None] | None = None,
+    symbol: str = "KRW=X",
+    timezone_name: str | None = "Europe/London",
+) -> bytes:
+    """`interval=1d` 응답 본문. 1분봉 픽스처와 달리 `exchangeTimezoneName`이 들어간다."""
+    timestamps = timestamps if timestamps is not None else [LONDON_WINTER_EPOCH, LONDON_SUMMER_EPOCH]
+    size = len(timestamps)
+    quote = {
+        "open": opens if opens is not None else [101.0] * size,
+        "high": highs if highs is not None else [102.0] * size,
+        "low": lows if lows is not None else [100.5] * size,
+        "close": closes if closes is not None else [101.5] * size,
+    }
+    if volumes is not None:
+        quote["volume"] = volumes
+    meta: dict[str, object] = {"symbol": symbol, "chartPreviousClose": 100.0, "currency": "USD"}
+    if timezone_name is not None:
+        meta["exchangeTimezoneName"] = timezone_name
+        # 응답이 실제로 함께 주는 값이다. 파서가 이걸 쓰지 않는다는 것을 픽스처로 못 박는다.
+        meta["gmtoffset"] = 0
+    return json.dumps(
+        {
+            "chart": {
+                "result": [{"meta": meta, "timestamp": timestamps, "indicators": {"quote": [quote]}}],
+                "error": None,
+            }
+        }
+    ).encode("utf-8")
+
+
+def daily_response_for(symbol: QuoteSymbol = QuoteSymbol.USDKRW, body: bytes | None = None) -> YahooResponse:
+    return YahooResponse(
+        symbol=symbol,
+        body=body if body is not None else daily_chart_payload(),
+        status=200,
+        started_at=STARTED_AT,
+        completed_at=COMPLETED_AT,
+    )
+
+
+def test_quote_daily_upsert_matches_the_model_and_its_natural_key():
+    table = QuoteDailyModel.__table__
+    columns = inserted_columns(QUOTE_DAILY_UPSERT)
+
+    assert set(columns) <= {column.name for column in table.columns}
+    assert required_columns(table) <= set(columns)
+    assert placeholder_count(QUOTE_DAILY_UPSERT) == len(columns)
+
+    natural_key = next(
+        tuple(column.name for column in constraint.columns)
+        for constraint in table.constraints
+        if constraint.name == "uq_quote_daily_natural_key"
+    )
+    assert f"ON CONFLICT ({', '.join(natural_key)}) DO UPDATE" in QUOTE_DAILY_UPSERT
+
+
+def test_build_daily_url_requests_daily_bars_and_escapes_the_symbol():
+    url = build_daily_url(QuoteSymbol.SOX)
+
+    assert "%5ESOX" in url
+    assert "interval=1d" in url
+    assert f"range={DAILY_RANGE}" in url
+
+
+def test_build_daily_url_rejects_a_range_yahoo_does_not_take():
+    # 잘못된 range에도 Yahoo는 200에 빈 결과를 준다. 요청 전에 막지 않으면 휴장과 구분되지 않는다.
+    with pytest.raises(ValueError, match="range must be one of"):
+        build_daily_url(QuoteSymbol.SOX, "10년")
+
+
+def test_parse_daily_places_bars_on_the_market_calendar_day():
+    # 응답의 timestamp는 시장이 문을 연 순간이다. 어느 날짜인지는 시장의 시간대가 정한다.
+    # 런던 여름 봉(23:00Z)은 다음 날이고 겨울 봉(00:00Z)은 같은 날이다. 고정 offset을 쓰면
+    # 둘 중 하나가 반드시 하루 밀린다.
+    parsed = parse_daily_bars(daily_chart_payload())
+
+    assert [bar.business_date for bar in parsed.bars] == [date(2026, 1, 14), date(2026, 7, 15)]
+    assert parsed.timezone_name == "Europe/London"
+
+
+def test_parse_daily_uses_the_exchange_timezone_not_utc():
+    # 뉴욕 개장은 13:30Z(서머)라 UTC 날짜와 같지만, 시간대가 바뀌면 결과도 바뀌어야 한다.
+    epoch = int(datetime(2026, 8, 14, 13, 30, tzinfo=UTC).timestamp())
+
+    in_new_york = parse_daily_bars(daily_chart_payload([epoch], timezone_name="America/New_York"))
+    in_seoul = parse_daily_bars(daily_chart_payload([epoch], timezone_name="Asia/Seoul"))
+
+    assert in_new_york.bars[0].business_date == date(2026, 8, 14)
+    assert in_seoul.bars[0].business_date == date(2026, 8, 14)
+    # 서울 자정 직전 봉이면 두 시간대의 날짜가 갈린다.
+    late = int(datetime(2026, 8, 14, 20, 0, tzinfo=UTC).timestamp())
+    assert parse_daily_bars(daily_chart_payload([late], timezone_name="Asia/Seoul")).bars[0].business_date == date(
+        2026, 8, 15
+    )
+
+
+def test_parse_daily_rejects_a_response_without_an_exchange_timezone():
+    # 시간대가 없으면 봉을 달력 날짜에 놓을 수 없다. 추측해서 저장하면 하루씩 밀린 값이 쌓인다.
+    with pytest.raises(YahooPayloadError, match="exchange timezone"):
+        parse_daily_bars(daily_chart_payload(timezone_name=None))
+
+
+def test_parse_daily_rejects_an_unknown_exchange_timezone():
+    with pytest.raises(YahooPayloadError, match="unknown exchange timezone"):
+        parse_daily_bars(daily_chart_payload(timezone_name="Mars/Olympus"))
+
+
+def test_parse_daily_skips_days_without_trades():
+    body = daily_chart_payload(closes=[101.5, None], opens=[101.0, None])
+
+    parsed = parse_daily_bars(body)
+
+    assert [bar.business_date for bar in parsed.bars] == [date(2026, 1, 14)]
+
+
+def test_parse_daily_rejects_arrays_that_do_not_line_up_with_the_timestamps():
+    body = daily_chart_payload(closes=[101.5])
+
+    with pytest.raises(YahooPayloadError, match="do not line up"):
+        parse_daily_bars(body)
+
+
+def test_parse_daily_rejects_a_chart_whose_values_are_all_missing():
+    body = daily_chart_payload(opens=[None, None], highs=[None, None], lows=[None, None], closes=[None, None])
+
+    with pytest.raises(YahooPayloadError, match="no usable daily bars"):
+        parse_daily_bars(body)
+
+
+def test_store_daily_writes_one_source_record_per_run():
+    connection = FakeConnection()
+
+    bar_count, outcomes = store_daily_bars(connection, [daily_response_for(), daily_response_for(QuoteSymbol.SOX)])
+
+    records = [
+        parameters
+        for statement, parameters in connection.recorded_cursor.calls
+        if "INSERT INTO source_record" in statement
+    ]
+    assert len(records) == 1
+    source_type, source, source_key, _, _, status, record_count, payload, metadata = records[0]
+    assert (source_type, source, source_key) == ("api", "yahoo", DAILY_SOURCE_KEY)
+    assert (status, record_count) == ("succeeded", bar_count)
+    # 심볼당 10년치라 원본을 남기지 않는다.
+    assert payload is None
+    assert json.loads(metadata)["interval"] == "1d"
+    assert {outcome.symbol for outcome in outcomes} == {"USDKRW", "SOX"}
+
+
+def test_store_daily_writes_rows_in_the_upsert_column_order():
+    connection = FakeConnection()
+
+    store_daily_bars(connection, [daily_response_for()])
+
+    rows = [
+        parameters
+        for statement, parameters in connection.recorded_cursor.calls
+        if "INSERT INTO quote_daily" in statement
+    ]
+    assert len(rows) == 2
+    provider, symbol, business_date, opened, high, low, close, volume, source_record_id = rows[0]
+    assert (provider, symbol) == ("yahoo", "USDKRW")
+    assert business_date == date(2026, 1, 14)
+    assert (opened, high, low, close) == (Decimal("101.0"), Decimal("102.0"), Decimal("100.5"), Decimal("101.5"))
+    assert volume is None
+    assert source_record_id == SOURCE_RECORD_ID
+
+
+def test_store_daily_keeps_a_source_record_when_a_symbol_fails():
+    connection = FakeConnection()
+    broken = daily_response_for(QuoteSymbol.SOX, body=daily_chart_payload(timezone_name=None))
+
+    bar_count, outcomes = store_daily_bars(connection, [daily_response_for(), broken])
+
+    assert bar_count == 2
+    failed = next(outcome for outcome in outcomes if outcome.symbol == "SOX")
+    assert failed.error is not None
+    assert next(outcome for outcome in outcomes if outcome.symbol == "USDKRW").bar_count == 2

@@ -6,6 +6,7 @@ from sqlalchemy import (
     BigInteger,
     Boolean,
     CheckConstraint,
+    Date,
     DateTime,
     ForeignKey,
     Index,
@@ -280,6 +281,78 @@ class QuoteBar(EntityBase):
             "선물의 실제 월물 코드(예: A01609). 현물 지수와 연속 심볼은 NULL이다. "
             "월물이 바뀌면 가격에 갭이 생기는데, 이 값이 없으면 그 갭이 시장 급변인지 "
             "롤오버인지 구분할 수 없다"
+        ),
+    )
+    source_record_id: Mapped[int] = mapped_column(
+        BigInteger,
+        ForeignKey("source_record.id", ondelete="RESTRICT"),
+        nullable=False,
+        comment="근거가 되는 source_record 레코드 ID",
+    )
+
+
+class QuoteDaily(EntityBase):
+    """지수·선물·환율의 일봉을 상관 분석용으로 누적한다.
+
+    `quote_bar`와 목적도 보존 기간도 다르다. 저쪽은 장중 알림을 위한 1분봉이고 제공처가
+    30일치만 준다. **30일 표본으로는 두 시계열의 상관을 낼 수 없다.** "환율이 오르면 반도체가
+    빠지더라" 같은 판단에는 몇 년치 일별 수익률이 필요하고, Yahoo는 같은 엔드포인트에서
+    `interval=1d`로 심볼당 한 번에 십수 년을 준다. 그래서 테이블을 따로 둔다.
+
+    한 테이블에 섞지 않는 이유는 축이 다르기 때문이다. 분봉은 `bar_at` timestamptz가 키이고
+    일봉은 거래일 날짜가 키다. 섞으면 모든 조회가 봉 종류를 먼저 걸러야 한다.
+
+    국내 종목 일봉은 여기 넣지 않는다. `stock_investor_trade_daily`가 이미 시가·고가·저가·
+    종가를 수급과 함께 갖고 있어 다시 받을 이유가 없다.
+
+    전일 종가 컬럼을 두지 않는다. 분봉에서는 세션 경계 계산을 피하려고 봉마다 복사해 뒀지만,
+    일봉은 직전 행이 곧 전일이라 `lag()` 하나로 나온다.
+    """
+
+    __tablename__ = "quote_daily"
+    __table_args__ = (
+        UniqueConstraint(
+            "provider",
+            "symbol",
+            "business_date",
+            name="uq_quote_daily_natural_key",
+        ),
+        Index("ix_quote_daily_business_date", "business_date"),
+        Index("ix_quote_daily_source_record_id", "source_record_id"),
+        table_options(
+            comment="지수·선물·환율의 일봉을 상관 분석용으로 누적하는 테이블",
+            database="default",
+        ),
+    )
+
+    provider: Mapped[str] = mapped_column(
+        Text,
+        nullable=False,
+        comment="데이터 제공처 식별자(yahoo). 같은 수집의 source_record.source와 같은 값이다",
+    )
+    symbol: Mapped[str] = mapped_column(
+        Text,
+        nullable=False,
+        comment="시세 대상 식별자(예: USDKRW, SOX). quote_symbol 마스터의 symbol과 같으며 제공처 안에서만 고유하다",
+    )
+    business_date: Mapped[date] = mapped_column(
+        Date,
+        nullable=False,
+        comment=(
+            "봉이 담는 거래일. 제공처가 준 봉 시작 시각을 그 시장의 현지 날짜로 바꾼 값이다. "
+            "심볼마다 기준 시장이 달라 UTC 날짜와 어긋날 수 있다"
+        ),
+    )
+    open: Mapped[Decimal] = mapped_column(Numeric(18, 8), nullable=False, comment="그 거래일의 시가")
+    high: Mapped[Decimal] = mapped_column(Numeric(18, 8), nullable=False, comment="그 거래일의 고가")
+    low: Mapped[Decimal] = mapped_column(Numeric(18, 8), nullable=False, comment="그 거래일의 저가")
+    close: Mapped[Decimal] = mapped_column(Numeric(18, 8), nullable=False, comment="그 거래일의 종가")
+    volume: Mapped[int | None] = mapped_column(
+        BigInteger,
+        nullable=True,
+        comment=(
+            "그 거래일의 거래량. 제공처가 주는 값을 그대로 저장한다. "
+            "현물 지수와 환율처럼 거래량 개념이 없는 심볼은 제공처가 0을 실어 보내므로 0이 들어간다"
         ),
     )
     source_record_id: Mapped[int] = mapped_column(
@@ -1403,17 +1476,13 @@ class StockInvestorTradeDaily(EntityBase):
         nullable=False,
         comment="거래일(stck_bsop_date). KRX 영업일 기준이며 시각은 담지 않는다",
     )
-    open_price: Mapped[Decimal] = mapped_column(
-        Numeric(18, 4), nullable=False, comment="시가(stck_oprc). 단위는 원"
-    )
-    high_price: Mapped[Decimal] = mapped_column(
-        Numeric(18, 4), nullable=False, comment="고가(stck_hgpr). 단위는 원"
-    )
-    low_price: Mapped[Decimal] = mapped_column(
-        Numeric(18, 4), nullable=False, comment="저가(stck_lwpr). 단위는 원"
-    )
+    open_price: Mapped[Decimal] = mapped_column(Numeric(18, 4), nullable=False, comment="시가(stck_oprc). 단위는 원")
+    high_price: Mapped[Decimal] = mapped_column(Numeric(18, 4), nullable=False, comment="고가(stck_hgpr). 단위는 원")
+    low_price: Mapped[Decimal] = mapped_column(Numeric(18, 4), nullable=False, comment="저가(stck_lwpr). 단위는 원")
     close_price: Mapped[Decimal] = mapped_column(
-        Numeric(18, 4), nullable=False, comment="종가(stck_clpr). 단위는 원. 수급과 가격을 한 화면에서 겹치려고 저장한다"
+        Numeric(18, 4),
+        nullable=False,
+        comment="종가(stck_clpr). 단위는 원. 수급과 가격을 한 화면에서 겹치려고 저장한다",
     )
     accumulated_volume: Mapped[int] = mapped_column(
         BigInteger, nullable=False, comment="누적 거래량(acml_vol). 단위는 주"
@@ -1424,7 +1493,9 @@ class StockInvestorTradeDaily(EntityBase):
         comment="누적 거래대금(acml_tr_pbmn). **단위는 원이다.** 투자자별 대금만 백만원이라 섞어 쓰면 안 된다",
     )
     foreign_net_buy_qty: Mapped[int] = mapped_column(
-        BigInteger, nullable=False, comment="외국인 순매수 수량(frgn_ntby_qty). 단위는 주. 등록+미등록과 일치하는지 검증한다"
+        BigInteger,
+        nullable=False,
+        comment="외국인 순매수 수량(frgn_ntby_qty). 단위는 주. 등록+미등록과 일치하는지 검증한다",
     )
     foreign_registered_net_buy_qty: Mapped[int] = mapped_column(
         BigInteger, nullable=False, comment="외국인 등록분 순매수 수량(frgn_reg_ntby_qty). 단위는 주"
@@ -1436,7 +1507,9 @@ class StockInvestorTradeDaily(EntityBase):
         BigInteger, nullable=False, comment="개인 순매수 수량(prsn_ntby_qty). 단위는 주. 장중 추정 API에는 없는 값이다"
     )
     institution_net_buy_qty: Mapped[int] = mapped_column(
-        BigInteger, nullable=False, comment="기관계 순매수 수량(orgn_ntby_qty). 단위는 주. 세부 일곱의 합과 일치하는지 검증한다"
+        BigInteger,
+        nullable=False,
+        comment="기관계 순매수 수량(orgn_ntby_qty). 단위는 주. 세부 일곱의 합과 일치하는지 검증한다",
     )
     securities_net_buy_qty: Mapped[int] = mapped_column(
         BigInteger, nullable=False, comment="금융투자 순매수 수량(scrt_ntby_qty). 기관계의 부분집합이다"

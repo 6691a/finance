@@ -7,7 +7,7 @@ from typing import Any, Self
 import pytest
 from pydantic import BaseModel, ConfigDict, Field
 
-from modules.analysts import AnalystReport
+from modules.assessment import Assessment
 from modules.llm import (
     AssistantMessage,
     LlmError,
@@ -20,14 +20,13 @@ from modules.schema import response_format, strict_json_schema
 
 REPORT = json.dumps(
     {
-        "observations": [
-            {
-                "statement": "미국 10년물이 4.63이다.",
-                "series": ["fred:DGS10"],
-                "numbers": [{"name": "last", "value": 4.63}],
-            }
-        ],
-        "summary": "장기금리가 소폭 내렸다.",
+        "instruments": [],
+        "indicators": [],
+        "topics": [],
+        "direction": "neutral",
+        "scores": {"relevance": 0, "novelty": 0, "specificity": 0, "impact": 0},
+        "new_facts": [],
+        "reason": "",
     },
     ensure_ascii=False,
 )
@@ -79,7 +78,7 @@ def tool_call(name: str, arguments: dict[str, Any], call_id: str = "call_1") -> 
 
 def test_answer_sends_the_schema_and_no_tools():
     client = ScriptedClient(AssistantMessage(content=REPORT))
-    schema = response_format(AnalystReport, "analyst_report")
+    schema = response_format(Assessment, "assessment")
 
     answer(client, "m", [], schema, "정리하라")
 
@@ -98,7 +97,7 @@ def test_answer_falls_back_when_the_provider_rejects_the_schema():
 
     client = Picky(AssistantMessage(content=REPORT))
 
-    content = answer(client, "m", [], response_format(AnalystReport, "analyst_report"), "정리하라")
+    content = answer(client, "m", [], response_format(Assessment, "assessment"), "정리하라")
 
     # 강제가 안 되면 프롬프트와 검증이 형식을 지킨다.
     assert content == REPORT
@@ -140,7 +139,7 @@ def test_strict_schema_drops_keywords_the_provider_rejects():
         assert keyword not in schema
 
 
-@pytest.mark.parametrize("model", [AnalystReport, Outer])
+@pytest.mark.parametrize("model", [Assessment, Outer])
 def test_response_format_is_shaped_for_the_api(model):
     formatted = response_format(model, "thing")
 

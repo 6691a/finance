@@ -95,8 +95,9 @@ REQUEST_TIMEOUT_SECONDS = 30
 USER_AGENT = "news-collector/1.0 (+https://opendart.fss.or.kr/)"
 
 # 목록 한 장의 최대 건수와 장 수 상한. 7일 창에서는 한 장이면 끝나지만 정정이 몰리면 늘어난다.
+# 상한은 백필이 정한다. 삼성전자의 1년치가 2,886건(실측)이라 열 장으로는 절반도 못 받는다.
 PAGE_COUNT = 100
-MAX_PAGES = 10
+MAX_PAGES = 40
 
 # OpenDART가 본문 `status`로 알리는 값 중 우리가 뜻을 아는 것.
 STATUS_OK = "000"
@@ -389,6 +390,13 @@ def fetch_disclosures(
         total_count = int(payload.get("total_count") or 0)
         if page >= int(payload.get("total_page") or 1):
             break
+
+    # 장 상한에서 멈추면 조회 구간에 구멍이 남는다. 조용히 잘린 목록보다 실패가 낫다.
+    if total_count > len(rows):
+        raise DartPayloadError(
+            f"DART returned {total_count} disclosures for {company.value} "
+            f"but only {len(rows)} were read in {page} pages; narrow the window or raise MAX_PAGES"
+        )
 
     try:
         disclosures = tuple(Disclosure.from_payload(row) for row in rows)

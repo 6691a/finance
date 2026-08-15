@@ -13,6 +13,7 @@ from modules.collectors.hana import (
     EARLIEST_QUOTATION_DATE,
     EXCHANGE_RATE_UPSERT,
     KST,
+    MAX_DAY_OFFSET,
     UPSERT_PAGE_SIZE,
     HanaCurrency,
     HanaHTTPError,
@@ -280,19 +281,34 @@ def test_parse_returns_rounds_in_ascending_order():
     assert [rate.round for rate in parse_rates(response_for())] == [1, 2, 3]
 
 
-def test_parse_rejects_a_table_that_wraps_past_midnight_twice():
-    # 한 고시일자는 자정을 한 번만 넘는다. 두 번 넘었다면 회차와 시각이 어긋난 것이고,
-    # 그냥 두면 날짜가 조용히 하루씩 더 밀린 채 저장된다.
+def test_parse_accepts_a_friday_table_that_wraps_past_midnight_twice():
+    # 금요일 고시는 다음 영업일 개장까지 이어져 토·일요일 자정을 함께 넘는다.
     body = table_html(
         ROW_TEMPLATE.format(round=1, time="08:25:25")
         + ROW_TEMPLATE.format(round=2, time="23:50:00")
-        + ROW_TEMPLATE.format(round=3, time="00:10:00")
-        + ROW_TEMPLATE.format(round=4, time="23:55:00")
-        + ROW_TEMPLATE.format(round=5, time="00:20:00")
+        + ROW_TEMPLATE.format(round=3, time="12:24:47")
+        + ROW_TEMPLATE.format(round=4, time="06:57:02")
     )
 
-    with pytest.raises(HanaPayloadError, match="wrapped past midnight more than once"):
-        parse_rates(response_for(body=body))
+    days = [rate.quoted_at.astimezone(KST).date() for rate in parse_rates(response_for(body=body))]
+
+    assert days == [
+        QUOTATION_DATE,
+        QUOTATION_DATE,
+        QUOTATION_DATE + timedelta(days=1),
+        QUOTATION_DATE + timedelta(days=2),
+    ]
+
+
+def test_parse_rejects_a_table_that_wraps_past_midnight_beyond_the_limit():
+    # 상한을 넘게 되감겼으면 회차와 시각이 어긋난 것이고, 그냥 두면 날짜가 조용히 밀린 채 저장된다.
+    rows = "".join(
+        ROW_TEMPLATE.format(round=number, time="23:50:00" if number % 2 else "00:10:00")
+        for number in range(1, MAX_DAY_OFFSET * 2 + 4)
+    )
+
+    with pytest.raises(HanaPayloadError, match="wrapped past midnight more than"):
+        parse_rates(response_for(body=table_html(rows)))
 
 
 def test_parse_moves_rounds_past_midnight_to_the_next_kst_day():

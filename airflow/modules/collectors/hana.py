@@ -107,8 +107,11 @@ STANDARD_CELL = 7  # 매매 기준율. 6번은 `외화수표 파실 때`다.
 # 회차, 시간, 현찰 2칸, 송금 2칸, 외화수표, 매매기준율, 직전대비, 환가료율, 미화환산율.
 EXPECTED_CELL_COUNT = 11
 
-# 한 고시일자가 자정을 넘는 횟수. 08:25에 시작해 다음 날 새벽에 끝나므로 정확히 한 번이다.
-MAX_DAY_OFFSET = 1
+# 한 고시일자가 자정을 넘는 최대 횟수. 평일 고시는 08:25에 시작해 다음 날 새벽에 끝나 한 번이다.
+# 금요일 고시는 다음 영업일 개장까지 이어져 토·일요일 자정을 함께 넘는다(실측: 2026-07-10 USD
+# 1,696회차, 금 08:24 ~ 일 06:57). 연휴가 붙으면 더 늘어난다. 상한은 회차와 시각이 아예 어긋난
+# 표를 걸러 내려고 두는 것이라 최장 연휴에 맞춰 잡는다.
+MAX_DAY_OFFSET = 6
 
 # upsert를 한 번에 보낼 행 수. 고시일자 하나가 통화당 1500행 가까이 되고, DB가 원격이면
 # 행마다 왕복하는 비용이 그대로 곱해진다.
@@ -362,10 +365,11 @@ def parse_rates(response: HanaResponse) -> tuple[HanaRate, ...]:
         if previous is not None and quoted_time < previous:
             day_offset += 1
             if day_offset > MAX_DAY_OFFSET:
-                # 한 고시일자는 KST 08:25에 시작해 다음 날 새벽에 끝나므로 자정을 한 번만 넘는다.
-                # 두 번 넘었다면 회차 순서와 시각이 어긋난 것이고, 그대로 두면 날짜가 조용히
-                # 하루씩 더 밀린 채 저장된다. 여기서 멈추는 편이 낫다.
-                raise HanaPayloadError(f"Quotation times wrapped past midnight more than once by round {round_number}")
+                # 최장 연휴보다 더 넘었다면 회차 순서와 시각이 어긋난 것이고, 그대로 두면 날짜가
+                # 조용히 하루씩 더 밀린 채 저장된다. 여기서 멈추는 편이 낫다.
+                raise HanaPayloadError(
+                    f"Quotation times wrapped past midnight more than {MAX_DAY_OFFSET} times by round {round_number}"
+                )
         previous = quoted_time
 
         quoted_at = datetime.combine(quotation_date + timedelta(days=day_offset), quoted_time, tzinfo=KST)

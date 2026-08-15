@@ -5,6 +5,14 @@ config.yaml
 
 # 디렉터리째 막으면 안쪽 `!` 예외가 먹지 않는다. 그래서 `docs/*`다.
 docs/*
+!docs/kis-semiconductor-minute-bars.md
+!docs/kis-investor-flow.md
+!docs/kis-program-trading.md
+!docs/kis-market-positioning-daily.md
+!docs/dart-disclosure-earnings.md
+!docs/kis-market-movement-distribution.md
+!docs/kis-market-session-calendar.md
+!docs/economic-document-archive-design.md
 # 이번 작업의 판단 근거는 문서에만 있다. 이 둘은 예외로 추적한다.
 !docs/quote-bar-intraday.md
 !docs/collection-map.html
@@ -30,3 +38,4 @@ airflow/plugins/*
 
 
 graphify-out/
+.gstack/

@@ -22,10 +22,16 @@ def test_disclosure_event_restricts_the_lineage_delete(capsys):
 
 
 def test_the_minute_level_receipt_time_is_gone(capsys):
-    """공식 RSS로는 과거를 채울 수 없어 컬럼을 두지 않는다."""
+    """공식 RSS로는 과거를 채울 수 없어 컬럼을 두지 않는다.
+
+    `disclosure_event` 안만 본다. 문서 아카이브의 `document`에는 제공처가 알려 준
+    `published_at`이 있고 그건 이 규칙과 무관하다.
+    """
     sql = head_sql(capsys)
 
-    assert "published_at" not in sql
+    statement = sql[sql.index("CREATE TABLE disclosure_event") :]
+    statement = statement[: statement.index(";")]
+    assert "published_at" not in statement
 
 
 def test_earnings_fact_is_created_with_its_five_part_key(capsys):

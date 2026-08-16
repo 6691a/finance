@@ -39,3 +39,6 @@ airflow/plugins/*
 
 graphify-out/
 .gstack/
+
+# macOS
+.DS_Store

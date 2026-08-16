@@ -74,7 +74,7 @@ Yahoo chart는 요청 한 번에 하루치 1분봉을 통째로 돌려준다. �
 ## 필요한 환경
 
 - API 키가 없다. Yahoo v8 chart는 인증을 요구하지 않는다.
-- `CONNECTION_ID`가 가리키는 Airflow 연결. 접속 정보는 `AIRFLOW_CONN_NEWS`가 갖는다.
+- `CONNECTION_ID`가 가리키는 Airflow 연결. 접속 정보는 `AIRFLOW_CONN_FINANCE`가 갖는다.
 
 봉은 `quote_bar`에, 수집 계보는 `source_record`에 저장한다. 폴링 1회가 `source_record`
 1건이다. 테이블 정의의 원본은 백엔드의 `apps/models/market.py`이고, 이 DAG가 쓰는 SQL은
@@ -104,13 +104,9 @@ from modules.collectors.yahoo import (
     store_bars,
 )
 from modules.market_session import us_equity_open_day
-from modules.utility import KST_TIMEZONE
+from modules.utility import CONNECTION_ID, KST_TIMEZONE
 
 logger = logging.getLogger(__name__)
-
-# 이 DAG가 쓰는 Airflow 연결 ID. 값이 아니라 이름만 정한다. 실제 접속 정보는
-# `AIRFLOW_CONN_NEWS`가 갖는다.
-CONNECTION_ID = "news"
 
 # 미국 현물장 개장 여부를 물을 때 쓰는 날짜의 기준 시간대.
 NEW_YORK_TIMEZONE = ZoneInfo("America/New_York")

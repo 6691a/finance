@@ -1,7 +1,7 @@
 databases:
   # [배포] 저장 위치 4/5 — 마이그레이션이 테이블을 만드는 곳.
   # `exchange_rate`, `indicator_observation`, `source_record`, `instrument`가 여기 생긴다.
-  # Airflow DAG는 이 파일을 읽지 않는다. DAG의 대상은 `AIRFLOW_CONN_NEWS`가 정하므로
+  # Airflow DAG는 이 파일을 읽지 않는다. DAG의 대상은 `AIRFLOW_CONN_FINANCE`가 정하므로
   # 배포할 때 둘이 같은 DB를 가리키는지 확인한다. 어긋나면 DAG가 없는 테이블에 INSERT한다.
   default:
     url: postgresql+asyncpg://news2:news2@localhost:15432/news2

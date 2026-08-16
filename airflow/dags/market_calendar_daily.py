@@ -55,7 +55,7 @@ NYSE 페이지는 3년치를 미리 고시한다.
 - `KIS_APP_KEY`, `KIS_APP_SECRET`. Airflow가 읽는 건 `compose/local/airflow/.env`다.
   `config.yaml`의 `kis_app_key`/`kis_app_secret`과 같아야 한다. 어긋나면 토큰 발급이
   HTTP 403 `EGW00103`으로 떨어진다.
-- `CONNECTION_ID`가 가리키는 Airflow 연결. 접속 정보는 `AIRFLOW_CONN_NEWS`가 갖는다.
+- `CONNECTION_ID`가 가리키는 Airflow 연결. 접속 정보는 `AIRFLOW_CONN_FINANCE`가 갖는다.
 
 토큰은 `kis_quote_intraday`와 **같은 Airflow Variable 캐시를 공유한다.** 발급 횟수 제한이
 있어 DAG마다 따로 받지 않는다.
@@ -91,11 +91,9 @@ from modules.collectors.nyse_calendar import (
     parse_calendar,
     store_calendar,
 )
-from modules.utility import KST_TIMEZONE
+from modules.utility import CONNECTION_ID, KST_TIMEZONE
 
 logger = logging.getLogger(__name__)
-
-CONNECTION_ID = "news"
 
 BASE_DATE_PARAM = "base_date"
 TRADE_DATE_PARAM = "trade_date"

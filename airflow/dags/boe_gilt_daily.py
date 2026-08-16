@@ -14,7 +14,7 @@ IADB의 명목 par yield 노드가 일별로 고시하는 만기는 5·10·20년
 일본 국채를 받는 `mof_jgb_daily`, 유로 지역 곡선을 받는 `ecb_yield_curve_daily`와 같은
 테이블에 쌓이며 `provider`로 갈린다.
 
-인증이 없다. API 키도 등록도 필요 없고 환경 변수도 `AIRFLOW_CONN_NEWS` 하나면 된다.
+인증이 없다. API 키도 등록도 필요 없고 환경 변수도 `AIRFLOW_CONN_FINANCE` 하나면 된다.
 
 스케줄과 조회 기간은 한국 시간(KST) 기준이다. 관측일은 영국 영업일이라 KST 날짜와 어긋날
 수 있는데, 되돌아보는 구간이 그 차이를 흡수한다. 저장하는 시각(`started_at`,
@@ -96,7 +96,7 @@ User-Agent를 명시한다. 인증이 아니므로 값 자체에 의미는 없�
 
 ## 필요한 환경
 
-- `CONNECTION_ID`가 가리키는 Airflow 연결. 접속 정보는 `AIRFLOW_CONN_NEWS`가 갖는다.
+- `CONNECTION_ID`가 가리키는 Airflow 연결. 접속 정보는 `AIRFLOW_CONN_FINANCE`가 갖는다.
 - 인증 정보는 없다.
 
 원본 CSV는 jsonb 컬럼에 넣지 않으므로 `source_record.payload`는 비어 있다. 어느 구간을
@@ -129,13 +129,9 @@ from modules.period import (
     PeriodError,
     resolve_observation_period,
 )
-from modules.utility import KST_TIMEZONE
+from modules.utility import CONNECTION_ID, KST_TIMEZONE
 
 logger = logging.getLogger(__name__)
-
-# 이 DAG가 쓰는 Airflow 연결 ID. 값이 아니라 이름만 정한다. 실제 접속 정보는
-# `AIRFLOW_CONN_NEWS`가 갖는다.
-CONNECTION_ID = "news"
 
 # 설정 오류라 재시도해도 같은 결과인 HTTP 상태.
 UNRECOVERABLE_STATUSES = frozenset({400, 401, 403, 404})
@@ -143,6 +139,8 @@ UNRECOVERABLE_STATUSES = frozenset({400, 401, 403, 404})
 
 @dag(
     dag_id="boe_gilt_daily",
+    dag_display_name="🇬🇧 영국 국채 금리 (BoE)",
+    description="잉글랜드은행에서 영국 Gilt 만기별 금리를 매일 받아 market.indicator_observation에 쌓는다.",
     schedule="40 8 * * 2-6",  # KST 화~토 08:40 = UTC 월~금 23:40
     start_date=pendulum.datetime(2026, 8, 7, tz=KST_TIMEZONE),  # KST 2026-08-07 00:00 = UTC 2026-08-06 15:00
     catchup=False,

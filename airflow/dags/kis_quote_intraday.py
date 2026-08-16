@@ -78,7 +78,7 @@ KOSPI200 선물은 분기물(3·6·9·12)이고 만기는 만기월 **두 번째
 ## 필요한 환경
 
 - `KIS_APP_KEY`, `KIS_APP_SECRET` 환경 변수. Airflow 가 읽는 건 `compose/local/airflow/.env`다.
-- `CONNECTION_ID`가 가리키는 Airflow 연결. 접속 정보는 `AIRFLOW_CONN_NEWS`가 갖는다.
+- `CONNECTION_ID`가 가리키는 Airflow 연결. 접속 정보는 `AIRFLOW_CONN_FINANCE`가 갖는다.
 
 토큰은 **발급 횟수 제한이 있어** Airflow Variable 에 캐시한다. 폴링마다 발급하지 않는다.
 """
@@ -112,11 +112,9 @@ from modules.collectors.kis import (
     store_market_movement,
 )
 from modules.market_session import krx_open_day
-from modules.utility import KST_TIMEZONE
+from modules.utility import CONNECTION_ID, KST_TIMEZONE
 
 logger = logging.getLogger(__name__)
-
-CONNECTION_ID = "news"
 
 LOOKBACK_MINUTES = 15
 LOOKBACK_MINUTES_PARAM = "lookback_minutes"

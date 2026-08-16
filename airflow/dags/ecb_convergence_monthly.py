@@ -84,7 +84,7 @@ DAG와 다른 것은 기본 되돌아보기 길이뿐이다.
 
 ## 필요한 환경
 
-- `CONNECTION_ID`가 가리키는 Airflow 연결. 접속 정보는 `AIRFLOW_CONN_NEWS`가 갖는다.
+- `CONNECTION_ID`가 가리키는 Airflow 연결. 접속 정보는 `AIRFLOW_CONN_FINANCE`가 갖는다.
 - 인증 정보는 없다.
 """
 
@@ -111,13 +111,9 @@ from modules.period import (
     PeriodError,
     resolve_observation_period,
 )
-from modules.utility import KST_TIMEZONE
+from modules.utility import CONNECTION_ID, KST_TIMEZONE
 
 logger = logging.getLogger(__name__)
-
-# 이 DAG가 쓰는 Airflow 연결 ID. 값이 아니라 이름만 정한다. 실제 접속 정보는
-# `AIRFLOW_CONN_NEWS`가 갖는다.
-CONNECTION_ID = "news"
 
 # 설정 오류라 재시도해도 같은 결과인 HTTP 상태.
 UNRECOVERABLE_STATUSES = frozenset({400, 401, 403, 404})
@@ -129,6 +125,8 @@ LOOKBACK_DAYS_MONTHLY = 190
 
 @dag(
     dag_id="ecb_convergence_monthly",
+    dag_display_name="🇪🇺 유로 회원국 10년물 월평균 (ECB)",
+    description="ECB에서 프랑스·이탈리아·스페인 10년 국채 금리 월평균을 받아 market.indicator_observation에 쌓는다.",
     schedule="30 8 * * 3",  # KST 매주 수요일 08:30 = UTC 매주 화요일 23:30
     start_date=pendulum.datetime(2026, 8, 7, tz=KST_TIMEZONE),  # KST 2026-08-07 00:00 = UTC 2026-08-06 15:00
     catchup=False,

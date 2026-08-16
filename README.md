@@ -287,7 +287,7 @@ import 뿌리는 `airflow/`입니다. DAG는 배포와 같은 이름으로 `from
 
 - **태스크가 하나입니다.** 파일 하나가 곡선 전체를 담고 있어 시계열마다 나눠 요청할 것이 없습니다. `source_record`도 시계열이 아니라 파일 단위로 남고 `source_key`가 파일 이름입니다.
 - **파일이 둘로 나뉘고 겹치지 않습니다.** `jgbcm.csv`는 이번 달치만 담고 매달 1일에 비워지며, `data/jgbcm_all.csv`는 1974-09-24부터 지난달 말까지입니다. 어느 한쪽도 최근 며칠과 과거를 함께 담지 못하므로 구간이 달 경계를 넘으면 둘 다 받습니다. `fetch_curves`가 이번 달 파일의 첫 날짜를 보고 정합니다. 이 판단이 없으면 매달 초 며칠 동안 되돌아본 구간이 조용히 사라집니다.
-- **인증이 없습니다.** API 키도 등록도 없어 환경 변수는 `AIRFLOW_CONN_NEWS` 하나면 됩니다. URL에 비밀이 없으므로 예외 메시지와 로그에 URL을 그대로 남깁니다. 대신 기본 `Python-urllib/3.x`가 막히는 경우가 있어 User-Agent를 명시합니다.
+- **인증이 없습니다.** API 키도 등록도 없어 환경 변수는 `AIRFLOW_CONN_FINANCE` 하나면 됩니다. URL에 비밀이 없으므로 예외 메시지와 로그에 URL을 그대로 남깁니다. 대신 기본 `Python-urllib/3.x`가 막히는 경우가 있어 User-Agent를 명시합니다.
 - **인코딩이 CP932이고 날짜가 和暦입니다.** `R8.8.3`은 令和8年8月3日, 즉 2026-08-03입니다. 모르는 연호 글자는 실패시킵니다. 조용히 엉뚱한 연도로 저장되는 것보다 멈추는 편이 낫습니다.
 - **헤더 열여섯 칸을 전부 대조합니다.** 재무성 CSV는 1~40년 열다섯 개를 주지만 실제 입찰 발행되는 연한만 저장합니다. 저장 대상만 확인하면 재무성이 열을 추가했을 때 값이 옆 칸으로 밀린 것을 못 잡습니다.
 - **`payload`는 비웁니다.** 원본이 CSV라 jsonb 컬럼에 들어가지 않고 과거 전체 파일은 1MB가 넘습니다. 어느 파일이 어느 구간을 담고 있었는지는 `metadata`가 남깁니다.
@@ -507,8 +507,11 @@ docker compose -f compose/local/docker-compose.yaml up -d grafana
 
 1분 간격 고시라 구간이 길면 행이 많아집니다. 시계열 패널은 `$__timeGroupAlias(..., $__interval)`로 다운샘플링합니다.
 
- uv tool install "graphifyy[sql, postgres, openai]"
+```
+uv tool install "graphifyy[sql, postgres, openai]"
 graphify hook install
 graphify install --project --platform codex
 graphify install --project --platform claude
 graphify extract . --code-only --force
+```
+

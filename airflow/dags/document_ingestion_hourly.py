@@ -32,7 +32,7 @@ RSS는 최근 항목만 준다. **수집을 시작하기 전 기간은 영영 �
 
 ## 필요한 환경
 
-- `CONNECTION_ID`가 가리키는 Airflow 연결. 접속 정보는 `AIRFLOW_CONN_NEWS`가 갖는다.
+- `CONNECTION_ID`가 가리키는 Airflow 연결. 접속 정보는 `AIRFLOW_CONN_FINANCE`가 갖는다.
 - 인증은 없다. 전부 공개 피드다.
 """
 
@@ -55,11 +55,9 @@ from modules.collectors.documents import (
     parse_feed,
     store_documents,
 )
-from modules.utility import KST_TIMEZONE
+from modules.utility import CONNECTION_ID, KST_TIMEZONE
 
 logger = logging.getLogger(__name__)
-
-CONNECTION_ID = "news"
 
 # 주소나 정책이 바뀐 것이라 재시도해도 같은 결과인 HTTP 상태.
 UNRECOVERABLE_STATUSES = frozenset({400, 401, 403, 404})

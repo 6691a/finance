@@ -11,7 +11,7 @@
 미국 국채를 받는 `fred_treasury_daily`, 국내 시장금리를 받는 `ecos_market_rate_daily`와
 같은 테이블에 쌓이며 `provider`로 갈린다.
 
-인증이 없다. API 키도 등록도 필요 없고 환경 변수도 `AIRFLOW_CONN_NEWS` 하나면 된다.
+인증이 없다. API 키도 등록도 필요 없고 환경 변수도 `AIRFLOW_CONN_FINANCE` 하나면 된다.
 
 스케줄과 조회 기간은 한국 시간(KST) 기준이다. 일본(JST)과 offset이 같아 날짜 경계가 어긋나지
 않는다. 저장하는 시각(`started_at`, `completed_at`)은 그대로 UTC다.
@@ -94,7 +94,7 @@ backfill의 dag_run을 running으로 올리지 않는다. 태스크를 clear해�
 
 ## 필요한 환경
 
-- `CONNECTION_ID`가 가리키는 Airflow 연결. 접속 정보는 `AIRFLOW_CONN_NEWS`가 갖는다.
+- `CONNECTION_ID`가 가리키는 Airflow 연결. 접속 정보는 `AIRFLOW_CONN_FINANCE`가 갖는다.
 - 인증 정보는 없다.
 
 원본 CSV는 jsonb 컬럼에 넣지 않으므로 `source_record.payload`는 비어 있다. 어느 파일이 어느
@@ -128,13 +128,9 @@ from modules.period import (
     PeriodError,
     resolve_observation_period,
 )
-from modules.utility import KST_TIMEZONE
+from modules.utility import CONNECTION_ID, KST_TIMEZONE
 
 logger = logging.getLogger(__name__)
-
-# 이 DAG가 쓰는 Airflow 연결 ID. 값이 아니라 이름만 정한다. 실제 접속 정보는
-# `AIRFLOW_CONN_NEWS`가 갖는다.
-CONNECTION_ID = "news"
 
 # 설정 오류라 재시도해도 같은 결과인 HTTP 상태.
 UNRECOVERABLE_STATUSES = frozenset({400, 401, 403, 404})

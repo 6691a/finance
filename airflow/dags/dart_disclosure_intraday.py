@@ -51,7 +51,7 @@ WebSocket이 없다. 화면에 보이는 신선도는 **폴링 주기 + DART 반
 ## 필요한 환경
 
 - `DART_API_KEY`. Airflow가 읽는 건 `compose/local/airflow/.env`다.
-- `CONNECTION_ID`가 가리키는 Airflow 연결. 접속 정보는 `AIRFLOW_CONN_NEWS`가 갖는다.
+- `CONNECTION_ID`가 가리키는 Airflow 연결. 접속 정보는 `AIRFLOW_CONN_FINANCE`가 갖는다.
 
 **API 키가 질의 문자열에 들어간다.** 그래서 수집기는 URL을 예외 메시지와 로그에 남기지 않고
 `source_record.payload`에 원본 요청을 저장하지 않는다.
@@ -84,11 +84,9 @@ from modules.collectors.dart import (
     store_disclosures,
     store_earnings,
 )
-from modules.utility import KST_TIMEZONE
+from modules.utility import CONNECTION_ID, KST_TIMEZONE
 
 logger = logging.getLogger(__name__)
-
-CONNECTION_ID = "news"
 
 LOOKBACK_DAYS = 7
 LOOKBACK_DAYS_PARAM = "lookback_days"

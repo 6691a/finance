@@ -17,7 +17,7 @@
 셋 다 같은 `indicator_observation` 테이블에 쌓이고 `provider`로 갈린다. 독일 곡선의 만기
 아홉 개는 유로 지역 AAA 곡선의 1년 이상 만기와 정확히 같아서 그대로 겹쳐 볼 수 있다.
 
-인증이 없다. API 키도 등록도 필요 없고 환경 변수도 `AIRFLOW_CONN_NEWS` 하나면 된다.
+인증이 없다. API 키도 등록도 필요 없고 환경 변수도 `AIRFLOW_CONN_FINANCE` 하나면 된다.
 
 스케줄과 조회 기간은 한국 시간(KST) 기준이다. 관측일은 독일 영업일이라 KST 날짜와 어긋날
 수 있는데, 되돌아보는 구간이 그 차이를 흡수한다. 저장하는 시각(`started_at`,
@@ -93,7 +93,7 @@ backfill의 dag_run을 running으로 올리지 않는다.
 
 ## 필요한 환경
 
-- `CONNECTION_ID`가 가리키는 Airflow 연결. 접속 정보는 `AIRFLOW_CONN_NEWS`가 갖는다.
+- `CONNECTION_ID`가 가리키는 Airflow 연결. 접속 정보는 `AIRFLOW_CONN_FINANCE`가 갖는다.
 - 인증 정보는 없다.
 
 원본 CSV는 jsonb 컬럼에 넣지 않으므로 `source_record.payload`는 비어 있다. 유효 관측값은
@@ -125,13 +125,9 @@ from modules.period import (
     PeriodError,
     resolve_observation_period,
 )
-from modules.utility import KST_TIMEZONE
+from modules.utility import CONNECTION_ID, KST_TIMEZONE
 
 logger = logging.getLogger(__name__)
-
-# 이 DAG가 쓰는 Airflow 연결 ID. 값이 아니라 이름만 정한다. 실제 접속 정보는
-# `AIRFLOW_CONN_NEWS`가 갖는다.
-CONNECTION_ID = "news"
 
 # 설정 오류라 재시도해도 같은 결과인 HTTP 상태.
 UNRECOVERABLE_STATUSES = frozenset({400, 401, 403, 404})
@@ -139,6 +135,8 @@ UNRECOVERABLE_STATUSES = frozenset({400, 401, 403, 404})
 
 @dag(
     dag_id="bbk_bund_daily",
+    dag_display_name="🇩🇪 독일 국채 금리 (Bundesbank)",
+    description="독일연방은행에서 독일 국채 만기별 금리를 매일 받아 market.indicator_observation에 쌓는다.",
     schedule="10 8 * * 2-6",  # KST 화~토 08:10 = UTC 월~금 23:10
     start_date=pendulum.datetime(2026, 8, 7, tz=KST_TIMEZONE),  # KST 2026-08-07 00:00 = UTC 2026-08-06 15:00
     catchup=False,

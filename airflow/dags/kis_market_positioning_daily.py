@@ -44,7 +44,7 @@
 ## 필요한 환경
 
 - `KIS_APP_KEY`, `KIS_APP_SECRET`. Airflow가 읽는 건 `compose/local/airflow/.env`다.
-- `CONNECTION_ID`가 가리키는 Airflow 연결. 접속 정보는 `AIRFLOW_CONN_NEWS`가 갖는다.
+- `CONNECTION_ID`가 가리키는 Airflow 연결. 접속 정보는 `AIRFLOW_CONN_FINANCE`가 갖는다.
 
 토큰은 `kis_quote_intraday`와 같은 Airflow Variable 캐시를 공유한다. 발급 횟수 제한이 있어
 DAG마다 따로 받지 않는다.
@@ -93,11 +93,9 @@ from modules.period import (
     PeriodError,
     resolve_observation_period,
 )
-from modules.utility import KST_TIMEZONE
+from modules.utility import CONNECTION_ID, KST_TIMEZONE
 
 logger = logging.getLogger(__name__)
-
-CONNECTION_ID = "news"
 
 # 설정 오류라 재시도해도 같은 결과인 HTTP 상태.
 UNRECOVERABLE_STATUSES = frozenset({400, 403, 404})

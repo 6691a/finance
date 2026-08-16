@@ -38,7 +38,7 @@
 
 ## 필요한 환경
 
-- `CONNECTION_ID`가 가리키는 Airflow 연결. 접속 정보는 `AIRFLOW_CONN_NEWS`가 갖는다.
+- `CONNECTION_ID`가 가리키는 Airflow 연결. 접속 정보는 `AIRFLOW_CONN_FINANCE`가 갖는다.
 - 인증은 없다. Yahoo v8 chart는 비공식 API다.
 """
 
@@ -60,11 +60,9 @@ from modules.collectors.yahoo import (
     fetch_daily_bars,
     store_daily_bars,
 )
-from modules.utility import KST_TIMEZONE
+from modules.utility import CONNECTION_ID, KST_TIMEZONE
 
 logger = logging.getLogger(__name__)
-
-CONNECTION_ID = "news"
 
 RANGE_PARAM = "range"
 

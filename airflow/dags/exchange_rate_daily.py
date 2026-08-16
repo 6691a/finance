@@ -70,7 +70,7 @@ USD, JPY, CNY, EUR, HKD, TWD, GBP, AUD, CAD, RUB. 통화를 늘리려면 그 enu
 
 ## 필요한 환경
 
-`CONNECTION_ID`가 가리키는 Airflow 연결 하나뿐이다. 접속 정보는 `AIRFLOW_CONN_NEWS`가 갖고,
+`CONNECTION_ID`가 가리키는 Airflow 연결 하나뿐이다. 접속 정보는 `AIRFLOW_CONN_FINANCE`가 갖고,
 로컬에서는 `compose/local/airflow/.env`에 있다. 값을 바꾸면 `docker compose up -d`로
 컨테이너를 다시 만들어야 반영된다. 외부 API 키는 쓰지 않는다.
 
@@ -80,9 +80,10 @@ USD, JPY, CNY, EUR, HKD, TWD, GBP, AUD, CAD, RUB. 통화를 늘리려면 그 enu
 코드에서 저장 위치를 정하는 건 **연결 ID 하나뿐**이고 나머지는 환경·스키마 쪽이다.
 각 자리에 `[배포]` 주석을 달아 뒀으니 `grep -rn "배포. 저장 위치"`로 한 번에 찾는다.
 
-1. `CONNECTION_ID` (이 파일). 어느 Airflow 연결로 쓸지. **DB를 바꾸려면 보통 여기까지 안 온다.**
+1. `CONNECTION_ID` (`modules/utility.py`). 어느 Airflow 연결로 쓸지. 모든 DAG가 이 한 값을
+   공유한다. **DB를 바꾸려면 보통 여기까지 안 온다.**
    운영에서 같은 이름의 연결이 이미 운영 DB를 가리키면 코드는 그대로 두고 2번만 바꾼다.
-2. `AIRFLOW_CONN_NEWS` 환경 변수 (`compose/local/airflow/.env`). 실제 접속 정보.
+2. `AIRFLOW_CONN_FINANCE` 환경 변수 (`compose/local/airflow/.env`). 실제 접속 정보.
    운영 Airflow는 Connection UI나 시크릿 백엔드에 같은 이름으로 등록한다.
 3. `airflow/sql/postgres/exchange_rate/upsert.sql`. 테이블 이름과 스키마.
    운영에서 `public`이 아닌 스키마를 쓰면 여기서 `<스키마>.exchange_rate`로 수식한다.
@@ -115,15 +116,9 @@ from modules.collectors.hana import (
     quotation_date_for,
     store_rates,
 )
-from modules.utility import KST_TIMEZONE
+from modules.utility import CONNECTION_ID, KST_TIMEZONE
 
 logger = logging.getLogger(__name__)
-
-# [배포] 저장 위치 1/5 — 이 DAG가 쓰는 Airflow 연결 ID.
-# 이 프로젝트의 DB를 가리킨다. `exchange_rate`는 여기 있고, 형태를 가져온 외부 finance DB에는
-# 쓰지 않는다. 값이 아니라 이름만 정한다. 실제 접속 정보는 `AIRFLOW_CONN_NEWS`가 갖는다.
-# 운영에서도 연결 이름이 `news`면 이 줄은 그대로 두고 환경 변수만 바꾼다.
-CONNECTION_ID = "news"
 
 # 설정 오류라 재시도해도 같은 결과인 HTTP 상태.
 UNRECOVERABLE_STATUSES = frozenset({400, 401, 403, 404})

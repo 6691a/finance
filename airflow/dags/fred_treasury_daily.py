@@ -78,7 +78,7 @@ backfill의 dag_run을 running으로 올리지 않는다. 태스크를 clear해�
 - `FRED_API_KEY` 환경 변수. Airflow가 읽는 건 `compose/local/airflow/.env`다.
   다른 스택의 `compose/local/.env`에 넣으면 컨테이너에 들어가지 않는다. 값을 바꾸면
   `docker compose up -d`로 컨테이너를 다시 만들어야 반영된다.
-- `CONNECTION_ID`가 가리키는 Airflow 연결. 접속 정보는 `AIRFLOW_CONN_NEWS`가 갖는다.
+- `CONNECTION_ID`가 가리키는 Airflow 연결. 접속 정보는 `AIRFLOW_CONN_FINANCE`가 갖는다.
 
 원본 응답은 `source_record`에, 유효 관측값은 `indicator_observation`에 저장한다. 테이블 정의의
 원본은 백엔드의 `apps/models`이고, 이 DAG가 쓰는 SQL은 `airflow/sql/postgres/` 아래에 있다.
@@ -111,13 +111,9 @@ from modules.period import (
     PeriodError,
     resolve_observation_period,
 )
-from modules.utility import KST_TIMEZONE
+from modules.utility import CONNECTION_ID, KST_TIMEZONE
 
 logger = logging.getLogger(__name__)
-
-# 이 DAG가 쓰는 Airflow 연결 ID. 값이 아니라 이름만 정한다. 실제 접속 정보는
-# `AIRFLOW_CONN_NEWS`가 갖는다.
-CONNECTION_ID = "news"
 
 # 설정 오류라 재시도해도 같은 결과인 HTTP 상태.
 UNRECOVERABLE_STATUSES = frozenset({400, 401, 403, 404})

@@ -54,11 +54,9 @@ from modules.assessment import (
     store_assessment,
 )
 from modules.llm import chat_client
-from modules.utility import KST_TIMEZONE
+from modules.utility import CONNECTION_ID, KST_TIMEZONE
 
 logger = logging.getLogger(__name__)
-
-CONNECTION_ID = "news"
 
 BATCH_SIZE_PARAM = "batch_size"
 

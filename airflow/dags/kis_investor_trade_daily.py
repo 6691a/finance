@@ -38,7 +38,7 @@
 ## 필요한 환경
 
 - `KIS_APP_KEY`, `KIS_APP_SECRET`. Airflow가 읽는 건 `compose/local/airflow/.env`다.
-- `CONNECTION_ID`가 가리키는 Airflow 연결. 접속 정보는 `AIRFLOW_CONN_NEWS`가 갖는다.
+- `CONNECTION_ID`가 가리키는 Airflow 연결. 접속 정보는 `AIRFLOW_CONN_FINANCE`가 갖는다.
 
 토큰은 다른 KIS DAG와 같은 Airflow Variable 캐시를 공유한다.
 """
@@ -67,11 +67,9 @@ from modules.collectors.kis_investor_flow import (
     store_stock_trade_daily,
 )
 from modules.market_session import krx_open_day
-from modules.utility import KST_TIMEZONE
+from modules.utility import CONNECTION_ID, KST_TIMEZONE
 
 logger = logging.getLogger(__name__)
-
-CONNECTION_ID = "news"
 
 # 달력 하루만 받는다. ISO 주 표기(2026-W32)와 기본형(20260701)을 걸러 내는 그물이다.
 CALENDAR_DAY_PATTERN = re.compile(r"\d{4}-\d{2}-\d{2}")

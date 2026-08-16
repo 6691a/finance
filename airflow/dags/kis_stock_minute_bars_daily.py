@@ -50,7 +50,7 @@ KIS에는 종목 분봉 조회가 둘이다. 장중 조회(`FHKST03010200`)와 �
 ## 필요한 환경
 
 - `KIS_APP_KEY`, `KIS_APP_SECRET`. Airflow가 읽는 건 `compose/local/airflow/.env`다.
-- `CONNECTION_ID`가 가리키는 Airflow 연결. 접속 정보는 `AIRFLOW_CONN_NEWS`가 갖는다.
+- `CONNECTION_ID`가 가리키는 Airflow 연결. 접속 정보는 `AIRFLOW_CONN_FINANCE`가 갖는다.
 
 토큰은 다른 KIS DAG와 같은 Airflow Variable 캐시를 공유한다.
 """
@@ -78,11 +78,9 @@ from modules.collectors.kis import (
     store_stock_bars,
 )
 from modules.sql import read_sql
-from modules.utility import KST_TIMEZONE
+from modules.utility import CONNECTION_ID, KST_TIMEZONE
 
 logger = logging.getLogger(__name__)
-
-CONNECTION_ID = "news"
 
 # 달력 하루만 받는다. ISO 주 표기(2026-W33)와 기본형(20260814)을 걸러 내는 그물이다.
 CALENDAR_DAY_PATTERN = re.compile(r"\d{4}-\d{2}-\d{2}")

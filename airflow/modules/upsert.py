@@ -15,8 +15,10 @@ from typing import Any, Protocol
 try:
     # psycopg2 전용 고속 경로. 이 모듈의 필수 의존성은 아니라서 없으면 `None`으로 두고
     # PEP 249 표준 `executemany`로 물러선다.
+    from psycopg2.extensions import cursor as _Psycopg2Cursor
     from psycopg2.extras import execute_batch as _execute_batch
 except ImportError:  # pragma: no cover - Airflow 이미지에는 psycopg2가 항상 있다
+    _Psycopg2Cursor = None
     _execute_batch = None
 
 # 한 번에 묶어 보낼 문장 수. `hana.py`와 같은 값이다.
@@ -34,10 +36,14 @@ def execute_upserts(cursor: BatchCursor, statement: str, parameters: Sequence[Se
 
     `execute_batch`가 없으면 PEP 249 표준 `executemany`로 물러선다. psycopg3의
     `executemany`는 자체적으로 파이프라이닝을 하므로 그쪽에서는 물러서도 느리지 않다.
+
+    **판정 기준은 import 가능 여부가 아니라 커서의 드라이버다.** 한 이미지에 psycopg2와
+    psycopg3이 함께 있고 provider가 psycopg3 연결을 주면, import는 성공하는데
+    `execute_batch`가 psycopg3 커서를 받아 `mogrify`를 찾다 죽는다.
     """
     if not parameters:
         return
-    if _execute_batch is None:
+    if _execute_batch is None or not isinstance(cursor, _Psycopg2Cursor):
         cursor.executemany(statement, parameters)
         return
     _execute_batch(cursor, statement, parameters, page_size=UPSERT_PAGE_SIZE)

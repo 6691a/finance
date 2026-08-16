@@ -438,6 +438,8 @@ def test_store_uses_the_psycopg2_fast_path_when_the_driver_offers_it(monkeypatch
         sent.append((statement, list(parameters), page_size))
 
     monkeypatch.setattr("modules.collectors.hana._execute_batch", fake_execute_batch)
+    # 고속 경로는 커서가 psycopg2 것일 때만 탄다. 가짜 커서를 그 자리에 세운다.
+    monkeypatch.setattr("modules.collectors.hana._Psycopg2Cursor", FakeCursor)
     connection = FakeConnection()
 
     assert store_rates(connection, parse_rates(response_for())) == 3

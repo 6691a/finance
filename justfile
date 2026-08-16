@@ -1,5 +1,3 @@
-set shell := ["powershell", "-NoLogo", "-NoProfile", "-Command"]
-
 airflow_compose := "compose/local/airflow/docker-compose.yaml"
 dev_compose := "compose/local/docker-compose.yaml"
 

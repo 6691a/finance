@@ -39,23 +39,47 @@
 `prompt_version`에는 관점이 함께 들어간다(`2/global`). 관점이 바뀌면 같은 문서라도 점수가
 달라지므로 컬럼을 늘리는 대신 기존 재평가 조건에 얹는다.
 
+## 흐름
+
+LangGraph 그래프 둘이다. 흐름 제어를 손으로 짜지 않는 대신 노드 이름이 그대로 트레이스에
+남아 어디서 몇 번 불렀는지 보인다.
+
+- `DocumentAssessor`: 문서 하나. `call` → (형식이 깨지면) `repair` → `call`. 교정은 한 번뿐이다.
+- `AssessmentBatch`: 문서 목록을 `Send`로 흩어 `assess_one`을 문서마다 돌린다. 동시 실행 수는
+  `LLM_MAX_CONCURRENCY`가 정한다. **저장은 하지 않는다.** 결과만 모아 DAG에 돌려주고, 문서
+  하나가 트랜잭션 하나라는 규칙은 DAG가 지킨다.
+
+체크포인터는 붙이지 않는다. 상태를 프로세스 밖에 남길 이유가 없고 재실행 단위는 Airflow
+태스크다.
+
 ## 필요한 환경
 
-`LLM_BASE_URL`, `LLM_API_KEY`, `LLM_CHAT_MODEL`. `config.yaml`은 Airflow가 읽지 못하므로
-환경변수로 준다. 키는 `SecretStr`로 받고 로그와 예외 메시지에 넣지 않는다.
-`LLM_PERSPECTIVE`는 선택이며 기본은 `global`이다.
+`XAI_API_KEY` 하나가 필수다. **우리가 읽지 않는다.** 어떤 모델을 부를지는 `modules/llm.py`가
+코드로 정하고, 키는 그 LangChain 클래스가 자기 이름으로 읽는다. 제공처를 바꾸면 환경변수
+이름도 그 제공처 것으로 바뀐다.
+
+`LLM_PERSPECTIVE`(기본 `global`)와 `LLM_MAX_CONCURRENCY`(기본 4)는 선택이며 이 모듈이 읽는다.
+둘 다 제공처와 무관하게 판단을 바꾸는 값이다.
+
+`LANGSMITH_TRACING`을 켜면 프롬프트와 문서 본문이 LangSmith로 나간다. `modules/llm.py` 참고.
 """
 
 import json
 import logging
+import operator
 import os
 from collections.abc import Sequence
 from datetime import UTC, datetime
-from typing import Any, Literal, Protocol, Self
+from typing import Annotated, Any, Literal, Protocol, Self, TypedDict
 
-from pydantic import BaseModel, ConfigDict, Field, SecretStr, ValidationError, field_validator
+from langchain_core.language_models import BaseChatModel
+from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, SystemMessage
+from langgraph.graph import END, START, StateGraph
+from langgraph.types import Send
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
 
-from modules.llm import ChatClient, answer
+from modules import llm
+from modules.llm import UnsupportedResponseFormat
 from modules.schema import response_format
 from modules.sql import read_sql
 from modules.upsert import execute_upserts
@@ -91,10 +115,11 @@ PERSPECTIVES: dict[str, str] = {
 
 DEFAULT_PERSPECTIVE = "global"
 
-REQUEST_TIMEOUT_SECONDS = 60
-
 # 한 번 실행에서 평가할 문서 수. 시간당 수집량보다 넉넉하되 예산이 한 번에 새지 않게 둔다.
 DEFAULT_BATCH_SIZE = 50
+
+# 한 배치에서 동시에 부를 문서 수. 제공처 rate limit과 비용 흐름을 바꾸는 값이라 작게 둔다.
+DEFAULT_MAX_CONCURRENCY = 4
 
 # 점수 항목. 각 0~2점이고 합이 `value_score`다.
 SCORE_FIELDS = ("relevance", "novelty", "specificity", "impact")
@@ -121,14 +146,18 @@ class AssessmentError(RuntimeError):
 
 
 class LlmSettings(BaseModel):
-    """모델 접속 설정. 키는 로그에 남지 않게 `SecretStr`로 받는다."""
+    """평가 설정.
+
+    **접속 정보는 여기 없다.** 어떤 모델을 부를지는 `modules/llm.py`가 코드로 정하고 키는
+    LangChain이 자기 환경변수(`XAI_API_KEY`)에서 읽는다. 여기 남은 것은 제공처와 무관하게
+    이 DAG의 판단을 바꾸는 값뿐이다.
+    """
 
     model_config = ConfigDict(frozen=True)
 
-    base_url: str
-    api_key: SecretStr
-    chat_model: str
     perspective: str = DEFAULT_PERSPECTIVE
+    # 한 배치에서 동시에 부를 문서 수. 제공처 rate limit에 걸리면 내린다. 1이면 순차다.
+    max_concurrency: int = Field(default=DEFAULT_MAX_CONCURRENCY, ge=1)
 
     @field_validator("perspective")
     @classmethod
@@ -148,17 +177,21 @@ class LlmSettings(BaseModel):
 
     @classmethod
     def from_environment(cls) -> Self:
-        missing = [name for name in ("LLM_BASE_URL", "LLM_API_KEY", "LLM_CHAT_MODEL") if not os.environ.get(name)]
-        if missing:
-            raise AssessmentError(f"Missing LLM settings: {', '.join(missing)}")
+        # 모델 API 키는 검사하지 않는다. LangChain 클래스가 자기 이름으로 읽고, 없으면
+        # 모델을 만들 때 그쪽이 실패한다. 우리가 이름을 한 번 더 알 이유가 없다.
         perspective = os.environ.get("LLM_PERSPECTIVE") or DEFAULT_PERSPECTIVE
         if perspective not in PERSPECTIVES:
             raise AssessmentError(f"LLM_PERSPECTIVE must be one of {sorted(PERSPECTIVES)}, got {perspective!r}")
+        raw_concurrency = os.environ.get("LLM_MAX_CONCURRENCY") or DEFAULT_MAX_CONCURRENCY
+        try:
+            max_concurrency = int(raw_concurrency)
+        except ValueError:
+            raise AssessmentError(f"LLM_MAX_CONCURRENCY must be an integer, got {raw_concurrency!r}") from None
+        if max_concurrency < 1:
+            raise AssessmentError(f"LLM_MAX_CONCURRENCY must be at least 1, got {max_concurrency}")
         return cls(
-            base_url=os.environ["LLM_BASE_URL"],
-            api_key=SecretStr(os.environ["LLM_API_KEY"]),
-            chat_model=os.environ["LLM_CHAT_MODEL"],
             perspective=perspective,
+            max_concurrency=max_concurrency,
         )
 
 
@@ -264,34 +297,208 @@ INSTRUCTION = """\
 """
 
 
-def build_messages(
-    document: PendingDocument,
-    candidates: Candidates,
-    perspective: str = DEFAULT_PERSPECTIVE,
-) -> list[dict[str, str]]:
-    """모델에 보낼 메시지. 후보 목록을 프롬프트에 실어 자유 문자열을 막는다."""
-    if perspective not in PERSPECTIVES:
-        raise AssessmentError(f"Unknown perspective: {perspective!r}")
-    instrument_lines = "\n".join(f"- {ticker}: {name}" for ticker, name in candidates.instruments)
-    indicator_lines = "\n".join(
-        f"- {provider}:{series_id} ({label})" for provider, series_id, label in candidates.indicators
-    )
-    parts = [
-        INSTRUCTION,
-        f"\n## 종목 후보\n{instrument_lines or '(없음)'}",
-        f"\n## 지표 후보\n{indicator_lines or '(없음)'}",
-        f"\n## 문서\n출처: {document.source_slug}",
-        f"발행: {document.published_at.isoformat() if document.published_at else '알 수 없음'}",
-        f"제목: {document.title}",
-    ]
-    if document.summary:
-        parts.append(f"요약: {document.summary}")
-    if document.body:
-        parts.append(f"본문: {document.body}")
-    return [
-        {"role": "system", "content": SYSTEM_PROMPT_TEMPLATE.format(perspective=PERSPECTIVES[perspective])},
-        {"role": "user", "content": "\n".join(parts)},
-    ]
+# 형식이 깨졌을 때 붙이는 교정 지시. 한 번만 붙인다.
+REPAIR_INSTRUCTION = "이전 응답이 형식에 맞지 않았다. JSON 객체 하나만 다시 출력하라."
+
+
+class AssessState(TypedDict):
+    """문서 하나를 평가하는 동안의 상태.
+
+    `settings`는 여기 넣지 않는다. API 키가 들어 있고 상태는 트레이스 입력으로 나간다.
+    """
+
+    messages: list[BaseMessage]
+    assessment: Assessment | None
+    error: str | None
+    attempts: int
+
+
+class AssessmentResult(BaseModel):
+    """문서 하나의 평가 결과. 실패해도 결과 하나로 돌아온다."""
+
+    model_config = ConfigDict(frozen=True)
+
+    document_id: int
+    assessment: Assessment | None = None
+    error: str | None = None
+
+
+class BatchState(TypedDict):
+    documents: list[PendingDocument]
+    candidates: Candidates
+    # 문서마다 갈라진 노드가 각자 한 건씩 넣는다. 순서는 보장되지 않는다.
+    results: Annotated[list[AssessmentResult], operator.add]
+
+
+class DocumentAssessor:
+    """문서 하나를 평가한다. 프롬프트, 파싱, 교정 재요청 흐름을 갖는다.
+
+    흐름은 LangGraph 그래프다. 노드는 둘이다.
+
+    - `call`: 스키마를 강제해 부르고 응답을 검증한다. 제공처가 스키마를 받지 않으면
+      스키마 없이 한 번 더 부른다.
+    - `repair`: 형식이 깨졌을 때 교정 지시를 붙인다. **한 번만** 붙는다.
+
+    조건부 엣지가 `call` 다음을 정한다. 결과가 있으면 끝, 없고 아직 교정을 안 했으면
+    `repair`, 그 밖이면 끝이다.
+    """
+
+    def __init__(self, model: BaseChatModel, settings: LlmSettings) -> None:
+        self._model = model
+        self._settings = settings
+        self._schema = response_format(Assessment, "assessment")
+        self._graph = self._build_graph()
+
+    @staticmethod
+    def build_messages(
+        document: PendingDocument,
+        candidates: Candidates,
+        perspective: str = DEFAULT_PERSPECTIVE,
+    ) -> list[BaseMessage]:
+        """모델에 보낼 메시지. 후보 목록을 프롬프트에 실어 자유 문자열을 막는다."""
+        if perspective not in PERSPECTIVES:
+            raise AssessmentError(f"Unknown perspective: {perspective!r}")
+        instrument_lines = "\n".join(f"- {ticker}: {name}" for ticker, name in candidates.instruments)
+        indicator_lines = "\n".join(
+            f"- {provider}:{series_id} ({label})" for provider, series_id, label in candidates.indicators
+        )
+        parts = [
+            INSTRUCTION,
+            f"\n## 종목 후보\n{instrument_lines or '(없음)'}",
+            f"\n## 지표 후보\n{indicator_lines or '(없음)'}",
+            f"\n## 문서\n출처: {document.source_slug}",
+            f"발행: {document.published_at.isoformat() if document.published_at else '알 수 없음'}",
+            f"제목: {document.title}",
+        ]
+        if document.summary:
+            parts.append(f"요약: {document.summary}")
+        if document.body:
+            parts.append(f"본문: {document.body}")
+        return [
+            SystemMessage(SYSTEM_PROMPT_TEMPLATE.format(perspective=PERSPECTIVES[perspective])),
+            HumanMessage("\n".join(parts)),
+        ]
+
+    @staticmethod
+    def parse(raw: str) -> Assessment:
+        """모델 응답을 검증한다. 스키마 강제가 안 되는 제공처에서는 이것이 유일한 방어다."""
+        try:
+            return Assessment.model_validate_json(_json_object(raw))
+        except ValidationError as error:
+            raise AssessmentError(f"Model returned an invalid assessment: {error}") from None
+        except json.JSONDecodeError as error:
+            raise AssessmentError(f"Model returned malformed JSON: {error}") from None
+
+    def assess(self, document: PendingDocument, candidates: Candidates) -> Assessment:
+        """문서 하나를 평가한다.
+
+        두 번째도 실패하면 `AssessmentError`를 올린다. 호출자는 그 문서를 태그 없이 두고
+        다음 실행에 다시 집는다. 실패를 상태로 바꾸지 않는다.
+        """
+        state: AssessState = {
+            "messages": self.build_messages(document, candidates, self._settings.perspective),
+            "assessment": None,
+            "error": None,
+            "attempts": 0,
+        }
+        final = self._graph.invoke(
+            state,
+            config={"run_name": "assess_document", "metadata": {"document_id": document.id}},
+        )
+        assessment = final.get("assessment")
+        if assessment is None:
+            raise AssessmentError(final.get("error") or "Model did not return an assessment")
+        return assessment
+
+    def _build_graph(self):
+        graph = StateGraph(AssessState)
+        graph.add_node("call", self._call)
+        graph.add_node("repair", self._repair)
+        graph.add_edge(START, "call")
+        graph.add_conditional_edges("call", self._next, {"repair": "repair", END: END})
+        graph.add_edge("repair", "call")
+        return graph.compile()
+
+    def _call(self, state: AssessState) -> dict[str, Any]:
+        """스키마를 강제해 한 번 부른다. 제공처가 스키마를 안 받으면 그때만 한 번 더."""
+        messages = state["messages"]
+        try:
+            reply = llm.invoke(self._model, messages, schema=self._schema)
+        except UnsupportedResponseFormat as error:
+            logger.warning("provider does not accept a response schema; falling back to validation: %s", error)
+            reply = llm.invoke(self._model, messages)
+
+        try:
+            return {"messages": [*messages, reply], "assessment": self.parse(_text(reply)), "error": None}
+        except AssessmentError as error:
+            return {"messages": [*messages, reply], "assessment": None, "error": str(error)}
+
+    def _repair(self, state: AssessState) -> dict[str, Any]:
+        """형식이 깨졌다. 교정 지시를 붙이고 한 번만 다시 묻는다."""
+        logger.warning("retrying once after %s", state["error"])
+        return {
+            "messages": [*state["messages"], HumanMessage(REPAIR_INSTRUCTION)],
+            "attempts": state["attempts"] + 1,
+        }
+
+    @staticmethod
+    def _next(state: AssessState) -> str:
+        if state["assessment"] is not None:
+            return END
+        return "repair" if state["attempts"] == 0 else END
+
+
+class AssessmentBatch:
+    """문서 여러 개를 평가한다. **저장은 하지 않는다.**
+
+    문서마다 갈라진 노드가 각자 `DocumentAssessor`를 부르고 결과 한 건씩을 돌려준다.
+    한 문서의 실패가 나머지로 번지지 않는다. 저장은 호출자가 문서마다 트랜잭션으로 한다.
+    """
+
+    def __init__(self, assessor: DocumentAssessor, max_concurrency: int = DEFAULT_MAX_CONCURRENCY) -> None:
+        self._assessor = assessor
+        self._max_concurrency = max_concurrency
+        self._graph = self._build_graph()
+
+    def run(
+        self,
+        documents: Sequence[PendingDocument],
+        candidates: Candidates,
+    ) -> tuple[AssessmentResult, ...]:
+        if not documents:
+            return ()
+        final = self._graph.invoke(
+            {"documents": list(documents), "candidates": candidates, "results": []},
+            config={"run_name": "assess_batch", "max_concurrency": self._max_concurrency},
+        )
+        return tuple(final["results"])
+
+    def _build_graph(self):
+        graph = StateGraph(BatchState)
+        graph.add_node("assess_one", self._assess_one)
+        graph.add_conditional_edges(START, self._fan_out, ["assess_one"])
+        graph.add_edge("assess_one", END)
+        return graph.compile()
+
+    @staticmethod
+    def _fan_out(state: BatchState) -> list[Send]:
+        return [
+            Send("assess_one", {"document": document, "candidates": state["candidates"]})
+            for document in state["documents"]
+        ]
+
+    def _assess_one(self, task: dict[str, Any]) -> dict[str, Any]:
+        document: PendingDocument = task["document"]
+        try:
+            assessment = self._assessor.assess(document, task["candidates"])
+        except AssessmentError as error:
+            # 문서는 태그 없이 남는다. 다음 실행이 다시 집는다.
+            logger.warning("document %s could not be assessed: %s", document.id, error)
+            return {"results": [AssessmentResult(document_id=document.id, error=str(error))]}
+        except Exception as error:  # noqa: BLE001 - 제공처 예외 종류가 열려 있다
+            logger.warning("document %s failed to reach the model: %s", document.id, type(error).__name__)
+            return {"results": [AssessmentResult(document_id=document.id, error=type(error).__name__)]}
+        return {"results": [AssessmentResult(document_id=document.id, assessment=assessment)]}
 
 
 def _json_object(raw: str) -> str:
@@ -307,47 +514,12 @@ def _json_object(raw: str) -> str:
     return raw[start : end + 1]
 
 
-def parse_assessment(raw: str) -> Assessment:
-    try:
-        return Assessment.model_validate_json(_json_object(raw))
-    except ValidationError as error:
-        raise AssessmentError(f"Model returned an invalid assessment: {error}") from None
-    except json.JSONDecodeError as error:
-        raise AssessmentError(f"Model returned malformed JSON: {error}") from None
-
-
-def assess(
-    client: ChatClient,
-    settings: LlmSettings,
-    document: PendingDocument,
-    candidates: Candidates,
-) -> Assessment:
-    """문서 하나를 평가한다.
-
-    응답 형식은 `response_format`으로 **강제한다**. 제공처가 그걸 받으면 깨진 응답이 아예
-    오지 않는다. 받지 않는 제공처에서는 프롬프트와 검증이 형식을 지키고, 그때만 교정을
-    한 번 요청한다.
-
-    두 번째도 실패하면 `AssessmentError`를 올린다. 호출자는 그 문서를 태그 없이 두고 다음
-    실행에 다시 집는다. 실패를 상태로 바꾸지 않는다.
-    """
-    messages = build_messages(document, candidates, settings.perspective)
-    schema = response_format(Assessment, "assessment")
-    try:
-        return parse_assessment(answer(client, settings.chat_model, messages, schema))
-    except AssessmentError as first:
-        # 스키마를 강제했는데도 깨졌다면 제공처가 그걸 못 받아 검증 경로로 떨어진 것이다.
-        logger.warning("document %s: retrying once after %s", document.id, first)
-
-    return parse_assessment(
-        answer(
-            client,
-            settings.chat_model,
-            messages,
-            schema,
-            "이전 응답이 형식에 맞지 않았다. JSON 객체 하나만 다시 출력하라.",
-        )
-    )
+def _text(message: AIMessage) -> str:
+    """응답 본문을 문자열로. 제공처가 블록 배열로 답해도 같은 자리에서 흡수한다."""
+    content = message.content
+    if isinstance(content, str):
+        return content
+    return "".join(part.get("text", "") for part in content if isinstance(part, dict))
 
 
 def filter_tags(

@@ -19,6 +19,13 @@ OpenAI 호환 `json_schema` strict 모드는 Pydantic이 그냥 뱉는 스키마
 **호출하는 쪽이 스키마 없이 한 번 더 시도한다**(`modules/llm.py`). 프롬프트에도 출력 형식을
 그대로 적어 두는 이유가 이것이다. 강제가 되면 좋고, 안 되면 검증이 받는다.
 
+## `with_structured_output`을 쓰지 않는다
+
+LangChain에는 같은 일을 하는 `with_structured_output()`이 있지만 그건 파싱까지 가져간다.
+우리가 막아야 하는 것은 제공처가 스키마를 **거절할 때**가 아니라 **무시할 때**이고, 그건
+`modules/assessment.py`의 `_json_object`와 검증이 받는다. 그래서 여기서 만든 값을
+`.bind(response_format=...)`으로 건다. 그것도 LangChain 경로다.
+
 ## 열린 dict는 못 쓴다
 
 `dict[str, float]` 같은 필드는 strict 모드에서 표현할 수 없다. 값 이름이 스키마에 없기

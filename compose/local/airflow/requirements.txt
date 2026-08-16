@@ -7,16 +7,17 @@
 # modules/collectors/hana.py: scrapling.fetchers.Fetcher와 curl_cffi.curl.CurlError.
 # curl_cffi는 scrapling 기본 의존성이 아니라 fetchers extra에 들어 있다.
 scrapling[fetchers]>=0.4.12
+
+# modules/llm.py: langchain_xai.ChatXAI로 모델을 부른다. 처음에는 SDK 없이 urllib으로
+# POST했지만 2026-08-16에 바꿨다. LangChain으로 부르면 LangSmith 추적이 코드 없이 따라오고
+# 툴 루프를 직접 짜지 않아도 된다. 재시도는 여전히 Airflow가 하며 max_retries=0으로 SDK
+# 재시도를 끈다.
 langchain-xai>=1.3.0
-# 문서 아카이브(docs/economic-document-archive-design.md)를 위해 늘린 의존성은 **없다.**
-# 넣으려다 뺀 것과 이유를 남긴다. 다시 넣자는 이야기가 나올 때 같은 검토를 반복하지 않는다.
-#
-# - `openai` / `langchain-openai`: LLM 호출은 JSON을 POST하고 JSON을 받는 것 하나뿐이다.
-#   SDK가 주는 재시도·스트리밍·타입 모델을 쓰지 않고 재시도는 Airflow가 한다. 그래서
-#   `urllib.request`로 충분하다(`modules/llm.py`의 `chat_client`). "OpenAI 호환"은 회사가
-#   아니라 요청·응답 모양을 가리키므로 xAI든 어디든 `base_url`만 바꾸면 된다.
-# - `feedparser`: RSS와 Atom은 XML이라 `xml.etree.ElementTree`로 읽고, RFC 822 날짜는
-#   `email.utils.parsedate_to_datetime`이 처리한다. 둘 다 표준 라이브러리다.
-# - `langchain-text-splitters`: 문서 분할은 임베딩과 함께 붙일 예정이라 아직 쓰는 코드가
-#   없다. 안 쓰는 의존성은 이미지에 두지 않는다. 그때 한 줄 늘린다.
-# - `pypdf`: PDF 본문 추출은 아직 범위 밖이다.
+# modules/assessment.py: 문서 평가 흐름과 배치 팬아웃 그래프.
+langgraph>=1.2.0
+# modules/llm.py가 예외 타입을 직접 import한다. ChatXAI가 BaseChatOpenAI 서브클래스라
+# 제공처 오류가 openai 예외 그대로 올라온다. 전이 의존을 몰래 쓰지 않고 여기 적는다.
+openai>=2.0.0
+apache-airflow-providers-postgres>=7.0.1
+sentry-sdk>=2.68.0
+langsmith>=0.11.0

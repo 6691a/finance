@@ -3,31 +3,33 @@ from datetime import UTC, datetime
 from typing import Self
 
 import pytest
+from langchain_core.messages import AIMessage
 from sqlalchemy import Table
 
 from apps.models.content import Document as DocumentModel
 from apps.models.content import DocumentIndicator, DocumentInstrument
 from modules.assessment import (
+    DEFAULT_MAX_CONCURRENCY,
     DEFAULT_PERSPECTIVE,
     DOCUMENT_INDICATOR_UPSERT,
     DOCUMENT_INSTRUMENT_UPSERT,
     PENDING_DOCUMENTS,
     PERSPECTIVES,
     PROMPT_VERSION,
+    REPAIR_INSTRUCTION,
     UPDATE_ASSESSMENT,
     Assessment,
+    AssessmentBatch,
     AssessmentError,
     Candidates,
+    DocumentAssessor,
     IndicatorTag,
     LlmSettings,
     PendingDocument,
-    assess,
-    build_messages,
     filter_tags,
-    parse_assessment,
     store_assessment,
 )
-from modules.llm import AssistantMessage
+from modules.llm import UnsupportedResponseFormat
 
 ASSESSED_AT = datetime(2026, 8, 15, 3, 25, tzinfo=UTC)
 
@@ -54,18 +56,42 @@ VALID = """{"instruments": ["005930"],
  "new_facts": ["환율이 1,400원을 넘었다"], "reason": "수출주 원가에 직접 영향"}"""
 
 
-class FakeClient:
-    """`modules.llm.ChatClient`를 흉내 낸다. 실제 호출은 하지 않는다."""
+class ScriptedModel:
+    """LangChain 모델 자리에 끼운다. 실제 호출은 하지 않는다."""
 
     def __init__(self, *replies: str) -> None:
         self.replies = list(replies)
-        self.calls: list[list[dict[str, str]]] = []
+        self.calls: list[list] = []
         self.schemas: list[dict | None] = []
+        self._schema: dict | None = None
 
-    def complete(self, *, model: str, messages, tools=None, response_format=None) -> AssistantMessage:
+    def bind(self, **kwargs) -> Self:
+        self._schema = kwargs.get("response_format")
+        return self
+
+    def bind_tools(self, tools) -> Self:
+        return self
+
+    def invoke(self, messages) -> AIMessage:
         self.calls.append(list(messages))
-        self.schemas.append(response_format)
-        return AssistantMessage(content=self.replies.pop(0))
+        self.schemas.append(self._schema)
+        self._schema = None
+        return AIMessage(self.replies.pop(0))
+
+
+class PickyModel(ScriptedModel):
+    """스키마를 거절하는 제공처. 강제가 안 되면 프롬프트와 검증이 형식을 지킨다."""
+
+    def invoke(self, messages) -> AIMessage:
+        if self._schema is not None:
+            self._schema = None
+            raise UnsupportedResponseFormat("json_schema is not supported")
+        return super().invoke(messages)
+
+
+def assessor(*replies: str, model_class: type[ScriptedModel] = ScriptedModel) -> tuple[DocumentAssessor, ScriptedModel]:
+    scripted = model_class(*replies)
+    return DocumentAssessor(scripted, settings()), scripted
 
 
 class FakeCursor:
@@ -102,12 +128,7 @@ def without_the_psycopg2_fast_path(monkeypatch):
 
 
 def settings(perspective: str = DEFAULT_PERSPECTIVE) -> LlmSettings:
-    return LlmSettings(
-        base_url="https://example.invalid/v1",
-        api_key="secret",
-        chat_model="test-model",
-        perspective=perspective,
-    )
+    return LlmSettings(perspective=perspective)
 
 
 def inserted_columns(statement: str) -> tuple[str, ...]:
@@ -124,24 +145,35 @@ def natural_key(table: Table, name: str) -> tuple[str, ...]:
     )
 
 
-def test_api_key_does_not_leak_when_the_settings_are_printed():
-    # URL에 키가 실리지 않더라도 예외 메시지와 로그에 객체가 찍힐 수 있다.
-    assert "secret" not in repr(settings())
-    assert "secret" not in str(settings())
+def test_the_settings_hold_no_credentials():
+    """접속 정보가 이 객체에 없으면 로그와 예외에 실릴 자리도 없다.
+
+    키는 LangChain 클래스가 자기 환경변수에서 읽고, 모델은 `modules/llm.py`가 코드로 정한다.
+    """
+    assert set(LlmSettings.model_fields) == {"perspective", "max_concurrency"}
 
 
-def test_missing_environment_is_reported_without_the_values(monkeypatch):
-    for name in ("LLM_BASE_URL", "LLM_API_KEY", "LLM_CHAT_MODEL"):
-        monkeypatch.delenv(name, raising=False)
+def test_the_concurrency_comes_from_the_environment(monkeypatch):
+    monkeypatch.delenv("LLM_MAX_CONCURRENCY", raising=False)
+    assert LlmSettings.from_environment().max_concurrency == DEFAULT_MAX_CONCURRENCY
 
-    with pytest.raises(AssessmentError, match="Missing LLM settings"):
+    monkeypatch.setenv("LLM_MAX_CONCURRENCY", "1")
+    assert LlmSettings.from_environment().max_concurrency == 1
+
+    # 오타가 조용히 기본값으로 떨어지면 병렬로 돌 줄 알았던 배치가 순차로 돈다.
+    monkeypatch.setenv("LLM_MAX_CONCURRENCY", "네개")
+    with pytest.raises(AssessmentError, match="must be an integer"):
+        LlmSettings.from_environment()
+
+    monkeypatch.setenv("LLM_MAX_CONCURRENCY", "0")
+    with pytest.raises(AssessmentError, match="at least 1"):
         LlmSettings.from_environment()
 
 
 def test_prompt_lists_the_allowed_values():
     # 자유 문자열을 받으면 document_instrument가 instrument와 조인되지 않는다.
-    messages = build_messages(DOCUMENT, CANDIDATES)
-    prompt = messages[-1]["content"]
+    messages = DocumentAssessor.build_messages(DOCUMENT, CANDIDATES)
+    prompt = messages[-1].content
 
     assert "005930: 삼성전자" in prompt
     assert "yahoo:USDKRW" in prompt
@@ -154,7 +186,7 @@ def test_relevance_may_be_zero_and_the_prompt_says_so():
     0을 안 쓰면 점수 바닥이 1로 올라가 0~8이 아니라 4~8이 된다. 상위 몇 건을 고르는 것이 이
     점수의 유일한 쓸모라 눌리면 못 쓴다.
     """
-    prompt = build_messages(DOCUMENT, CANDIDATES)[-1]["content"]
+    prompt = DocumentAssessor.build_messages(DOCUMENT, CANDIDATES)[-1].content
 
     assert "0을 쓰는 것을 주저하지 마라" in prompt
     assert "둘 다 비었다면 relevance는 0" in prompt
@@ -166,7 +198,7 @@ def test_relevance_is_asked_as_a_path_not_as_a_direct_mention():
     "한국에 직접 관련되는가"로 물으면 한국을 언급하지 않는 연준 성명이 0점을 받는다. 그
     문서들을 모으는 이유가 전이 효과이므로 경로를 묻는다.
     """
-    prompt = build_messages(DOCUMENT, CANDIDATES)[-1]["content"]
+    prompt = DocumentAssessor.build_messages(DOCUMENT, CANDIDATES)[-1].content
 
     assert "직접 언급을 요구하지 않는다" in prompt
     assert "경로" in prompt
@@ -175,23 +207,26 @@ def test_relevance_is_asked_as_a_path_not_as_a_direct_mention():
 def test_the_default_perspective_is_global():
     # 기본이 한국 전용이면 아카이브의 대부분이 잘못 채점된다.
     assert DEFAULT_PERSPECTIVE == "global"
-    system = build_messages(DOCUMENT, CANDIDATES)[0]["content"]
+    system = DocumentAssessor.build_messages(DOCUMENT, CANDIDATES)[0].content
     assert PERSPECTIVES["global"] in system
 
 
 def test_the_perspective_changes_the_system_prompt():
-    korea = build_messages(DOCUMENT, CANDIDATES, "korea")[0]["content"]
-    united_states = build_messages(DOCUMENT, CANDIDATES, "us")[0]["content"]
+    korea = DocumentAssessor.build_messages(DOCUMENT, CANDIDATES, "korea")[0].content
+    united_states = DocumentAssessor.build_messages(DOCUMENT, CANDIDATES, "us")[0].content
 
     assert PERSPECTIVES["korea"] in korea
     assert PERSPECTIVES["us"] in united_states
     # 문서 부분은 관점과 무관하게 같아야 한다.
-    assert build_messages(DOCUMENT, CANDIDATES, "korea")[-1] == build_messages(DOCUMENT, CANDIDATES, "us")[-1]
+    assert (
+        DocumentAssessor.build_messages(DOCUMENT, CANDIDATES, "korea")[-1]
+        == DocumentAssessor.build_messages(DOCUMENT, CANDIDATES, "us")[-1]
+    )
 
 
 def test_an_unknown_perspective_is_rejected():
     with pytest.raises(AssessmentError, match="Unknown perspective"):
-        build_messages(DOCUMENT, CANDIDATES, "mars")
+        DocumentAssessor.build_messages(DOCUMENT, CANDIDATES, "mars")
 
 
 def test_the_prompt_revision_carries_the_perspective():
@@ -201,10 +236,6 @@ def test_the_prompt_revision_carries_the_perspective():
 
 
 def test_the_perspective_comes_from_the_environment(monkeypatch):
-    monkeypatch.setenv("LLM_BASE_URL", "https://example.invalid/v1")
-    monkeypatch.setenv("LLM_API_KEY", "secret")
-    monkeypatch.setenv("LLM_CHAT_MODEL", "test-model")
-
     monkeypatch.delenv("LLM_PERSPECTIVE", raising=False)
     assert LlmSettings.from_environment().perspective == DEFAULT_PERSPECTIVE
 
@@ -218,7 +249,7 @@ def test_the_perspective_comes_from_the_environment(monkeypatch):
 
 def test_parse_accepts_a_reply_wrapped_in_a_code_fence():
     # 제3자 OpenAI 호환 제공자가 JSON만 내라는 지시를 안 지키는 경우가 있다.
-    assessment = parse_assessment(f"```json\n{VALID}\n```")
+    assessment = DocumentAssessor.parse(f"```json\n{VALID}\n```")
 
     assert assessment.direction == "negative"
     assert assessment.scores.total == 6
@@ -226,26 +257,26 @@ def test_parse_accepts_a_reply_wrapped_in_a_code_fence():
 
 def test_parse_rejects_a_score_outside_the_range():
     with pytest.raises(AssessmentError, match="invalid assessment"):
-        parse_assessment(VALID.replace('"relevance": 2', '"relevance": 5'))
+        DocumentAssessor.parse(VALID.replace('"relevance": 2', '"relevance": 5'))
 
 
 def test_parse_rejects_an_unknown_direction():
     with pytest.raises(AssessmentError, match="invalid assessment"):
-        parse_assessment(VALID.replace('"negative"', '"bullish"'))
+        DocumentAssessor.parse(VALID.replace('"negative"', '"bullish"'))
 
 
 def test_parse_rejects_a_reply_without_a_json_object():
     with pytest.raises(AssessmentError, match="did not return a JSON object"):
-        parse_assessment("판단할 수 없습니다.")
+        DocumentAssessor.parse("판단할 수 없습니다.")
 
 
 def test_assess_forces_the_output_schema():
     """검증만 하지 않고 강제한다. 제공처가 받으면 깨진 응답이 아예 오지 않는다."""
-    client = FakeClient(VALID)
+    assessing, model = assessor(VALID)
 
-    assess(client, settings(), DOCUMENT, CANDIDATES)
+    assessing.assess(DOCUMENT, CANDIDATES)
 
-    schema = client.schemas[0]
+    schema = model.schemas[0]
     assert schema["type"] == "json_schema"
     assert schema["json_schema"]["strict"] is True
     properties = schema["json_schema"]["schema"]["properties"]
@@ -253,23 +284,63 @@ def test_assess_forces_the_output_schema():
     assert properties["direction"]["enum"] == ["positive", "negative", "neutral"]
 
 
-def test_assess_retries_once_when_the_format_is_broken():
-    client = FakeClient("형식이 틀린 답", VALID)
+def test_assess_falls_back_when_the_provider_rejects_the_schema():
+    assessing, model = assessor(VALID, model_class=PickyModel)
 
-    assessment = assess(client, settings(), DOCUMENT, CANDIDATES)
+    assessment = assessing.assess(DOCUMENT, CANDIDATES)
 
     assert assessment.scores.total == 6
-    assert len(client.calls) == 2
-    # 교정 요청은 원래 메시지 뒤에 한 줄만 붙인다.
-    assert len(client.calls[1]) == len(client.calls[0]) + 1
+    # 스키마 없이 다시 부른 요청 하나만 실제로 돌았다.
+    assert model.schemas == [None]
+
+
+def test_assess_retries_once_when_the_format_is_broken():
+    assessing, model = assessor("형식이 틀린 답", VALID)
+
+    assessment = assessing.assess(DOCUMENT, CANDIDATES)
+
+    assert assessment.scores.total == 6
+    assert len(model.calls) == 2
+    # 두 번째 요청에는 첫 응답과 교정 지시가 붙는다.
+    assert len(model.calls[1]) == len(model.calls[0]) + 2
+    assert REPAIR_INSTRUCTION == model.calls[1][-1].content
 
 
 def test_assess_gives_up_after_the_second_failure():
-    client = FakeClient("틀림", "또 틀림")
+    assessing, model = assessor("틀림", "또 틀림")
 
     with pytest.raises(AssessmentError):
-        assess(client, settings(), DOCUMENT, CANDIDATES)
-    assert len(client.calls) == 2
+        assessing.assess(DOCUMENT, CANDIDATES)
+    assert len(model.calls) == 2
+
+
+def test_batch_keeps_one_failure_from_spreading():
+    """문서 하나가 실패해도 나머지는 계속 간다. 저장은 배치가 하지 않는다."""
+    other = DOCUMENT.model_copy(update={"id": 12})
+    assessing, _ = assessor("틀림", "또 틀림", VALID)
+
+    results = AssessmentBatch(assessing, max_concurrency=1).run([DOCUMENT, other], CANDIDATES)
+
+    by_id = {result.document_id: result for result in results}
+    assert by_id[DOCUMENT.id].assessment is None
+    assert by_id[DOCUMENT.id].error
+    assert by_id[other.id].assessment is not None
+
+
+def test_batch_returns_one_result_per_document():
+    documents = [DOCUMENT.model_copy(update={"id": number}) for number in (21, 22, 23)]
+    assessing, _ = assessor(*([VALID] * 3))
+
+    results = AssessmentBatch(assessing, max_concurrency=1).run(documents, CANDIDATES)
+
+    assert {result.document_id for result in results} == {21, 22, 23}
+
+
+def test_batch_does_not_call_the_model_for_an_empty_batch():
+    assessing, model = assessor()
+
+    assert AssessmentBatch(assessing).run([], CANDIDATES) == ()
+    assert model.calls == []
 
 
 def test_unknown_tags_are_dropped_and_the_document_survives():
@@ -329,7 +400,7 @@ def test_tag_upserts_match_the_models_and_their_natural_keys():
 
 def test_store_writes_the_assessment_and_both_tag_kinds():
     connection = FakeConnection()
-    assessment = parse_assessment(VALID)
+    assessment = DocumentAssessor.parse(VALID)
     instruments, indicators = filter_tags(assessment, CANDIDATES, DOCUMENT.id)
 
     store_assessment(
@@ -359,7 +430,7 @@ def test_store_writes_the_assessment_and_both_tag_kinds():
 
 def test_store_skips_the_tag_statements_when_there_is_nothing_to_tag():
     connection = FakeConnection()
-    assessment = parse_assessment(VALID)
+    assessment = DocumentAssessor.parse(VALID)
 
     store_assessment(connection, DOCUMENT, assessment, (), (), "test-model", ASSESSED_AT, settings().prompt_revision)
 

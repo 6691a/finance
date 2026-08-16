@@ -18,11 +18,16 @@
 
 ## 필요한 환경
 
-- `LLM_BASE_URL`, `LLM_API_KEY`, `LLM_CHAT_MODEL`. **셋 중 하나라도 없으면 태스크를 즉시
-  실패시킨다.** DAG은 `config.yaml`을 읽지 못하므로 환경변수로 준다.
+- `XAI_API_KEY`. 어떤 모델을 부를지는 `modules/llm.py`의 `document_model()`이 코드로 정하고
+  키는 그 LangChain 클래스가 자기 이름으로 읽는다. 키가 없으면 모델을 만들 때 실패한다.
+  DAG은 `config.yaml`을 읽지 못하므로 환경변수로 준다.
 - `LLM_PERSPECTIVE`는 선택이고 기본이 `global`이다. 세계에서 일어난 일이 한국 시장에 닿는
   경로까지 보라는 뜻이다. `korea`는 국내 직접 관련만, `us`는 미국 시장의 눈으로 본다.
   **바꾸면 이미 평가한 문서가 전부 재평가 대상이 된다**(`prompt_version`에 관점이 들어간다).
+- `LLM_MAX_CONCURRENCY`는 선택이고 기본이 4다. 한 실행에서 동시에 부를 문서 수이며 제공처
+  rate limit에 걸리면 내린다. 1이면 순차다.
+- `LANGSMITH_TRACING`과 키를 주면 프롬프트·응답·토큰이 LangSmith에 남는다. 비우면 아무 것도
+  보내지 않는다. **켜면 문서 본문이 외부로 나간다.**
 - `CONNECTION_ID`가 가리키는 Airflow 연결.
 
 ## params
@@ -45,15 +50,16 @@ from airflow.sdk import Param, dag, get_current_context, task
 
 from modules.assessment import (
     DEFAULT_BATCH_SIZE,
+    AssessmentBatch,
     AssessmentError,
+    DocumentAssessor,
     LlmSettings,
-    assess,
     filter_tags,
     load_candidates,
     pending_documents,
     store_assessment,
 )
-from modules.llm import chat_client
+from modules.llm import document_model, model_name
 from modules.utility import CONNECTION_ID, KST_TIMEZONE
 
 logger = logging.getLogger(__name__)
@@ -118,24 +124,24 @@ def document_assessment_hourly():
             # 후보가 비면 태그를 만들 수 없고, 그건 마스터 시드가 빠진 상태다.
             raise AirflowFailException("No instrument or indicator candidates; seed the masters first")
 
-        client = chat_client(settings.base_url, settings.api_key.get_secret_value())
+        # 어떤 모델을 부를지는 `modules/llm.py`가 정한다. 키는 그쪽 LangChain 클래스가 읽는다.
+        model = document_model()
+        batch = AssessmentBatch(DocumentAssessor(model, settings), settings.max_concurrency)
+        # 평가는 그래프가 한 번에 돌린다. 실패한 문서도 결과 한 건으로 돌아온다.
+        results = batch.run(documents, candidates)
+        by_id = {document.id: document for document in documents}
         assessed_at = datetime.now(UTC)
 
         assessed = 0
         failures = 0
-        for document in documents:
-            try:
-                assessment = assess(client, settings, document, candidates)
-            except AssessmentError as error:
+        for result in results:
+            document = by_id[result.document_id]
+            if result.assessment is None:
                 # 문서는 태그 없이 남는다. 다음 실행이 다시 집는다.
-                logger.warning("document %s could not be assessed: %s", document.id, error)
-                failures += 1
-                continue
-            except Exception as error:  # noqa: BLE001 - 제공처 예외 종류가 열려 있다
-                logger.warning("document %s failed to reach the model: %s", document.id, type(error).__name__)
                 failures += 1
                 continue
 
+            assessment = result.assessment
             instruments, indicators = filter_tags(assessment, candidates, document.id)
 
             # 문서 하나가 트랜잭션 하나다. 앞의 성공을 뒤의 실패가 되돌리지 않는다.
@@ -147,7 +153,7 @@ def document_assessment_hourly():
                     assessment,
                     instruments,
                     indicators,
-                    settings.chat_model,
+                    model_name(model),
                     assessed_at,
                     settings.prompt_revision,
                 )

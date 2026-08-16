@@ -1,7 +1,12 @@
-"""모델 호출과 툴 루프.
+"""공용 모델 정의와 호출.
 
-`modules/tools.py`가 무엇을 부를 수 있는지 정하고, 여기가 실제로 부른다. 프롬프트는
-`modules/assessment.py`와 `modules/analysts.py`가 갖는다.
+**어떤 모델을 쓸지는 여기서 정한다.** 환경변수로 제공처를 갈아 끼우지 않는다. LangChain은
+제공처마다 클래스가 다르고(`ChatXAI`, `ChatAnthropic`, …) 받는 인자도 다르다. 그걸 문자열
+설정 세 개로 흉내 내면 어느 쪽도 제대로 못 쓴다. 그래서 이 파일이 LangChain 문법 그대로
+모델을 만들고, 바꿀 때는 여기 한 줄을 고친다.
+
+키만 환경에서 온다. `ChatXAI`는 `XAI_API_KEY`를 스스로 읽으므로 우리가 넘기지 않는다.
+키를 코드나 인자로 옮기면 로그와 예외에 실릴 자리가 늘어난다.
 
 ## 조사와 답변을 나눈다
 
@@ -9,34 +14,47 @@
 동작이 다르고(스키마를 주면 툴 호출을 안 하거나, 그 반대), 그 차이를 우리가 흡수할 방법이
 없다. 그래서 두 단계로 나눈다.
 
-1. **조사**: 툴만 주고 모델이 필요한 만큼 부르게 한다(`modules/tools.py`의 `investigate`).
+1. **조사**: 툴만 주고 모델이 필요한 만큼 부르게 한다.
 2. **답변**: 툴을 빼고 `response_format`으로 스키마를 강제해 한 번 더 부른다.
 
 이 구조라 마지막 응답은 항상 우리가 정한 모양이고, 툴 결과는 그 전 대화에 이미 들어가 있다.
 
 ## 스키마를 못 받는 제공처
 
-제3자 OpenAI 호환 제공자가 `json_schema`를 모르면 요청이 거절된다. 어댑터가 그걸
-`UnsupportedResponseFormat`으로 올리고, 여기서 스키마 없이 한 번 더 부른다. 프롬프트에
+제3자 OpenAI 호환 제공자가 `json_schema`를 모르면 요청이 거절된다. `classify`가 그걸
+`UnsupportedResponseFormat`으로 바꾸고, 부르는 쪽이 스키마 없이 한 번 더 부른다. 프롬프트에
 출력 형식을 그대로 적어 둔 이유가 이것이다. **강제가 되면 좋고, 안 되면 검증이 받는다.**
 
-## 툴을 모른다
+## 오류는 여기서만 분류한다
 
-툴 루프는 `modules/tools.py`가 갖는다. 여기는 "메시지를 보내고 답을 받는다"까지만 안다.
-그래야 문서 태깅(`modules/assessment.py`)이 리포트용 툴 계층에 묶이지 않는다. 태깅은 툴을
-쓰지 않는다.
+`ChatXAI`는 `BaseChatOpenAI` 서브클래스라 제공처 오류가 `openai` 예외로 그대로 올라온다.
+그걸 재시도할 값어치가 있는 것(`ConnectionError`)과 없는 것(`LlmError`)으로 가르는 곳이
+`classify` 하나다. 실제 재시도 여부는 DAG가 정한다.
+
+**재시도는 Airflow가 한다.** 모델은 `max_retries=0`으로 만든다. SDK가 먼저 재시도하면 태스크
+타임아웃 안에서 몇 번을 부른 것인지 로그와 트레이스가 어긋난다.
+
+## 추적을 켜는 법
+
+`LANGSMITH_TRACING`, `LANGSMITH_API_KEY`, `LANGSMITH_PROJECT`를 환경에 준다. 비우면 아무 것도
+보내지 않고 호출 경로도 그대로다. **켜면 프롬프트 전문과 문서 본문이 LangSmith로 나간다.**
+저장 위치가 문제가 되면 `LANGSMITH_ENDPOINT`로 다른 인스턴스를 가리킨다.
 """
 
-import json
 import logging
-import urllib.error
-import urllib.request
 from collections.abc import Sequence
-from typing import Any, Protocol
+from typing import Any
 
-from pydantic import BaseModel, ConfigDict
+import openai
+from langchain_core.language_models import BaseChatModel
+from langchain_core.messages import AIMessage, BaseMessage
+from langchain_xai import ChatXAI
 
 logger = logging.getLogger(__name__)
+
+# 한 번의 호출을 기다리는 시간. 문서 하나를 읽고 JSON 하나를 내는 데 이보다 오래 걸리면
+# 그 실행은 포기하고 다음 실행이 다시 집는 편이 낫다.
+REQUEST_TIMEOUT_SECONDS = 120.0
 
 
 class LlmError(RuntimeError):
@@ -47,120 +65,57 @@ class UnsupportedResponseFormat(LlmError):
     """제공처가 `response_format` 스키마를 받지 않는다. 스키마 없이 다시 부른다."""
 
 
-class ToolCall(BaseModel):
-    model_config = ConfigDict(frozen=True)
-
-    id: str
-    name: str
-    arguments: str
-
-
-class AssistantMessage(BaseModel):
-    """모델이 돌려준 한 턴.
-
-    `raw`는 제공처가 보낸 메시지 그대로다. 대화에 다시 실을 때는 우리가 재구성한 것이 아니라
-    이걸 그대로 넣는다. 툴 호출 메시지의 모양이 제공처마다 조금씩 다르기 때문이다.
-    """
-
-    model_config = ConfigDict(frozen=True)
-
-    content: str = ""
-    tool_calls: tuple[ToolCall, ...] = ()
-    raw: dict[str, Any] = {}
-
-
-class ChatClient(Protocol):
-    """우리가 쓰는 부분만. 테스트가 가짜를 끼울 수 있게 좁혀 둔다."""
-
-    def complete(
-        self,
-        *,
-        model: str,
-        messages: Sequence[dict[str, Any]],
-        tools: Sequence[dict[str, Any]] | None = None,
-        response_format: dict[str, Any] | None = None,
-    ) -> AssistantMessage: ...
-
-
-def answer(
-    client: ChatClient,
-    model: str,
-    messages: Sequence[dict[str, Any]],
-    schema: dict[str, Any] | None,
-    instruction: str | None = None,
-) -> str:
-    """스키마를 강제해 마지막 답변을 받는다.
-
-    제공처가 스키마를 받지 않으면 한 번 더, 이번에는 스키마 없이 부른다. 그 경우 형식은
-    프롬프트와 사후 검증이 지킨다.
-    """
-    conversation = list(messages)
-    if instruction is not None:
-        conversation.append({"role": "user", "content": instruction})
-    if schema is not None:
-        try:
-            return client.complete(model=model, messages=conversation, response_format=schema).content
-        except UnsupportedResponseFormat as error:
-            logger.warning("provider does not accept a response schema; falling back to validation: %s", error)
-    return client.complete(model=model, messages=conversation).content
-
-
 # 제공처가 스키마를 못 받을 때 400 본문에 나오는 조각. 오류 문자열로 가르는 것이 마뜩잖지만
 # OpenAI 호환 API에 "이 기능을 지원하는가"를 묻는 표준 방법이 없다.
 UNSUPPORTED_MARKERS = ("response_format", "json_schema", "structured output")
 
 
-def chat_client(base_url: str, api_key: str, timeout: float = 120.0) -> ChatClient:
-    """OpenAI 호환 chat completions 어댑터.
+def document_model() -> BaseChatModel:
+    """문서 태깅(`modules/assessment.py`)이 쓰는 모델.
 
-    **SDK를 쓰지 않는다.** 우리가 하는 일은 JSON을 POST하고 JSON을 받는 것 하나뿐이고,
-    SDK가 주는 재시도·스트리밍·타입 모델은 하나도 쓰지 않는다. 재시도는 Airflow가 한다.
-    그래서 `urllib.request`로 충분하고, 그러면 배포 이미지와 백엔드 가상환경 어느 쪽에도
-    의존성이 늘지 않는다. `fred.py`·`ecos.py`가 쓰는 것과 같은 도구다.
-
-    "OpenAI 호환"은 회사가 아니라 **요청·응답 모양**을 가리킨다. xAI(Grok)를 포함해 여러
-    제공처가 같은 모양을 받으므로 `base_url`만 바꾸면 된다.
-
-    키는 헤더에 실린다. URL에는 비밀이 없어 오류 메시지에 상태와 본문을 그대로 남겨도 된다.
-
-    `modules/assessment.py`와 `modules/analysts.py`는 `ChatClient` 프로토콜만 안다. HTTP를
-    아는 코드는 이 함수 하나다.
+    키는 `XAI_API_KEY`에서 온다. 모델을 바꾸려면 이 함수를 고친다. 제공처를 바꾸려면 여기서
+    다른 LangChain 클래스를 만들어 돌려주면 되고, 부르는 쪽은 `BaseChatModel`만 안다.
     """
+    return ChatXAI(
+        model="grok-4",
+        timeout=REQUEST_TIMEOUT_SECONDS,
+        # 재시도는 Airflow가 한다. 위 모듈 docstring 참고.
+        max_retries=0,
+    )
 
-    class _Adapter:
-        def complete(self, *, model, messages, tools=None, response_format=None) -> AssistantMessage:
-            payload: dict[str, Any] = {"model": model, "messages": list(messages)}
-            if tools:
-                payload["tools"] = list(tools)
-            if response_format:
-                payload["response_format"] = response_format
 
-            request = urllib.request.Request(
-                f"{base_url.rstrip('/')}/chat/completions",
-                data=json.dumps(payload, ensure_ascii=False).encode("utf-8"),
-                headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
-            )
-            try:
-                with urllib.request.urlopen(request, timeout=timeout) as response:
-                    body = json.load(response)
-            except urllib.error.HTTPError as error:
-                detail = error.read().decode("utf-8", "replace")[:500]
-                if response_format and any(marker in detail.lower() for marker in UNSUPPORTED_MARKERS):
-                    raise UnsupportedResponseFormat(f"HTTP {error.code}: {detail}") from error
-                raise LlmError(f"HTTP {error.code}: {detail}") from error
-            except (urllib.error.URLError, TimeoutError) as error:
-                # 네트워크 실패는 재시도할 값어치가 있다. DAG이 판단한다.
-                raise ConnectionError(f"chat request failed: {error}") from error
+def model_name(model: BaseChatModel) -> str:
+    """`document.llm_model`에 남길 이름. 어느 모델이 그 점수를 냈는지 나중에 읽어야 한다."""
+    return getattr(model, "model_name", None) or type(model).__name__
 
-            message = body["choices"][0]["message"]
-            calls = tuple(
-                ToolCall(
-                    id=call["id"],
-                    name=call["function"]["name"],
-                    arguments=call["function"].get("arguments") or "{}",
-                )
-                for call in (message.get("tool_calls") or ())
-            )
-            return AssistantMessage(content=message.get("content") or "", tool_calls=calls, raw=message)
 
-    return _Adapter()
+def invoke(
+    model: BaseChatModel,
+    messages: Sequence[BaseMessage],
+    *,
+    schema: dict[str, Any] | None = None,
+    tools: Sequence[dict[str, Any]] | None = None,
+) -> AIMessage:
+    """한 번 부른다. 재시도도 툴 루프도 여기서 돌지 않는다."""
+    bound = model
+    if tools:
+        bound = bound.bind_tools(tools)
+    if schema:
+        bound = bound.bind(response_format=schema)
+    try:
+        return bound.invoke(list(messages))
+    except openai.OpenAIError as error:
+        raise classify(error, had_schema=schema is not None) from error
+
+
+def classify(error: openai.OpenAIError, *, had_schema: bool = False) -> Exception:
+    """제공처 예외를 DAG가 아는 종류로 바꾼다. 재시도 여부 판단이 여기 달려 있다."""
+    if isinstance(error, openai.APIConnectionError | openai.APITimeoutError):
+        # 네트워크 실패는 재시도할 값어치가 있다. DAG이 판단한다.
+        return ConnectionError(f"chat request failed: {error}")
+    if isinstance(error, openai.APIStatusError):
+        detail = str(error.response.text)[:500] if error.response is not None else str(error)
+        if had_schema and any(marker in detail.lower() for marker in UNSUPPORTED_MARKERS):
+            return UnsupportedResponseFormat(f"HTTP {error.status_code}: {detail}")
+        return LlmError(f"HTTP {error.status_code}: {detail}")
+    return LlmError(str(error))

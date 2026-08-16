@@ -96,8 +96,8 @@
 
 ### `exchange_rate`
 
-- 통화별·회차별 환율 고시다. `default` 별칭(news2)에 있고 `exchange_rate_daily` DAG가 채운다. 2026-08-06에 `finance` 별칭에서 옮겼고 이전 데이터는 가져오지 않았다.
-- 컬럼 형태는 외부 finance DB의 같은 이름 테이블을 글자 그대로 복사한 것이다. serial `id`, naive `timestamp`, `date`/`time` 분리를 그대로 둔다. 나중에 finance의 과거 행을 옮기거나 Grafana를 news2로 돌릴 때 컬럼이 1:1로 맞아야 하기 때문이다.
+- 통화별·회차별 환율 고시다. `default` 별칭에 있고 `exchange_rate_daily` DAG가 채운다. 2026-08-06에 `finance` 별칭에서 옮겼고 이전 데이터는 가져오지 않았다.
+- 컬럼 형태는 외부 finance DB의 같은 이름 테이블을 글자 그대로 복사한 것이다. serial `id`, naive `timestamp`, `date`/`time` 분리를 그대로 둔다. 나중에 외부 DB의 과거 행을 옮기거나 Grafana를 우리 DB로 돌릴 때 컬럼이 1:1로 맞아야 하기 때문이다. 우리 DB 이름도 `finance`라 원본을 가리킬 때는 `외부 finance DB`라고 쓴다.
 - 프로젝트 기본 규칙 중 BIGSERIAL과 timezone-aware 시각을 적용하지 않는 유일한 테이블이다. 타입이나 컬럼 구성을 바꾸려면 그 이관 계획을 먼저 접는다. 지금 상태는 `tests/models/test_finance_models.py`가 컬럼 단위로 고정한다.
 - 주석은 예외로 단다. 주석은 데이터 이관에 영향을 주지 않으므로 테이블·컬럼 주석을 기본 규칙대로 채운다.
 - `currency`는 `apps/models/finance.py`의 `Currency` StrEnum이고 저장 타입은 `VARCHAR(10)` 그대로다. CHECK 제약은 걸지 않는다. 원본에 없는 제약이 생기고 통화를 추가할 때마다 다시 만들어야 하기 때문이다. 값은 `modules.collectors.hana.HanaCurrency`와 같아야 하며 테스트가 둘을 대조한다.
@@ -121,6 +121,23 @@
 - API 요청·응답, 설정, 외부 입력 검증에는 Pydantic 모델과 `Field`, validator를 사용한다.
 - 제공처 이름, URL, 종목 코드, 외부 식별자처럼 값이 열려 있는 필드는 `str` 또는 `Text`로 유지한다.
 - 단순 문자열을 의미 없이 Pydantic 모델이나 Enum으로 감싸지 않고, 유효성 규칙이나 제한된 값 집합이 있을 때 사용한다.
+
+## LLM 코드 규칙
+
+LLM을 부르는 코드는 **Pydantic, LangChain, LangGraph 위에서만 쓴다.** 세 층의 역할이 겹치지 않는다.
+
+- **어떤 모델을 쓸지는 코드가 정한다.** 모델 정의는 `airflow/modules/llm.py`에 LangChain 문법 그대로 모아 두고(`document_model()`) 바꿀 때 그 함수를 고친다. `base_url`·모델명을 환경변수로 빼서 제공처를 갈아 끼우지 않는다. 제공처마다 클래스와 인자가 달라 문자열 설정 몇 개로 흉내 낼 수 없다. **API 키만 환경에서 오고 그것도 우리가 읽지 않는다** — LangChain 클래스가 자기 이름(`XAI_API_KEY` 등)으로 읽는다.
+- **모델 호출은 LangChain이다.** `langchain_xai.ChatXAI` 같은 `BaseChatModel`을 쓰고 HTTP를 직접 치지 않는다. 요청·응답을 손으로 조립하면 LangSmith 추적이 끊기고 툴 호출 왕복을 직접 짜야 한다. 메시지는 dict가 아니라 `SystemMessage`, `HumanMessage`, `AIMessage`로 다룬다.
+- **흐름 제어는 LangGraph다.** 재시도, 교정 재요청, 분기, 문서·항목 팬아웃(`Send`)은 `StateGraph`의 노드와 엣지로 표현한다. `if`와 `for`로 흩어 놓지 않는다. 노드 이름이 그대로 트레이스에 남아 어디서 몇 번 불렀는지 보이는 것이 이 규칙의 목적이다. 상태는 `TypedDict`로 선언하고 병합이 필요한 칸에는 리듀서(`Annotated[list, operator.add]`)를 단다.
+- **데이터 모양은 Pydantic이다.** 설정, 모델 응답, 노드가 주고받는 결과는 `BaseModel`로 선언한다. `dataclass`나 맨 dict를 쓰지 않는다. 응답 스키마는 Pydantic 모델에서 뽑아 `response_format`으로 강제하고(`modules/schema.py`), 강제가 안 되는 제공처를 위해 검증을 그대로 남긴다.
+- **흐름은 클래스로 묶는다.** `DocumentAssessor`·`AssessmentBatch`처럼 그래프를 소유한 클래스가 갖는다. 모델 정의와 오류 분류는 `modules/llm.py`의 함수다. 감쌀 상태가 없는 것을 클래스로 만들지 않는다. 그래프는 생성자에서 한 번 `compile()`한다. 프롬프트 조립과 파싱처럼 상태가 필요 없는 것은 같은 클래스의 `@staticmethod`로 둔다.
+- **API 키를 그래프 상태에 넣지 않는다.** 상태와 config는 트레이스 입력으로 나간다. `SecretStr`을 담은 설정 객체는 생성자로만 넘긴다.
+- **재시도는 Airflow가 한다.** 모델 클라이언트는 `max_retries=0`으로 만든다. SDK가 먼저 재시도하면 태스크 타임아웃 안에서 몇 번을 불렀는지 로그와 트레이스가 어긋난다.
+- 제공처 예외는 한 곳에서 우리 종류로 바꾼다. 재시도할 값어치가 있는 것(`ConnectionError`)과 없는 것(`LlmError`)을 가르는 판단은 DAG가 한다.
+- 체크포인터·persistence는 붙이지 않는다. 재실행 단위는 Airflow 태스크다.
+- 추적은 `LANGSMITH_*` 환경변수로 켠다. 코드에 추적 호출을 심지 않는다. **켜면 프롬프트와 원문이 외부로 나간다는 사실을 문서에 남긴다.**
+
+기준 구현은 `airflow/modules/llm.py`와 `airflow/modules/assessment.py`다.
 
 ## 수집 계보 테이블 규칙
 

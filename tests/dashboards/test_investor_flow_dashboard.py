@@ -40,7 +40,12 @@ def test_every_panel_reads_the_selected_datasource(dashboard):
 
 def test_every_query_pins_the_provider(dashboard):
     for key, sql in statements(dashboard).items():
-        tables = ("market_investor_flow_snapshot", "stock_investor_estimate_snapshot", "stock_investor_trade_daily", "quote_bar")
+        tables = (
+            "market_investor_flow_snapshot",
+            "stock_investor_estimate_snapshot",
+            "stock_investor_trade_daily",
+            "quote_bar",
+        )
         if any(table in sql for table in tables):
             assert "provider = 'kis'" in sql, key
 

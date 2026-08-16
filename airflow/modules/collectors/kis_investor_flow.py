@@ -269,9 +269,7 @@ class MarketFlowRow(BaseModel):
 
         parts = sum(values[f"{name}_net_buy_qty"] for name, _ in INSTITUTION_PARTS)
         if parts != values["institution_net_buy_qty"]:
-            raise KisPayloadError(
-                f"institution parts do not add up: {parts} != {values['institution_net_buy_qty']}"
-            )
+            raise KisPayloadError(f"institution parts do not add up: {parts} != {values['institution_net_buy_qty']}")
 
         # 시장 전체는 닫혀 있다. 누가 팔면 누군가는 받는다(실측: 정확히 0).
         closed = (
@@ -629,9 +627,7 @@ class StockTradeDailyRow(BaseModel):
         }
         for name, prefix in (("foreign", "frgn"), ("institution", "orgn"), ("individual", "prsn")):
             values[f"{name}_net_buy_qty"] = _int(row.get(f"{prefix}_ntby_qty"), f"{prefix}_ntby_qty")
-            values[f"{name}_net_buy_amount"] = _decimal(
-                row.get(f"{prefix}_ntby_tr_pbmn"), f"{prefix}_ntby_tr_pbmn"
-            )
+            values[f"{name}_net_buy_amount"] = _decimal(row.get(f"{prefix}_ntby_tr_pbmn"), f"{prefix}_ntby_tr_pbmn")
         for name, field in INSTITUTION_PARTS + OTHER_PARTS:
             values[f"{name}_net_buy_qty"] = _int(row.get(field), field)
 
@@ -650,8 +646,7 @@ class StockTradeDailyRow(BaseModel):
         parts = sum(values[f"{name}_net_buy_qty"] for name, _ in INSTITUTION_PARTS)
         if parts != values["institution_net_buy_qty"]:
             raise KisPayloadError(
-                f"institution parts do not add up on {business_date}: "
-                f"{parts} != {values['institution_net_buy_qty']}"
+                f"institution parts do not add up on {business_date}: {parts} != {values['institution_net_buy_qty']}"
             )
 
         # 기타 합계를 제공처가 따로 준다. 우리가 더한 값과 대조해 둘 중 하나가 다른 뜻으로
@@ -659,9 +654,7 @@ class StockTradeDailyRow(BaseModel):
         others = values["other_corporation_net_buy_qty"] + values["other_organization_net_buy_qty"]
         reported_others = _int(row.get("etc_ntby_qty"), "etc_ntby_qty")
         if others != reported_others:
-            raise KisPayloadError(
-                f"other parts do not add up on {business_date}: {others} != {reported_others}"
-            )
+            raise KisPayloadError(f"other parts do not add up on {business_date}: {others} != {reported_others}")
 
         closed = (
             values["individual_net_buy_qty"]

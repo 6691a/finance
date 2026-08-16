@@ -298,7 +298,9 @@ def test_the_vol_suffix_categories_are_not_read_as_qty():
     assert fields["private_equity"] == "pe_fund_ntby_vol"
     assert fields["other_corporation"] == "etc_corp_ntby_vol"
     assert fields["other_organization"] == "etc_orgt_ntby_vol"
-    assert all(field.endswith("_ntby_qty") for name, field in kis_investor_flow.INSTITUTION_PARTS if name != "private_equity")
+    assert all(
+        field.endswith("_ntby_qty") for name, field in kis_investor_flow.INSTITUTION_PARTS if name != "private_equity"
+    )
 
 
 def test_an_all_zero_market_response_fails(monkeypatch):
@@ -491,9 +493,7 @@ def test_daily_trade_rejects_an_unreadable_date(monkeypatch):
 
 
 def test_store_daily_trade_writes_one_row_per_business_date(monkeypatch):
-    monkeypatch.setattr(
-        kis_investor_flow, "send_get", fake_send_get(body(output2=[DAILY_ROW, DAILY_ROW_PREVIOUS]))
-    )
+    monkeypatch.setattr(kis_investor_flow, "send_get", fake_send_get(body(output2=[DAILY_ROW, DAILY_ROW_PREVIOUS])))
     fetch = fetch_stock_trade_daily(TOKEN, APP_KEY, APP_SECRET, SAMSUNG, BUSINESS_DATE)
     connection = FakeConnection()
 
@@ -507,9 +507,7 @@ def test_store_daily_trade_writes_one_row_per_business_date(monkeypatch):
 
 def test_store_daily_trade_records_the_covered_range(monkeypatch):
     """백필이 어디까지 갔는지 계보만 보고 읽을 수 있어야 한다."""
-    monkeypatch.setattr(
-        kis_investor_flow, "send_get", fake_send_get(body(output2=[DAILY_ROW, DAILY_ROW_PREVIOUS]))
-    )
+    monkeypatch.setattr(kis_investor_flow, "send_get", fake_send_get(body(output2=[DAILY_ROW, DAILY_ROW_PREVIOUS])))
     fetch = fetch_stock_trade_daily(TOKEN, APP_KEY, APP_SECRET, SAMSUNG, BUSINESS_DATE)
     connection = FakeConnection()
     store_stock_trade_daily(connection, fetch)

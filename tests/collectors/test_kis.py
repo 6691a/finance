@@ -798,7 +798,9 @@ def test_store_stock_bars_records_the_call_count(monkeypatch):
     connection = FakeConnection()
     store_stock_bars(connection, fetch)
 
-    record = next(args for statement, args in connection.recorded_cursor.calls if "INSERT INTO source_record" in statement)
+    record = next(
+        args for statement, args in connection.recorded_cursor.calls if "INSERT INTO source_record" in statement
+    )
     metadata = json.loads(record[-1])
     assert record[2] == "stock_minute_bars"
     assert metadata["business_date"] == "2026-08-14"

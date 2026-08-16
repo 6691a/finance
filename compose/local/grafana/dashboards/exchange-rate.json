@@ -1,7 +1,7 @@
 {
   "uid": "exchange-rate",
   "title": "환율 고시",
-  "description": "exchange_rate 테이블을 통화별로 조회한다. 어느 DB를 볼지는 상단 '데이터소스' 드롭다운이 정한다. 기본값은 news2이고, 같은 스키마를 가진 다른 postgres 데이터소스를 고르면 패널이 전부 따라간다. 모든 쿼리는 date 인덱스를 타도록 날짜 범위 조건을 함께 건다. uid 는 바꾸지 않는다. 프로비저닝된 대시보드의 uid 를 바꾸면 Grafana 가 같은 파일로 두 번째 대시보드를 만들고, 그 뒤로 갱신이 uid 충돌로 막힌다.",
+  "description": "exchange_rate 테이블을 통화별로 조회한다. 어느 DB를 볼지는 상단 '데이터소스' 드롭다운이 정한다. 기본값은 finance이고, 같은 스키마를 가진 다른 postgres 데이터소스를 고르면 패널이 전부 따라간다. 모든 쿼리는 date 인덱스를 타도록 날짜 범위 조건을 함께 건다. uid 는 바꾸지 않는다. 프로비저닝된 대시보드의 uid 를 바꾸면 Grafana 가 같은 파일로 두 번째 대시보드를 만들고, 그 뒤로 갱신이 uid 충돌로 막힌다.",
   "tags": ["exchange-rate"],
   "editable": true,
   "schemaVersion": 39,
@@ -24,7 +24,7 @@
         "hide": 0,
         "current": {
           "selected": true,
-          "text": "news2",
+          "text": "finance",
           "value": "news2-postgres"
         },
         "options": []
@@ -46,7 +46,7 @@
       {
         "name": "tz",
         "label": "저장 시간대",
-        "description": "exchange_rate.date + time 이 어느 시간대의 벽시계 시각인지. 이 값으로 UTC 타임스탬프를 만든다. 화면 표시 시간대가 아니다. exchange_rate_daily DAG는 KST 고시 시각을 UTC로 바꿔 저장하므로 news2는 UTC다. 데이터소스를 바꿨는데 시각이 9시간 밀려 보이면 여기부터 확인한다.",
+        "description": "exchange_rate.date + time 이 어느 시간대의 벽시계 시각인지. 이 값으로 UTC 타임스탬프를 만든다. 화면 표시 시간대가 아니다. exchange_rate_daily DAG는 KST 고시 시각을 UTC로 바꿔 저장하므로 finance는 UTC다. 데이터소스를 바꿨는데 시각이 9시간 밀려 보이면 여기부터 확인한다.",
         "type": "custom",
         "query": "UTC,Asia/Seoul",
         "includeAll": false,

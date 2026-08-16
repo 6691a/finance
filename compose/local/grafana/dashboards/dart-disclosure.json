@@ -29,7 +29,7 @@
         "hide": 0,
         "current": {
           "selected": true,
-          "text": "news2",
+          "text": "finance",
           "value": "news2-postgres"
         },
         "options": []

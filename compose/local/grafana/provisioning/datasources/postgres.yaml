@@ -1,7 +1,16 @@
 apiVersion: 1
 
-datasources:
+# 프로비저닝은 datasource를 uid가 아니라 **이름으로** 찾는다. 이름을 바꾸면 새 datasource를
+# 넣으려 하고, uid가 같아서 UNIQUE 제약에 걸려 Grafana가 아예 뜨지 않는다. 옛 이름을 먼저
+# 지우게 해서 uid를 넘겨받는다. `news2` datasource가 이미 사라진 환경에서도 문제없다.
+deleteDatasources:
   - name: news2
+    orgId: 1
+
+datasources:
+  # uid는 그대로 둔다. 대시보드 JSON이 이 값으로 datasource를 가리키므로 바꾸면 패널이
+  # 전부 데이터소스를 잃는다. 표시 이름만 DB 이름을 따라간다.
+  - name: finance
     uid: news2-postgres
     type: postgres
     access: proxy

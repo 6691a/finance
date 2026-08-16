@@ -13,7 +13,7 @@ STREAM_URL = "redis://localhost:16379/1"
 def make_settings(**overrides: object) -> Settings:
     values: dict[str, object] = {
         "databases": {
-            "default": {"url": "postgresql+asyncpg://news2:news2@localhost:15432/news2"},
+            "default": {"url": "postgresql+asyncpg://finance:finance@localhost:15432/finance"},
         },
         "redises": {
             "default": {"url": DEFAULT_URL},

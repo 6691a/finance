@@ -4,20 +4,20 @@ databases:
   # Airflow DAG는 이 파일을 읽지 않는다. DAG의 대상은 `AIRFLOW_CONN_FINANCE`가 정하므로
   # 배포할 때 둘이 같은 DB를 가리키는지 확인한다. 어긋나면 DAG가 없는 테이블에 INSERT한다.
   default:
-    url: postgresql+asyncpg://news2:news2@localhost:15432/news2
+    url: postgresql+asyncpg://finance:finance@localhost:15432/finance
     runtime_enabled: true
     migration:
       enabled: true
       model_modules:
         - apps.models
   analytics:
-    url: postgresql+asyncpg://news2:news2@localhost:15432/news2
+    url: postgresql+asyncpg://finance:finance@localhost:15432/finance
   market_read:
-    url: postgresql+asyncpg://market_reader:market_reader@localhost:15432/news2
+    url: postgresql+asyncpg://market_reader:market_reader@localhost:15432/finance
     runtime_enabled: true
     read_only: true
   market_migration:
-    url: postgresql+asyncpg://migration_owner:migration_owner@localhost:15432/news2
+    url: postgresql+asyncpg://migration_owner:migration_owner@localhost:15432/finance
     runtime_enabled: false
     migration:
       enabled: true
@@ -52,6 +52,6 @@ ecos_api_key: ""
 
 sentry_dsn: ""
 sentry_environment: development
-sentry_release: news2@local
+sentry_release: finance@local
 sentry_traces_sample_rate: 0.1
 sentry_error_sample_rate: 1.0

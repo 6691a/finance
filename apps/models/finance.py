@@ -1,18 +1,21 @@
 """외부 finance DB에서 형태를 가져온 환율 고시 테이블.
 
-원본은 다른 시스템이 만든 finance DB의 `exchange_rate`다. 지금은 이 프로젝트가 `default`
-alias(news2)에 제 테이블을 만들어 직접 수집한다. finance DB의 데이터는 가져오지 않는다.
-`airflow/dags/exchange_rate_daily.py`가 `news` 연결로 여기에 쓴다.
+원본은 다른 시스템이 만든 외부 finance DB의 `exchange_rate`다. 지금은 이 프로젝트가
+`default` alias에 제 테이블을 만들어 직접 수집한다. 외부 DB의 데이터는 가져오지 않는다.
+`airflow/dags/exchange_rate_daily.py`가 `finance` 연결로 여기에 쓴다.
+
+**우리 DB 이름도 `finance`다.** 외부 원본과 이름이 같아서, 이 파일에서 원본을 가리킬 때는
+반드시 `외부 finance DB`라고 쓴다. 별칭 이름(`default`, `finance`)은 또 다른 층이다.
 
 컬럼의 **형태**는 여전히 원본을 따른다. SERIAL 기본키, 시간대 없는 `timestamp`,
-`date`/`time` 분리가 그렇다. 나중에 finance의 과거 행을 `INSERT INTO ... SELECT`로 옮길 때
+`date`/`time` 분리가 그렇다. 나중에 외부 DB의 과거 행을 `INSERT INTO ... SELECT`로 옮길 때
 컬럼이 1:1로 맞아야 하기 때문이다. 타입이나 컬럼 구성을 바꾸려면 그 계획을 먼저 접는다.
 
 주석은 예외다. 테이블·컬럼 주석은 데이터 이관에 영향을 주지 않으므로 이 프로젝트의 기본
 규칙대로 채운다. `currency`도 파이썬 쪽만 `Currency`로 좁혔고 저장 타입은 `VARCHAR(10)`
 그대로다. 두 변경 모두 컬럼 형태를 건드리지 않는다.
 
-파일 이름은 스키마 이름이 아니라 형태를 가져온 원본 DB 이름이다. 테이블 자체는 news2의
+파일 이름은 스키마 이름이 아니라 형태를 가져온 원본 DB 이름이다. 테이블 자체는 우리 DB의
 `public`에 있다.
 """
 

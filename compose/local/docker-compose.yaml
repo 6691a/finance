@@ -3,15 +3,15 @@ services:
     image: paradedb/paradedb:0.25.2-pg17
     command: postgres -c shared_preload_libraries=pg_search
     environment:
-      POSTGRES_DB: news2
-      POSTGRES_USER: news2
-      POSTGRES_PASSWORD: news2
+      POSTGRES_DB: finance
+      POSTGRES_USER: finance
+      POSTGRES_PASSWORD: finance
     ports:
       - "15432:5432"
     volumes:
       - psql:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U news2 -d news2"]
+      test: ["CMD-SHELL", "pg_isready -U finance -d finance"]
       interval: 5s
       timeout: 3s
       retries: 5
@@ -39,9 +39,9 @@ services:
       # and recreating grafana - no file under grafana/provisioning changes.
       # Defaults point at the db service in this compose file.
       NEWS_DB_URL: ${NEWS_DB_URL:-db:5432}
-      NEWS_DB_NAME: ${NEWS_DB_NAME:-news2}
-      NEWS_DB_USER: ${NEWS_DB_USER:-news2}
-      NEWS_DB_PASSWORD: ${NEWS_DB_PASSWORD:-news2}
+      NEWS_DB_NAME: ${NEWS_DB_NAME:-finance}
+      NEWS_DB_USER: ${NEWS_DB_USER:-finance}
+      NEWS_DB_PASSWORD: ${NEWS_DB_PASSWORD:-finance}
       FINANCE_DB_URL: ${FINANCE_DB_URL:-}
       FINANCE_DB_NAME: ${FINANCE_DB_NAME:-}
       FINANCE_DB_USER: ${FINANCE_DB_USER:-}

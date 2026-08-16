@@ -17,18 +17,18 @@ Copy-Item config.yaml.sample config.yaml
 ```yaml
 databases:
   default:
-    url: postgresql+asyncpg://news2:news2@localhost:15432/news2
+    url: postgresql+asyncpg://finance:finance@localhost:15432/finance
     runtime_enabled: true
     migration:
       enabled: true
       model_modules:
         - apps.models
   market_read:
-    url: postgresql+asyncpg://market_reader:password@localhost:15432/news2
+    url: postgresql+asyncpg://market_reader:password@localhost:15432/finance
     runtime_enabled: true
     read_only: true
   market_migration:
-    url: postgresql+asyncpg://migration_owner:password@localhost:15432/news2
+    url: postgresql+asyncpg://migration_owner:password@localhost:15432/finance
     runtime_enabled: false
     migration:
       enabled: true
@@ -117,7 +117,7 @@ ORM 매핑은 그대로라 읽고 쓸 수 있지만, **어떤 alias의 autogener
 
 ```yaml
 market_read:
-  url: postgresql+asyncpg://market_reader:password@localhost:15432/news2
+  url: postgresql+asyncpg://market_reader:password@localhost:15432/finance
   runtime_enabled: true
   read_only: true
 ```
@@ -358,7 +358,7 @@ docker compose -f compose/local/docker-compose.yaml logs -f grafana
 같은 대시보드를 다른 데이터베이스로 돌려 보는 길이 둘 있습니다. 대시보드 JSON은 어느 쪽에서도 고치지 않습니다.
 
 1. **대시보드 상단 `데이터소스` 드롭다운.** 재시작이 필요 없습니다. 프로비저닝된 postgres datasource 중에서 고르면 모든 패널이 따라갑니다. 잠깐 다른 환경을 확인할 때 씁니다.
-2. **`compose/local/.env`의 `NEWS_DB_*`.** `news2` datasource 자체가 가리키는 DB가 바뀝니다. 값을 비우면 로컬 `db` 컨테이너를 씁니다. 반영하려면 컨테이너를 다시 만듭니다.
+2. **`compose/local/.env`의 `NEWS_DB_*`.** `finance` datasource 자체가 가리키는 DB가 바뀝니다. 값을 비우면 로컬 `db` 컨테이너를 씁니다. 반영하려면 컨테이너를 다시 만듭니다.
 
 ```powershell
 docker compose -f compose/local/docker-compose.yaml up -d grafana

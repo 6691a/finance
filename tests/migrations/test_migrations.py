@@ -6,8 +6,8 @@ from pydantic import ValidationError
 from migrations.cli import PROJECT_ROOT, VERSION_PATH, _parser, build_alembic_config, migration_aliases
 from tests.helpers import SettingsForTest as Settings
 
-DEFAULT_URL = "postgresql+asyncpg://news2:news2@localhost:15432/news2"
-ANALYTICS_URL = "postgresql+asyncpg://news2:news2@localhost:15432/analytics"
+DEFAULT_URL = "postgresql+asyncpg://finance:finance@localhost:15432/finance"
+ANALYTICS_URL = "postgresql+asyncpg://finance:finance@localhost:15432/analytics"
 
 
 def make_settings(**overrides: object) -> Settings:

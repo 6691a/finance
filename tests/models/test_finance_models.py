@@ -1,6 +1,6 @@
 """`exchange_rate` is this project's own table, shaped after the finance one.
 
-The table lives on the `default` alias (news2) and the Hana collector writes to
+The table lives on the `default` alias (finance) and the Hana collector writes to
 it. Its column shape copies the external finance table so those rows can be
 loaded later without translating columns, which is why it keeps SERIAL, naive
 timestamps and split date/time columns instead of the project defaults. Drift

@@ -20,6 +20,7 @@ import json
 from collections.abc import Sequence
 from datetime import UTC, date, datetime
 from decimal import Decimal
+from enum import StrEnum
 from typing import Any, Protocol, Self
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlencode
@@ -41,12 +42,59 @@ from modules.sql import read_sql
 FRED_URL = "https://api.stlouisfed.org/fred/series/observations"
 SOURCE = "fred"
 
-# 미국 국채 수익률 곡선에서 단기·중기·장기를 대표하는 FRED 일별 시계열.
-# 시계열을 늘리려면 여기에만 추가한다. 저장 계약은 `series_id`로 갈라지므로 코드 변경이 없다.
-TREASURY_SERIES: tuple[str, ...] = ("DGS3MO", "DGS2", "DGS10", "DGS30")
 
-# FRED는 이 시계열들을 연이율 퍼센트로 발표한다. observations 응답에는 단위가 없다.
-SERIES_UNIT = "Percent"
+class FredSeries(StrEnum):
+    """수집 대상. 저장 식별자, FRED 좌표, 단위, 종류, 라벨을 한 줄에 묶는다.
+
+    **단위를 계열마다 단다.** 초판은 `SERIES_UNIT = "Percent"` 상수 하나였다. 국채만 받을 때는
+    맞았지만 물가지수와 소매판매가 들어오면서 거짓이 됐다. observations 응답에는 단위가 없어서
+    (`series` 엔드포인트에만 있다) 여기 선언하는 값이 유일한 근거다.
+
+    **FRED id를 저장 식별자로 쓰지 않는 계열이 있다.** `DGS10`은 사람이 읽으니 그대로 두지만
+    `CPIAUCSL`은 DB만 보고 무슨 값인지 알 수 없다. 그런 계열은 읽히는 이름을 만들어 저장하고
+    FRED 좌표는 요청과 `source_record.metadata`에만 쓴다. `ecos.py`의 `MarketRateSeries`가
+    항목코드를 다루는 방식과 같다.
+
+    **월간 계열은 `M`으로 끝난다.** 한 테이블에 일별과 월간이 섞여 있어 표시가 없으면 조회하는
+    쪽이 주기를 구분할 수 없다. `ecb_irs.py`가 먼저 쓴 규칙이다.
+    """
+
+    fred_id: str
+    unit: str
+    kind: str
+    label: str
+
+    def __new__(cls, series_id: str, fred_id: str, unit: str, kind: str, label: str) -> Self:
+        member = str.__new__(cls, series_id)
+        member._value_ = series_id
+        member.fred_id = fred_id
+        member.unit = unit
+        member.kind = kind
+        member.label = label
+        return member
+
+    @property
+    def is_monthly(self) -> bool:
+        """월간 계열인지. 저장 식별자의 `M` 접미사가 그 표시다."""
+        return self.value.endswith("_M")
+
+    # 미국 국채 수익률 곡선에서 단기·중기·장기를 대표하는 일별 시계열.
+    DGS3MO = ("DGS3MO", "DGS3MO", "Percent", "government_bond", "미국 3개월물")
+    DGS2 = ("DGS2", "DGS2", "Percent", "government_bond", "미국 2년물")
+    DGS10 = ("DGS10", "DGS10", "Percent", "government_bond", "미국 10년물")
+    DGS30 = ("DGS30", "DGS30", "Percent", "government_bond", "미국 30년물")
+
+    # 월간 거시지표. 연준이 왜 움직이는지를 설명하는 값이고, 금리만으로는 안 보인다.
+    # 단위와 기준연도는 2026-08-16에 `series` 엔드포인트로 확인했다.
+    CPI_M = ("CPI_M", "CPIAUCSL", "Index 1982-1984=100", "price_index", "미국 소비자물가지수")
+    PPI_M = ("PPI_M", "PPIFIS", "Index Nov 2009=100", "price_index", "미국 생산자물가지수(최종수요)")
+    RETAIL_SALES_M = ("RETAIL_SALES_M", "RSAFS", "Millions of Dollars", "activity", "미국 소매판매")
+
+
+# DAG이 태스크를 매핑하는 단위. 국채와 거시는 발표 주기가 달라 되돌아볼 구간이 다르고,
+# 그래서 DAG도 나뉜다.
+TREASURY_SERIES: tuple[str, ...] = tuple(series.value for series in FredSeries if series.kind == "government_bond")
+MACRO_SERIES: tuple[str, ...] = tuple(series.value for series in FredSeries if series.is_monthly)
 
 # FRED가 휴장일과 미발표일에 값 대신 넣는 표시.
 MISSING_VALUE = "."
@@ -93,8 +141,8 @@ class FredRequest(BaseModel):
     @field_validator("series_id")
     @classmethod
     def require_known_series(cls, series_id: str) -> str:
-        if series_id not in TREASURY_SERIES:
-            raise ValueError(f"Unknown treasury series: {series_id!r}")
+        if series_id not in {series.value for series in FredSeries}:
+            raise ValueError(f"Unknown FRED series: {series_id!r}")
         return series_id
 
     @model_validator(mode="after")
@@ -175,7 +223,8 @@ def build_url(api_key: SecretStr, request: FredRequest) -> str:
 
     query = urlencode(
         {
-            "series_id": request.series_id,
+            # 요청에는 FRED 좌표가 들어간다. 저장 식별자와 다른 계열이 있다.
+            "series_id": FredSeries(request.series_id).fred_id,
             "api_key": api_key.get_secret_value(),
             "file_type": "json",
             "observation_start": request.observation_start.isoformat(),
@@ -224,6 +273,16 @@ SOURCE_RECORD_INSERT = read_sql("postgres", "source_record", "insert.sql")
 OBSERVATION_UPSERT = read_sql("postgres", "indicator_observation", "upsert.sql")
 
 
+def _require_first_of_month(series: FredSeries, observation_date: date) -> None:
+    """월간 계열의 관측일이 그 달 1일인지 본다.
+
+    FRED는 월간 값을 그 달 1일로 준다(실측 2026-08-16). 달 중간 날짜가 섞이면 같은 달이 두 행이
+    되고, 그 뒤로는 어느 쪽이 진짜인지 알 수 없다. `ecb_irs.py`가 같은 검사를 한다.
+    """
+    if series.is_monthly and observation_date.day != 1:
+        raise FredPayloadError(f"{series.value} is monthly but FRED returned {observation_date.isoformat()}")
+
+
 def store_observations(connection: Connection, response: FredResponse) -> int:
     """원본 1건과 유효 관측값을 저장하고 정규화한 관측값 수를 돌려준다.
 
@@ -234,6 +293,7 @@ def store_observations(connection: Connection, response: FredResponse) -> int:
     ORM 대신 문자열 SQL을 쓴다. Airflow 이미지에는 SQLAlchemy와 이 프로젝트의 DB 설정이
     없기 때문이다. 컬럼 이름은 `tests/collectors/test_fred.py`가 모델 metadata와 맞춰 둔다.
     """
+    series = FredSeries(response.series_id)
     observations = parse_observations(response.body)
     request_metadata = json.dumps(
         {
@@ -260,6 +320,7 @@ def store_observations(connection: Connection, response: FredResponse) -> int:
         )
         source_record_id = cursor.fetchone()[0]
         for observation in observations:
+            _require_first_of_month(series, observation.observation_date)
             cursor.execute(
                 OBSERVATION_UPSERT,
                 (
@@ -267,7 +328,7 @@ def store_observations(connection: Connection, response: FredResponse) -> int:
                     response.series_id,
                     observation.observation_date,
                     observation.value,
-                    SERIES_UNIT,
+                    series.unit,
                     source_record_id,
                 ),
             )

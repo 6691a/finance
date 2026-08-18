@@ -15,12 +15,21 @@ from apps.core.database import EntityBase, table_options
 
 
 class SeriesKind(StrEnum):
+    """시계열이 무엇을 재는 값인지.
+
+    금리 둘로 시작했지만 이 테이블은 금리 전용이 아니다. 물가지수와 실물활동이 들어오면서
+    종류가 넷이 됐다. **단위가 다른 값을 한 화면에 못 놓기 때문에** 물가지수(지수, 300 근처)와
+    실물활동(백만 달러, 70만 근처)을 갈라 둔다.
+    """
+
     GOVERNMENT_BOND = "government_bond"
     MONEY_MARKET = "money_market"
+    PRICE_INDEX = "price_index"
+    ACTIVITY = "activity"
 
 
 class IndicatorSeries(EntityBase):
-    """`indicator_observation`에 쌓이는 시계열이 어느 나라 무슨 금리인지 설명한다.
+    """`indicator_observation`에 쌓이는 시계열이 어느 나라 무슨 값인지 설명한다.
 
     관측값 테이블은 `(provider, series_id)`까지만 안다. 그 문자열에서 국가와 만기를
     되짚으려면 조회하는 쪽이 시계열 목록을 알고 있어야 하고, 그러면 나라를 추가할 때마다
@@ -40,15 +49,17 @@ class IndicatorSeries(EntityBase):
             name="uq_indicator_series_natural_key",
         ),
         CheckConstraint(
-            "kind IN ('government_bond', 'money_market')",
+            "kind IN ('government_bond', 'money_market', 'price_index', 'activity')",
             name="ck_indicator_series_kind",
         ),
+        # 만기가 없는 지표는 NULL이다. 0으로 채우지 않는다. 0을 넣으면 만기별 비교 쿼리가
+        # 그 시계열을 "0개월물"로 그린다.
         CheckConstraint(
-            "maturity_months > 0",
+            "maturity_months IS NULL OR maturity_months > 0",
             name="ck_indicator_series_maturity_months",
         ),
         table_options(
-            comment="지표 시계열이 어느 나라 무슨 금리인지 설명하는 마스터",
+            comment="지표 시계열이 어느 나라 무슨 값인지 설명하는 마스터",
             database="default",
         ),
     )
@@ -73,10 +84,13 @@ class IndicatorSeries(EntityBase):
         nullable=False,
         comment="국가 표시 이름. 국가에 붙는 속성이 더 늘면 country 마스터 테이블로 분리한다",
     )
-    maturity_months: Mapped[int] = mapped_column(
+    maturity_months: Mapped[int | None] = mapped_column(
         Integer,
-        nullable=False,
-        comment="만기 개월 수. 만기별 비교와 정렬에 쓴다(3개월=3, 10년=120). 91일물은 3으로 둔다",
+        nullable=True,
+        comment=(
+            "만기 개월 수. 만기별 비교와 정렬에 쓴다(3개월=3, 10년=120). 91일물은 3으로 둔다. "
+            "물가지수처럼 만기 개념이 없는 지표는 NULL이다"
+        ),
     )
     kind: Mapped[SeriesKind] = mapped_column(
         SqlEnum(
@@ -86,7 +100,10 @@ class IndicatorSeries(EntityBase):
             values_callable=lambda enum: [member.value for member in enum],
         ),
         nullable=False,
-        comment="금리의 종류(government_bond 또는 money_market). 국채 곡선에서 단기 자금시장 금리를 가른다",
+        comment=(
+            "시계열의 종류(government_bond, money_market, price_index 또는 activity). "
+            "국채 곡선에서 단기 자금시장 금리를 가르고, 단위가 다른 거시지표를 그 곡선에서 뺀다"
+        ),
     )
     label: Mapped[str] = mapped_column(
         Text,

@@ -12,14 +12,15 @@ from sqlalchemy import Table
 from apps.models.market import IndicatorObservation
 from apps.models.raw import SourceRecord
 from modules.collectors.fred import (
+    MACRO_SERIES,
     OBSERVATION_UPSERT,
-    SERIES_UNIT,
     SOURCE_RECORD_INSERT,
     TREASURY_SERIES,
     FredHTTPError,
     FredPayloadError,
     FredRequest,
     FredResponse,
+    FredSeries,
     build_url,
     fetch_series,
     parse_observations,
@@ -140,6 +141,40 @@ def test_treasury_series_cover_short_and_long_maturities():
     assert len(set(TREASURY_SERIES)) == len(TREASURY_SERIES)
 
 
+def test_the_two_series_groups_do_not_overlap():
+    # DAG이 둘로 나뉘어 각각 매핑한다. 겹치면 같은 계열을 하루에 두 번 받는다.
+    assert set(TREASURY_SERIES) & set(MACRO_SERIES) == set()
+    assert set(TREASURY_SERIES) | set(MACRO_SERIES) == {series.value for series in FredSeries}
+
+
+def test_each_series_declares_its_own_unit():
+    """단위를 모듈 상수 하나로 두면 국채 아닌 계열에 거짓이 실린다.
+
+    observations 응답에는 단위가 없어서(`series` 엔드포인트에만 있다) Enum에 적은 값이
+    유일한 근거다.
+    """
+    assert FredSeries.DGS10.unit == "Percent"
+    assert FredSeries.CPI_M.unit == "Index 1982-1984=100"
+    assert FredSeries.RETAIL_SALES_M.unit == "Millions of Dollars"
+    # 단위가 계열마다 다르다는 것 자체가 계약이다.
+    assert len({series.unit for series in FredSeries}) > 1
+
+
+def test_monthly_series_are_marked_in_the_stored_identifier():
+    # 한 테이블에 일별과 월간이 섞여 있어 표시가 없으면 조회하는 쪽이 주기를 구분할 수 없다.
+    assert all(series.value.endswith("_M") for series in FredSeries if series.is_monthly)
+    assert not any(series.is_monthly for series in FredSeries if series.kind == "government_bond")
+
+
+def test_the_request_uses_the_provider_coordinate_not_the_stored_identifier():
+    # `CPIAUCSL`은 DB만 보고 무슨 값인지 알 수 없어 읽히는 이름으로 저장한다. 요청은 좌표로 간다.
+    assert FredSeries.CPI_M.fred_id == "CPIAUCSL"
+    url = build_url(API_KEY, request_for("CPI_M"))
+
+    assert "series_id=CPIAUCSL" in url
+    assert "series_id=CPI_M" not in url
+
+
 def test_build_url_requests_one_series_as_json_for_the_given_period():
     url = build_url(API_KEY, request_for())
 
@@ -150,7 +185,7 @@ def test_build_url_requests_one_series_as_json_for_the_given_period():
 
 
 def test_request_rejects_unknown_series_and_reversed_period():
-    with pytest.raises(ValidationError, match="Unknown treasury series"):
+    with pytest.raises(ValidationError, match="Unknown FRED series"):
         request_for("GDP")
 
     with pytest.raises(ValidationError, match="observation_start"):
@@ -280,7 +315,12 @@ def test_store_links_each_observation_to_the_stored_source_record():
 
     provider, series_id, observation_date, value, unit, source_record_id = connection.recorded_cursor.calls[1][1]
 
-    assert (series_id, observation_date, value, unit) == ("DGS10", date(2026, 8, 3), Decimal("4.25"), SERIES_UNIT)
+    assert (series_id, observation_date, value, unit) == (
+        "DGS10",
+        date(2026, 8, 3),
+        Decimal("4.25"),
+        FredSeries.DGS10.unit,
+    )
     assert source_record_id == SOURCE_RECORD_ID
     # 멱등 키가 제공처까지 포함하므로 관측값의 provider는 원본 레코드의 source와 같아야 한다.
     assert provider == connection.recorded_cursor.calls[0][1][1]

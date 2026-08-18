@@ -1,7 +1,10 @@
 import pytest
 
+from modules.collectors.bbk import BundSeries
 from modules.collectors.boe import GiltSeries
 from modules.collectors.ecb import EuroYieldSeries
+from modules.collectors.ecb_irs import MATURITY_MONTHS as CONVERGENCE_MATURITY_MONTHS
+from modules.collectors.ecb_irs import ConvergenceSeries
 from modules.collectors.ecos import MarketRateSeries
 from modules.collectors.fred import MACRO_SERIES, TREASURY_SERIES
 from modules.collectors.mof import JgbSeries
@@ -83,19 +86,41 @@ def test_every_ecb_series_has_a_master_row(series, capsys):
     assert f"'ecb', '{series.value}'" in sql
 
 
+@pytest.mark.parametrize("series", list(BundSeries))
+def test_every_bbk_series_has_a_master_row(series, capsys):
+    sql = head_sql(capsys)
+
+    assert f"'bbk', '{series.value}'" in sql
+
+
+@pytest.mark.parametrize("series", list(ConvergenceSeries))
+def test_every_ecb_convergence_series_has_a_master_row(series, capsys):
+    # `ecb_irs`는 `ecb.py`와 provider를 공유한다. 같은 `ecb` 아래 있어도 시드는 따로 넣으므로
+    # 여기서 따로 대조해야 한다.
+    sql = head_sql(capsys)
+
+    assert f"'ecb', '{series.value}'" in sql
+
+
 @pytest.mark.parametrize(
-    ("provider", "series", "country", "country_name"),
+    ("provider", "series_id", "country", "country_name", "maturity_months"),
     [
-        *[("mof", series, "JP", "일본") for series in JgbSeries],
-        *[("boe", series, "GB", "영국") for series in GiltSeries],
+        *[("mof", series.value, "JP", "일본", series.maturity_months) for series in JgbSeries],
+        *[("boe", series.value, "GB", "영국", series.maturity_months) for series in GiltSeries],
         # 유로 지역은 나라가 아니라 통화권이다. ISO 국가 코드가 아니라 XM이 들어간다.
-        *[("ecb", series, "XM", "유로 지역") for series in EuroYieldSeries],
+        *[("ecb", series.value, "XM", "유로 지역", series.maturity_months) for series in EuroYieldSeries],
+        *[("bbk", series.value, "DE", "독일", series.maturity_months) for series in BundSeries],
+        # 수렴 기준 금리는 나라마다 잔존 10년 국채 하나뿐이라 만기가 수집기 상수다.
+        *[
+            ("ecb", series.value, series.country, series.country_name, CONVERGENCE_MATURITY_MONTHS)
+            for series in ConvergenceSeries
+        ],
     ],
 )
-def test_the_master_row_keeps_the_maturity_the_collector_declares(provider, series, country, country_name, capsys):
+def test_the_master_row_keeps_the_maturity_the_collector_declares(
+    provider, series_id, country, country_name, maturity_months, capsys
+):
     # 만기가 어긋나면 국가 비교 패널이 다른 만기를 같은 줄에 그린다. DAG는 죽지 않는다.
     sql = head_sql(capsys)
 
-    assert (
-        f"'{provider}', '{series.value}', '{country}', '{country_name}', {series.maturity_months}, 'government_bond'"
-    ) in sql
+    assert (f"'{provider}', '{series_id}', '{country}', '{country_name}', {maturity_months}, 'government_bond'") in sql

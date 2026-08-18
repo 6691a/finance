@@ -4,6 +4,13 @@
 > 상태: 미구현 기능의 확정 실행 계획  
 > 대상: 삼성전자(`005930`), SK하이닉스(`000660`)의 KRX·NXT 체결
 
+> **2026-08-18 갱신**: 저장 스키마는 이 문서와 다르게 확정됐다. `krx_equity_bar`/`nxt_equity_bar`
+> 물리 테이블 분리 대신 단일 `stock_bar`에 `exchange`(KRX/NXT) 컬럼을 자연키 축으로 둔다
+> (`apps/models/market.py`, 커밋 `e6cf001`). 마감 후 REST 확정본은 `kis_stock_minute_bars_daily`
+> DAG로 구현됐다. WebSocket 실시간 경로, `kis_quote_intraday`의 5분 REST 조정,
+> `kis_equity_backfill` 백필 DAG는 여전히 미구현이다. 이후 절의 테이블 이름과 SQL 경로는
+> 구현 시 `stock_bar` 기준으로 바꿔 읽는다.
+
 ## 1. 결론
 
 삼성전자와 SK하이닉스의 KRX·NXT 체결을 거래소별 1분 OHLCV로 저장한다. 실시간 주 경로는

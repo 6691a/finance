@@ -275,7 +275,7 @@ DAG마다 절을 두지 않습니다. 상세는 각 DAG 파일의 `doc_md`에 �
 | `kis_quote_intraday` | 평일 08~16시 5분마다 | `quote_bar`, `market_movement_snapshot` | KIS |
 | `kis_investor_flow_intraday` | 평일 09~15시 5분마다 | `market_investor_flow_snapshot`, `stock_investor_estimate_snapshot` | KIS |
 | `kis_investor_trade_daily` | 평일 18:10 | `stock_investor_trade_daily` | KIS |
-| `kis_stock_minute_bars_daily` | 평일 18:40 | `quote_bar` | KIS |
+| `kis_stock_minute_bars_daily` | 평일 20:40 | `stock_bar` | KIS |
 | `kis_market_positioning_daily` | 화~토 08:10 | `krx_*` 6종(신용·공매도·대차·증시자금) | KIS |
 | `yahoo_quote_intraday` | 5분마다(시간 창 없음) | `quote_bar` | Yahoo |
 | `yahoo_quote_daily` | 매일 07:30 | `quote_daily` | Yahoo |
@@ -293,9 +293,9 @@ DAG마다 절을 두지 않습니다. 상세는 각 DAG 파일의 `doc_md`에 �
 
 | DAG | 스케줄(KST) | 채널 | 내용 |
 | --- | --- | --- | --- |
-| `slack_kr_market_briefing` | 평일 12:30·16:30 | `SLACK_CHANNEL_MARKET` | 국내 지수·선물, 장중 해외(미국 선물·아시아), 환율, 수급 |
+| `slack_kr_market_briefing` | 평일 12:30·16:30·19:30 | `SLACK_CHANNEL_MARKET` | 국내 지수·선물, 장중 해외(미국 선물·아시아), 환율, 수급 |
 | `slack_us_market_briefing` | 화~토 08:00 | `SLACK_CHANNEL_MARKET` | 밤사이 미국 마감, 주요국 10년 금리, 전일 국내 복기와 조합 요약 |
-| `slack_document_briefing` | 매일 08:00·17:00 | `SLACK_CHANNEL_DOCUMENT` | 최근 12시간 평가 집계와 `value_score` 상위 문서 |
+| `slack_document_briefing` | 매일 08:00 | `SLACK_CHANNEL_DOCUMENT` | 지난 24시간 평가 집계와 `value_score` 상위 문서 |
 | `slack_ops_briefing` | 매일 08:00 | `SLACK_CHANNEL_OPS` | 지난 24시간 수집 성공·실패·무소식 |
 
 표는 SQL 집계가 만들고 LLM은 그 위에 요약만 씁니다. **숫자는 LLM이 만들지 않습니다.** 요약이 실패해도 리포트는 나가고, 실패했다는 사실은 메시지에 남습니다. 조용히 빠지면 요약이 원래 없는 리포트와 구분되지 않기 때문입니다.

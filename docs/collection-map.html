@@ -594,11 +594,15 @@
     <strong>국내 반도체 개별주 — 삼성전자(<code>005930</code>) · SK하이닉스(<code>000660</code>).</strong>
     가설의 정답지다. <code>kind</code>는 기존 <code>equity</code>를 그대로 쓴다(TSMC ADR이 이미 쓴다).
     <br><br>
+    <strong>2026-08-18 구현됨</strong> — <code>kis_stock_minute_bars_daily</code>가 장 마감 뒤
+    KRX·NXT 1분봉을 각각 받아 <code>stock_bar</code>에 저장한다(거래소가 자연키의 한 축).
+    <br><br>
     <code>FHKST03010200</code> /
     <code>/uapi/domestic-stock/v1/quotations/inquire-time-itemchartprice</code> 로 확인했다.
     한 요청에 <strong>30봉</strong>(선물 102봉, 업종지수 120봉과 다르다).
-    <code>FID_COND_MRKT_DIV_CODE</code>는 <code>J</code>(KRX)다 —
-    <code>NX</code>(NXT)·<code>UN</code>(통합)은 쓰지 않는다.
+    <code>FID_COND_MRKT_DIV_CODE</code>는 종목 분봉에서 <code>J</code>(KRX)와
+    <code>NX</code>(NXT)를 각각 보낸다 — <code>UN</code>(통합)은 쓰지 않는다.
+    업종 분봉만 KRX 전용이다.
     <br><br>
     <strong>구현할 때 가장 먼저 걸리는 지점:</strong> 값 컬럼이 선물(<code>futs_*</code>)·
     업종지수(<code>bstp_nmix_*</code>)와 다른 <strong>세 번째 이름 체계</strong>(<code>stck_*</code>)다.

@@ -525,24 +525,39 @@ def _intraday_overseas(summary: MarketSummary) -> tuple[QuoteChange, ...]:
 
 
 def _quote_section(title: str, quotes: Sequence[QuoteChange]) -> list[dict[str, Any]]:
+    """시세 표.
+
+    **기준 시각을 행마다 적는다.** 심볼마다 마지막 봉 시각이 다르다. 국내는 KRX 마감,
+    해외 선물은 몇 분 전 값이라 한 표 안에서 며칠 차이가 나기도 한다. 표 밖에 대표 시각
+    하나만 두면 묵은 줄이 최신처럼 보인다.
+    """
     if not quotes:
         return []
-    rows = [(quote.label, _number(quote.close), _percent(quote.change_percent)) for quote in quotes]
-    return [blocks.table_section(title, ("구분", "종가", "등락"), rows)]
+    rows = [
+        (quote.label, _number(quote.close), _percent(quote.change_percent), _day_stamp(quote.bar_at))
+        for quote in quotes
+    ]
+    return [blocks.table_section(title, ("구분", "종가", "등락", "기준"), rows)]
 
 
 def _exchange_rate_section(summary: MarketSummary) -> list[dict[str, Any]]:
     if not summary.exchange_rates:
         return []
-    rows = [(fx.currency, _number(fx.rate), _percent(fx.change_percent)) for fx in summary.exchange_rates]
-    return [blocks.table_section("환율(하나은행 고시)", ("통화", "매매기준율", "전일 대비"), rows)]
+    rows = [
+        (fx.currency, _number(fx.rate), _percent(fx.change_percent), f"{fx.posted_on:%m/%d} {fx.round}회차")
+        for fx in summary.exchange_rates
+    ]
+    return [blocks.table_section("환율(하나은행 고시)", ("통화", "매매기준율", "전일 대비", "기준"), rows)]
 
 
 def _rate_section(summary: MarketSummary) -> list[dict[str, Any]]:
     if not summary.rates:
         return []
-    rows = [(rate.label, f"{rate.value}%", _basis_points(rate.change_bp)) for rate in summary.rates]
-    return [blocks.table_section("주요국 10년 금리", ("국가", "금리", "전일 대비"), rows)]
+    rows = [
+        (rate.label, f"{rate.value}%", _basis_points(rate.change_bp), f"{rate.observation_date:%m/%d}")
+        for rate in summary.rates
+    ]
+    return [blocks.table_section("주요국 10년 금리", ("국가", "금리", "전일 대비", "기준"), rows)]
 
 
 def _flow_section(summary: MarketSummary) -> list[dict[str, Any]]:
@@ -554,10 +569,11 @@ def _flow_section(summary: MarketSummary) -> list[dict[str, Any]]:
             _amount(flow.foreign_net_buy_amount),
             _amount(flow.institution_net_buy_amount),
             _amount(flow.individual_net_buy_amount),
+            _day_stamp(flow.observed_at),
         )
         for flow in summary.flows
     ]
-    return [blocks.table_section("투자자 순매수(억원)", ("시장", "외국인", "기관", "개인"), rows)]
+    return [blocks.table_section("투자자 순매수(억원)", ("시장", "외국인", "기관", "개인", "기준"), rows)]
 
 
 def _movement_section(summary: MarketSummary) -> list[dict[str, Any]]:
@@ -569,31 +585,27 @@ def _movement_section(summary: MarketSummary) -> list[dict[str, Any]]:
             str(movement.rising_count),
             str(movement.unchanged_count),
             str(movement.falling_count),
+            _day_stamp(movement.observed_at),
         )
         for movement in summary.movements
     ]
-    return [blocks.table_section("등락 종목 수", ("시장", "상승", "보합", "하락"), rows)]
+    return [blocks.table_section("등락 종목 수", ("시장", "상승", "보합", "하락", "기준"), rows)]
 
 
 def _as_of(summary: MarketSummary, scope: MarketScope) -> list[str]:
-    """각 값이 언제 것인지. 어느 섹션이 묵었는지 보이지 않으면 조용히 옛 값을 읽는다."""
-    lines = []
+    """리포트 시각과 **가장 묵은 값**.
+
+    값마다의 기준 시각은 이제 표 안에 있다. 여기서는 한눈에 볼 것 하나만 남긴다 —
+    이 리포트에서 제일 오래된 값이 언제 것인가. 그게 최신이면 전체가 최신이다.
+    """
+    lines = [f"작성 {blocks.timestamp(summary.generated_at.astimezone(KST_TIMEZONE))}"]
     quotes = _korea_quotes(summary) if scope is MarketScope.KOREA else _us_quotes(summary)
-    if quotes:
-        latest = max(quote.bar_at for quote in quotes)
-        lines.append(f"시세 {blocks.timestamp(latest.astimezone(KST_TIMEZONE))}")
-    if summary.exchange_rates:
-        newest = max(summary.exchange_rates, key=lambda fx: (fx.posted_on, fx.round))
-        lines.append(f"환율 {newest.posted_on:%m/%d} {newest.round}회차")
-    if scope is MarketScope.US and summary.rates:
-        lines.append(f"금리 {max(rate.observation_date for rate in summary.rates):%m/%d}")
-    # 수급·등락은 장중 스냅샷이라 시세보다 며칠 묵어 있을 수 있다. 여기 안 적으면 나흘 지난
-    # 순매수를 오늘 것으로 읽는다. 실제로 그런 일이 있었다.
-    if summary.flows:
-        lines.append(f"수급 {_day_stamp(max(flow.observed_at for flow in summary.flows))}")
-    if summary.movements:
-        lines.append(f"등락 {_day_stamp(max(movement.observed_at for movement in summary.movements))}")
-    return lines or ["표시할 값이 없다"]
+    observed = [quote.bar_at for quote in quotes]
+    observed += [flow.observed_at for flow in summary.flows]
+    observed += [movement.observed_at for movement in summary.movements]
+    if observed:
+        lines.append(f"가장 오래된 값 {_day_stamp(min(observed))}")
+    return lines
 
 
 def _day_stamp(moment: datetime) -> str:

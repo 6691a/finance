@@ -123,17 +123,34 @@ def test_the_quote_window_survives_a_long_holiday():
     assert market.FLOW_LOOKBACK >= timedelta(days=8)
 
 
-def test_every_section_says_how_old_its_values_are():
-    """수급·등락은 시세보다 며칠 묵어 있을 수 있다.
+def test_every_row_carries_its_own_as_of_time():
+    """행마다 기준 시각이 달라질 수 있다.
 
-    실측(2026-08-18): 수급이 08-14, 등락이 08-13 값인데 context가 시세 기준 시각만 알려
-    요약이 나흘 묵은 수급을 현재로 읽었다. 묵은 값을 숨기지 않는 것이 context의 일이다.
+    실측(2026-08-18): KIS 심볼은 08-14, yahoo 심볼은 08-15 값이었는데 표에는 시각이 없고
+    context에 가장 최신 하나만 있어 전부 같은 시점처럼 보였다. 어느 줄이 묵었는지는
+    그 줄에 적혀야 안다.
     """
-    context = market.render_blocks(summary(), MarketScope.KOREA, None)[-1]
-    text = context["elements"][0]["text"]
+    stale = MIDDAY - timedelta(days=3)
+    connection = FakeConnection(
+        [
+            ("kis", "KOSPI", "코스피", "index", "KR", Decimal("2687.45"), Decimal("2665.60"), stale),
+            ("kis", "KOSDAQ", "코스닥", "index", "KR", Decimal("745.10"), Decimal("747.42"), MIDDAY),
+        ],
+        [], [], [], [], [], [], [], [],
+    )
+    blocks_out = market.render_blocks(market.collect_summary(connection, MIDDAY), MarketScope.KOREA, None)
+    table = next(block["text"]["text"] for block in blocks_out if "국내" in block.get("text", {}).get("text", ""))
 
-    assert "수급" in text
-    assert "등락" in text
+    assert "기준" in table  # 열 제목
+    assert "08/15" in table  # 묵은 줄
+    assert "08/18" in table  # 최신 줄
+
+
+def test_the_context_flags_the_oldest_value():
+    """행마다 시각이 붙어도 한눈에 "가장 묵은 게 언제냐"는 따로 보여야 한다."""
+    context = market.render_blocks(summary(), MarketScope.KOREA, None)[-1]
+
+    assert "가장 오래된" in context["elements"][0]["text"]
 
 
 def test_yields_are_not_drawn_as_percent_moves():

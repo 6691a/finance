@@ -1,26 +1,26 @@
 apiVersion: 1
 
-# 프로비저닝은 datasource를 uid가 아니라 **이름으로** 찾는다. 이름을 바꾸면 새 datasource를
-# 넣으려 하고, uid가 같아서 UNIQUE 제약에 걸려 Grafana가 아예 뜨지 않는다. 옛 이름을 먼저
-# 지우게 해서 uid를 넘겨받는다. `news2` datasource가 이미 사라진 환경에서도 문제없다.
+# 로컬 Docker의 finance DB만 사용한다. 이전 이름과 외부 DB datasource는 기존 Grafana
+# 볼륨에도 남지 않게 제거한다.
 deleteDatasources:
   - name: news2
     orgId: 1
+  - name: external-finance
+    orgId: 1
 
 datasources:
-  # uid는 그대로 둔다. 대시보드 JSON이 이 값으로 datasource를 가리키므로 바꾸면 패널이
-  # 전부 데이터소스를 잃는다. 표시 이름만 DB 이름을 따라간다.
+  # uid는 DB 이름이 아니라 대시보드가 참조하는 안정 식별자라 그대로 둔다.
   - name: finance
     uid: news2-postgres
     type: postgres
     access: proxy
-    url: $NEWS_DB_URL
-    database: $NEWS_DB_NAME
-    user: $NEWS_DB_USER
+    url: db:5432
+    database: finance
+    user: finance
     isDefault: true
     editable: false
     secureJsonData:
-      password: $NEWS_DB_PASSWORD
+      password: finance
     jsonData:
       sslmode: disable
       postgresVersion: 1700

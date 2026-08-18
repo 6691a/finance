@@ -35,14 +35,7 @@ def movement_statements(dashboard: dict) -> dict[str, str]:
 def test_uid_and_variables_stay_put(dashboard):
     # uid를 바꾸면 Grafana가 같은 파일로 두 번째 대시보드를 만들고 갱신이 막힌다.
     assert dashboard["uid"] == "market-movement"
-    assert [variable["name"] for variable in dashboard["templating"]["list"]] == ["ds", "symbol"]
-
-
-def test_every_panel_reads_the_selected_datasource(dashboard):
-    for panel in dashboard["panels"]:
-        assert panel["datasource"] == {"type": "postgres", "uid": "${ds}"}
-        for target in panel["targets"]:
-            assert target["datasource"] == {"type": "postgres", "uid": "${ds}"}
+    assert [variable["name"] for variable in dashboard["templating"]["list"]] == ["symbol"]
 
 
 def test_the_total_is_the_three_way_sum_never_the_five(dashboard):

@@ -76,7 +76,7 @@ USD, JPY, CNY, EUR, HKD, TWD, GBP, AUD, CAD, RUB. 통화를 늘리려면 그 enu
 
 ## 배포 시 저장 위치를 바꾸는 곳
 
-지금은 로컬 finance DB에 넣는다. 실 배포에서 다른 DB로 보내려면 아래 다섯 군데를 본다.
+지금은 로컬 finance DB에 넣는다. 실 배포에서 다른 DB로 보내려면 아래 네 군데를 본다.
 코드에서 저장 위치를 정하는 건 **연결 ID 하나뿐**이고 나머지는 환경·스키마 쪽이다.
 각 자리에 `[배포]` 주석을 달아 뒀으니 `grep -rn "배포. 저장 위치"`로 한 번에 찾는다.
 
@@ -89,9 +89,6 @@ USD, JPY, CNY, EUR, HKD, TWD, GBP, AUD, CAD, RUB. 통화를 늘리려면 그 enu
    운영에서 `public`이 아닌 스키마를 쓰면 여기서 `<스키마>.exchange_rate`로 수식한다.
 4. `apps/models/finance.py`의 `table_options(database=...)`와 `config.yaml`의 별칭 URL.
    테이블을 **만드는** 쪽이다. DAG가 쓰는 DB와 마이그레이션이 만드는 DB는 같아야 한다.
-5. `compose/local/.env`의 `NEWS_DB_*`. 대시보드가 **읽는** 쪽이다. 쓰기와는 무관하므로
-   1~4가 맞아도 여기가 다른 DB를 보면 그래프만 비어 보인다.
-
 1번과 4번이 어긋나면 DAG가 없는 테이블에 INSERT를 시도해 런타임에야 드러난다.
 배포 전에 대상 DB에서 `SELECT to_regclass('exchange_rate')`로 존재를 먼저 확인한다.
 """

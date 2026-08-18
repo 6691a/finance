@@ -29,17 +29,10 @@ def panel_sql(dashboard: dict) -> dict[int, str]:
     }
 
 
-def test_uid_and_datasource_variable_stay_put(dashboard):
+def test_uid_and_variables_stay_put(dashboard):
     # uid를 바꾸면 Grafana가 같은 파일로 두 번째 대시보드를 만들고 갱신이 막힌다.
     assert dashboard["uid"] == "dart-disclosure"
-    assert [variable["name"] for variable in dashboard["templating"]["list"]] == ["ds", "company", "basis", "scope"]
-
-
-def test_every_panel_reads_the_selected_datasource(dashboard):
-    for panel in dashboard["panels"]:
-        assert panel["datasource"] == {"type": "postgres", "uid": "${ds}"}
-        for target in panel["targets"]:
-            assert target["datasource"] == {"type": "postgres", "uid": "${ds}"}
+    assert [variable["name"] for variable in dashboard["templating"]["list"]] == ["company", "basis", "scope"]
 
 
 def test_the_two_companies_match_the_collector(dashboard):

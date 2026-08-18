@@ -342,7 +342,7 @@ docker exec local-grafana-1 grafana cli admin reset-admin-password <new-password
 
 | 경로 | 역할 |
 | --- | --- |
-| `compose/local/grafana/provisioning/datasources/` | datasource 정의. 접속 정보는 `compose/local/.env`가 넘기고, 비어 있으면 compose가 로컬 `db` 컨테이너 값을 채웁니다. |
+| `compose/local/grafana/provisioning/datasources/` | 로컬 `finance` datasource 정의. Docker의 `db:5432/finance`만 사용합니다. |
 | `compose/local/grafana/provisioning/dashboards/` | dashboard provider 정의. |
 | `compose/local/grafana/dashboards/` | 대시보드 JSON. 하위 디렉터리 구조가 Grafana 폴더 구조가 됩니다. |
 
@@ -352,19 +352,6 @@ datasource는 UI에서 수정할 수 없습니다(`editable: false`). 변경은 
 docker compose -f compose/local/docker-compose.yaml restart grafana
 docker compose -f compose/local/docker-compose.yaml logs -f grafana
 ```
-
-### DB를 바꿔서 보기
-
-같은 대시보드를 다른 데이터베이스로 돌려 보는 길이 둘 있습니다. 대시보드 JSON은 어느 쪽에서도 고치지 않습니다.
-
-1. **대시보드 상단 `데이터소스` 드롭다운.** 재시작이 필요 없습니다. 프로비저닝된 postgres datasource 중에서 고르면 모든 패널이 따라갑니다. 잠깐 다른 환경을 확인할 때 씁니다.
-2. **`compose/local/.env`의 `NEWS_DB_*`.** `finance` datasource 자체가 가리키는 DB가 바뀝니다. 값을 비우면 로컬 `db` 컨테이너를 씁니다. 반영하려면 컨테이너를 다시 만듭니다.
-
-```powershell
-docker compose -f compose/local/docker-compose.yaml up -d grafana
-```
-
-datasource YAML은 `$NEWS_DB_URL` 같은 이름만 참조하므로 접속 정보가 저장소에 들어가지 않습니다. 값은 compose 서비스의 `environment`가 넘깁니다.
 
 ### 대시보드 구성
 
@@ -475,17 +462,7 @@ ORDER BY ts
 
 ### finance datasource와 환율 대시보드
 
-`finance` datasource는 이 프로젝트가 소유하지 않는 외부 읽기 전용 PostgreSQL(`config.yaml`의 `databases.finance`와 같은 서버)을 바라봅니다. 접속 정보는 `compose/local/.env`에서 오고 이 파일은 커밋하지 않습니다. `compose/local/.env.sample`을 복사해서 채웁니다.
-
-```powershell
-Copy-Item compose/local/.env.sample compose/local/.env
-```
-
-비밀번호에 `$`가 들어가면 compose가 변수로 해석하므로 `.env`에서 작은따옴표로 감쌉니다. 값을 바꾼 뒤에는 컨테이너를 다시 만들어야 반영됩니다.
-
-```powershell
-docker compose -f compose/local/docker-compose.yaml up -d grafana
-```
+`finance` datasource는 Docker Compose가 실행하는 로컬 PostgreSQL의 `finance` DB를 바라봅니다. 모든 대시보드가 이 datasource 하나를 직접 사용합니다.
 
 [compose/local/grafana/dashboards/exchange-rate.json](compose/local/grafana/dashboards/exchange-rate.json)은 이 datasource의 `exchange_rate` 테이블을 그립니다. 통화별 최신 매매기준율 stat, 통화별 매매기준율·살 때·팔 때 시계열, 선택 구간 변화율 비교, 최신 고시 테이블로 구성되고 `통화` 변수로 패널이 반복됩니다.
 
@@ -514,4 +491,3 @@ graphify install --project --platform codex
 graphify install --project --platform claude
 graphify extract . --code-only --force
 ```
-

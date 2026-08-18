@@ -27,7 +27,7 @@
         "iconColor": "orange",
         "datasource": {
           "type": "postgres",
-          "uid": "${ds}"
+          "uid": "news2-postgres"
         },
         "target": {
           "format": "table",
@@ -41,28 +41,13 @@
   "templating": {
     "list": [
       {
-        "name": "ds",
-        "label": "데이터소스",
-        "description": "market_movement_snapshot 과 quote_bar 를 읽을 postgres 데이터소스. 모든 패널이 이 값을 쓴다.",
-        "type": "datasource",
-        "query": "postgres",
-        "refresh": 1,
-        "hide": 0,
-        "current": {
-          "selected": true,
-          "text": "finance",
-          "value": "news2-postgres"
-        },
-        "options": []
-      },
-      {
         "name": "symbol",
         "label": "시장",
         "description": "분포를 고시하는 지수. 값이 quote_bar.symbol 과 같아서 지수 봉과 한 키로 조인된다. 코스피200은 코스피의 부분집합이라 분포 대상이 아니다.",
         "type": "query",
         "datasource": {
           "type": "postgres",
-          "uid": "${ds}"
+          "uid": "news2-postgres"
         },
         "query": "SELECT DISTINCT symbol FROM market_movement_snapshot WHERE provider = 'kis' ORDER BY 1",
         "includeAll": true,
@@ -90,7 +75,7 @@
       "description": "선택 구간의 마지막 스냅샷에서 오른 종목의 비율. 분모는 상승+보합+하락이다. **상한가는 상승에 이미 포함돼 있으므로 다섯 값을 더하지 않는다**(실측). 50%를 넘으면 시장 전반이 오른 장이고, 지수는 올랐는데 이 값이 50% 아래면 소수 대형주가 끌어올린 장이다.",
       "datasource": {
         "type": "postgres",
-        "uid": "${ds}"
+        "uid": "news2-postgres"
       },
       "repeat": "symbol",
       "repeatDirection": "h",
@@ -152,7 +137,7 @@
           "editorMode": "code",
           "datasource": {
             "type": "postgres",
-            "uid": "${ds}"
+            "uid": "news2-postgres"
           },
           "rawSql": "SELECT\n  observed_at AS time,\n  -- 전체는 상승+보합+하락이다. 상·하한가는 그 안의 부분집합이라 더하면 이중 계산된다.\n  100.0 * rising_count / nullif(rising_count + unchanged_count + falling_count, 0) AS \"상승 비율\"\nFROM market_movement_snapshot\nWHERE provider = 'kis'\n  AND symbol = ${symbol:sqlstring}\n  AND $__timeFilter(observed_at)\nORDER BY 1"
         }
@@ -165,7 +150,7 @@
       "description": "두 시장의 상승 비율을 같은 축에서 본다. 코스피와 코스닥이 갈리는 날이 대형주 장세와 중소형주 장세를 가른다. 50% 선이 기준이다.",
       "datasource": {
         "type": "postgres",
-        "uid": "${ds}"
+        "uid": "news2-postgres"
       },
       "gridPos": {
         "h": 9,
@@ -230,7 +215,7 @@
           "editorMode": "code",
           "datasource": {
             "type": "postgres",
-            "uid": "${ds}"
+            "uid": "news2-postgres"
           },
           "rawSql": "SELECT\n  observed_at AS time,\n  symbol AS metric,\n  100.0 * rising_count / nullif(rising_count + unchanged_count + falling_count, 0) AS value\nFROM market_movement_snapshot\nWHERE provider = 'kis'\n  AND symbol IN (${symbol:sqlstring})\n  AND $__timeFilter(observed_at)\nORDER BY 1, 2"
         }
@@ -243,7 +228,7 @@
       "description": "**이 화면의 핵심 패널이다.** 지수 변동률(왼쪽 축)과 상승 비율(오른쪽 축)이 갈리는 구간이 소수 종목이 지수를 끌고 간 구간이다. 지수는 `quote_bar`에서 온다. 두 테이블의 symbol 값이 같아 대응표 없이 조인된다.",
       "datasource": {
         "type": "postgres",
-        "uid": "${ds}"
+        "uid": "news2-postgres"
       },
       "repeat": "symbol",
       "repeatDirection": "h",
@@ -337,7 +322,7 @@
           "editorMode": "code",
           "datasource": {
             "type": "postgres",
-            "uid": "${ds}"
+            "uid": "news2-postgres"
           },
           "rawSql": "SELECT\n  bar_at AS time,\n  100.0 * (close - previous_close) / nullif(previous_close, 0) AS \"지수 변동률\"\nFROM quote_bar\nWHERE provider = 'kis'\n  AND symbol = ${symbol:sqlstring}\n  AND $__timeFilter(bar_at)\nORDER BY 1"
         },
@@ -348,7 +333,7 @@
           "editorMode": "code",
           "datasource": {
             "type": "postgres",
-            "uid": "${ds}"
+            "uid": "news2-postgres"
           },
           "rawSql": "SELECT\n  observed_at AS time,\n  100.0 * rising_count / nullif(rising_count + unchanged_count + falling_count, 0) AS \"상승 비율\"\nFROM market_movement_snapshot\nWHERE provider = 'kis'\n  AND symbol = ${symbol:sqlstring}\n  AND $__timeFilter(observed_at)\nORDER BY 1"
         }
@@ -361,7 +346,7 @@
       "description": "상승·보합·하락 종목 수를 쌓아 본다. 세 값의 합이 그날 거래된 종목 수라 막대 높이가 거의 일정하고, 색의 비율만 움직인다. 상·하한가는 여기 따로 그리지 않는다. 이미 상승·하락 안에 들어 있다.",
       "datasource": {
         "type": "postgres",
-        "uid": "${ds}"
+        "uid": "news2-postgres"
       },
       "repeat": "symbol",
       "repeatDirection": "h",
@@ -465,7 +450,7 @@
           "editorMode": "code",
           "datasource": {
             "type": "postgres",
-            "uid": "${ds}"
+            "uid": "news2-postgres"
           },
           "rawSql": "SELECT\n  observed_at AS time,\n  rising_count AS \"상승\",\n  unchanged_count AS \"보합\",\n  falling_count AS \"하락\"\nFROM market_movement_snapshot\nWHERE provider = 'kis'\n  AND symbol = ${symbol:sqlstring}\n  AND $__timeFilter(observed_at)\nORDER BY 1"
         }
@@ -478,7 +463,7 @@
       "description": "가장 최근 관측. 상·하한가는 상승·하락 안의 부분집합이라 따로 보여 준다. `관측 시각`은 제공처가 준 원천 시각이 아니라 응답을 받은 분이다. 개장 전과 마감 뒤에는 다섯 값이 0으로 리셋되므로 그 응답은 아예 저장하지 않는다.",
       "datasource": {
         "type": "postgres",
-        "uid": "${ds}"
+        "uid": "news2-postgres"
       },
       "gridPos": {
         "h": 8,
@@ -565,7 +550,7 @@
           "editorMode": "code",
           "datasource": {
             "type": "postgres",
-            "uid": "${ds}"
+            "uid": "news2-postgres"
           },
           "rawSql": "SELECT DISTINCT ON (symbol)\n  symbol AS \"시장\",\n  observed_at AS \"관측 시각\",\n  rising_count + unchanged_count + falling_count AS \"거래 종목\",\n  rising_count AS \"상승\",\n  unchanged_count AS \"보합\",\n  falling_count AS \"하락\",\n  upper_limit_count AS \"상한가\",\n  lower_limit_count AS \"하한가\",\n  100.0 * rising_count / nullif(rising_count + unchanged_count + falling_count, 0) AS \"상승 비율\"\nFROM market_movement_snapshot\nWHERE provider = 'kis'\n  AND symbol IN (${symbol:sqlstring})\n  AND $__timeFilter(observed_at)\nORDER BY symbol, observed_at DESC"
         }

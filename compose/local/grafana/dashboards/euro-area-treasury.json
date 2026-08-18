@@ -1,7 +1,7 @@
 {
   "uid": "market-euro-area-yield-curve",
   "title": "유로 지역 국채 금리",
-  "description": "indicator_observation 테이블의 ECB 유로 지역 국채 수익률 곡선(3개월~30년)을 만기별로 조회한다. 모든 패널이 provider = 'ecb' 를 함께 건다. 값은 유로 지역 전체의 AAA 등급 국채 스팟 곡선이고 독일·프랑스 같은 개별 회원국 곡선이 아니다. ECB가 Svensson 모형으로 추정해 고시한다. 만기 목록은 indicator_series 마스터에서 읽으므로 시계열을 늘려도 이 대시보드를 고칠 일이 없다. 데이터소스는 상단 `데이터소스` 변수로 바꾼다.",
+  "description": "indicator_observation 테이블의 ECB 유로 지역 국채 수익률 곡선(3개월~30년)을 만기별로 조회한다. 모든 패널이 provider = 'ecb' 를 함께 건다. 값은 유로 지역 전체의 AAA 등급 국채 스팟 곡선이고 독일·프랑스 같은 개별 회원국 곡선이 아니다. ECB가 Svensson 모형으로 추정해 고시한다. 만기 목록은 indicator_series 마스터에서 읽으므로 시계열을 늘려도 이 대시보드를 고칠 일이 없다.",
   "tags": [
     "market",
     "rate",
@@ -19,28 +19,13 @@
   "templating": {
     "list": [
       {
-        "name": "ds",
-        "label": "데이터소스",
-        "description": "indicator_observation 을 읽을 postgres 데이터소스. 모든 패널이 이 값을 쓰므로 여기 하나만 바꾸면 대시보드 전체가 다른 DB를 본다. 프로비저닝된 데이터소스는 compose/local/grafana/provisioning/datasources 에 있다.",
-        "type": "datasource",
-        "query": "postgres",
-        "current": {
-          "selected": true,
-          "text": "finance",
-          "value": "news2-postgres"
-        },
-        "hide": 0,
-        "options": [],
-        "refresh": 1
-      },
-      {
         "name": "series",
         "label": "만기",
         "description": "ECB 시계열. 표시는 마스터의 label 이고 값은 저장된 series_id 다. 목록을 손으로 적지 않는다. 수집 대상과 ID는 modules.collectors.ecb 의 EuroYieldSeries 가 정한다.",
         "type": "query",
         "datasource": {
           "type": "postgres",
-          "uid": "${ds}"
+          "uid": "news2-postgres"
         },
         "query": "SELECT label AS \"__text\", series_id AS \"__value\" FROM indicator_series WHERE provider = 'ecb' ORDER BY maturity_months",
         "includeAll": true,
@@ -67,7 +52,7 @@
       "description": "선택 구간의 마지막 관측값. 주말과 TARGET 휴일에는 행이 없고, 곡선이 유럽 시간 정오 무렵에 갱신되므로 최근 1~2 영업일도 비어 있을 수 있다. 그럴 때는 직전 고시일 값이 그대로 남는다.",
       "datasource": {
         "type": "postgres",
-        "uid": "${ds}"
+        "uid": "news2-postgres"
       },
       "repeat": "series",
       "repeatDirection": "h",
@@ -119,7 +104,7 @@
           "editorMode": "code",
           "datasource": {
             "type": "postgres",
-            "uid": "${ds}"
+            "uid": "news2-postgres"
           },
           "rawSql": "SELECT\n  observed_at AS time,\n  value\nFROM (\n  SELECT\n    observation_date::timestamp AT TIME ZONE 'UTC' AS observed_at,\n    value\n  FROM indicator_observation\n  WHERE provider = 'ecb'\n    AND series_id = ${series:sqlstring}\n) AS observations\nWHERE $__timeFilter(observed_at)\nORDER BY 1"
         }
@@ -132,7 +117,7 @@
       "description": "관측일은 유로 지역 영업일(TARGET 결제일)이다. 값은 Svensson 모형이 추정한 스팟 금리라 만기 사이가 매끄럽게 이어진다. 개별 국채의 실제 체결 수익률이 아니다.",
       "datasource": {
         "type": "postgres",
-        "uid": "${ds}"
+        "uid": "news2-postgres"
       },
       "gridPos": {
         "h": 10,
@@ -187,7 +172,7 @@
           "editorMode": "code",
           "datasource": {
             "type": "postgres",
-            "uid": "${ds}"
+            "uid": "news2-postgres"
           },
           "rawSql": "SELECT\n  observed_at AS time,\n  value,\n  label AS metric\nFROM (\n  SELECT\n    o.observation_date::timestamp AT TIME ZONE 'UTC' AS observed_at,\n    o.value,\n    s.label\n  FROM indicator_observation o\n  JOIN indicator_series s\n    ON s.provider = o.provider\n   AND s.series_id = o.series_id\n  WHERE o.provider = 'ecb'\n    AND o.series_id IN (${series:sqlstring})\n) AS observations\nWHERE $__timeFilter(observed_at)\nORDER BY 1"
         }
@@ -200,7 +185,7 @@
       "description": "가장 최근 고시값을 만기 순으로 세운다. 만기 변수와 무관하게 마스터에 있는 유로 지역 시계열 전부를 그린다. 12개월 미만은 개월, 그 이상은 연 단위로 이름을 만든다.",
       "datasource": {
         "type": "postgres",
-        "uid": "${ds}"
+        "uid": "news2-postgres"
       },
       "gridPos": {
         "h": 9,
@@ -249,7 +234,7 @@
           "editorMode": "code",
           "datasource": {
             "type": "postgres",
-            "uid": "${ds}"
+            "uid": "news2-postgres"
           },
           "rawSql": "SELECT\n  CASE WHEN s.maturity_months < 12 THEN s.maturity_months || '개월' ELSE (s.maturity_months / 12) || '년' END AS \"만기\",\n  latest.value AS \"금리\"\nFROM indicator_series s\nJOIN LATERAL (\n  SELECT o.value\n  FROM indicator_observation o\n  WHERE o.provider = s.provider\n    AND o.series_id = s.series_id\n  ORDER BY o.observation_date DESC\n  LIMIT 1\n) AS latest ON true\nWHERE s.provider = 'ecb'\nORDER BY s.maturity_months"
         }
@@ -262,7 +247,7 @@
       "description": "0 아래로 내려가면 금리 역전이다. 두 시계열이 같은 날 모두 고시된 날만 그린다. `만기` 변수와 무관하게 항상 10년과 2년을 쓴다.",
       "datasource": {
         "type": "postgres",
-        "uid": "${ds}"
+        "uid": "news2-postgres"
       },
       "gridPos": {
         "h": 9,
@@ -327,7 +312,7 @@
           "editorMode": "code",
           "datasource": {
             "type": "postgres",
-            "uid": "${ds}"
+            "uid": "news2-postgres"
           },
           "rawSql": "SELECT\n  observed_at AS time,\n  ten_year - two_year AS \"10Y-2Y\"\nFROM (\n  SELECT\n    observation_date::timestamp AT TIME ZONE 'UTC' AS observed_at,\n    max(value) FILTER (WHERE series_id = 'EA10Y') AS ten_year,\n    max(value) FILTER (WHERE series_id = 'EA2Y') AS two_year\n  FROM indicator_observation\n  WHERE provider = 'ecb'\n    AND series_id IN ('EA10Y', 'EA2Y')\n  GROUP BY 1\n) AS spread\nWHERE $__timeFilter(observed_at)\n  AND ten_year IS NOT NULL\n  AND two_year IS NOT NULL\nORDER BY 1"
         }
@@ -340,7 +325,7 @@
       "description": "시계열마다 가장 최근 행 하나. `source_record`를 조인해 그 값이 어느 조회에서 왔는지 보여 준다. 수집 시각은 UTC이고 관측일은 유로 지역 영업일이다. SDMX 키 하나가 곡선 전체를 담아 오므로 원천 식별자가 시계열이 아니라 키 접두사(`YC.B.U2.EUR.4F.G_N_A.SV_C_YM`)다.",
       "datasource": {
         "type": "postgres",
-        "uid": "${ds}"
+        "uid": "news2-postgres"
       },
       "gridPos": {
         "h": 8,
@@ -396,7 +381,7 @@
           "editorMode": "code",
           "datasource": {
             "type": "postgres",
-            "uid": "${ds}"
+            "uid": "news2-postgres"
           },
           "rawSql": "SELECT DISTINCT ON (o.series_id)\n  s.label AS \"만기\",\n  o.observation_date AS \"관측일\",\n  o.value AS \"금리\",\n  o.unit AS \"단위\",\n  o.series_id AS \"시계열 ID\",\n  r.source AS \"제공처\",\n  r.source_key AS \"원천 조회\",\n  r.completed_at AS \"수집 시각(UTC)\",\n  r.record_count AS \"수집 행 수\"\nFROM indicator_observation o\nJOIN indicator_series s\n  ON s.provider = o.provider\n AND s.series_id = o.series_id\nJOIN source_record r ON r.id = o.source_record_id\nWHERE o.provider = 'ecb'\n  AND o.series_id IN (${series:sqlstring})\nORDER BY o.series_id, o.observation_date DESC"
         }
@@ -409,7 +394,7 @@
       "description": "`source_record`에 남은 수집 계보. SDMX 키 하나가 곡선 전체를 담아 오므로 실행마다 점이 하나다. 정상 실행이면 최근 7일 × 만기 열하나, 즉 33~55행이 나온다. 0으로 찍힌 점은 그 구간이 전부 휴장이었다는 뜻이다. 조회했지만 값이 없는 구간과 아직 조회하지 않은 구간을 가르려고 0건도 남긴다.",
       "datasource": {
         "type": "postgres",
-        "uid": "${ds}"
+        "uid": "news2-postgres"
       },
       "gridPos": {
         "h": 8,
@@ -457,7 +442,7 @@
           "editorMode": "code",
           "datasource": {
             "type": "postgres",
-            "uid": "${ds}"
+            "uid": "news2-postgres"
           },
           "rawSql": "SELECT\n  completed_at AS time,\n  record_count AS value,\n  source_key AS metric\nFROM source_record\nWHERE source = 'ecb'\n  AND $__timeFilter(completed_at)\nORDER BY 1"
         }

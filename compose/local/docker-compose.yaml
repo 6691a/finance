@@ -34,18 +34,6 @@ services:
       GF_SECURITY_ADMIN_USER: admin
       GF_SECURITY_ADMIN_PASSWORD: pwd
       GF_USERS_DEFAULT_THEME: dark
-      # Datasource connection details. The provisioning YAML files read these names,
-      # so switching a dashboard to another database means editing compose/local/.env
-      # and recreating grafana - no file under grafana/provisioning changes.
-      # Defaults point at the db service in this compose file.
-      NEWS_DB_URL: ${NEWS_DB_URL:-db:5432}
-      NEWS_DB_NAME: ${NEWS_DB_NAME:-finance}
-      NEWS_DB_USER: ${NEWS_DB_USER:-finance}
-      NEWS_DB_PASSWORD: ${NEWS_DB_PASSWORD:-finance}
-      FINANCE_DB_URL: ${FINANCE_DB_URL:-}
-      FINANCE_DB_NAME: ${FINANCE_DB_NAME:-}
-      FINANCE_DB_USER: ${FINANCE_DB_USER:-}
-      FINANCE_DB_PASSWORD: ${FINANCE_DB_PASSWORD:-}
     volumes:
       - grafana:/var/lib/grafana
       - ./grafana/provisioning:/etc/grafana/provisioning

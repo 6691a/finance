@@ -30,14 +30,7 @@ def statements(dashboard: dict) -> dict[int, str]:
 def test_uid_and_variables_stay_put(dashboard):
     # uid를 바꾸면 Grafana가 같은 파일로 두 번째 대시보드를 만들고 갱신이 막힌다.
     assert dashboard["uid"] == "market-positioning"
-    assert [variable["name"] for variable in dashboard["templating"]["list"]] == ["ds", "stock", "universe"]
-
-
-def test_every_panel_reads_the_selected_datasource(dashboard):
-    for panel in dashboard["panels"]:
-        assert panel["datasource"] == {"type": "postgres", "uid": "${ds}"}
-        for target in panel["targets"]:
-            assert target["datasource"] == {"type": "postgres", "uid": "${ds}"}
+    assert [variable["name"] for variable in dashboard["templating"]["list"]] == ["stock", "universe"]
 
 
 def test_every_query_pins_the_provider(dashboard):

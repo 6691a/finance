@@ -69,7 +69,7 @@ def test_there_are_dashboards_to_check():
 @pytest.mark.parametrize("path", PATHS, ids=lambda p: p.name)
 def test_every_dashboard_carries_the_same_variables(path):
     # 변수 하나가 빠지면 그 화면만 다른 조건으로 조회한다.
-    assert list(variables(load(path))) == ["ds", "provider", "symbol", "session", "window_min", "threshold"]
+    assert list(variables(load(path))) == ["provider", "symbol", "session", "window_min", "threshold"]
 
 
 @pytest.mark.parametrize("path", [p for p in PATHS if p.name != UNIFIED], ids=lambda p: p.name)

@@ -1,7 +1,7 @@
 {
   "uid": "dart-disclosure",
   "title": "공시·실적 (DART)",
-  "description": "삼성전자·SK하이닉스의 DART 공시와 실적을 본다. 다른 대시보드가 전부 가격·금리인 것과 달리 여기는 이벤트 축이다. 실적 발표일을 모르면 그 시각의 급변을 시장 신호로 오독한다. disclosure_event 와 earnings_fact 를 읽으며 어느 DB를 볼지는 상단 '데이터소스' 드롭다운이 정한다. uid 는 바꾸지 않는다. 프로비저닝된 대시보드의 uid 를 바꾸면 Grafana 가 같은 파일로 두 번째 대시보드를 만들고 그 뒤로 갱신이 uid 충돌로 막힌다.",
+  "description": "삼성전자·SK하이닉스의 DART 공시와 실적을 본다. 다른 대시보드가 전부 가격·금리인 것과 달리 여기는 이벤트 축이다. 실적 발표일을 모르면 그 시각의 급변을 시장 신호로 오독한다. disclosure_event 와 earnings_fact 는 로컬 finance DB에서 읽는다. uid 는 바꾸지 않는다. 프로비저닝된 대시보드의 uid 를 바꾸면 Grafana 가 같은 파일로 두 번째 대시보드를 만들고 그 뒤로 갱신이 uid 충돌로 막힌다.",
   "tags": [
     "dart",
     "disclosure",
@@ -19,21 +19,6 @@
   "timezone": "browser",
   "templating": {
     "list": [
-      {
-        "name": "ds",
-        "label": "데이터소스",
-        "description": "disclosure_event 와 earnings_fact 를 읽을 postgres 데이터소스. 모든 패널이 이 값을 쓴다.",
-        "type": "datasource",
-        "query": "postgres",
-        "refresh": 1,
-        "hide": 0,
-        "current": {
-          "selected": true,
-          "text": "finance",
-          "value": "news2-postgres"
-        },
-        "options": []
-      },
       {
         "name": "company",
         "label": "회사",
@@ -93,7 +78,7 @@
       "description": "선택 구간에 접수된 공시 수. 접수일(receipt_date) 기준이며 종류를 가리지 않는다.",
       "datasource": {
         "type": "postgres",
-        "uid": "${ds}"
+        "uid": "news2-postgres"
       },
       "gridPos": {
         "h": 4,
@@ -142,7 +127,7 @@
           "editorMode": "code",
           "datasource": {
             "type": "postgres",
-            "uid": "${ds}"
+            "uid": "news2-postgres"
           },
           "rawSql": "SELECT count(*) AS \"공시\"\nFROM disclosure_event\nWHERE provider = 'dart'\n  AND stock_code IN (${company:sqlstring})\n  -- 접수일은 날짜뿐이고 기준 시간대가 한국이다.\n  AND receipt_date BETWEEN ($__timeFrom()::timestamptz AT TIME ZONE 'Asia/Seoul')::date\n                       AND ($__timeTo()::timestamptz AT TIME ZONE 'Asia/Seoul')::date"
         }
@@ -155,7 +140,7 @@
       "description": "선택한 기간 기준·재무제표 범위로 저장된 실적 행 수. 지표 하나가 한 행이다.",
       "datasource": {
         "type": "postgres",
-        "uid": "${ds}"
+        "uid": "news2-postgres"
       },
       "gridPos": {
         "h": 4,
@@ -204,7 +189,7 @@
           "editorMode": "code",
           "datasource": {
             "type": "postgres",
-            "uid": "${ds}"
+            "uid": "news2-postgres"
           },
           "rawSql": "SELECT count(*) AS \"실적 행\"\nFROM earnings_fact\nWHERE provider = 'dart'\n  AND stock_code IN (${company:sqlstring})\n  AND amount_basis = '$basis'\n  AND statement_scope = '$scope'\n  AND period_end BETWEEN ($__timeFrom()::timestamptz AT TIME ZONE 'Asia/Seoul')::date\n                     AND ($__timeTo()::timestamptz AT TIME ZONE 'Asia/Seoul')::date"
         }
@@ -217,7 +202,7 @@
       "description": "공시 목록 조회가 마지막으로 끝난 시각(UTC 저장, 화면은 브라우저 시간대). 2분마다 도는 DAG가 멈추면 이 값이 늘어난다.",
       "datasource": {
         "type": "postgres",
-        "uid": "${ds}"
+        "uid": "news2-postgres"
       },
       "gridPos": {
         "h": 4,
@@ -274,7 +259,7 @@
           "editorMode": "code",
           "datasource": {
             "type": "postgres",
-            "uid": "${ds}"
+            "uid": "news2-postgres"
           },
           "rawSql": "SELECT EXTRACT(EPOCH FROM (now() - max(completed_at))) AS \"지연\"\nFROM source_record\nWHERE source = 'dart'\n  AND source_key = 'disclosure_list'"
         }
@@ -287,7 +272,7 @@
       "description": "선택 구간의 공시를 최근순으로 본다. **'최초 감지'는 공시 시각이 아니다.** 우리 수집기가 그 접수번호를 처음 본 시각이고 2분 폴링이라 공시 시각의 상한 노릇을 한다. 접수일에는 시·분이 없으므로 자정 같은 값으로 꾸미지 않는다. 분 단위 접수 시각은 공식 RSS에만 있는데 전 상장사 최신 50건뿐이라 과거를 채울 수 없어 수집하지 않는다.",
       "datasource": {
         "type": "postgres",
-        "uid": "${ds}"
+        "uid": "news2-postgres"
       },
       "gridPos": {
         "h": 12,
@@ -361,7 +346,7 @@
           "editorMode": "code",
           "datasource": {
             "type": "postgres",
-            "uid": "${ds}"
+            "uid": "news2-postgres"
           },
           "rawSql": "SELECT\n  receipt_date AS \"접수일\",\n  detected_at AS \"최초 감지\",\n  company_name AS \"회사\",\n  report_name AS \"보고서\",\n  filer_name AS \"제출인\",\n  COALESCE(remarks, '') AS \"비고\",\n  rcept_no AS \"접수번호\"\nFROM disclosure_event\nWHERE provider = 'dart'\n  AND stock_code IN (${company:sqlstring})\n  AND receipt_date BETWEEN ($__timeFrom()::timestamptz AT TIME ZONE 'Asia/Seoul')::date\n                       AND ($__timeTo()::timestamptz AT TIME ZONE 'Asia/Seoul')::date\nORDER BY receipt_date DESC, rcept_no DESC"
         }
@@ -374,7 +359,7 @@
       "description": "기간 종료일 기준 실적. **같은 회사·기간·지표에 접수번호가 여럿이면 가장 최근 것만 쓴다.** 정정 공시는 이전 행을 덮지 않고 새 행으로 쌓이므로 조회하는 쪽이 고른다. 잠정치가 먼저 오고 정기보고서 확정치가 나중에 오는데, 접수번호가 시간순으로 커지므로 같은 규칙이 확정치를 고른다. 단위는 억원이다.",
       "datasource": {
         "type": "postgres",
-        "uid": "${ds}"
+        "uid": "news2-postgres"
       },
       "gridPos": {
         "h": 10,
@@ -430,7 +415,7 @@
           "editorMode": "code",
           "datasource": {
             "type": "postgres",
-            "uid": "${ds}"
+            "uid": "news2-postgres"
           },
           "rawSql": "WITH latest AS (\n  -- 같은 회사·기간·지표에서 가장 최근 접수번호 하나만 남긴다. 접수번호는 시간순으로\n  -- 커지므로 정정 공시와 확정 실적이 자연히 앞선다.\n  SELECT DISTINCT ON (f.stock_code, f.period_end, f.metric)\n    f.stock_code, f.period_end, f.metric, f.current_amount, f.rcept_no\n  FROM earnings_fact f\n  WHERE f.provider = 'dart'\n    AND f.stock_code IN (${company:sqlstring})\n    AND f.amount_basis = '$basis'\n    AND f.statement_scope = '$scope'\n    AND f.period_end BETWEEN ($__timeFrom()::timestamptz AT TIME ZONE 'Asia/Seoul')::date\n                         AND ($__timeTo()::timestamptz AT TIME ZONE 'Asia/Seoul')::date\n  ORDER BY f.stock_code, f.period_end, f.metric, f.rcept_no DESC\n)\nSELECT\n  (latest.period_end + TIME '00:00') AT TIME ZONE 'Asia/Seoul' AS time,\n  COALESCE(names.company_name, latest.stock_code)\n    || ' '\n    || CASE latest.metric\n         WHEN 'revenue' THEN '매출액'\n         WHEN 'operating_profit' THEN '영업이익'\n         WHEN 'net_income' THEN '당기순이익'\n       END AS metric,\n  -- 저장은 원 단위다. 화면에서만 억원으로 줄인다.\n  latest.current_amount / 100000000 AS value\nFROM latest\n-- 회사명은 공시 이벤트가 들고 있다. 화면에 종목코드를 그대로 쓰지 않는다.\nLEFT JOIN LATERAL (\n  SELECT e.company_name\n  FROM disclosure_event e\n  WHERE e.provider = 'dart' AND e.rcept_no = latest.rcept_no\n  LIMIT 1\n) AS names ON TRUE\nORDER BY 1, 2"
         }
@@ -443,7 +428,7 @@
       "description": "기간별 최신 값과 전년 동기 대비 증감률. **증감률은 저장하지 않고 여기서 계산한다.** 전년 동기 금액이 없는 공시가 있어 그때는 비어 있다. 0으로 채우지 않는다. '출처'가 provisional 이면 잠정치이고 periodic 이면 정기보고서 확정치다.",
       "datasource": {
         "type": "postgres",
-        "uid": "${ds}"
+        "uid": "news2-postgres"
       },
       "gridPos": {
         "h": 12,
@@ -571,7 +556,7 @@
           "editorMode": "code",
           "datasource": {
             "type": "postgres",
-            "uid": "${ds}"
+            "uid": "news2-postgres"
           },
           "rawSql": "WITH latest AS (\n  SELECT DISTINCT ON (f.stock_code, f.period_end, f.metric)\n    f.stock_code, f.period_end, f.metric, f.current_amount, f.prior_year_amount,\n    f.release_type, f.currency, f.rcept_no\n  FROM earnings_fact f\n  WHERE f.provider = 'dart'\n    AND f.stock_code IN (${company:sqlstring})\n    AND f.amount_basis = '$basis'\n    AND f.statement_scope = '$scope'\n    AND f.period_end BETWEEN ($__timeFrom()::timestamptz AT TIME ZONE 'Asia/Seoul')::date\n                         AND ($__timeTo()::timestamptz AT TIME ZONE 'Asia/Seoul')::date\n  ORDER BY f.stock_code, f.period_end, f.metric, f.rcept_no DESC\n)\nSELECT\n  latest.period_end AS \"기간 종료\",\n  COALESCE(names.company_name, latest.stock_code) AS \"회사\",\n  CASE latest.metric\n    WHEN 'revenue' THEN '매출액'\n    WHEN 'operating_profit' THEN '영업이익'\n    WHEN 'net_income' THEN '당기순이익'\n  END AS \"지표\",\n  latest.current_amount / 100000000 AS \"당기(억원)\",\n  latest.prior_year_amount / 100000000 AS \"전년 동기(억원)\",\n  -- 전년 동기가 없거나 0이면 계산하지 않는다. 0으로 나눠 무한대를 만들지 않는다.\n  CASE\n    WHEN latest.prior_year_amount IS NULL OR latest.prior_year_amount = 0 THEN NULL\n    ELSE round(100.0 * (latest.current_amount - latest.prior_year_amount) / abs(latest.prior_year_amount), 1)\n  END AS \"증감률\",\n  latest.release_type AS \"출처\",\n  latest.currency AS \"통화\",\n  latest.rcept_no AS \"접수번호\"\nFROM latest\nLEFT JOIN LATERAL (\n  SELECT e.company_name\n  FROM disclosure_event e\n  WHERE e.provider = 'dart' AND e.rcept_no = latest.rcept_no\n  LIMIT 1\n) AS names ON TRUE\nORDER BY latest.period_end DESC, \"회사\", latest.metric"
         }

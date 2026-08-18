@@ -79,7 +79,6 @@ def document_model() -> BaseChatModel:
     return ChatXAI(
         model="grok-4.6",
         timeout=REQUEST_TIMEOUT_SECONDS,
-        # 재시도는 Airflow가 한다. 위 모듈 docstring 참고.
         max_retries=0,
     )
 

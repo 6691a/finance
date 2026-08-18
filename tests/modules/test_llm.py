@@ -53,7 +53,7 @@ def test_the_document_model_is_defined_in_code_not_in_settings(monkeypatch):
 
     model = document_model()
 
-    assert model_name(model) == "grok-4"
+    assert model_name(model) == "grok-4.6"
     # 재시도는 Airflow가 한다. SDK가 먼저 재시도하면 태스크 타임아웃 안에서 몇 번 불렀는지
     # 로그와 트레이스가 어긋난다.
     assert model.max_retries == 0

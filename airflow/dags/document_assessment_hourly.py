@@ -16,6 +16,16 @@
 집는다. 실패를 "보류" 같은 상태로 바꾸지 않는다. 응답 형식이 깨지면 한 번만 교정을 요청하고,
 두 번째도 실패하면 넘어간다.
 
+**넘어가는 것은 그 문서만의 문제일 때다.** 모델에 닿지 못한 실패는 삼키지 않는다. 키가
+틀렸거나 네트워크가 끊긴 것은 남은 문서 전부가 똑같이 실패할 문제라, 예외를 결과로 바꾸지
+않고 그대로 올려 태스크를 죽인다. 원인이 로그에 스택과 함께 남는 편이 "0건 처리" 성공보다
+낫다. 재시도할 값어치가 없는 것(`LlmError`)만 `AirflowFailException`으로 바꾸고,
+`ConnectionError`는 그대로 두어 Airflow가 재시도하게 한다.
+
+팬아웃은 중간에 끊기지 않는다. `Send`로 갈라진 노드가 한 superstep에서 다 돌고 나서 예외가
+올라오므로, 키가 틀린 실행은 배치 전체를 한 번씩 부르고 죽는다. 그 낭비의 상한이
+`batch_size`다.
+
 ## 필요한 환경
 
 - `XAI_API_KEY`. 어떤 모델을 부를지는 `modules/llm.py`의 `document_model()`이 코드로 정하고
@@ -59,7 +69,7 @@ from modules.assessment import (
     pending_documents,
     store_assessment,
 )
-from modules.llm import document_model, model_name
+from modules.llm import LlmError, document_model, model_name
 from modules.utility import CONNECTION_ID, KST_TIMEZONE
 
 logger = logging.getLogger(__name__)
@@ -127,8 +137,15 @@ def document_assessment_hourly():
         # 어떤 모델을 부를지는 `modules/llm.py`가 정한다. 키는 그쪽 LangChain 클래스가 읽는다.
         model = document_model()
         batch = AssessmentBatch(DocumentAssessor(model, settings), settings.max_concurrency)
-        # 평가는 그래프가 한 번에 돌린다. 실패한 문서도 결과 한 건으로 돌아온다.
-        results = batch.run(documents, candidates)
+        # 평가는 그래프가 한 번에 돌린다. 응답 형식이 깨진 문서만 결과 한 건으로 돌아오고,
+        # 모델에 닿지 못한 실패는 예외 그대로 여기까지 올라온다.
+        try:
+            results = batch.run(documents, candidates)
+        except LlmError as error:
+            # 키·요청 형식·권한 문제라 10분 뒤에 다시 불러도 같은 답이다.
+            raise AirflowFailException(str(error)) from error
+        # `ConnectionError`는 잡지 않는다. 네트워크·타임아웃은 재시도할 값어치가 있어
+        # Airflow가 그대로 재시도한다.
         by_id = {document.id: document for document in documents}
         assessed_at = datetime.now(UTC)
 
@@ -166,8 +183,11 @@ def document_assessment_hourly():
             assessed += 1
 
         if assessed == 0 and failures:
-            # 하나도 성공하지 못했으면 모델이나 설정 쪽 문제다. 재시도할 값어치가 있다.
-            raise ConnectionError(f"Every assessment failed ({failures} documents)")
+            # 여기까지 왔다는 것은 모델에 닿긴 했는데 응답 형식이 전부 깨졌다는 뜻이다.
+            # 문서 하나의 문제가 아니라 프롬프트나 모델 쪽 문제이므로 재시도해도 같다.
+            # 원인을 지어내지 않고 첫 문서가 남긴 이유를 그대로 싣는다.
+            reason = next((result.error for result in results if result.error), "unknown")
+            raise AirflowFailException(f"Every assessment failed ({failures} documents): {reason}")
 
         logger.info("Assessed %s documents with %s (%s failed)", assessed, settings.prompt_revision, failures)
         return assessed

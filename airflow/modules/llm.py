@@ -77,7 +77,7 @@ def document_model() -> BaseChatModel:
     다른 LangChain 클래스를 만들어 돌려주면 되고, 부르는 쪽은 `BaseChatModel`만 안다.
     """
     return ChatXAI(
-        model="grok-4",
+        model="grok-4.6",
         timeout=REQUEST_TIMEOUT_SECONDS,
         # 재시도는 Airflow가 한다. 위 모듈 docstring 참고.
         max_retries=0,

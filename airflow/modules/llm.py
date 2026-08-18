@@ -52,9 +52,9 @@ from langchain_xai import ChatXAI
 
 logger = logging.getLogger(__name__)
 
-# 한 번의 호출을 기다리는 시간. 문서 하나를 읽고 JSON 하나를 내는 데 이보다 오래 걸리면
-# 그 실행은 포기하고 다음 실행이 다시 집는 편이 낫다.
-REQUEST_TIMEOUT_SECONDS = 120.0
+# 한 번의 호출을 기다리는 시간. 스트리밍을 쓰지 않으므로 모델이 추론을 끝내야 응답 헤더가
+# 온다. 긴 문서 하나가 이 시간을 넘기면 팬아웃 배치 전체가 되돌아가므로 넉넉히 잡는다.
+REQUEST_TIMEOUT_SECONDS = 300.0
 
 
 class LlmError(RuntimeError):

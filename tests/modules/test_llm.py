@@ -8,7 +8,15 @@ from langchain_core.messages import AIMessage
 from pydantic import BaseModel, ConfigDict, Field
 
 from modules.assessment import Assessment
-from modules.llm import LlmError, UnsupportedResponseFormat, classify, document_model, invoke, model_name
+from modules.llm import (
+    LlmError,
+    UnsupportedResponseFormat,
+    briefing_model,
+    classify,
+    document_model,
+    invoke,
+    model_name,
+)
 from modules.schema import response_format, strict_json_schema
 
 
@@ -56,6 +64,17 @@ def test_the_document_model_is_defined_in_code_not_in_settings(monkeypatch):
     assert model_name(model) == "grok-4.6"
     # 재시도는 Airflow가 한다. SDK가 먼저 재시도하면 태스크 타임아웃 안에서 몇 번 불렀는지
     # 로그와 트레이스가 어긋난다.
+    assert model.max_retries == 0
+
+
+def test_the_briefing_model_is_its_own_function(monkeypatch):
+    """지금은 문서 태깅과 같은 모델이지만 함수를 나눠 둔다. 브리핑 요약과 태깅은 요구가 달라
+    한쪽만 바꾸고 싶어질 때 그 함수만 고치면 된다."""
+    monkeypatch.setenv("XAI_API_KEY", "secret-key")
+
+    model = briefing_model()
+
+    assert model_name(model) == "grok-4.6"
     assert model.max_retries == 0
 
 

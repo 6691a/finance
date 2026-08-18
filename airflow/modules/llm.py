@@ -83,6 +83,21 @@ def document_model() -> BaseChatModel:
     )
 
 
+def briefing_model() -> BaseChatModel:
+    """Slack 브리핑 요약(`modules/briefing/comment.py`)이 쓰는 모델.
+
+    지금은 `document_model`과 같은 모델이지만 함수를 나눠 둔다. 태깅은 문서 한 건을 읽고
+    JSON을 내는 일이고 브리핑은 집계 표를 읽고 글을 쓰는 일이라, 한쪽만 다른 모델로 옮기고
+    싶어질 때 그 함수만 고치면 된다.
+    """
+    return ChatXAI(
+        model="grok-4.6",
+        timeout=REQUEST_TIMEOUT_SECONDS,
+        # 재시도는 Airflow가 한다. 위 모듈 docstring 참고.
+        max_retries=0,
+    )
+
+
 def model_name(model: BaseChatModel) -> str:
     """`document.llm_model`에 남길 이름. 어느 모델이 그 점수를 냈는지 나중에 읽어야 한다."""
     return getattr(model, "model_name", None) or type(model).__name__

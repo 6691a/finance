@@ -27,6 +27,11 @@ langgraph>=1.2.0
 # modules/llm.py가 예외 타입을 직접 import한다. ChatXAI가 BaseChatOpenAI 서브클래스라
 # 제공처 오류가 openai 예외 그대로 올라온다. 전이 의존을 몰래 쓰지 않고 여기 적는다.
 openai>=2.0.0
+# modules/slack.py: slack_sdk.WebClient로 chat.postMessage를 부른다. 재시도 핸들러는 붙이지
+# 않는다. SDK가 먼저 재시도하면 태스크 타임아웃 안에서 몇 번을 불렀는지 로그와 어긋난다.
+# 버전은 위 규칙대로 constraints에 맡긴다. Airflow가 slack provider를 함께 핀하므로
+# 범위를 적으면 이미지 빌드가 ResolutionImpossible로 죽는다.
+slack-sdk
 # LangSmith 추적. `LANGSMITH_*`가 비어 있으면 아무 것도 보내지 않는다.
 langsmith>=0.11.0
 # Airflow의 sentry 통합이 쓴다. 개발에서는 `sentry_on = false`라 켜지지 않지만 배포

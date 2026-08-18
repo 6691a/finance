@@ -156,6 +156,8 @@ def test_each_series_declares_its_own_unit():
     assert FredSeries.DGS10.unit == "Percent"
     assert FredSeries.CPI_M.unit == "Index 1982-1984=100"
     assert FredSeries.RETAIL_SALES_M.unit == "Millions of Dollars"
+    assert FredSeries.UNEMPLOYMENT_M.unit == "Percent"
+    assert FredSeries.NONFARM_PAYROLL_M.unit == "Thousands of Persons"
     # 단위가 계열마다 다르다는 것 자체가 계약이다.
     assert len({series.unit for series in FredSeries}) > 1
 

@@ -89,6 +89,9 @@ class FredSeries(StrEnum):
     CPI_M = ("CPI_M", "CPIAUCSL", "Index 1982-1984=100", "price_index", "미국 소비자물가지수")
     PPI_M = ("PPI_M", "PPIFIS", "Index Nov 2009=100", "price_index", "미국 생산자물가지수(최종수요)")
     RETAIL_SALES_M = ("RETAIL_SALES_M", "RSAFS", "Millions of Dollars", "activity", "미국 소매판매")
+    # 고용 둘은 2026-08-18에 `series` 엔드포인트로 확인했다. 레벨만 저장한다. 변화율은 계산된다.
+    UNEMPLOYMENT_M = ("UNEMPLOYMENT_M", "UNRATE", "Percent", "activity", "미국 실업률")
+    NONFARM_PAYROLL_M = ("NONFARM_PAYROLL_M", "PAYEMS", "Thousands of Persons", "activity", "미국 비농업고용")
 
 
 # DAG이 태스크를 매핑하는 단위. 국채와 거시는 발표 주기가 달라 되돌아볼 구간이 다르고,

@@ -93,7 +93,7 @@ def test_failed_runs_break_the_all_green():
 
     assert not result.is_healthy
     assert result.failures[0].source == "fred"
-    assert "500" in _block_text(ops.render_blocks(result, None))
+    assert "500" in _block_text(ops.render_blocks(result))
 
 
 def test_stale_exchange_rates_are_caught_without_a_source_record():
@@ -122,7 +122,7 @@ def test_a_backlog_under_the_limit_is_normal():
 
 def test_a_healthy_report_is_still_sent_as_a_heartbeat():
     """침묵이 정상 신호이면 고장으로 인한 침묵과 구분할 수 없다."""
-    text = _block_text(ops.render_blocks(summary(), None))
+    text = _block_text(ops.render_blocks(summary()))
 
     assert "모든 수집 정상" in text
 
@@ -131,19 +131,10 @@ def test_unknown_sources_are_folded_into_one_row():
     """문서 피드는 DB 테이블이 정하고 수십 개다. 하나씩 그리면 표가 화면을 넘는다."""
     rows = [*HEALTHY_ROWS, ("yonhap", 12, 12, 0, 40, TUESDAY), ("hankyung", 12, 12, 0, 30, TUESDAY)]
 
-    text = _block_text(ops.render_blocks(summary(rows), None))
+    text = _block_text(ops.render_blocks(summary(rows)))
 
     assert "yonhap" not in text
     assert "문서 피드" in text
-
-
-def test_comment_input_lists_what_is_wrong():
-    rows = [row for row in HEALTHY_ROWS if row[0] != "mof"]
-
-    payload = json.loads(ops.comment_input(summary(rows)))
-
-    assert "mof" in payload["silent"]
-    assert payload["healthy"] is False
 
 
 def test_the_window_is_a_full_day():

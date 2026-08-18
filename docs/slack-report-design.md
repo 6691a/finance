@@ -360,7 +360,6 @@ SCHEDULE = "0 8 * * *"  # KST 매일 08:00 = UTC -1일 23:00
 | 무소식 소스 | — (모듈 판정) | `EXPECTED_SOURCES` 상수와 대조 |
 | 예외 둘 | `exchange_rate/select_freshness.sql` + 2부의 집계 쿼리 | 아래 참고 |
 | 최근 실패 상세 | `source_record/select_recent_failures.sql` | 최근 5건: source, `source_key`, `started_at`, `metadata`의 오류 요지(300자로 자름) |
-| 💬 요약 | — | 실패·무소식이 있을 때만. 올그린이면 "모든 수집 정상" 한 줄로 충분하다 |
 
 **기대 소스 목록에 문서 피드를 넣지 않는다.** 피드 목록은 `document_source` 테이블이 정하고
 수십 개라, 코드 상수와 DB가 어긋나는 순간 거짓 경보가 된다. `document_ingestion_hourly`는
@@ -379,6 +378,10 @@ SCHEDULE = "0 8 * * *"  # KST 매일 08:00 = UTC -1일 23:00
 
 **올그린이어도 보낸다(하트비트).** 침묵이 정상 신호면 고장으로 인한 침묵과 구분할 수
 없다. 하루 한 번은 견딜 만한 소음이다.
+
+**이 파트만 LLM을 부르지 않는다.** 그래서 `ops.py`에는 `comment_input`이 없다. 표와 실패
+목록이 이미 사실을 다 말하고, 나머지를 감시하는 리포트가 모델 호출에 기대면 모델이 죽은 날
+감시도 같이 흔들린다.
 
 알려진 한계: `source_record`에 `running` 행을 쓰는 수집기가 없어, 매달린 DAG는 '실행
 중'이 아니라 '부재'로 보인다. 무소식 섹션이 그 부재를 잡는 것까지가 이 리포트의 몫이고,

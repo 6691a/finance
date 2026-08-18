@@ -21,10 +21,13 @@ Airflow 메타데이터를 봐야 한다.
 ## 올그린에도 보낸다
 
 침묵이 정상 신호이면 고장으로 인한 침묵과 구분할 수 없다. 하루 한 번은 견딜 만한 소음이다.
-다만 그때는 LLM을 부르지 않는다. 템플릿 한 줄로 충분하다.
+
+## LLM을 부르지 않는다
+
+다른 파트와 달리 `comment_input`이 없다. 표와 실패 목록이 이미 사실을 다 말하고, 나머지를
+감시하는 리포트가 모델 호출에 기대면 모델이 죽은 날 감시도 같이 흔들린다.
 """
 
-import json
 from datetime import date, datetime, timedelta
 from typing import Any, NamedTuple, Protocol, Self
 
@@ -188,7 +191,7 @@ def silent_sources(activity: tuple[SourceActivity, ...], now: datetime) -> tuple
     )
 
 
-def render_blocks(summary: OpsSummary, comment: str | None, error: str | None = None) -> list[dict[str, Any]]:
+def render_blocks(summary: OpsSummary) -> list[dict[str, Any]]:
     local = summary.generated_at.astimezone(KST_TIMEZONE)
     mark = "✅" if summary.is_healthy else "⚠️"
     rendered = [blocks.header(f"{mark} 수집 운영 현황 · {blocks.timestamp(local)}")]
@@ -211,7 +214,6 @@ def render_blocks(summary: OpsSummary, comment: str | None, error: str | None = 
     if summary.failures:
         rendered.append(blocks.section("*최근 실패*\n" + "\n".join(_failure_line(item) for item in summary.failures)))
 
-    rendered += blocks.comment_blocks(comment, error)
     rendered.append(
         blocks.context([f"평가 대기 {summary.assessment_backlog}건", f"환율 {summary.exchange_rate_latest}"])
     )
@@ -233,38 +235,13 @@ def render_text(summary: OpsSummary) -> str:
     return "수집 운영 현황 · " + " · ".join(problems)
 
 
-def comment_input(summary: OpsSummary) -> str:
-    payload = {
-        "as_of_kst": summary.generated_at.astimezone(KST_TIMEZONE).isoformat(),
-        "window_hours": summary.window_hours,
-        "healthy": summary.is_healthy,
-        "silent": [source.name for source in summary.silent],
-        "failures": [
-            {"source": item.source, "key": item.source_key, "detail": item.detail} for item in summary.failures
-        ],
-        "activity": [
-            {"source": item.source, "runs": item.runs, "failed": item.failed, "records": item.records}
-            for item in summary.activity
-            if item.source in EXPECTED_BY_NAME
-        ],
-        "exchange_rate_latest": summary.exchange_rate_latest.isoformat() if summary.exchange_rate_latest else None,
-        "assessment_backlog": summary.assessment_backlog,
-    }
-    return json.dumps(payload, ensure_ascii=False)
-
-
 def _activity_rows(summary: OpsSummary) -> list[tuple[str, str, str, str]]:
     """기대 소스는 한 줄씩, 나머지(문서 피드)는 한 줄로 접는다.
 
     피드는 `document_source` 테이블이 정하고 수십 개라 하나씩 그리면 표가 화면을 넘는다.
     """
     rows = [
-        (
-            EXPECTED_BY_NAME[item.source].label,
-            str(item.runs),
-            str(item.failed),
-            f"{item.records:,}",
-        )
+        (EXPECTED_BY_NAME[item.source].label, f"{item.runs:,}", f"{item.failed:,}", f"{item.records:,}")
         for item in summary.activity
         if item.source in EXPECTED_BY_NAME
     ]
@@ -273,8 +250,8 @@ def _activity_rows(summary: OpsSummary) -> list[tuple[str, str, str, str]]:
         rows.append(
             (
                 f"문서 피드({len(others)})",
-                str(sum(item.runs for item in others)),
-                str(sum(item.failed for item in others)),
+                f"{sum(item.runs for item in others):,}",
+                f"{sum(item.failed for item in others):,}",
                 f"{sum(item.records for item in others):,}",
             )
         )

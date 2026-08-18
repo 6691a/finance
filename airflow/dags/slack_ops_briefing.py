@@ -5,8 +5,12 @@
 ## 왜 올그린에도 보내나
 
 이 리포트가 나머지를 감시하는 쪽이다. 침묵을 정상 신호로 쓰면 고장으로 인한 침묵과 구분할
-수 없다. 하루 한 번은 견딜 만한 소음이다. 다만 정상일 때는 LLM을 부르지 않는다. 템플릿
-한 줄이 이미 할 말을 다 한다.
+수 없다. 하루 한 번은 견딜 만한 소음이다.
+
+## LLM을 부르지 않는다
+
+표와 실패 목록이 이미 사실을 다 말한다. 감시하는 쪽이 감시받는 쪽(모델 호출)에 의존하면
+모델이 죽은 날 이 리포트도 같이 흔들린다. 요약이 필요하면 Airflow 로그를 본다.
 
 ## source_record에 안 잡히는 둘
 
@@ -17,7 +21,6 @@ docstring에 이유가 있다.
 ## 필요한 환경
 
 - `SLACK_BOT_TOKEN`, `SLACK_CHANNEL_OPS`.
-- `XAI_API_KEY`. 문제가 있을 때만 부른다.
 - `CONNECTION_ID`가 가리키는 Airflow 연결.
 """
 
@@ -33,8 +36,6 @@ from airflow.sdk import dag, task
 from pydantic import SecretStr
 
 from modules.briefing import ops
-from modules.briefing.comment import BriefingCommentator, CommentError
-from modules.llm import LlmError, briefing_model
 from modules.slack import SlackError, post_message
 from modules.utility import CONNECTION_ID, KST_TIMEZONE
 
@@ -42,8 +43,6 @@ logger = logging.getLogger(__name__)
 
 # KST 매일 08:00 = UTC 전일 23:00. 아침 수집 DAG들이 끝난 뒤라 밤사이 실행이 전부 잡힌다.
 SCHEDULE = "0 8 * * *"
-
-REPORT_NAME = "수집 운영 현황"
 
 
 def _connection() -> Any:
@@ -82,24 +81,13 @@ def slack_ops_briefing():
         finally:
             connection.close()
 
-        comment, comment_error = _comment(summary)
-        blocks = ops.render_blocks(summary, comment, comment_error)
+        blocks = ops.render_blocks(summary)
         text = ops.render_text(summary)
 
         try:
             return post_message(token, channel, text=text, blocks=blocks)
         except SlackError as error:
             raise AirflowFailException(str(error)) from error
-
-    def _comment(summary: ops.OpsSummary) -> tuple[str | None, str | None]:
-        """정상이면 부르지 않는다. "모든 수집 정상" 위에 덧붙일 말이 없다."""
-        if summary.is_healthy:
-            return None, None
-        try:
-            return BriefingCommentator(briefing_model()).comment(REPORT_NAME, ops.comment_input(summary)), None
-        except (ConnectionError, LlmError, CommentError) as error:
-            logger.warning("briefing comment failed; sending the tables without it: %s", error)
-            return None, str(error)
 
     send_briefing()
 

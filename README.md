@@ -446,8 +446,9 @@ docker compose -f compose/local/docker-compose.yaml logs -f grafana
 | 상승·보합·하락 종목 분포 | `market-movement.json` | 장중 시장 폭(breadth) |
 | 신용·공매도·대차 포지션 | `market-positioning.json` | 신용잔고·공매도·대차·증시자금 |
 | 공시·실적 (DART) | `dart-disclosure.json` | 공시 타임라인과 실적 추이 |
+| 문서 평가 (LLM) | `document-assessment.json` | 점수 분포, 점수 높은 문서, 태그·출처별 집계 |
 
-대시보드가 없는 값이 둘 있습니다. 문서 평가 결과(`document`의 점수와 태그)와 미국 물가·소매판매(`fred_macro_daily`)입니다. 후자는 소비자가 화면이 아니라 리포트 쪽 계산이라 세 계열로 화면을 만들지 않았습니다. 계열이 늘면 그때 만듭니다.
+미국 물가·소매판매(`fred_macro_daily`)만 대시보드가 없습니다. 소비자가 화면이 아니라 리포트 쪽 계산이라 세 계열로 화면을 만들지 않았습니다. 계열이 늘면 그때 만듭니다.
 
 ### 미국 국채 대시보드
 
@@ -517,6 +518,20 @@ docker compose -f compose/local/docker-compose.yaml logs -f grafana
 - 시계열별 최신 관측값과 수집 계보 표. 마스터에는 있는데 관측값이 없는 시계열은 여기서 빠지므로, 수집이 안 붙은 시계열을 찾는 데 씁니다.
 
 **이 대시보드에는 나라 이름도 시계열 ID도 하드코딩돼 있지 않습니다.** 나라를 추가하면 수집기와 마스터 시드만 늘리면 되고, 국가 변수 목록과 모든 패널이 저절로 따라옵니다. 일본·영국·유로 지역을 붙일 때 실제로 그랬습니다. 국채가 아닌 금리(CD 91일 등)는 `kind = 'government_bond'` 조건에서 빠집니다.
+
+### 문서 평가 대시보드
+
+[compose/local/grafana/dashboards/document-assessment.json](compose/local/grafana/dashboards/document-assessment.json)은 `document_assessment_hourly`가 매긴 점수와 태그를 봅니다. 다른 대시보드가 값의 추이를 보는 것과 달리 **평가가 쓸 만한지**를 보는 화면입니다.
+
+- 수집 문서, 평가 대기, 평균 점수, 마지막 평가 이후 경과 stat.
+- 시간별 수집·평가 시계열. 두 선이 벌어지면 평가가 수집을 못 따라가는 것입니다.
+- 점수 분포 막대. **이 패널이 이 대시보드의 목적입니다.** 한 점수에 몰려 있으면 그 점수는 문서를 가르지 못하고 리포트가 상위 몇 건을 고를 수 없습니다. 0건인 점수도 칸을 남기려고 `generate_series(0, 8)`이 축을 만듭니다.
+- 점수 높은 문서 표. 리포트가 고르는 것과 같은 순서입니다.
+- 태그별·출처별 집계 표.
+
+`최소 점수` 변수는 **점수 높은 문서 표에만** 걸립니다. 집계 패널까지 걸면 화면이 "낮은 점수가 없다"고 말하게 되어 점수가 눌린 것을 못 잡습니다. 걸러진 문서도 삭제되지 않고 DB에 그대로 있습니다.
+
+시간 필터는 `published_at`이 아니라 `detected_at`에 겁니다. 피드가 발행 시각을 주지 않는 출처가 있어 `published_at`은 `NULL`일 수 있고 `detected_at`은 항상 있습니다.
 
 ### 대시보드를 Git에 남기기
 

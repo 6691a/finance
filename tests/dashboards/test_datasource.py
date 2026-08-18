@@ -3,7 +3,6 @@ from pathlib import Path
 
 import pytest
 
-
 DASHBOARD_DIR = Path(__file__).resolve().parents[2] / "compose/local/grafana/dashboards"
 PATHS = sorted(DASHBOARD_DIR.glob("*.json"))
 

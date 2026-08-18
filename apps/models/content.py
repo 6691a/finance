@@ -161,6 +161,11 @@ class Document(EntityBase):
             "content_level IN ('metadata_only', 'feed_content', 'full_text')",
             name="ck_document_content_level",
         ),
+        # 평가 전이면 NULL이다. SQL에서 NULL은 CHECK를 통과하므로 따로 열어 둘 필요가 없다.
+        CheckConstraint(
+            "direction IN ('positive', 'negative', 'neutral')",
+            name="ck_document_direction",
+        ),
         # 본문을 저장하지 않기로 한 출처의 문서에 본문이 들어가는 것을 DB가 막는다.
         # 수집기 판단이 어긋나도 여기서 걸린다.
         CheckConstraint(

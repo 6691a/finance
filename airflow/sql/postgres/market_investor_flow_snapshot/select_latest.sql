@@ -1,4 +1,4 @@
--- 시장마다 마지막 수급 스냅샷 하나. 금액은 원 단위 그대로 주고 렌더링이 조 단위로 줄인다.
+-- 시장마다 마지막 수급 스냅샷 하나. 금액은 저장된 백만원 단위 그대로 주고 렌더링이 억원으로 줄인다.
 SELECT DISTINCT ON (market_code)
        market_code,
        observed_at,

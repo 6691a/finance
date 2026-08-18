@@ -13,6 +13,7 @@ from apps.models.market import (
     MarketMovementSnapshot,
     QuoteBar,
     QuoteDaily,
+    StockInvestorEstimateSnapshot,
 )
 from apps.models.reference import IndicatorSeries, QuoteSymbol
 from modules.briefing import market
@@ -42,6 +43,8 @@ RATE_ROWS = [
 ]
 
 FLOW_ROWS = [("KOSPI", MIDDAY, Decimal(-152300000000), Decimal(88400000000), Decimal(61200000000))]
+
+STOCK_FLOW_ROWS = [("005930", "삼성전자", date(2026, 8, 18), 1_971_000, -648_000, 1_323_000, MIDDAY)]
 
 MOVEMENT_ROWS = [("KOSPI", MIDDAY, 512, 61, 341)]
 
@@ -97,6 +100,7 @@ def summary(now: datetime = MIDDAY):
         FX_ROWS,
         RATE_ROWS,
         FLOW_ROWS,
+        STOCK_FLOW_ROWS,
         MOVEMENT_ROWS,
         QUOTE_TREND_ROWS,
         RATE_TREND_ROWS,
@@ -136,14 +140,15 @@ def test_every_row_carries_its_own_as_of_time():
             ("kis", "KOSPI", "코스피", "index", "KR", Decimal("2687.45"), Decimal("2665.60"), stale),
             ("kis", "KOSDAQ", "코스닥", "index", "KR", Decimal("745.10"), Decimal("747.42"), MIDDAY),
         ],
-        [], [], [], [], [], [], [], [],
+        [], [], [], [], [], [], [], [], [],
     )
     blocks_out = market.render_blocks(market.collect_summary(connection, MIDDAY), MarketScope.KOREA, None)
-    table = next(block["text"]["text"] for block in blocks_out if "국내" in block.get("text", {}).get("text", ""))
+    table = next(block for block in blocks_out if block["type"] == "table")
+    rows = [[cell["text"] for cell in row] for row in table["rows"]]
 
-    assert "기준" in table  # 열 제목
-    assert "08/15" in table  # 묵은 줄
-    assert "08/18" in table  # 최신 줄
+    assert rows[0][-1] == "기준"  # 열 제목
+    assert rows[1] == ["코스피", "2,687.45", "▲ +0.82%", "08/15 12:30"]  # 묵은 줄
+    assert rows[2] == ["코스닥", "745.10", "▼ -0.31%", "08/18 12:30"]  # 최신 줄
 
 
 def test_the_context_flags_the_oldest_value():
@@ -161,6 +166,7 @@ def test_yields_are_not_drawn_as_percent_moves():
     """
     connection = FakeConnection(
         [("yahoo", "US10Y", "미국 10년물 금리", "rate", "US", Decimal("4.70"), Decimal("4.65"), MIDDAY)],
+        [],
         [],
         [],
         [],
@@ -229,6 +235,7 @@ def test_a_thin_sample_is_marked_so_the_prompt_can_discount_it():
         FX_ROWS,
         RATE_ROWS,
         FLOW_ROWS,
+        STOCK_FLOW_ROWS,
         MOVEMENT_ROWS,
         [("kis", "KOSPI", date(2026, 8, 17), Decimal(2600)), ("kis", "KOSPI", date(2026, 8, 18), Decimal(2687))],
         [],
@@ -305,6 +312,40 @@ def test_fallback_text_is_one_line():
     assert "코스피" in text
 
 
+def test_rows_are_ordered_for_reading_not_alphabetically():
+    """가나다·알파벳 순서는 코스닥을 코스피 위로 올리고 통화를 CNY부터 시작하게 만든다."""
+    result = summary()
+
+    assert [quote.symbol for quote in market._korea_quotes(result)] == ["KOSPI", "KOSPI200_FUT"]
+    assert [quote.country for quote in market._intraday_overseas(result)] == ["US", "JP"]
+
+    table = next(block for block in market.render_blocks(result, MarketScope.KOREA, None) if block["type"] == "table")
+    assert [row[0]["text"] for row in table["rows"]] == ["구분", "코스피", "코스피200 선물"]
+
+    fx = next(
+        block
+        for block in market.render_blocks(result, MarketScope.KOREA, None)
+        if block["type"] == "table" and block["rows"][0][0]["text"] == "통화"
+    )
+    assert [row[0]["text"] for row in fx["rows"][1:]] == ["USD", "JPY"]
+
+
+def test_stock_estimates_are_counted_in_shares_not_won():
+    """종목 수급은 추정 **수량**이다. 억원인 시장 수급과 한 표에 섞으면 자릿수가 뜻을 잃는다."""
+    rendered = market.render_blocks(summary(), MarketScope.KOREA, None)
+    titles = [block["text"]["text"] for block in rendered if block["type"] == "section"]
+    table = next(
+        block for block in rendered if block["type"] == "table" and block["rows"][0][0]["text"] == "종목"
+    )
+
+    assert "*종목 추정 순매수(주)*" in titles
+    assert [cell["text"] for cell in table["rows"][1]] == ["삼성전자", "+1,971,000", "-648,000", "+1,323,000", "08/18"]
+
+    payload = json.loads(market.comment_input(summary(), MarketScope.KOREA))
+    assert payload["stock_investor_estimates"][0]["foreign_net_buy_shares"] == 1_971_000
+    assert payload["stock_investor_estimates"][0]["estimate"] is True
+
+
 @pytest.mark.parametrize(
     ("statement", "table", "columns"),
     [
@@ -323,6 +364,11 @@ def test_fallback_text_is_one_line():
             ("market_code", "observed_at", "foreign_net_buy_amount"),
         ),
         (market.LATEST_MOVEMENTS, MarketMovementSnapshot.__table__, ("rising_count", "falling_count")),
+        (
+            market.LATEST_STOCK_FLOWS,
+            StockInvestorEstimateSnapshot.__table__,
+            ("stock_code", "business_date", "source_time_code", "foreign_net_buy_qty"),
+        ),
         (market.QUOTE_TREND, QuoteBar.__table__, ("provider", "symbol", "bar_at", "close")),
         (market.QUOTE_TREND, QuoteDaily.__table__, ("business_date",)),
         (market.RATE_TREND, IndicatorObservation.__table__, ("observation_date", "value")),

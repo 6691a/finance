@@ -128,19 +128,17 @@ def render_blocks(summary: DocumentSummary, comment: str | None, error: str | No
         rendered.append(blocks.context(_as_of(summary)))
         return rendered
 
-    rendered.append(
-        blocks.table_section(
-            f"최근 {summary.window_hours}시간",
-            ("구분", "건수"),
-            (
-                ("신규 수집", str(summary.detected)),
-                ("평가 완료", str(summary.assessed)),
-                ("긍정", str(summary.positive)),
-                ("부정", str(summary.negative)),
-                ("중립", str(summary.neutral)),
-                ("평가 대기", str(summary.backlog)),
-            ),
-        )
+    rendered += blocks.table_section(
+        f"최근 {summary.window_hours}시간",
+        ("구분", "건수"),
+        (
+            ("신규 수집", str(summary.detected)),
+            ("평가 완료", str(summary.assessed)),
+            ("긍정", str(summary.positive)),
+            ("부정", str(summary.negative)),
+            ("중립", str(summary.neutral)),
+            ("평가 대기", str(summary.backlog)),
+        ),
     )
     if summary.top:
         rendered.append(

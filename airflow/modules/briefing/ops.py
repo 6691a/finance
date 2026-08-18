@@ -196,12 +196,10 @@ def render_blocks(summary: OpsSummary, comment: str | None, error: str | None = 
     if summary.is_healthy:
         rendered.append(blocks.section(f"최근 {summary.window_hours}시간 모든 수집 정상"))
 
-    rendered.append(
-        blocks.table_section(
-            f"최근 {summary.window_hours}시간 수집",
-            ("소스", "실행", "실패", "건수"),
-            _activity_rows(summary),
-        )
+    rendered += blocks.table_section(
+        f"최근 {summary.window_hours}시간 수집",
+        ("소스", "실행", "실패", "건수"),
+        _activity_rows(summary),
     )
     if summary.silent:
         names = ", ".join(f"{source.label}({source.name})" for source in summary.silent)

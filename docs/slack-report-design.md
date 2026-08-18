@@ -250,7 +250,7 @@ FRED·yahoo 일봉)이 끝난 뒤가 08:00이다. 미국 휴장일은 `us_equity
 | `market_investor_flow_snapshot/select_latest.sql` | 시장별 마지막 수급 스냅샷 |
 | `market_movement_snapshot/select_latest.sql` | 시장별 마지막 등락 종목 수 |
 
-Block Kit: `header` → 섹션별 `section`(값은 **고정폭 코드 블록 표**) → `divider` →
+Block Kit: `header` → 섹션마다 제목 `section` + **`table` 블록** → `divider` →
 요약 `section` → `context`. `text` fallback은 지수 둘과 환율/금리 하나를 담은 한 줄이다.
 
 실제 출력은 이렇게 나온다.
@@ -258,23 +258,24 @@ Block Kit: `header` → 섹션별 `section`(값은 **고정폭 코드 블록 표
 ```
 ## 📈 한국장 브리핑 · 08/18(화) 12:30 KST · 장중
 *국내 지수·선물*
-구분                종가      등락
-코스피          2,687.45  ▲ +0.82%
-코스닥            745.10  ▼ -0.31%
-코스피200 선물    361.20  ▲ +0.67%
-
-*환율(하나은행 고시)*
-통화  매매기준율  전일 대비
-USD     1,388.60   ▼ -0.31%
-
-*투자자 순매수(억원)*
-시장   외국인  기관  개인
-KOSPI  -1,523  +884  +612
+┌────────────────┬──────────┬──────────┬─────────────┐
+│ 구분           │     종가 │     등락 │        기준 │
+│ 코스피         │ 2,687.45 │ ▲ +0.82% │ 08/18 12:30 │
+│ 코스피200 선물 │   361.20 │ ▲ +0.67% │ 08/18 12:29 │
+└────────────────┴──────────┴──────────┴─────────────┘
 ```
 
-**열 폭은 글자 수가 아니라 표시 칸 수로 센다.** 한글·전각 기호는 고정폭 글꼴에서 두 칸이라
-`len`으로 맞추면 한글이 섞인 줄만 밀린다. `table.display_width`가
-`unicodedata.east_asian_width`로 그 판정을 한다.
+**열은 Slack이 맞춘다.** 처음에는 코드 블록 안에서 `unicodedata.east_asian_width`로 칸 수를
+세어 직접 맞췄는데(`briefing/table.py`), 실제 Slack에서 줄이 어긋났다. 코드 블록 글꼴인
+`Monaco`/`Menlo` 계열에 한글이 없어 대체 글꼴로 떨어지고 그 자간이 ASCII의 정확히 두 배가
+아니기 때문이다. 칸 수를 아무리 정확히 세어도 한글 수가 다른 줄끼리 밀린다. `▲`/`▼`가
+ambiguous 폭이라 글꼴마다 한 칸이 되기도 두 칸이 되기도 하는 것은 그 위에 겹친 둘째 문제였다.
+**맞출 수 없는 것을 맞추려 하지 않는다.** Slack 기본 `table` 블록이 클라이언트에서 열을
+맞추므로 그 계산이 통째로 사라졌다. `table.py`는 지웠다.
+
+`table` 블록에는 제목 칸이 없어 `blocks.table_section`이 제목 `section`과 표를 **두 블록**으로
+돌려준다. 칸은 `raw_text`라 링크와 굵게가 들어가지 않는다. 그래서 문서 브리핑의 주요 문서와
+운영 브리핑의 실패 목록처럼 링크가 필요한 자리는 표가 아니라 `section`으로 남는다.
 
 ### 3.4 모델이 판단할 수 있게 만든다
 
@@ -323,10 +324,10 @@ KOSPI  -1,523  +884  +612
 `slack_document_briefing`, 기본 스케줄:
 
 ```python
-SCHEDULE = "0 8,17 * * *"  # KST 매일 08:00·17:00 = UTC -1일 23:00, 08:00
+SCHEDULE = "0 8 * * *"  # KST 매일 08:00 = UTC -1일 23:00
 ```
 
-조회 창은 `assessed_at` 기준 최근 `WINDOW_HOURS`(기본 12)다. `published_at`이 아니라
+조회 창은 `assessed_at` 기준 최근 `WINDOW_HOURS`(기본 24)다. `published_at`이 아니라
 `assessed_at`인 이유: 평가는 수집보다 늦게 따라오고, 이 리포트가 답하는 질문은
 "파이프라인이 방금 무엇을 평가했나"다.
 
@@ -390,10 +391,9 @@ SCHEDULE = "0 8 * * *"  # KST 매일 08:00 = UTC -1일 23:00
 | 테스트 | 무엇을 고정하나 |
 | --- | --- |
 | `tests/modules/test_slack.py` | 오류 분류표, 전달 인자, `retry_handlers=[]`, 예외 문자열에 토큰 미노출 |
-| `tests/modules/test_briefing_table.py` | 한글 두 칸 판정, 첫 열 좌측·나머지 우측 정렬, 모든 줄 같은 폭 |
 | `tests/modules/test_briefing_comment.py` | 성공·교정 1회·재실패·`ConnectionError` 통과, 단락 여럿 허용 |
 | `tests/modules/test_briefing_trend.py` | 연속 일수, 이상 움직임 백분위, 금리 bp vs 가격 퍼센트, 마이너스 금리, 표본 부족 표시, 수급의 부호 연속 |
-| `tests/modules/test_briefing_market.py` | 나라·종류 분할(한국장에서 미국 현물 제외), 미국장 요약 입력에 한국 값 포함, 뉴욕 기준 세션 날짜, 요일 표기, 요약 입력의 추세 필드 |
+| `tests/modules/test_briefing_market.py` | 나라·종류 분할(한국장에서 미국 현물 제외), 미국장 요약 입력에 한국 값 포함, 뉴욕 기준 세션 날짜, 요일 표기, 요약 입력의 추세 필드, 줄마다 붙는 기준 시각 |
 | `tests/modules/test_briefing_documents.py` | 창이 `assessed_at` 기준, 0건 짧은 형태, 상위 문서 링크·점수 |
 | `tests/modules/test_briefing_ops.py` | 무소식 판정(주말 예외 포함), 환율 신선도, 백로그 임계, 올그린 하트비트, 피드 접기 |
 | `tests/dags/test_slack_market_briefing.py` | 네 DAG의 스케줄, 태스크 하나, 채널 분리, 설정 누락 시 즉시 실패 |

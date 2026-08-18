@@ -13,7 +13,7 @@
 """
 
 import json
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Iterable, Sequence
 from datetime import date, datetime, timedelta
 from decimal import Decimal
 from enum import StrEnum
@@ -32,6 +32,7 @@ LATEST_EXCHANGE_RATES = read_sql("postgres", "exchange_rate", "select_latest_wit
 LATEST_RATES = read_sql("postgres", "indicator_observation", "select_latest_pair.sql")
 LATEST_FLOWS = read_sql("postgres", "market_investor_flow_snapshot", "select_latest.sql")
 LATEST_MOVEMENTS = read_sql("postgres", "market_movement_snapshot", "select_latest.sql")
+LATEST_STOCK_FLOWS = read_sql("postgres", "stock_investor_estimate_snapshot", "select_latest.sql")
 
 QUOTE_TREND = read_sql("postgres", "quote_bar", "select_daily_trend.sql")
 RATE_TREND = read_sql("postgres", "indicator_observation", "select_trend.sql")
@@ -56,6 +57,7 @@ EXCHANGE_RATE_LOOKBACK = timedelta(days=14)
 RATE_LOOKBACK = timedelta(days=45)
 
 # 브리핑에 그릴 통화. 하나은행이 고시하는 전부를 넣으면 표가 화면을 넘는다.
+# 이 순서가 그대로 표의 줄 순서다.
 BRIEFING_CURRENCIES = ("USD", "JPY", "EUR", "CNY")
 
 # 국가 비교의 기준 만기. 나라마다 고시 만기가 달라 10년물만 두 나라 이상이 항상 갖는다.
@@ -65,6 +67,12 @@ GOVERNMENT_BOND = "government_bond"
 # 한국장 시간에도 값이 움직이는 해외 시장. 미국 현물은 닫혀 있어 넣지 않는다.
 ASIA_COUNTRIES = frozenset({"JP", "TW", "HK", "CN"})
 INDEX_FUTURE = "index_future"
+
+# 표에 그리는 순서. **정렬을 SQL에 맡기지 않는다.** 이름순으로 두면 코스닥이 코스피 위에
+# 오고 통화가 CNY부터 시작한다. 읽는 사람이 먼저 보고 싶은 것과 가나다·알파벳 순서는 다르다.
+# 목록에 없는 값은 뒤로 밀리고 자기들끼리는 원래 순서를 지킨다.
+KOREA_SYMBOL_ORDER = ("KOSPI", "KOSPI200", "KOSPI200_FUT", "KOSDAQ", "KOSDAQ150_FUT")
+OVERSEAS_COUNTRY_ORDER = ("US", "JP", "CN", "HK", "TW")
 
 # 시세 표에 그리는 종류. 등락을 퍼센트로 그려도 뜻이 통하는 것만 넣는다.
 #
@@ -163,6 +171,23 @@ class FlowSnapshot(BaseModel):
     individual_net_buy_amount: Decimal
 
 
+class StockFlowSnapshot(BaseModel):
+    """종목 하나의 추정 순매수. **금액이 아니라 수량(주)이고 추정치다.**
+
+    시장 수급(`FlowSnapshot`)과 단위가 달라 한 표에 섞지 않는다.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    stock_code: str
+    label: str
+    business_date: date
+    foreign_net_buy_qty: int
+    institution_net_buy_qty: int
+    total_net_buy_qty: int
+    collected_at: AwareDatetime
+
+
 class MovementSnapshot(BaseModel):
     model_config = ConfigDict(frozen=True)
 
@@ -187,6 +212,7 @@ class MarketSummary(BaseModel):
     exchange_rates: tuple[FxChange, ...] = ()
     rates: tuple[RateChange, ...] = ()
     flows: tuple[FlowSnapshot, ...] = ()
+    stock_flows: tuple[StockFlowSnapshot, ...] = ()
     movements: tuple[MovementSnapshot, ...] = ()
     quote_trends: dict[str, Trend] = {}
     """`provider:symbol` → 추세."""
@@ -257,6 +283,20 @@ def collect_summary(connection: Connection, now: datetime) -> MarketSummary:
             individual_net_buy_amount=row[4],
         ),
     )
+    stock_flows = _fetch(
+        connection,
+        LATEST_STOCK_FLOWS,
+        ((now - FLOW_LOOKBACK).date(),),
+        lambda row: StockFlowSnapshot(
+            stock_code=row[0],
+            label=row[1],
+            business_date=row[2],
+            foreign_net_buy_qty=row[3],
+            institution_net_buy_qty=row[4],
+            total_net_buy_qty=row[5],
+            collected_at=row[6],
+        ),
+    )
     movements = _fetch(
         connection,
         LATEST_MOVEMENTS,
@@ -295,6 +335,7 @@ def collect_summary(connection: Connection, now: datetime) -> MarketSummary:
         exchange_rates=exchange_rates,
         rates=rates,
         flows=flows,
+        stock_flows=stock_flows,
         movements=movements,
         quote_trends=quote_trends,
         rate_trends=rate_trends,
@@ -322,7 +363,7 @@ def us_session_date(now: datetime) -> date:
 
 
 def render_blocks(summary: MarketSummary, scope: MarketScope, comment: str | None, error: str | None = None):
-    """Slack 블록. 값은 코드 블록 안 고정폭 표로 그린다."""
+    """Slack 블록. 값은 Slack 기본 `table` 블록에 넣는다(`blocks` 모듈 docstring 참고)."""
     local = summary.generated_at.astimezone(KST_TIMEZONE)
     if scope is MarketScope.KOREA:
         rendered = [
@@ -331,6 +372,7 @@ def render_blocks(summary: MarketSummary, scope: MarketScope, comment: str | Non
             *_quote_section("장중 해외", _intraday_overseas(summary)),
             *_exchange_rate_section(summary),
             *_flow_section(summary),
+            *_stock_flow_section(summary),
             *_movement_section(summary),
         ]
     else:
@@ -342,6 +384,7 @@ def render_blocks(summary: MarketSummary, scope: MarketScope, comment: str | Non
             *_quote_section("전일 국내", _korea_quotes(summary)),
             *_exchange_rate_section(summary),
             *_flow_section(summary),
+            *_stock_flow_section(summary),
         ]
     rendered += blocks.comment_blocks(comment, error)
     rendered.append(blocks.context(_as_of(summary, scope)))
@@ -355,7 +398,7 @@ def render_text(summary: MarketSummary, scope: MarketScope) -> str:
     if scope is MarketScope.KOREA:
         parts += [f"{fx.currency} {_number(fx.rate)}" for fx in summary.exchange_rates if fx.currency == "USD"]
     else:
-        parts += [f"{rate.label} {rate.value}%" for rate in summary.rates if rate.country == "US"][:1]
+        parts += [f"{rate.label} {_rate(rate.value)}" for rate in summary.rates if rate.country == "US"][:1]
     title = "한국장 브리핑" if scope is MarketScope.KOREA else "미국장 마감"
     return f"{title} · " + " · ".join(parts) if parts else f"{title} · 값 없음"
 
@@ -403,6 +446,18 @@ def comment_input(summary: MarketSummary, scope: MarketScope) -> str:
                 "as_of_kst": flow.observed_at.astimezone(KST_TIMEZONE).isoformat(),
             }
             for flow in summary.flows
+        ],
+        "stock_investor_estimates": [
+            {
+                "stock": flow.label,
+                "code": flow.stock_code,
+                # 시장 수급과 단위가 다르다. 모델이 억원으로 읽으면 자릿수를 그대로 옮겨 쓴다.
+                "foreign_net_buy_shares": flow.foreign_net_buy_qty,
+                "institution_net_buy_shares": flow.institution_net_buy_qty,
+                "estimate": True,
+                "business_date": flow.business_date.isoformat(),
+            }
+            for flow in summary.stock_flows
         ],
     }
     if scope is MarketScope.KOREA:
@@ -504,7 +559,11 @@ def _sign_streaks(
 
 
 def _korea_quotes(summary: MarketSummary) -> tuple[QuoteChange, ...]:
-    return tuple(quote for quote in summary.quotes if quote.country == "KR" and quote.kind in QUOTED_KINDS)
+    return _ordered(
+        (quote for quote in summary.quotes if quote.country == "KR" and quote.kind in QUOTED_KINDS),
+        lambda quote: quote.symbol,
+        KOREA_SYMBOL_ORDER,
+    )
 
 
 def _us_quotes(summary: MarketSummary) -> tuple[QuoteChange, ...]:
@@ -516,11 +575,15 @@ def _intraday_overseas(summary: MarketSummary) -> tuple[QuoteChange, ...]:
 
     미국은 선물만 넣는다. 현물 지수는 이 시간에 닫혀 있어 어제 종가를 오늘 값처럼 보이게 한다.
     """
-    return tuple(
-        quote
-        for quote in summary.quotes
-        if quote.kind in QUOTED_KINDS
-        and ((quote.country == "US" and quote.kind == INDEX_FUTURE) or quote.country in ASIA_COUNTRIES)
+    return _ordered(
+        (
+            quote
+            for quote in summary.quotes
+            if quote.kind in QUOTED_KINDS
+            and ((quote.country == "US" and quote.kind == INDEX_FUTURE) or quote.country in ASIA_COUNTRIES)
+        ),
+        lambda quote: quote.country,
+        OVERSEAS_COUNTRY_ORDER,
     )
 
 
@@ -537,7 +600,7 @@ def _quote_section(title: str, quotes: Sequence[QuoteChange]) -> list[dict[str, 
         (quote.label, _number(quote.close), _percent(quote.change_percent), _day_stamp(quote.bar_at))
         for quote in quotes
     ]
-    return [blocks.table_section(title, ("구분", "종가", "등락", "기준"), rows)]
+    return blocks.table_section(title, ("구분", "종가", "등락", "기준"), rows)
 
 
 def _exchange_rate_section(summary: MarketSummary) -> list[dict[str, Any]]:
@@ -545,19 +608,25 @@ def _exchange_rate_section(summary: MarketSummary) -> list[dict[str, Any]]:
         return []
     rows = [
         (fx.currency, _number(fx.rate), _percent(fx.change_percent), f"{fx.posted_on:%m/%d} {fx.round}회차")
-        for fx in summary.exchange_rates
+        for fx in _ordered(summary.exchange_rates, lambda fx: fx.currency, BRIEFING_CURRENCIES)
     ]
-    return [blocks.table_section("환율(하나은행 고시)", ("통화", "매매기준율", "전일 대비", "기준"), rows)]
+    return blocks.table_section("환율(하나은행 고시)", ("통화", "매매기준율", "전일 대비", "기준"), rows)
 
 
 def _rate_section(summary: MarketSummary) -> list[dict[str, Any]]:
     if not summary.rates:
         return []
     rows = [
-        (rate.label, f"{rate.value}%", _basis_points(rate.change_bp), f"{rate.observation_date:%m/%d}")
+        (rate.label, _rate(rate.value), _basis_points(rate.change_bp), f"{rate.observation_date:%m/%d}")
         for rate in summary.rates
     ]
-    return [blocks.table_section("주요국 10년 금리", ("국가", "금리", "전일 대비", "기준"), rows)]
+    return blocks.table_section("주요국 10년 금리", ("국가", "금리", "전일 대비", "기준"), rows)
+
+
+# `market_investor_flow_snapshot`의 순매수 대금은 **백만원 단위**다(KIS `*_ntby_tr_pbmn`).
+# 억원으로 줄이려면 1억이 아니라 100으로 나눈다. 원 단위로 착각해 1억으로 나누면 수천억짜리
+# 값이 전부 `-0`이 되어 표와 요약 입력이 동시에 거짓말을 한다.
+MILLIONS_PER_HUNDRED_MILLION = 100
 
 
 def _flow_section(summary: MarketSummary) -> list[dict[str, Any]]:
@@ -573,7 +642,34 @@ def _flow_section(summary: MarketSummary) -> list[dict[str, Any]]:
         )
         for flow in summary.flows
     ]
-    return [blocks.table_section("투자자 순매수(억원)", ("시장", "외국인", "기관", "개인", "기준"), rows)]
+    return blocks.table_section("투자자 순매수(억원)", ("시장", "외국인", "기관", "개인", "기준"), rows)
+
+
+def _stock_flow_section(summary: MarketSummary) -> list[dict[str, Any]]:
+    """추적 종목의 추정 순매수.
+
+    시장 수급과 표를 나눈다. 저쪽은 억원이고 이쪽은 주 수라 한 표에 넣으면 자릿수가 뜻을
+    잃는다. **추정치라는 것도 제목에 적는다.** 확정 수급은 장 마감 뒤에야 나온다.
+    """
+    if not summary.stock_flows:
+        return []
+    rows = [
+        (
+            flow.label,
+            f"{flow.foreign_net_buy_qty:+,}",
+            f"{flow.institution_net_buy_qty:+,}",
+            f"{flow.total_net_buy_qty:+,}",
+            f"{flow.business_date:%m/%d}",
+        )
+        for flow in summary.stock_flows
+    ]
+    return blocks.table_section("종목 추정 순매수(주)", ("종목", "외국인", "기관", "합계", "기준"), rows)
+
+
+def _ordered[T](items: Iterable[T], key: Callable[[T], str], order: Sequence[str]) -> tuple[T, ...]:
+    """`order`에 적힌 차례로 줄을 세운다. 목록에 없는 값은 뒤로 밀린다."""
+    rank = {value: index for index, value in enumerate(order)}
+    return tuple(sorted(items, key=lambda item: rank.get(key(item), len(rank))))
 
 
 def _movement_section(summary: MarketSummary) -> list[dict[str, Any]]:
@@ -582,14 +678,14 @@ def _movement_section(summary: MarketSummary) -> list[dict[str, Any]]:
     rows = [
         (
             movement.market_code,
-            str(movement.rising_count),
-            str(movement.unchanged_count),
-            str(movement.falling_count),
+            f"{movement.rising_count:,}",
+            f"{movement.unchanged_count:,}",
+            f"{movement.falling_count:,}",
             _day_stamp(movement.observed_at),
         )
         for movement in summary.movements
     ]
-    return [blocks.table_section("등락 종목 수", ("시장", "상승", "보합", "하락", "기준"), rows)]
+    return blocks.table_section("등락 종목 수", ("시장", "상승", "보합", "하락", "기준"), rows)
 
 
 def _as_of(summary: MarketSummary, scope: MarketScope) -> list[str]:
@@ -617,6 +713,11 @@ def _number(value: Decimal) -> str:
     return f"{value:,.2f}"
 
 
+def _rate(value: Decimal) -> str:
+    """금리는 소수 셋째 자리까지다. `Numeric(18,8)`을 그대로 찍으면 `4.68000000%`가 나온다."""
+    return f"{value:,.3f}%"
+
+
 def _percent(change: float | None) -> str:
     if change is None:
         return "-"
@@ -630,12 +731,12 @@ def _basis_points(change: float | None) -> str:
 
 
 def _amount(value: Decimal) -> str:
-    """원 단위 금액을 억원으로 줄인다. 조 단위 숫자를 그대로 두면 표가 화면을 넘는다."""
-    return f"{value / 100_000_000:+,.0f}"
+    """수급 대금을 억원으로 줄인다. 조 단위 숫자를 그대로 두면 표가 화면을 넘는다."""
+    return f"{value / MILLIONS_PER_HUNDRED_MILLION:+,.0f}"
 
 
 def _billion(value: Decimal) -> float:
-    return round(float(value) / 100_000_000, 1)
+    return round(float(value) / MILLIONS_PER_HUNDRED_MILLION, 1)
 
 
 def _arrow(change: float) -> str:

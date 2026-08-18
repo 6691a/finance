@@ -12,6 +12,7 @@ from apps.models.market import (
     MarketInvestorFlowSnapshot,
     MarketMovementSnapshot,
     QuoteBar,
+    QuoteDaily,
 )
 from apps.models.reference import IndicatorSeries, QuoteSymbol
 from modules.briefing import market
@@ -74,8 +75,34 @@ class FakeConnection:
         return cursor
 
 
+# 추세용 일별 이력. 조용하다가 마지막 날 크게 움직인 코스피와, 5일 내리 판 외국인.
+QUOTE_TREND_ROWS = [("kis", "KOSPI", date(2026, 8, 1 + day), Decimal(2600 + day)) for day in range(14)] + [
+    ("kis", "KOSPI", date(2026, 8, 18), Decimal("2687.45"))
+]
+
+RATE_TREND_ROWS = [("fred", "DGS10", date(2026, 8, 1 + day), Decimal("4.18")) for day in range(14)] + [
+    ("fred", "DGS10", date(2026, 8, 18), Decimal("4.21"))
+]
+
+FX_TREND_ROWS = [("USD", date(2026, 8, 1 + day), Decimal(1390 + day)) for day in range(14)] + [
+    ("USD", date(2026, 8, 18), Decimal("1388.60"))
+]
+
+FLOW_TREND_ROWS = [("KOSPI", date(2026, 8, 14 + day), Decimal(-100_000_000_000 - day)) for day in range(5)]
+
+
 def summary(now: datetime = MIDDAY):
-    connection = FakeConnection(QUOTE_ROWS, FX_ROWS, RATE_ROWS, FLOW_ROWS, MOVEMENT_ROWS)
+    connection = FakeConnection(
+        QUOTE_ROWS,
+        FX_ROWS,
+        RATE_ROWS,
+        FLOW_ROWS,
+        MOVEMENT_ROWS,
+        QUOTE_TREND_ROWS,
+        RATE_TREND_ROWS,
+        FX_TREND_ROWS,
+        FLOW_TREND_ROWS,
+    )
     return market.collect_summary(connection, now)
 
 
@@ -119,6 +146,60 @@ def test_korea_comment_leaves_out_the_rate_section():
     payload = json.loads(market.comment_input(summary(), MarketScope.KOREA))
 
     assert "rates" not in payload
+
+
+def test_the_comment_input_says_whether_todays_move_is_unusual():
+    """이게 없으면 모델은 +0.82%가 큰 값인지 모른다. 판단의 근거는 접근 권한이 아니라
+    비교 기준이다."""
+    payload = json.loads(market.comment_input(summary(), MarketScope.KOREA))
+
+    kospi = next(quote for quote in payload["quotes"] if quote["label"] == "코스피")
+    trend = kospi["trend"]
+    # 2주 내내 하루 1포인트씩 오르다가 마지막 날 크게 뛰었다.
+    assert trend["move_percentile"] > 90
+    assert trend["observations"] == 15
+    assert trend["window_low"] < trend["window_high"]
+
+
+def test_a_thin_sample_is_marked_so_the_prompt_can_discount_it():
+    connection = FakeConnection(
+        QUOTE_ROWS,
+        FX_ROWS,
+        RATE_ROWS,
+        FLOW_ROWS,
+        MOVEMENT_ROWS,
+        [("kis", "KOSPI", date(2026, 8, 17), Decimal(2600)), ("kis", "KOSPI", date(2026, 8, 18), Decimal(2687))],
+        [],
+        [],
+        [],
+    )
+    payload = json.loads(market.comment_input(market.collect_summary(connection, MIDDAY), MarketScope.KOREA))
+
+    kospi = next(quote for quote in payload["quotes"] if quote["label"] == "코스피")
+    assert kospi["trend"]["thin"]
+
+
+def test_a_series_without_history_simply_has_no_trend():
+    """새로 붙인 심볼은 이력이 없다. 그것 때문에 리포트가 죽으면 안 된다."""
+    payload = json.loads(market.comment_input(summary(), MarketScope.KOREA))
+
+    kosdaq_futures = [quote for quote in payload["quotes"] if quote["label"] == "코스피200 선물"]
+    assert kosdaq_futures[0]["trend"] is None
+
+
+def test_the_flow_streak_is_reported_in_days():
+    """ "외국인 5일 연속 순매도"는 하루치 금액보다 많은 것을 말해 준다."""
+    payload = json.loads(market.comment_input(summary(), MarketScope.KOREA))
+
+    # 이력 5일이 모두 순매도라 5일이다. 금액이 매일 줄었는지가 아니라 어느 편이었는지를 센다.
+    assert payload["investor_flows"][0]["foreign_streak_days"] == -5
+
+
+def test_rate_trends_are_measured_in_basis_points():
+    payload = json.loads(market.comment_input(summary(MORNING), MarketScope.US))
+
+    dgs10 = next(rate for rate in payload["rates"] if rate["label"] == "미국 10년물")
+    assert dgs10["trend"]["change"] == pytest.approx(3.0, abs=0.1)
 
 
 def test_missing_comment_drops_its_block():
@@ -180,6 +261,11 @@ def test_fallback_text_is_one_line():
             ("market_code", "observed_at", "foreign_net_buy_amount"),
         ),
         (market.LATEST_MOVEMENTS, MarketMovementSnapshot.__table__, ("rising_count", "falling_count")),
+        (market.QUOTE_TREND, QuoteBar.__table__, ("provider", "symbol", "bar_at", "close")),
+        (market.QUOTE_TREND, QuoteDaily.__table__, ("business_date",)),
+        (market.RATE_TREND, IndicatorObservation.__table__, ("observation_date", "value")),
+        (market.EXCHANGE_RATE_TREND, ExchangeRate.__table__, ("currency", "exchange_standard_rate")),
+        (market.FLOW_TREND, MarketInvestorFlowSnapshot.__table__, ("market_code", "foreign_net_buy_amount")),
     ],
 )
 def test_queries_name_columns_that_exist(statement: str, table: Table, columns: tuple[str, ...]):

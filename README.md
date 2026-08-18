@@ -235,7 +235,7 @@ import 뿌리는 `airflow/`입니다. DAG는 배포와 같은 이름으로 `from
 - **위치는 Airflow를 따릅니다.** 배포에서 보이지 않는 경로에 실행 코드를 두면 DAG가 죽습니다. 백엔드와 Airflow가 함께 쓰는 수집 코드는 `airflow/modules` 아래 한 벌만 둡니다. 사본을 `apps/`에 만들지 않습니다.
 - **규칙은 백엔드를 따릅니다.** 외부 입력은 Pydantic으로 검증하고, 시각은 timezone-aware UTC이며, 주석은 한국어로 씁니다.
 - **`dags/`에는 오케스트레이션만 둡니다.** 스케줄, 재시도, 태스크 매핑, Hook 사용, 실패 분류가 여기에 해당합니다. 파싱·검증·저장 규칙은 `modules/`에 둡니다.
-- **의존성은 Airflow 환경에 있는 것만 씁니다.** 표준 라이브러리, Pydantic, PEP 249 연결입니다. SQLAlchemy 모델과 `core.config`는 import하지 않습니다.
+- **의존성은 Airflow 환경에 있는 것만 씁니다.** 표준 라이브러리, Pydantic, PEP 249 연결이 기본이고, 여기에 HTML 수집용 `scrapling[fetchers]`와 LLM 호출용 `langchain-xai`·`langgraph`가 더해집니다. 목록은 [compose/local/airflow/requirements.txt](compose/local/airflow/requirements.txt)에 있고, 새로 쓰려면 운영 Airflow 이미지에 먼저 들어가야 합니다. SQLAlchemy 모델과 `core.config`는 import하지 않습니다.
 - **테이블 정의의 원본은 백엔드입니다.** 수집기는 ORM 없이 문자열 SQL을 쓰므로 컬럼 이름이 어긋나면 실행 시점에야 드러납니다. [tests/collectors/test_fred.py](tests/collectors/test_fred.py)와 [tests/collectors/test_ecos.py](tests/collectors/test_ecos.py)가 INSERT 컬럼 목록과 `ON CONFLICT` 키를 `apps/models`의 metadata와 대조합니다. 모델을 고치면 이 테스트가 먼저 깨집니다.
 
 ### 수집기 작성 규칙
@@ -245,7 +245,7 @@ import 뿌리는 `airflow/`입니다. DAG는 배포와 같은 이름으로 `from
 - 요청 값(`FredRequest`), 외부 응답 본문(`FredObservationsPayload`), 정규화 결과(`FredObservation`), 수집 결과(`FredResponse`)를 모두 Pydantic 모델로 선언합니다. `dataclass`를 쓰지 않습니다. 외부 JSON은 `model_validate_json`으로 검증합니다.
 - 모델은 `ConfigDict(frozen=True)`로 둡니다. 재시도 경로에서 값이 바뀌면 원본과 저장값이 어긋납니다.
 - 시각 필드는 `AwareDatetime`으로 받고 validator에서 UTC로 정규화합니다. naive datetime은 모델 단계에서 거부됩니다.
-- 허용 값이 정해진 필드는 validator로 막습니다. 시계열 ID는 `TREASURY_SERIES`에 있는 값만 받습니다.
+- 허용 값이 정해진 필드는 validator로 막습니다. 시계열 ID는 `FredSeries` Enum에 있는 값만 받습니다. 이 Enum이 저장 식별자, FRED 좌표, 단위, 종류를 한 줄에 묶습니다. `CPIAUCSL`처럼 제공처 ID만 보고 무슨 값인지 알 수 없는 계열은 `CPI_M` 같은 읽히는 ID로 저장하고, 제공처 좌표는 요청과 `source_record.metadata`에만 씁니다.
 - API 키는 `SecretStr`로 받습니다. URL에 키가 들어가므로 예외 메시지와 로그에 URL을 넣지 않습니다. 키는 Git에서 제외된 `compose/local/airflow/.env`의 `FRED_API_KEY`로만 주입합니다.
 - 외부 오류는 재시도 가능 여부로 나눕니다. HTTP 상태는 `FredHTTPError`, 형식 오류는 `FredPayloadError`, 연결 실패는 `ConnectionError`입니다. 판단은 DAG가 합니다.
 
@@ -255,6 +255,37 @@ import 뿌리는 `airflow/`입니다. DAG는 배포와 같은 이름으로 `from
 - **잘못된 식별자에 정상 응답이 오면 식별자를 Enum으로 좁힙니다.** ECOS는 없는 항목코드에도 데이터 없음과 같은 `INFO-200`으로 답해서, 오타가 조용한 0건이 됩니다. `MarketRateSeries`가 요청 전에 막습니다.
 - **응답이 잘릴 수 있으면 전체 건수와 받은 행 수를 대조합니다.** ECOS는 요청한 건수 범위를 넘으면 경고 없이 앞부분만 돌려줍니다. 그대로 저장하면 조회 구간에 조용히 구멍이 남습니다.
 - **단위는 제공처 표기가 아니라 정규화한 표기로 저장합니다.** ECOS는 `연%`, FRED는 단위를 주지 않습니다. 둘 다 `Percent`로 저장해야 두 나라 금리를 한 쿼리로 비교할 수 있습니다. 원본 표기는 `source_record`에 남습니다.
+
+### 수집 DAG 목록
+
+DAG마다 절을 두지 않습니다. 상세는 각 DAG 파일의 `doc_md`에 있고, 여기서는 무엇이 언제 도는지까지만 봅니다. 아래 절들은 수집기 성질이 서로 다른 국채 DAG만 골라 설명합니다.
+
+| DAG | 스케줄(KST) | 채우는 테이블 | 제공처 |
+| --- | --- | --- | --- |
+| `fred_treasury_daily` | 화~토 07:30 | `indicator_observation` | FRED |
+| `fred_macro_daily` | 화~토 07:40 | `indicator_observation` | FRED |
+| `ecos_market_rate_daily` | 화~토 08:00 | `indicator_observation` | 한국은행 ECOS |
+| `bbk_bund_daily` | 화~토 08:10 | `indicator_observation` | 분데스방크 |
+| `mof_jgb_daily` | 화~토 08:20 | `indicator_observation` | 일본 재무성 |
+| `boe_gilt_daily` | 화~토 08:40 | `indicator_observation` | 잉글랜드은행 |
+| `ecb_yield_curve_daily` | 화~토 08:50 | `indicator_observation` | ECB |
+| `ecb_convergence_monthly` | 수 08:30 | `indicator_observation` | ECB |
+| `exchange_rate_daily` | 매일 08:00 | `exchange_rate` | 하나은행 |
+| `market_calendar_daily` | 매일 07:00 | `market_session` | KIS·NYSE |
+| `kis_quote_intraday` | 평일 08~16시 5분마다 | `quote_bar`, `market_movement_snapshot` | KIS |
+| `kis_investor_flow_intraday` | 평일 09~15시 5분마다 | `market_investor_flow_snapshot`, `stock_investor_estimate_snapshot` | KIS |
+| `kis_investor_trade_daily` | 평일 18:10 | `stock_investor_trade_daily` | KIS |
+| `kis_stock_minute_bars_daily` | 평일 18:40 | `quote_bar` | KIS |
+| `kis_market_positioning_daily` | 화~토 08:10 | `krx_*` 6종(신용·공매도·대차·증시자금) | KIS |
+| `yahoo_quote_intraday` | 5분마다(시간 창 없음) | `quote_bar` | Yahoo |
+| `yahoo_quote_daily` | 매일 07:30 | `quote_daily` | Yahoo |
+| `dart_disclosure_intraday` | 평일 07~20시 2분마다 | `disclosure_event`, `earnings_fact` | DART |
+| `document_ingestion_hourly` | 매시 05분 | `document`, `document_source` | 공식기관·언론 피드 |
+| `document_assessment_hourly` | 매시 25분 | `document`, `document_instrument`, `document_indicator` | xAI Grok |
+
+수집하는 DAG는 전부 `source_record`도 함께 남깁니다. 관측값이 0건이어도 남겨서, 조회했지만 값이 없는 구간과 아직 조회하지 않은 구간을 구분합니다. 예외는 두 개입니다. `exchange_rate_daily`는 외부 DB에서 형태를 그대로 가져온 테이블이라 계보 컬럼이 없고, `document_assessment_hourly`는 새로 수집하지 않고 이미 저장된 문서를 읽습니다.
+
+`yahoo_quote_intraday`에만 시간 창이 없습니다. 한국 장중의 미국 선물 변동을 보는 것이 이 수집의 목적이라 미국 장 시간에만 도는 스케줄로는 목적을 못 이룹니다.
 
 ### 미국 국채 수집 DAG
 
@@ -322,6 +353,37 @@ airflow dags trigger mof_jgb_daily --conf '{\"source_file\": \"all\", \"observat
 - **`TIME_PERIOD`가 달력 하루인지 먼저 봅니다.** `date.fromisoformat`은 `2026-W32` 같은 ISO 주 표기도 받아 그 주의 월요일로 바꿉니다. 주간·월간 빈도의 값이 섞이면 조용히 엉뚱한 날짜로 저장됩니다.
 - 관측일 기준은 유로 지역 영업일(TARGET 결제일)입니다. 곡선은 유럽 시간 정오 무렵에 갱신되므로 최근 1~2 영업일이 비어 있는 것은 정상이고, 되돌아보는 구간이 다음 run에서 채웁니다. 곡선은 2004-09-06부터 고시됩니다.
 
+## 문서 수집과 LLM 평가
+
+시세와 금리는 값이지만 뉴스와 공식 발표는 글입니다. 글을 시세와 같은 좌표계에 올리는 것이 이 두 DAG의 일입니다.
+
+- [airflow/dags/document_ingestion_hourly.py](airflow/dags/document_ingestion_hourly.py)가 매시 05분에 공식기관·언론 피드에서 문서를 발견해 `document`에 정규화합니다.
+- [airflow/dags/document_assessment_hourly.py](airflow/dags/document_assessment_hourly.py)가 매시 25분에 아직 평가하지 않은 문서를 LLM에 보내 종목·지표 태그, 방향, 0~8점 점수와 근거를 받아 `document`, `document_instrument`, `document_indicator`에 저장합니다.
+
+**문서를 버리지 않습니다.** 승인·보류 같은 상태 머신을 두면 나중에 기준을 바꿀 때 이미 버린 문서를 되돌릴 수 없습니다. 전부 저장하고 점수만 남긴 뒤, 리포트를 만들 때 상위 몇 개를 고릅니다. 평가에 실패한 문서는 `assessed_at`이 `NULL`로 남아 다음 정시 실행이 다시 집습니다.
+
+태그 테이블(`document_instrument`, `document_indicator`)은 마스터로 **외래키를 걸지 않습니다.** `indicator_observation`이 `indicator_series`를 참조하지 않는 것과 같은 이유입니다. 마스터에 없는 값이 오면 태깅 전체가 죽는 대신 그 태그만 빠져야 합니다. LLM에게는 후보 목록을 프롬프트로 주고, 목록 밖의 값은 저장 전에 버립니다.
+
+흐름도는 [docs/document-assessment-workflow.md](docs/document-assessment-workflow.md)에 있습니다.
+
+### LLM 계층은 세 층으로 나뉩니다
+
+층마다 맡는 것이 다르고 겹치지 않습니다. 기준 구현은 [airflow/modules/llm.py](airflow/modules/llm.py)와 [airflow/modules/assessment.py](airflow/modules/assessment.py)입니다.
+
+- **모델 호출은 LangChain입니다.** `langchain_xai.ChatXAI`를 쓰고 HTTP를 직접 치지 않습니다. 요청·응답을 손으로 조립하면 추적이 끊기고 툴 호출 왕복을 직접 짜야 합니다.
+- **흐름 제어는 LangGraph입니다.** 재시도, 교정 재요청, 문서별 팬아웃(`Send`)을 `StateGraph`의 노드와 엣지로 표현합니다. 노드 이름이 그대로 트레이스에 남아 어디서 몇 번 불렀는지 보이는 것이 이 규칙의 목적입니다.
+- **데이터 모양은 Pydantic입니다.** 설정, 모델 응답, 노드가 주고받는 결과를 `BaseModel`로 선언하고, 응답 스키마는 그 모델에서 뽑아 `response_format`으로 강제합니다. 강제를 지원하지 않는 제공처를 위해 스키마 없이 한 번 더 부르는 경로와 검증을 그대로 남겨 둡니다.
+
+**어떤 모델을 쓸지는 코드가 정합니다.** `llm.py`의 `document_model()`이 LangChain 문법 그대로 모델을 만들고, 바꿀 때 그 함수를 고칩니다. `base_url`과 모델명을 환경변수로 빼서 제공처를 갈아 끼우지 않습니다. LangChain은 제공처마다 클래스와 인자가 달라 문자열 설정 몇 개로 흉내 내면 어느 쪽도 제대로 못 씁니다. **환경에서 오는 것은 API 키뿐이고 그것도 우리가 읽지 않습니다.** `ChatXAI`가 `XAI_API_KEY`를 스스로 읽습니다. 키를 우리 설정 객체에 담으면 로그와 예외에 실릴 자리만 늘어납니다.
+
+**재시도는 Airflow가 합니다.** 모델 클라이언트는 `max_retries=0`으로 만듭니다. SDK가 먼저 재시도하면 태스크 타임아웃 안에서 몇 번을 불렀는지 로그와 트레이스가 어긋납니다. 체크포인터도 붙이지 않습니다. 재실행 단위는 Airflow 태스크입니다.
+
+### 추적
+
+`LANGSMITH_TRACING`, `LANGSMITH_API_KEY`, `LANGSMITH_PROJECT`를 환경에 주면 켜집니다. 코드에는 추적 호출이 없습니다. 비워 두면 아무것도 보내지 않고 호출 경로도 그대로입니다.
+
+**켜면 프롬프트 전문과 문서 본문이 LangSmith로 나갑니다.** 저장 위치가 문제가 되면 `LANGSMITH_ENDPOINT`로 다른 인스턴스를 가리킵니다.
+
 ## Grafana
 
 수집한 지수를 차트와 대시보드로 확인하는 용도입니다. `just dev`로 PostgreSQL, Redis와 함께 올라갑니다.
@@ -355,7 +417,7 @@ docker compose -f compose/local/docker-compose.yaml logs -f grafana
 
 ### 대시보드 구성
 
-금리 대시보드는 여섯입니다. 나라(통화권)별로 하나씩, 그리고 그것들을 가로지르는 통합 하나입니다.
+금리 대시보드는 여섯입니다. 나라(통화권)별로 하나씩, 그리고 그것들을 가로지르는 통합 하나입니다. 독일은 나라별 대시보드가 없고 통합에만 나옵니다.
 
 | 대시보드 | 파일 | 보는 것 |
 | --- | --- | --- |
@@ -367,6 +429,25 @@ docker compose -f compose/local/docker-compose.yaml logs -f grafana
 | 통합 국채 금리 | `global-treasury.json` | 나라 간 비교, 나라 간 금리차, 최신 수익률 곡선 |
 
 나라별 대시보드는 그 나라 이야기만 담습니다. 나라를 가로지르는 비교는 전부 통합에 둡니다. 나라가 늘어날 때 나라별 대시보드는 새로 하나 만들면 되고, 통합은 패널을 **고치지 않습니다.** 통합이 국가와 만기를 `indicator_series` 마스터에서 읽기 때문입니다. 일본을 붙일 때 통합에서 바꾼 것은 `비교 만기` 변수 쿼리 한 줄뿐이고, 영국과 유로 지역을 붙일 때는 그 한 줄조차 고치지 않았습니다. 나라마다 고시하는 만기가 달라, 두 나라 이상이 가진 만기만 목록에 남기도록 `HAVING count(DISTINCT country) > 1`을 걸었습니다. 일본 40년이나 유로 지역 6개월처럼 한 나라만 고시하는 만기는 골라도 비교할 대상이 없습니다.
+
+나머지 대시보드는 금리가 아닌 값을 봅니다. 아래 절들이 다루지 않는 것도 이 표에서 파일 이름을 찾을 수 있습니다.
+
+| 대시보드 | 파일 | 보는 것 |
+| --- | --- | --- |
+| 환율 고시 | `exchange-rate.json` | 하나은행 통화별 고시 환율과 회차 |
+| 지수·선물 통합 장중 | `quote-intraday.json` | 국내외 지수·선물 1분봉을 한 화면에 |
+| 지수 장중 | `quote-index.json` | 지수 1분봉 |
+| 지수선물 장중 | `quote-index-future.json` | 지수선물 1분봉 |
+| 종목 장중 | `quote-equity.json` | 삼성전자·SK하이닉스 1분봉 |
+| 환율 장중 | `quote-fx.json` | 환율 1분봉 |
+| 원자재 장중 | `quote-commodity.json` | 원자재 1분봉 |
+| 암호화폐 장중 | `quote-crypto.json` | 암호화폐 1분봉 |
+| 외국인·기관·개인 수급 | `investor-flow.json` | 시장 수급과 종목 추정 수급 |
+| 상승·보합·하락 종목 분포 | `market-movement.json` | 장중 시장 폭(breadth) |
+| 신용·공매도·대차 포지션 | `market-positioning.json` | 신용잔고·공매도·대차·증시자금 |
+| 공시·실적 (DART) | `dart-disclosure.json` | 공시 타임라인과 실적 추이 |
+
+대시보드가 없는 값이 둘 있습니다. 문서 평가 결과(`document`의 점수와 태그)와 미국 물가·소매판매(`fred_macro_daily`)입니다. 후자는 소비자가 화면이 아니라 리포트 쪽 계산이라 세 계열로 화면을 만들지 않았습니다. 계열이 늘면 그때 만듭니다.
 
 ### 미국 국채 대시보드
 
@@ -484,6 +565,10 @@ ORDER BY ts
 
 1분 간격 고시라 구간이 길면 행이 많아집니다. 시계열 패널은 `$__timeGroupAlias(..., $__interval)`로 다운샘플링합니다.
 
+## graphify
+
+저장소의 코드를 지식 그래프로 뽑아 `graphify-out/`에 둡니다. 에이전트가 파일을 훑는 대신 `graphify query "<질문>"`으로 필요한 부분만 받아 가는 용도입니다. 결과물은 Git에서 제외합니다.
+
 ```
 uv tool install "graphifyy[sql, postgres, openai]"
 graphify hook install
@@ -491,3 +576,5 @@ graphify install --project --platform codex
 graphify install --project --platform claude
 graphify extract . --code-only --force
 ```
+
+코드를 고친 뒤에는 `graphify update .`로 그래프를 맞춥니다. AST만 다시 읽으므로 API 비용이 들지 않습니다.

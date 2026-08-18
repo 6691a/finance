@@ -13,6 +13,8 @@ docs/*
 !docs/kis-market-movement-distribution.md
 !docs/kis-market-session-calendar.md
 !docs/economic-document-archive-design.md
+!docs/document-assessment-workflow.md
+!docs/document-relevance-prefilter-design.md
 # 이번 작업의 판단 근거는 문서에만 있다. 이 둘은 예외로 추적한다.
 !docs/quote-bar-intraday.md
 !docs/collection-map.html

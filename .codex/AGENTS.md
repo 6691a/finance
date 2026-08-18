@@ -158,7 +158,7 @@ API, 크롤링, 웹소켓 수집 결과의 출처와 상태를 가볍게 보존�
 
 여러 제공처에서 추출한 지표 관측값을 날짜와 단위와 함께 조회 가능한 형태로 누적 저장한다. `(provider, series_id, observation_date)`를 고유키로 사용하고 `source_record_id`로 근거 수집 레코드와 연결한다.
 
-- `provider`는 그 값을 준 제공처(`fred`, `ecos`, `mof`, `boe`, `ecb`)이며 같은 수집의 `source_record.source`와 같은 값이다.
+- `provider`는 그 값을 준 제공처(`fred`, `ecos`, `mof`, `boe`, `bbk`, `ecb`)이며 같은 수집의 `source_record.source`와 같은 값이다.
 - `series_id`는 **제공처 안에서만 고유하다.** 그래서 자연키에 `provider`가 함께 들어간다.
 - `series_id`는 사람이 읽을 수 있어야 한다. FRED의 `DGS10`처럼 제공처 ID가 이미 읽히면 그대로 쓰고, ECOS 항목코드(`010210000`)처럼 숫자뿐이면 `KTB10Y` 같은 ID를 만들어 저장한다. 제공처의 원본 좌표는 수집기 Enum이 들고 있다가 요청에 쓰고 `source_record.metadata`에 남긴다.
 - 조회하는 쪽도 `provider`를 함께 건다. `series_id` 하나로 거는 쿼리는 제공처가 늘어나면 조용히 틀린다.
@@ -166,15 +166,17 @@ API, 크롤링, 웹소켓 수집 결과의 출처와 상태를 가볍게 보존�
 
 ### `reference.indicator_series`
 
-`indicator_observation`의 시계열이 어느 나라 무슨 금리인지 설명하는 마스터다. `(provider, series_id)`가 자연키이고 대시보드가 이 키로 관측값을 조인한다.
+`indicator_observation`의 시계열이 어느 나라 무슨 값인지 설명하는 마스터다. `(provider, series_id)`가 자연키이고 대시보드가 이 키로 관측값을 조인한다.
 
 - 존재 이유는 나라를 추가할 때 조회 쪽을 안 고치기 위해서다. 국가·만기를 조회 쿼리가 알고 있으면 나라가 늘 때마다 대시보드 SQL을 고쳐야 한다. 영국과 유로 지역을 붙일 때 통합 대시보드는 한 줄도 고치지 않았다.
 - `country`는 ISO 3166-1 alpha-2다. 유로 지역처럼 나라가 아닌 통화권은 `XM`을 쓰고 `country_name`에 `유로 지역`을 넣는다.
-- `kind`가 국채(`government_bond`)와 단기 자금시장 금리(`money_market`)를 가른다. `maturity_months`는 비교와 정렬 기준이며 91일물은 3으로 둔다.
+- **금리 전용 테이블이 아니다.** `kind`가 국채(`government_bond`), 단기 자금시장 금리(`money_market`), 물가지수(`price_index`), 실물활동(`activity`) 넷을 가른다. 조회하는 쪽은 `kind`를 반드시 건다. 단위가 다른 값이 한 축에 섞이면 화면이 조용히 거짓말을 한다.
+- `maturity_months`는 비교와 정렬 기준이며 91일물은 3으로 둔다. **만기 개념이 없는 지표(물가지수, 소매판매)는 `NULL`이다.** 0으로 채우면 만기별 비교 쿼리가 "0개월물"로 그린다.
+- **월간 계열은 저장 식별자를 `M`으로 끝낸다**(`CPI_M`, `FR10YM`). 한 테이블에 일별과 월간이 섞여 있어 표시가 없으면 조회하는 쪽이 주기를 구분할 수 없다.
 - 국가 비교 패널의 만기 목록은 두 나라 이상이 가진 만기로 좁힌다(`HAVING count(DISTINCT country) > 1`). 일본 40년이나 유로 지역 6개월처럼 한 나라만 고시하는 만기는 골라도 비교할 대상이 없다.
 - 관측값에서 이 테이블로 외래키를 걸지 않는다. 걸면 마스터 행이 없는 시계열을 수집기가 저장하지 못해 Enum에만 추가한 순간 DAG가 죽는다. `tests/migrations/test_indicator_series_catalog.py`가 Enum과 시드를 대조한다.
 - 시계열을 늘릴 때는 수집기 Enum과 마스터 시드를 같은 커밋에서 함께 늘린다. 시드는 마이그레이션이 넣고 리비전 파일에서 앱 코드를 import하지 않는다.
-- `unit`은 제공처 표기가 아니라 정규화한 표기다. 연이율 퍼센트는 제공처가 `Percent`든 `연%`든 `Percent`로 저장해야 두 나라 금리를 한 쿼리로 비교할 수 있다.
+- `unit`은 제공처 표기가 아니라 정규화한 표기다. 연이율 퍼센트는 제공처가 `Percent`든 `연%`든 `Percent`로 저장해야 두 나라 금리를 한 쿼리로 비교할 수 있다. **단위는 계열마다 다르다.** 물가지수(`Index 1982-1984=100`)와 소매판매(`Millions of Dollars`)가 같은 테이블에 있으므로 모듈 상수 하나로 두지 않고 수집기 Enum이 계열별로 들고 있는다.
 
 ## 종목 마스터 테이블 목적
 
@@ -186,3 +188,15 @@ API, 크롤링, 웹소켓 수집 결과의 출처와 상태를 가볍게 보존�
 - `source_symbol`은 수집 소스 심볼이 티커와 다를 때만 채운다. 같으면 `NULL`로 둔다.
 - `is_watched`는 수집·분석 대상 여부만 나타낸다. 상장폐지·거래정지 같은 종목 생애주기 상태가 필요해지면 별도 `status` enum 컬럼으로 분리한다.
 - 한 종목을 여러 소스에서 수집하게 되면 `source_symbol` 한 칸으로 못 버틴다. 그때는 `reference.instrument_source(instrument_id, source, symbol)` 자식 테이블로 옮긴다.
+
+## 문서 테이블 목적
+
+### `content.document` 계열
+
+수집한 문서 한 건과 그 문서에 붙은 태그다. `document_ingestion_hourly`가 문서를 넣고 `document_assessment_hourly`가 평가를 채운다.
+
+- 자연키는 `(source_slug, external_id)`다. **`content_hash`를 키에 넣지 않는다.** 넣으면 본문이 조금만 달라져도 새 행이 생겨 같은 기사가 매시간 쌓인다. 재평가 여부는 `assessed_content_hash`와 현재 `content_hash`의 비교가 정한다.
+- **승인·보류 같은 상태 머신을 두지 않는다.** 소비자가 사람이 아니라 LLM이라 전부 저장하고 점수(`value_score`)만 남긴다. 상태로 버리면 나중에 기준을 바꿀 때 되돌릴 수 없다.
+- 평가에 실패한 문서는 `assessed_at`을 `NULL`로 남긴다. 삭제하거나 다른 상태로 바꾸지 않고 다음 정시 실행이 다시 집는다.
+- `document_instrument`와 `document_indicator`는 마스터로 **외래키를 걸지 않는다.** 마스터에 없는 태그가 오면 태깅 전체가 죽는 대신 그 태그만 빠져야 한다. 후보 목록은 프롬프트로 주고 목록 밖의 값은 저장 전에 버린다.
+- `body`는 `content_level`이 `metadata_only`면 `NULL`이고 CHECK 제약이 그것을 강제한다.

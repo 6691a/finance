@@ -323,11 +323,12 @@ API, 크롤링, 웹소켓 수집 결과의 출처와 상태를 가볍게 보존�
 
 여러 제공처에서 추출한 지표 관측값을 날짜와 단위와 함께 조회 가능한 형태로 누적 저장한다.
 `(provider, series_id, observation_date)`를 고유키로 사용하고 `source_record_id`로 근거 수집
-레코드와 연결한다. 현재 `fred_treasury_daily`(미국 국채), `ecos_market_rate_daily`(국내
-시장금리), `mof_jgb_daily`(일본 국채), `boe_gilt_daily`(영국 국채),
-`ecb_yield_curve_daily`(유로 지역 국채)가 채운다.
+레코드와 연결한다. 현재 `fred_treasury_daily`(미국 국채), `fred_macro_daily`(미국 물가·소매판매),
+`ecos_market_rate_daily`(국내 시장금리), `mof_jgb_daily`(일본 국채), `boe_gilt_daily`(영국 국채),
+`bbk_bund_daily`(독일 국채), `ecb_yield_curve_daily`(유로 지역 국채),
+`ecb_convergence_monthly`(유로 회원국 10년물 월평균)가 채운다.
 
-- `provider`는 그 값을 준 제공처(`fred`, `ecos`, `mof`, `boe`, `ecb`)이며 같은 수집의
+- `provider`는 그 값을 준 제공처(`fred`, `ecos`, `mof`, `boe`, `bbk`, `ecb`)이며 같은 수집의
   `source_record.source`와 같다.
 - `series_id`는 **제공처 안에서만 고유하다.** 그래서 자연키에 `provider`가 함께 들어간다.
 - **`series_id`는 사람이 읽을 수 있어야 한다.** FRED의 `DGS10`처럼 제공처 ID가 이미 읽히면
@@ -338,13 +339,15 @@ API, 크롤링, 웹소켓 수집 결과의 출처와 상태를 가볍게 보존�
   조용히 틀린다. Grafana 대시보드의 패널 쿼리도 마찬가지다.
 - 국가·만기 같은 시계열의 성격은 여기 두지 않고 `reference.indicator_series`에 둔다.
 - `unit`은 제공처 표기가 아니라 정규화한 표기다. 연이율 퍼센트는 제공처가 `Percent`든 `연%`든
-  `Percent`로 저장한다. 그래야 두 나라 금리를 한 쿼리로 비교할 수 있다.
+  `Percent`로 저장한다. 그래야 두 나라 금리를 한 쿼리로 비교할 수 있다. **단위는 계열마다
+  다르다.** 금리만 있던 때의 모듈 상수 하나로는 물가지수(`Index 1982-1984=100`)와
+  소매판매(`Millions of Dollars`)에 거짓이 실린다. 수집기 Enum이 계열별로 들고 있는다.
 - 관측값이 0건이어도 `source_record`는 남긴다. 조회했지만 값이 없는 구간과 아직 조회하지 않은
   구간이 구분돼야 한다.
 
 ### `reference.indicator_series`
 
-`indicator_observation`에 쌓이는 시계열이 어느 나라 무슨 금리인지 설명하는 마스터다.
+`indicator_observation`에 쌓이는 시계열이 어느 나라 무슨 값인지 설명하는 마스터다.
 `(provider, series_id)`가 자연키이고 대시보드가 이 키로 관측값을 조인한다.
 
 - 이 테이블이 있는 이유는 **나라를 추가할 때 조회 쪽을 안 고치기 위해서다.** 일본을 붙일 때
@@ -356,9 +359,15 @@ API, 크롤링, 웹소켓 수집 결과의 출처와 상태를 가볍게 보존�
 - 나라마다 고시하는 만기가 다르다. 국가 비교 패널의 만기 목록은 두 나라 이상이 가진 만기로
   좁힌다(`HAVING count(DISTINCT country) > 1`). 일본 40년이나 유로 지역 6개월처럼 한 나라만
   고시하는 만기는 골라도 비교할 대상이 없다. 한 나라의 만기 전부는 곡선 패널이 그린다.
-- `kind`가 국채(`government_bond`)와 단기 자금시장 금리(`money_market`)를 가른다. 국채 곡선
-  패널이 CD 91일 같은 값을 집어삼키지 않게 하는 장치다.
-- `maturity_months`는 만기 비교와 정렬의 기준이다. 91일물은 3으로 둔다.
+- **금리 전용 테이블이 아니다.** `kind`가 국채(`government_bond`), 단기 자금시장 금리
+  (`money_market`), 물가지수(`price_index`), 실물활동(`activity`) 넷을 가른다. 국채 곡선
+  패널이 CD 91일이나 CPI를 집어삼키지 않게 하는 장치다. **조회하는 쪽은 `kind`를 반드시
+  건다.** 단위가 다른 값이 한 축에 섞이면 화면이 조용히 거짓말을 한다.
+- `maturity_months`는 만기 비교와 정렬의 기준이다. 91일물은 3으로 둔다. **만기 개념이 없는
+  지표(물가지수, 소매판매)는 `NULL`이다.** 0으로 채우면 만기별 비교 쿼리가 그 시계열을
+  "0개월물"로 그린다.
+- **월간 계열은 저장 식별자를 `M`으로 끝낸다**(`CPI_M`, `FR10YM`). 한 테이블에 일별과 월간이
+  섞여 있어 표시가 없으면 조회하는 쪽이 주기를 구분할 수 없다.
 - **관측값에서 이 테이블로 외래키를 걸지 않는다.** 걸면 마스터 행이 없는 시계열을 수집기가
   저장하지 못해, 수집기 Enum에만 추가하고 마스터 시드를 빠뜨린 순간 DAG가 죽는다. 대신
   `tests/migrations/test_indicator_series_catalog.py`가 수집기 Enum과 시드를 대조한다.
@@ -379,6 +388,24 @@ API, 크롤링, 웹소켓 수집 결과의 출처와 상태를 가볍게 보존�
   필요해지면 별도 `status` enum 컬럼으로 분리한다.
 - 한 종목을 여러 소스에서 수집하게 되면 `source_symbol` 한 칸으로 못 버틴다.
   그때는 `reference.instrument_source(instrument_id, source, symbol)` 자식 테이블로 옮긴다.
+
+### `content.document` 계열
+
+수집한 문서 한 건과 그 문서에 붙은 태그다. `document_ingestion_hourly`가 문서를 넣고
+`document_assessment_hourly`가 평가를 채운다.
+
+- 자연키는 `(source_slug, external_id)`다. **`content_hash`를 키에 넣지 않는다.** 넣으면
+  본문이 조금만 달라져도 새 행이 생겨 같은 기사가 매시간 쌓인다. 본문이 바뀌면 같은 행을
+  갱신하고, 다시 평가할지는 `assessed_content_hash`와 현재 `content_hash`의 비교가 정한다.
+- **승인·보류 같은 상태 머신을 두지 않는다.** 소비자가 사람이 아니라 LLM이라 전부 저장하고
+  점수(`value_score`)만 남긴다. 상태로 버리면 나중에 기준을 바꿀 때 되돌릴 수 없다.
+- 평가에 실패한 문서는 `assessed_at`을 `NULL`로 남긴다. 삭제하거나 다른 상태로 바꾸지 않는다.
+  다음 정시 실행이 다시 집는다.
+- `document_instrument`와 `document_indicator`는 `instrument`·`indicator_series` 마스터로
+  **외래키를 걸지 않는다.** `indicator_observation`이 마스터를 참조하지 않는 것과 같은 이유다.
+  마스터에 없는 태그가 오면 태깅 전체가 죽는 대신 그 태그만 빠져야 한다. 후보 목록은
+  프롬프트로 주고, 목록 밖의 값은 저장 전에 버린다.
+- `body`는 `content_level`이 `metadata_only`면 `NULL`이고 CHECK 제약이 그것을 강제한다.
 
 ### `exchange_rate`
 

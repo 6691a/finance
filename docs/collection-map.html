@@ -640,13 +640,21 @@
   <table>
     <thead><tr><th>분류</th><th>내용</th><th>왜 다른가</th></tr></thead>
     <tbody>
-      <tr><td>수급</td><td>외국인·기관 순매수, 선물 외국인 포지션,<br>프로그램 매매</td>
-          <td>일 단위 집계값이다. KIS API로 받을 수 있지만 저장 형태가 봉이 아니다</td></tr>
-      <tr><td>수급</td><td>공매도 잔고 · 대차잔고 · 신용융자</td>
+      <tr><td>수급</td><td>선물 외국인 포지션, 프로그램 매매</td>
+          <td>일 단위 집계값이다. KIS API로 받을 수 있지만 저장 형태가 봉이 아니다.
+              <strong>외국인·기관 순매수는 받는다.</strong> 장중 추정치는
+              <code>market_investor_flow_snapshot</code>·<code>stock_investor_estimate_snapshot</code>,
+              확정값은 <code>stock_investor_trade_daily</code>에 있다</td></tr>
+      <tr><td>수급</td><td>공매도 <strong>잔고</strong></td>
           <td><strong>공시가 T+2다.</strong> 관측일과 공시일을 따로 저장하지 않으면
-              백테스트가 미래를 훔친다(look-ahead bias). <code>published_at</code>이 필수다</td></tr>
-      <tr><td>이벤트</td><td>CPI · 고용 · FOMC · BOJ · 중국 PMI</td>
-          <td>발표 시각과 예상치·실제치를 갖는 캘린더 성격이다. 값이 아니라 사건이다</td></tr>
+              백테스트가 미래를 훔친다(look-ahead bias). <code>published_at</code>이 필수다.
+              대차잔고·신용융자와 공매도 <em>체결</em>은 받는다.
+              <code>kis_market_positioning_daily</code>가 다음 영업일 아침에 한 번 돈다</td></tr>
+      <tr><td>이벤트</td><td>고용 · FOMC · BOJ · 중국 PMI</td>
+          <td>발표 시각과 예상치·실제치를 갖는 캘린더 성격이다. 값이 아니라 사건이다.
+              <strong>레벨 값은 이미 받는다.</strong> 미국 CPI·PPI·소매판매는
+              <code>fred_macro_daily</code>가 <code>indicator_observation</code>에 월간으로 쌓는다.
+              여기 남은 것은 발표 시각과 예상치다</td></tr>
       <tr><td>펀더멘털</td><td>TSMC 월매출, 관세청 반도체 수출액(10일 단위),<br>DRAM·NAND 현물가</td>
           <td>월·순 단위 발표다. 크롤링이고 발표 지연을 함께 기록해야 한다</td></tr>
       <tr><td>파생</td><td>KRX 야간선물</td>
@@ -689,8 +697,11 @@
 
   <footer>
     자동 생성이 아니라 손으로 쓴 문서다. 심볼이나 스케줄을 바꾸면 여기도 함께 고친다.<br>
+    <strong>이 지도는 값만 다룬다.</strong> 뉴스·공식 발표 같은 글의 수집과 LLM 평가는
+    README의 <code>문서 수집과 LLM 평가</code> 절과
+    <a href="document-assessment-workflow.md">document-assessment-workflow.md</a>에 있다.<br>
     설계 배경과 실측 근거는 수집기와 모델의 문서 문자열에 있다. 구현이 끝난 설계 문서는
     지웠고 이력에만 남아 있다.
-    기준일 2026-08-09.
+    기준일 2026-08-18.
   </footer>
 </main>

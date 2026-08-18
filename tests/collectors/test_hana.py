@@ -14,7 +14,6 @@ from modules.collectors.hana import (
     EXCHANGE_RATE_UPSERT,
     KST,
     MAX_DAY_OFFSET,
-    UPSERT_PAGE_SIZE,
     HanaCurrency,
     HanaHTTPError,
     HanaPayloadError,
@@ -129,9 +128,9 @@ def without_the_psycopg2_fast_path(monkeypatch):
     psycopg2가 설치돼 있으면 `store_rates`는 `execute_batch`를 탄다. 그건 문장을 묶어
     보내므로 커서에 도착하는 SQL이 드라이버 사정에 따라 달라진다. 파라미터 바인딩 같은
     이 모듈의 계약을 검증하려면 행 단위가 그대로 보이는 경로여야 한다.
-    고속 경로 자체는 `test_store_uses_the_psycopg2_fast_path_when_the_driver_offers_it`이 본다.
+    고속 경로 자체는 `tests/modules/test_upsert.py`가 본다.
     """
-    monkeypatch.setattr("modules.collectors.hana._execute_batch", None)
+    monkeypatch.setattr("modules.upsert._execute_batch", None)
 
 
 def inserted_columns(statement: str) -> tuple[str, ...]:
@@ -427,28 +426,6 @@ def test_store_sends_every_round_in_one_call_not_one_round_per_round_trip():
 
     assert connection.recorded_cursor.batches == 1
     assert len(connection.recorded_cursor.calls) == 3
-
-
-def test_store_uses_the_psycopg2_fast_path_when_the_driver_offers_it(monkeypatch):
-    # psycopg2의 `executemany`는 행마다 왕복해서 반복문과 같다. `execute_batch`만이 실제로
-    # 문장을 묶어 보낸다. 드라이버가 그걸 주면 반드시 그 경로를 타야 한다.
-    sent = []
-
-    def fake_execute_batch(cursor, statement, parameters, page_size):
-        sent.append((statement, list(parameters), page_size))
-
-    monkeypatch.setattr("modules.collectors.hana._execute_batch", fake_execute_batch)
-    # 고속 경로는 커서가 psycopg2 것일 때만 탄다. 가짜 커서를 그 자리에 세운다.
-    monkeypatch.setattr("modules.collectors.hana._Psycopg2Cursor", FakeCursor)
-    connection = FakeConnection()
-
-    assert store_rates(connection, parse_rates(response_for())) == 3
-
-    assert connection.recorded_cursor.calls == []
-    statement, parameters, page_size = sent[0]
-    assert "ON CONFLICT (currency, date, time, round) DO UPDATE" in statement
-    assert len(parameters) == 3
-    assert page_size == UPSERT_PAGE_SIZE
 
 
 def test_store_binds_every_value_as_a_parameter_instead_of_inlining_it():

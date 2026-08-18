@@ -34,7 +34,7 @@ def test_us_briefing_runs_the_morning_after():
 
 
 def test_document_and_ops_briefings_run_daily():
-    assert slack_document_briefing.slack_document_briefing.schedule == "0 8,17 * * *"
+    assert slack_document_briefing.slack_document_briefing.schedule == "0 8 * * *"
     assert slack_ops_briefing.slack_ops_briefing.schedule == "0 8 * * *"
 
 

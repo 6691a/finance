@@ -80,7 +80,7 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_valida
 
 from modules import llm
 from modules.llm import UnsupportedResponseFormat
-from modules.schema import response_format
+from modules.schema import SchemaError, json_object, response_format
 from modules.sql import read_sql
 from modules.upsert import execute_upserts
 
@@ -383,7 +383,9 @@ class DocumentAssessor:
     def parse(raw: str) -> Assessment:
         """모델 응답을 검증한다. 스키마 강제가 안 되는 제공처에서는 이것이 유일한 방어다."""
         try:
-            return Assessment.model_validate_json(_json_object(raw))
+            return Assessment.model_validate_json(json_object(raw))
+        except SchemaError as error:
+            raise AssessmentError(str(error)) from None
         except ValidationError as error:
             raise AssessmentError(f"Model returned an invalid assessment: {error}") from None
         except json.JSONDecodeError as error:
@@ -506,19 +508,6 @@ class AssessmentBatch:
             logger.warning("document %s could not be assessed: %s", document.id, error)
             return {"results": [AssessmentResult(document_id=document.id, error=str(error))]}
         return {"results": [AssessmentResult(document_id=document.id, assessment=assessment)]}
-
-
-def _json_object(raw: str) -> str:
-    """코드 펜스나 앞뒤 설명이 붙어 와도 JSON 객체만 뽑는다.
-
-    제3자 OpenAI 호환 제공자는 JSON만 내라는 지시를 지키지 않는 경우가 있다. 첫 `{`부터
-    마지막 `}`까지를 잘라 낸다.
-    """
-    start = raw.find("{")
-    end = raw.rfind("}")
-    if start == -1 or end <= start:
-        raise AssessmentError("Model did not return a JSON object")
-    return raw[start : end + 1]
 
 
 def _text(message: AIMessage) -> str:

@@ -11,7 +11,7 @@
 | 순서 | 리포트 | 채널 env | 내용 |
 | --- | --- | --- | --- |
 | 1부 | 시장 데이터 요약 — 한국장·미국장 2종 | `SLACK_CHANNEL_MARKET` | 한국장: 장중·마감 통계. 미국장: 다음날 아침 마감 요약 + 한국 값과 조합한 평가 |
-| 2부 | 뉴스·문서 평가 요약 | `SLACK_CHANNEL_DOCUMENT` | 신규 평가 문서 집계와 `value_score` 상위 문서 |
+| 2부 | 뉴스·문서 평가 요약 | `SLACK_CHANNEL_DOCUMENT` | 신규 평가 문서 집계와 LLM이 고른 읽을 것·주의 |
 | 3부 | 수집 운영 현황 | `SLACK_CHANNEL_OPS` | `source_record` 기반 수집 성공·실패·무소식 |
 
 본문은 **SQL 집계를 고정 템플릿의 표로 렌더링한 것**이고, LLM은 그 표의 값을 근거로
@@ -79,6 +79,9 @@ ECOS의 `EcosResultError`와 같은 자리에 `SlackError`가 선다.
 
 ### 2.2 LLM 코멘트 — `airflow/modules/briefing/comment.py`
 
+1부(시장 브리핑) 둘이 쓴다. 2부는 요약 대신 선별(§2.2.1)을, 3부는 모델을 아예 쓰지 않는다.
+
+
 `BriefingCommentator`. `DocumentAssessor`의 축소판으로, LLM 코드 규칙
 (LangChain 호출, LangGraph 흐름, Pydantic 형태)을 그대로 따른다.
 
@@ -104,8 +107,40 @@ ECOS의 `EcosResultError`와 같은 자리에 `SlackError`가 선다.
 태스크의 성패는 Slack 전송만 정한다: `SlackError`면 `AirflowFailException`,
 `ConnectionError`면 올려서 Airflow가 재시도한다.
 
-**부를 값이 없으면 아예 안 부른다.** 2부의 평가 0건, 3부의 올그린이 그렇다. 쓸 값이 없는데
-요약을 시키면 없는 이야기를 지어낸다. 이건 실패가 아니라 정상 흐름이라 경고 줄도 안 붙는다.
+**부를 값이 없으면 아예 안 부른다.** 2부의 평가 0건이 그렇다. 쓸 값이 없는데 요약을 시키면
+없는 이야기를 지어낸다. 이건 실패가 아니라 정상 흐름이라 경고 줄도 안 붙는다.
+
+### 2.2.1 LLM 선별 — `airflow/modules/briefing/picks.py`
+
+`DocumentPicker`. 2부만 쓴다. 모양은 `BriefingCommentator`와 같고(call + repair 2노드,
+repair 1회, `briefing_model()`, `max_retries=0`) 두 가지가 다르다.
+
+- **출력이 평문이 아니라 구조다.** `Picks`(→ `Pick(document_id, why, watch)`)를
+  `modules/schema.py`의 `response_format`으로 강제하고, 강제가 안 되는 제공처를 위해
+  `parse()`가 검증한다. 코드 펜스가 붙어 와도 `schema.json_object`가 객체만 뽑는다.
+- **목록 밖의 `document_id`는 그 건만 버린다.** `assessment.filter_tags`가 마스터에 없는
+  태그만 버리는 것과 같은 규칙이다. 다만 **전부** 목록 밖이면 모델이 후보를 안 보고 답한
+  것이라 형식 실패로 보고 교정을 요청한다. 반대로 모델이 아무 것도 고르지 않은 것
+  (`picks: []`)은 정상 응답이다.
+
+**왜 점수로 안 고르나.** 점수가 못 쓸 값이어서가 아니다. 실측(2026-08-18, 24시간 449건)에서
+분포는 8점 6건, 7점 8건, 6점 20건, 5점 28건, 4점 48건, 3점 54건, 2점 224건, 1점 38건, 0점 23건으로
+**잘 갈라진다.** 이유는 둘이다.
+
+- **상위 구간이 거의 동점이다.** 후보 60건의 최저가 5점이고 그 안에 5점만 28건이다. 동점
+  구간의 순서는 `assessed_at`이 정하므로 사실상 최신순이다. 그 구간의 순위를 선별이 정한다.
+- **점수가 답하지 않는 질문이 있다.** 무엇이 위험 쪽인지(`watch`), 왜 고를 값이 있는지(`why`),
+  같은 사건을 쓴 여러 기사 중 무엇 하나인지. 이 셋은 목록을 함께 놓고 봐야 답이 나온다.
+
+그래서 `value_score`는 후보를 `CANDIDATE_DOCUMENTS`(60)건으로 자르는 데까지 쓰고, 그 숫자가
+곧 모델에 실리는 토큰의 상한이다.
+
+**건수는 범위로만 준다**(읽을 것 최대 5, 주의 최대 3, 없으면 0). 고정 개수를 요구하면 한산한
+날 억지로 채우게 되고, 그러면 고른 것과 남은 것의 차이가 사라진다.
+
+**선별 실패는 발송을 막지 않는다.** DAG가 `ConnectionError`·`LlmError`·`PickError`를 잡아
+`None`을 돌려주고, 그때만 예전 방식대로 점수 순서 상위 `FALLBACK_DOCUMENTS`(5)건을 그린다.
+`⚠️ 문서 선별 실패: …` context 줄이 함께 나가서 "고를 것이 없던 날"과 구분된다.
 
 ### 2.3 파트 모듈 — `airflow/modules/briefing/`
 
@@ -115,19 +150,24 @@ ECOS의 `EcosResultError`와 같은 자리에 `SlackError`가 선다.
 | --- | --- |
 | `table.py` | 고정폭 표. 폭을 글자 수가 아니라 **표시 칸 수**로 센다(한글은 두 칸) |
 | `blocks.py` | Block Kit 조각(header·section·표 섹션·context·요약 블록)과 `08/18(화) 12:30 KST` 시각 표기 |
-| `comment.py` | 세 리포트가 함께 쓰는 LLM 요약 |
+| `comment.py` | 1부 두 리포트가 쓰는 LLM 요약 |
+| `picks.py` | 2부의 LLM 선별. 후보 중 읽을 것·주의를 고른다 |
 | `market.py` | 1부. 한국장·미국장 **둘 다** |
 | `documents.py` | 2부 |
 | `ops.py` | 3부 |
 
-파트 파일 셋은 같은 네 함수 모양을 갖는다.
+파트 파일 셋은 같은 세 함수 모양을 갖는다.
 
 ```python
 def collect_summary(connection: Connection, now: datetime) -> XxxSummary
-def render_blocks(summary: XxxSummary, comment: str | None, error: str | None = None) -> list[dict[str, Any]]
+def render_blocks(summary: XxxSummary, ..., error: str | None = None) -> list[dict[str, Any]]
 def render_text(summary: XxxSummary) -> str      # Slack text fallback 한 줄
-def comment_input(summary: XxxSummary) -> str    # LLM에 줄 압축 JSON
 ```
+
+LLM에 줄 입력을 만드는 함수는 그 파트가 모델을 어디에 쓰느냐에 따라 다르다. 1부는
+`comment_input`(요약), 2부는 `pick_input`(선별), 3부는 없다(모델을 안 부른다).
+`render_blocks`의 가운데 인자도 같은 이유로 갈린다 — 1부는 `comment: str | None`,
+2부는 `picks: Sequence[Pick] | None`, 3부는 없다.
 
 - 요약 모델은 `ConfigDict(frozen=True)` Pydantic, 시각은 `AwareDatetime` UTC.
 - 쿼리는 `airflow/sql/postgres/<테이블>/*.sql`에 두고 `read_sql`로 읽는다. 조회 구간은
@@ -334,11 +374,12 @@ SCHEDULE = "0 8 * * *"  # KST 매일 08:00 = UTC -1일 23:00
 | 섹션 | SQL 파일 | 내용 |
 | --- | --- | --- |
 | 집계 | `document/select_briefing_summary.sql` | 창 안 신규 발견 수, 평가 수, 방향 분포(positive/negative/neutral), `assessed_at IS NULL` 백로그 |
-| 상위 문서 5건 | `document/select_briefing_top.sql` | 창 안 평가 문서를 `value_score DESC, assessed_at DESC`로 5건. 제목, `source_slug`, 방향, 점수, `canonical_url`, `assessment->>'reason'`, `document_instrument` 티커 `array_agg` |
-| 💬 요약 | — | 입력: 집계 + 상위 5건의 `{title, direction, value_score, reason, tickers}` |
+| 후보 문서 | `document/select_briefing_candidates.sql` | 창 안 평가 문서를 `value_score DESC, assessed_at DESC`로 `CANDIDATE_DOCUMENTS`(60)건. `document_id`, 제목, `source_slug`, 방향, 점수, `canonical_url`, `assessment->>'reason'`, `document_instrument` 티커 `array_agg` |
+| 읽을 것 · 주의 | — | 후보 전체를 §2.2.1의 `DocumentPicker`에 주고 고르게 한다. 그린 줄마다 모델이 쓴 한 문장(`why`)이 붙는다 |
 
-`value_score`는 저장 단계에서 문서를 버리지 않고 리포트가 상위 N개를 고르는 데만 쓴다는
-설계 그대로의 소비자가 이 쿼리다.
+`value_score`는 저장 단계에서 문서를 버리지 않고 리포트가 쓴다는 설계 그대로의 소비자가
+이 쿼리인데, **최종 순위를 정하는 데는 안 쓴다.** 후보를 60건으로 자르는 데까지가 점수의
+몫이다. 이유는 §2.2.1에 있다.
 
 **0건이어도 보낸다.** "신규 평가 문서 없음 · 대기 N건" 한 줄 짧은 형태로 보내고 LLM은
 부르지 않는다. `document_assessment_hourly`는 `source_record`를 남기지 않는 DAG라
@@ -395,9 +436,10 @@ SCHEDULE = "0 8 * * *"  # KST 매일 08:00 = UTC -1일 23:00
 | --- | --- |
 | `tests/modules/test_slack.py` | 오류 분류표, 전달 인자, `retry_handlers=[]`, 예외 문자열에 토큰 미노출 |
 | `tests/modules/test_briefing_comment.py` | 성공·교정 1회·재실패·`ConnectionError` 통과, 단락 여럿 허용 |
+| `tests/modules/test_briefing_picks.py` | 목록 밖 id만 버리기, 전부 밖이면 교정 1회, 빈 선별은 정상, 건수·이유 길이 상한, 코드 펜스, `ConnectionError` 통과 |
 | `tests/modules/test_briefing_trend.py` | 연속 일수, 이상 움직임 백분위, 금리 bp vs 가격 퍼센트, 마이너스 금리, 표본 부족 표시, 수급의 부호 연속 |
 | `tests/modules/test_briefing_market.py` | 나라·종류 분할(한국장에서 미국 현물 제외), 미국장 요약 입력에 한국 값 포함, 뉴욕 기준 세션 날짜, 요일 표기, 요약 입력의 추세 필드, 줄마다 붙는 기준 시각 |
-| `tests/modules/test_briefing_documents.py` | 창이 `assessed_at` 기준, 0건 짧은 형태, 상위 문서 링크·점수 |
+| `tests/modules/test_briefing_documents.py` | 창이 `assessed_at` 기준, 0건 짧은 형태, 고른 것만 그리기, 주의 섹션 분리, 빈 선별과 선별 실패의 구분 |
 | `tests/modules/test_briefing_ops.py` | 무소식 판정(주말 예외 포함), 환율 신선도, 백로그 임계, 올그린 하트비트, 피드 접기 |
 | `tests/dags/test_slack_market_briefing.py` | 네 DAG의 스케줄, 태스크 하나, 채널 분리, 설정 누락 시 즉시 실패 |
 
@@ -419,7 +461,8 @@ slack-sdk 하나뿐이고, `modules/`의 새 파일은 Airflow를 import하지 �
   - 초대가 없어 거절당하면 `not_in_channel`이고, 재시도해도 같은 결과라 태스크가 즉시 실패한다.
 - `compose/local/airflow/.env`(운영은 해당 환경 변수 주입)에 키 4개:
   `SLACK_BOT_TOKEN`, `SLACK_CHANNEL_MARKET`, `SLACK_CHANNEL_DOCUMENT`, `SLACK_CHANNEL_OPS`.
-- LangSmith 추적이 켜져 있으면 요약 입력(집계 JSON)이 외부로 나간다. 원문에 해당하는 것은
-  2부 상위 문서의 제목과 `reason`뿐이지만, 추적 정책은 평가 DAG와 같은 기준을 따른다.
+- LangSmith 추적이 켜져 있으면 요약·선별 입력(집계 JSON)이 외부로 나간다. 원문에 해당하는
+  것은 2부 후보 문서의 제목과 `reason`뿐이지만, 후보가 60건이라 1부보다 양이 많다. 추적
+  정책은 평가 DAG와 같은 기준을 따른다.
 - 스케줄을 바꾸려면 각 DAG 파일 맨 위의 `SCHEDULE` 한 줄을 고친다. KST와 UTC를 같은 줄
   주석으로 병기한다.

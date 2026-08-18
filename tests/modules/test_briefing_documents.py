@@ -7,6 +7,7 @@ from sqlalchemy import Table
 
 from apps.models.content import Document, DocumentInstrument
 from modules.briefing import documents
+from modules.briefing.picks import Pick
 
 NOW = datetime(2026, 8, 18, 8, 0, tzinfo=UTC)
 
@@ -20,7 +21,7 @@ COUNT_ROW = (
     datetime(2026, 8, 18, 5, 0, tzinfo=UTC),  # oldest pending
 )
 
-TOP_ROWS = [
+CANDIDATE_ROWS = [
     (
         41,
         "원/달러 환율 1,400원 돌파",
@@ -69,21 +70,26 @@ class FakeConnection:
         return cursor
 
 
-def summary(count_row=COUNT_ROW, top_rows=None):
-    connection = FakeConnection(count_row, TOP_ROWS if top_rows is None else top_rows)
+def summary(count_row=COUNT_ROW, candidate_rows=None):
+    connection = FakeConnection(count_row, CANDIDATE_ROWS if candidate_rows is None else candidate_rows)
     return documents.collect_summary(connection, NOW), connection
 
 
-def test_counts_and_top_documents_are_parsed():
+def pick(document_id: int, why: str = "", watch: bool = False) -> Pick:
+    return Pick(document_id=document_id, why=why, watch=watch)
+
+
+def test_counts_and_candidates_are_parsed():
     result, _ = summary()
 
     assert (result.detected, result.assessed, result.backlog) == (14, 11, 3)
     assert (result.positive, result.negative, result.neutral) == (4, 5, 2)
-    assert [document.title for document in result.top] == [
+    assert [document.title for document in result.candidates] == [
         "원/달러 환율 1,400원 돌파",
         "반도체 감산 계획 발표",
     ]
-    assert result.top[0].tickers == ("005930",)
+    assert result.candidates[0].tickers == ("005930",)
+    assert result.allowed_ids == frozenset({41, 42})
 
 
 def test_the_window_is_measured_from_assessment_not_publication():
@@ -99,35 +105,69 @@ def test_an_empty_window_still_reports_the_backlog():
     result, _ = summary(EMPTY_COUNT_ROW, [])
 
     assert result.is_empty
-    text = _block_text(documents.render_blocks(result, None))
+    text = _block_text(documents.render_blocks(result))
     assert "신규 평가 문서 없음" in text
     assert "3" in text  # 대기 건수
 
 
-def test_top_documents_are_linked_with_their_score():
+def test_only_the_picked_documents_are_drawn():
+    """점수가 아니라 선별이 무엇을 그릴지 정한다. 고르지 않은 문서는 채널에 나오지 않는다."""
     result, _ = summary()
 
-    text = _block_text(documents.render_blocks(result, "요약"))
+    text = _block_text(documents.render_blocks(result, [pick(42, "공급 축소가 가격에 닿는다")]))
 
-    assert "https://example.test/a" in text
-    assert "7" in text
-    assert "요약" in text
+    assert "반도체 감산 계획 발표" in text
+    assert "공급 축소가 가격에 닿는다" in text
+    assert "원/달러 환율 1,400원 돌파" not in text
 
 
-def test_comment_input_carries_counts_and_reasons():
+def test_watch_documents_get_their_own_section():
     result, _ = summary()
 
-    payload = json.loads(documents.comment_input(result))
+    text = _block_text(documents.render_blocks(result, [pick(42), pick(41, watch=True)]))
+
+    assert "읽을 것" in text
+    assert "주의" in text
+
+
+def test_picking_nothing_says_so_instead_of_falling_back_to_the_score():
+    """한산한 날 억지로 채우지 않는 것이 설계다. 빈 선별과 실패는 다른 결과다."""
+    result, _ = summary()
+
+    text = _block_text(documents.render_blocks(result, []))
+
+    assert "읽을 만한 문서 없음" in text
+    assert "원/달러 환율 1,400원 돌파" not in text
+
+
+def test_a_failed_pick_falls_back_to_the_score_order_and_says_so():
+    """선별이 실패해도 리포트는 나간다. 다만 실패했다는 사실은 채널에 남는다."""
+    result, _ = summary()
+
+    text = _block_text(documents.render_blocks(result, None, "read timeout"))
+
+    assert "원/달러 환율 1,400원 돌파" in text
+    assert "문서 선별 실패" in text
+    assert "read timeout" in text
+
+
+def test_pick_input_carries_every_candidate_with_its_id():
+    result, _ = summary()
+
+    payload = json.loads(documents.pick_input(result))
 
     assert payload["counts"]["assessed"] == 11
-    assert payload["top"][0]["reason"] == "수출주 원가에 직접 영향"
-    assert payload["top"][0]["value_score"] == 7
+    assert [document["document_id"] for document in payload["documents"]] == [41, 42]
+    assert payload["documents"][0]["reason"] == "수출주 원가에 직접 영향"
 
 
-def test_fallback_text_is_one_line():
+def test_fallback_text_names_the_first_picked_document():
     result, _ = summary()
 
-    assert "\n" not in documents.render_text(result)
+    text = documents.render_text(result, [pick(42)])
+
+    assert "\n" not in text
+    assert "반도체 감산 계획 발표" in text
 
 
 @pytest.mark.parametrize(
@@ -135,11 +175,11 @@ def test_fallback_text_is_one_line():
     [
         (documents.BRIEFING_SUMMARY, Document.__table__, ("detected_at", "assessed_at", "direction")),
         (
-            documents.BRIEFING_TOP,
+            documents.BRIEFING_CANDIDATES,
             Document.__table__,
             ("title", "source_slug", "value_score", "canonical_url", "assessment"),
         ),
-        (documents.BRIEFING_TOP, DocumentInstrument.__table__, ("document_id", "ticker")),
+        (documents.BRIEFING_CANDIDATES, DocumentInstrument.__table__, ("document_id", "ticker")),
     ],
 )
 def test_queries_name_columns_that_exist(statement: str, table: Table, columns: tuple[str, ...]):

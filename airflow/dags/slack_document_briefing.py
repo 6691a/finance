@@ -4,13 +4,21 @@
 `value_score`를 여기서 처음으로 읽는다. 저장 단계는 점수로 문서를 버리지 않고, 무엇을
 보여 줄지는 이 리포트가 정한다.
 
+## 고르기는 모델이 한다
+
+점수로는 후보 몇십 건을 자르고, 그 안에서 읽을 것과 주의할 것을 고르는 일은
+`modules/briefing/picks.py`가 목록 전체를 한 번에 모델에 보여 주고 시킨다. 점수가 못 쓸 값이라서가
+아니라 **상위 구간이 거의 동점이라** 그 순서에 뜻이 없고, 위험 여부·고른 이유·중복 제거는
+점수가 답하지 않는 질문이기 때문이다. 선별이 실패하면 점수 순서 상위 몇 건으로 떨어지고
+리포트는 그대로 나간다.
+
 ## 0건에도 보낸다
 
 `document_assessment_hourly`는 `source_record`를 남기지 않아 운영 리포트에서 보이지 않는다.
 그래서 이 메시지가 평가 파이프라인의 생존 신호를 겸한다. 침묵이 정상 신호이면 고장으로 인한
 침묵과 구분할 수 없다.
 
-다만 0건일 때는 LLM을 부르지 않는다. 쓸 값이 없는데 요약을 시키면 없는 이야기를 지어낸다.
+다만 0건일 때는 LLM을 부르지 않는다. 고를 것이 없는데 고르라고 시키면 없는 이야기를 지어낸다.
 
 ## 필요한 환경
 
@@ -31,17 +39,15 @@ from airflow.sdk import dag, task
 from pydantic import SecretStr
 
 from modules.briefing import documents
-from modules.briefing.comment import BriefingCommentator, CommentError
+from modules.briefing.picks import DocumentPicker, Pick, PickError
 from modules.llm import LlmError, briefing_model
 from modules.slack import SlackError, post_message
 from modules.utility import CONNECTION_ID, KST_TIMEZONE
 
 logger = logging.getLogger(__name__)
 
-# KST 매일 08:00·17:00 = UTC 전일 23:00, 08:00. 아침에 밤사이 것을, 저녁에 낮 것을 본다.
-SCHEDULE = "0 8,17 * * *"
-
-REPORT_NAME = "문서 평가 브리핑"
+# KST 매일 08:00 = UTC 전일 23:00. 하루 한 번 아침에 지난 24시간을 본다.
+SCHEDULE = "0 8 * * *"
 
 
 def _connection() -> Any:
@@ -80,24 +86,33 @@ def slack_document_briefing():
         finally:
             connection.close()
 
-        comment, comment_error = _comment(summary)
-        blocks = documents.render_blocks(summary, comment, comment_error)
-        text = documents.render_text(summary)
+        picks, pick_error = _pick(summary)
+        blocks = documents.render_blocks(summary, picks, pick_error)
+        text = documents.render_text(summary, picks)
 
         try:
             return post_message(token, channel, text=text, blocks=blocks)
         except SlackError as error:
             raise AirflowFailException(str(error)) from error
 
-    def _comment(summary: documents.DocumentSummary) -> tuple[str | None, str | None]:
-        """평가한 문서가 없으면 부르지 않는다. 요약할 값이 없다."""
+    def _pick(summary: documents.DocumentSummary) -> tuple[tuple[Pick, ...] | None, str | None]:
+        """평가한 문서가 없으면 부르지 않는다. 고를 것이 없다.
+
+        실패하면 `None`을 돌려 점수 순서로 떨어진다. 발송이 태스크의 마지막 단계라 여기서
+        태스크를 죽이면 재시도가 같은 표를 한 번 더 채널에 보낸다.
+        """
         if summary.is_empty:
             return None, None
         try:
-            return BriefingCommentator(briefing_model()).comment(REPORT_NAME, documents.comment_input(summary)), None
-        except (ConnectionError, LlmError, CommentError) as error:
-            logger.warning("briefing comment failed; sending the tables without it: %s", error)
+            picks = DocumentPicker(briefing_model()).pick(
+                summary.window_hours,
+                documents.pick_input(summary),
+                summary.allowed_ids,
+            )
+        except (ConnectionError, LlmError, PickError) as error:
+            logger.warning("document picking failed; falling back to the score order: %s", error)
             return None, str(error)
+        return picks, None
 
     send_briefing()
 

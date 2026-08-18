@@ -23,7 +23,7 @@ OpenAI 호환 `json_schema` strict 모드는 Pydantic이 그냥 뱉는 스키마
 
 LangChain에는 같은 일을 하는 `with_structured_output()`이 있지만 그건 파싱까지 가져간다.
 우리가 막아야 하는 것은 제공처가 스키마를 **거절할 때**가 아니라 **무시할 때**이고, 그건
-`modules/assessment.py`의 `_json_object`와 검증이 받는다. 그래서 여기서 만든 값을
+이 모듈의 `json_object`와 부르는 쪽의 검증이 받는다. 그래서 여기서 만든 값을
 `.bind(response_format=...)`으로 건다. 그것도 LangChain 경로다.
 
 ## 열린 dict는 못 쓴다
@@ -68,3 +68,20 @@ def response_format(model: type[BaseModel], name: str) -> dict[str, Any]:
         "type": "json_schema",
         "json_schema": {"name": name, "strict": True, "schema": strict_json_schema(model)},
     }
+
+
+class SchemaError(ValueError):
+    """응답에서 JSON 객체를 찾지 못했다."""
+
+
+def json_object(raw: str) -> str:
+    """코드 펜스나 앞뒤 설명이 붙어 와도 JSON 객체만 뽑는다.
+
+    스키마를 강제하지 못한 제공처는 JSON만 내라는 지시를 지키지 않는 경우가 있다.
+    첫 `{`부터 마지막 `}`까지를 잘라 낸다.
+    """
+    start = raw.find("{")
+    end = raw.rfind("}")
+    if start == -1 or end <= start:
+        raise SchemaError("Model did not return a JSON object")
+    return raw[start : end + 1]

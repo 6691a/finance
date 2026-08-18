@@ -22,7 +22,8 @@
 
 ## 필요한 환경
 
-- `SLACK_BOT_TOKEN`. 봇 토큰이고 `chat:write` 스코프가 필요하다. 채널에 봇을 초대해 두지
+- `SLACK_BOT_TOKEN`. 봇 토큰이고 `chat:write` 스코프가 필요하다. 공개 채널은
+  `chat:write.public`이 있으면 초대 없이도 보내지지만, 비공개 채널은 봇을 초대해 두지
   않으면 Slack이 `not_in_channel`로 거절한다.
 - `SLACK_CHANNEL_MARKET`. 채널 ID다. 워크스페이스마다 다른 배포 설정이라 코드에 두지 않는다.
 - `XAI_API_KEY`. 요약 모델은 `modules/llm.py`의 `briefing_model()`이 코드로 정하고 키는 그

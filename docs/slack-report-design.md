@@ -409,8 +409,11 @@ slack-sdk 하나뿐이고, `modules/`의 새 파일은 Airflow를 import하지 �
 - `compose/local/airflow/requirements.txt`에 `slack-sdk>=3.33` 추가 후 이미지 재빌드.
   운영 Airflow 이미지에도 같은 줄이 먼저 들어가야 배포할 수 있다.
 - Slack 앱 생성, Bot Token Scopes에 `chat:write`.
-- 채널 3개 생성 후 **각 채널에 봇 초대**(`/invite`). 초대 없으면 `not_in_channel`로 죽고,
-  그건 재시도해도 같은 결과라 태스크가 즉시 실패한다.
+- 채널 3개 생성 후 **각 채널에 봇 초대**(`/invite`).
+  - 공개 채널은 `chat:write.public` 스코프가 있으면 초대 없이도 발송된다(2026-08-18 실측).
+    다만 그 상태에서는 봇이 `conversations.history`로 자기 메시지를 되읽지 못하고
+    `not_in_channel`을 받는다. 비공개 채널은 초대가 반드시 필요하다.
+  - 초대가 없어 거절당하면 `not_in_channel`이고, 재시도해도 같은 결과라 태스크가 즉시 실패한다.
 - `compose/local/airflow/.env`(운영은 해당 환경 변수 주입)에 키 4개:
   `SLACK_BOT_TOKEN`, `SLACK_CHANNEL_MARKET`, `SLACK_CHANNEL_DOCUMENT`, `SLACK_CHANNEL_OPS`.
 - LangSmith 추적이 켜져 있으면 요약 입력(집계 JSON)이 외부로 나간다. 원문에 해당하는 것은

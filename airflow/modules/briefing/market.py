@@ -33,6 +33,7 @@ LATEST_RATES = read_sql("postgres", "indicator_observation", "select_latest_pair
 LATEST_FLOWS = read_sql("postgres", "market_investor_flow_snapshot", "select_latest.sql")
 LATEST_MOVEMENTS = read_sql("postgres", "market_movement_snapshot", "select_latest.sql")
 LATEST_STOCK_FLOWS = read_sql("postgres", "stock_investor_estimate_snapshot", "select_latest.sql")
+LATEST_STOCK_TRADES = read_sql("postgres", "stock_investor_trade_daily", "select_latest.sql")
 
 QUOTE_TREND = read_sql("postgres", "quote_bar", "select_daily_trend.sql")
 RATE_TREND = read_sql("postgres", "indicator_observation", "select_trend.sql")
@@ -188,6 +189,38 @@ class StockFlowSnapshot(BaseModel):
     collected_at: AwareDatetime
 
 
+class StockTradeSnapshot(BaseModel):
+    """종목 하나의 장 마감 확정값. 종가와 12분류 수급 중 브리핑이 그리는 몫이다.
+
+    추정(`StockFlowSnapshot`)과 달리 거래소가 마감 뒤 고시한 확정치다. 단위는 주(수량)이고
+    KIS `kis_investor_trade_daily`가 KST 18:10에 채운다.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    stock_code: str
+    label: str
+    business_date: date
+    close: Decimal
+    previous_close: Decimal | None = None
+    foreign_net_buy_qty: int
+    institution_net_buy_qty: int
+    individual_net_buy_qty: int
+    securities_net_buy_qty: int
+    investment_trust_net_buy_qty: int
+    private_equity_net_buy_qty: int
+    bank_net_buy_qty: int
+    insurance_net_buy_qty: int
+    merchant_bank_net_buy_qty: int
+    pension_fund_net_buy_qty: int
+
+    @property
+    def change_percent(self) -> float | None:
+        if self.previous_close is None or not self.previous_close:
+            return None
+        return float((self.close - self.previous_close) / self.previous_close * 100)
+
+
 class MovementSnapshot(BaseModel):
     model_config = ConfigDict(frozen=True)
 
@@ -213,6 +246,7 @@ class MarketSummary(BaseModel):
     rates: tuple[RateChange, ...] = ()
     flows: tuple[FlowSnapshot, ...] = ()
     stock_flows: tuple[StockFlowSnapshot, ...] = ()
+    stock_trades: tuple[StockTradeSnapshot, ...] = ()
     movements: tuple[MovementSnapshot, ...] = ()
     quote_trends: dict[str, Trend] = {}
     """`provider:symbol` → 추세."""
@@ -297,6 +331,28 @@ def collect_summary(connection: Connection, now: datetime) -> MarketSummary:
             collected_at=row[6],
         ),
     )
+    stock_trades = _fetch(
+        connection,
+        LATEST_STOCK_TRADES,
+        ((now - FLOW_LOOKBACK).date(),),
+        lambda row: StockTradeSnapshot(
+            stock_code=row[0],
+            label=row[1],
+            business_date=row[2],
+            close=row[3],
+            previous_close=row[4],
+            foreign_net_buy_qty=row[5],
+            institution_net_buy_qty=row[6],
+            individual_net_buy_qty=row[7],
+            securities_net_buy_qty=row[8],
+            investment_trust_net_buy_qty=row[9],
+            private_equity_net_buy_qty=row[10],
+            bank_net_buy_qty=row[11],
+            insurance_net_buy_qty=row[12],
+            merchant_bank_net_buy_qty=row[13],
+            pension_fund_net_buy_qty=row[14],
+        ),
+    )
     movements = _fetch(
         connection,
         LATEST_MOVEMENTS,
@@ -336,6 +392,7 @@ def collect_summary(connection: Connection, now: datetime) -> MarketSummary:
         rates=rates,
         flows=flows,
         stock_flows=stock_flows,
+        stock_trades=stock_trades,
         movements=movements,
         quote_trends=quote_trends,
         rate_trends=rate_trends,
@@ -373,6 +430,7 @@ def render_blocks(summary: MarketSummary, scope: MarketScope, comment: str | Non
             *_exchange_rate_section(summary),
             *_flow_section(summary),
             *_stock_flow_section(summary),
+            *_stock_trade_sections(summary),
             *_movement_section(summary),
         ]
     else:
@@ -446,6 +504,22 @@ def comment_input(summary: MarketSummary, scope: MarketScope) -> str:
                 "as_of_kst": flow.observed_at.astimezone(KST_TIMEZONE).isoformat(),
             }
             for flow in summary.flows
+        ],
+        "stock_confirmed_trades": [
+            {
+                "stock": trade.label,
+                "code": trade.stock_code,
+                "close": float(trade.close),
+                "change_percent": round(trade.change_percent, 2) if trade.change_percent is not None else None,
+                "foreign_net_buy_shares": trade.foreign_net_buy_qty,
+                "institution_net_buy_shares": trade.institution_net_buy_qty,
+                "individual_net_buy_shares": trade.individual_net_buy_qty,
+                "pension_fund_net_buy_shares": trade.pension_fund_net_buy_qty,
+                # 마감 확정치다. 추정(estimate) 스냅샷과 단위는 같아도 성격이 다르다.
+                "estimate": False,
+                "business_date": trade.business_date.isoformat(),
+            }
+            for trade in _closed_trades(summary)
         ],
         "stock_investor_estimates": [
             {
@@ -664,6 +738,64 @@ def _stock_flow_section(summary: MarketSummary) -> list[dict[str, Any]]:
         for flow in summary.stock_flows
     ]
     return blocks.table_section("종목 추정 순매수(주)", ("종목", "외국인", "기관", "합계", "기준"), rows)
+
+
+def _closed_trades(summary: MarketSummary) -> tuple[StockTradeSnapshot, ...]:
+    """오늘(KST) 거래일의 확정값만 고른다.
+
+    조회 창은 연휴를 건너려고 열흘이지만, 그대로 그리면 12:30 발송에 어제 마감이 오늘
+    것처럼 실린다. 확정값은 KST 18:10에 오므로 이 섹션은 저녁 발송에만 나타난다.
+    """
+    today = summary.generated_at.astimezone(KST_TIMEZONE).date()
+    return tuple(trade for trade in summary.stock_trades if trade.business_date == today)
+
+
+def _stock_trade_sections(summary: MarketSummary) -> list[dict[str, Any]]:
+    """종목 마감 확정: 종가·등락과 확정 수급, 그리고 기관 세부.
+
+    추정(장중) 표와 나눈다. 하나는 장중 스냅샷이고 하나는 마감 확정치라 같은 표에 섞으면
+    어느 쪽인지 알 수 없다. 기관 세부 일곱은 열이 많아 표를 따로 그린다.
+    """
+    trades = _closed_trades(summary)
+    if not trades:
+        return []
+    closing_rows = [
+        (
+            trade.label,
+            _number(trade.close),
+            _percent(trade.change_percent),
+            f"{trade.foreign_net_buy_qty:+,}",
+            f"{trade.institution_net_buy_qty:+,}",
+            f"{trade.individual_net_buy_qty:+,}",
+            f"{trade.business_date:%m/%d}",
+        )
+        for trade in trades
+    ]
+    detail_rows = [
+        (
+            trade.label,
+            f"{trade.securities_net_buy_qty:+,}",
+            f"{trade.investment_trust_net_buy_qty:+,}",
+            f"{trade.private_equity_net_buy_qty:+,}",
+            f"{trade.bank_net_buy_qty:+,}",
+            f"{trade.insurance_net_buy_qty:+,}",
+            f"{trade.merchant_bank_net_buy_qty:+,}",
+            f"{trade.pension_fund_net_buy_qty:+,}",
+        )
+        for trade in trades
+    ]
+    return [
+        *blocks.table_section(
+            "종목 마감 확정(주)",
+            ("종목", "종가", "등락", "외국인", "기관", "개인", "기준"),
+            closing_rows,
+        ),
+        *blocks.table_section(
+            "기관 세부(주)",
+            ("종목", "금융투자", "투신", "사모", "은행", "보험", "종금", "연기금"),
+            detail_rows,
+        ),
+    ]
 
 
 def _ordered[T](items: Iterable[T], key: Callable[[T], str], order: Sequence[str]) -> tuple[T, ...]:

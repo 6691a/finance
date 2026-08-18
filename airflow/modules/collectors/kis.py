@@ -103,11 +103,20 @@ STOCK_BARS_PER_CALL = 120
 
 # 한 거래일에 허용하는 최대 호출 수. 커서가 앞으로 나아가지 않을 때의 안전장치다.
 MAX_STOCK_BAR_CALLS = 6
+# NXT는 프리(08:00~08:50)·주간(09:00~15:20)·애프터(15:30~20:00)를 다 담아 KRX보다 창이 길다.
+# 최대 약 700봉을 120봉씩 걷으므로 호출 상한도 따로 둔다.
+MAX_NXT_STOCK_BAR_CALLS = 8
 
 # 정규장 경계(KST). 이 밖의 봉은 저장하지 않는다. 15:32 같은 시간외 체결이 섞이면 한 심볼의
 # 시계열에 성격이 다른 거래가 들어간다(실측: 005930 2026-08-14에 153200 봉 11,196,308주).
 SESSION_FIRST_BAR = time(9, 0)
 SESSION_LAST_BAR = time(15, 30)
+
+# NXT 수집 창(KST). 세 세션을 한 창으로 담는다(실측 2026-08-18: 프리 08:00~08:50,
+# 주간 09:00~15:20, 애프터 15:30~20:00 봉이 한 조회에 이어져 온다). 세션 사이 공백은
+# 봉이 없어 자연히 비므로 경계를 셋으로 나눌 필요가 없다.
+NXT_SESSION_FIRST_BAR = time(8, 0)
+NXT_SESSION_LAST_BAR = time(20, 0)
 
 # 업종 현재가. 상승·보합·하락 종목 수가 여기 들어 있어 전 종목을 순회할 필요가 없다.
 INDEX_PRICE_PATH = "/uapi/domestic-stock/v1/quotations/inquire-index-price"
@@ -190,6 +199,38 @@ class DomesticIndex(StrEnum):
     # 봉 단위 베이시스는 API가 주지 않으므로 둘을 각각 받아 조회 쪽에서 뺀다.
     KOSPI200 = ("KOSPI200", "2001", "코스피200")
     KOSDAQ = ("KOSDAQ", "1001", "코스닥")
+
+
+class StockExchange(StrEnum):
+    """국내 주식 거래소. 값이 `stock_bar.exchange`에 그대로 저장된다.
+
+    `division_code`가 KIS `FID_COND_MRKT_DIV_CODE` 값이다. 통합(`UN`)은 쓰지 않는다 —
+    두 거래소 체결을 섞어 어느 쪽 값도 아니게 된다. `apps/models/market.py`의
+    `StockExchange`와 값이 같아야 하고 테스트가 둘을 대조한다.
+    """
+
+    division_code: str
+
+    def __new__(cls, value: str, division_code: str) -> Self:
+        member = str.__new__(cls, value)
+        member._value_ = value
+        member.division_code = division_code
+        return member
+
+    KRX = ("KRX", "J")
+    NXT = ("NXT", "NX")
+
+    @property
+    def first_bar(self) -> time:
+        return SESSION_FIRST_BAR if self is StockExchange.KRX else NXT_SESSION_FIRST_BAR
+
+    @property
+    def last_bar(self) -> time:
+        return SESSION_LAST_BAR if self is StockExchange.KRX else NXT_SESSION_LAST_BAR
+
+    @property
+    def max_calls(self) -> int:
+        return MAX_STOCK_BAR_CALLS if self is StockExchange.KRX else MAX_NXT_STOCK_BAR_CALLS
 
 
 class DomesticStock(StrEnum):
@@ -812,11 +853,12 @@ def _count(value: str | None, field: str) -> int:
 
 
 class StockBarFetch(BaseModel):
-    """한 종목·한 거래일의 분봉 수집 결과."""
+    """한 종목·한 거래일·한 거래소의 분봉 수집 결과."""
 
     model_config = ConfigDict(frozen=True)
 
     stock_code: str
+    exchange: StockExchange
     business_date: date
     bars: tuple[QuoteBar, ...]
     call_count: int
@@ -841,6 +883,7 @@ def fetch_stock_bars(
     stock: DomesticStock,
     business_date: date,
     previous_close: Decimal,
+    exchange: StockExchange = StockExchange.KRX,
 ) -> StockBarFetch:
     """한 종목의 하루치 정규장 1분봉을 받는다.
 
@@ -863,11 +906,11 @@ def fetch_stock_bars(
     """
     started_at = datetime.now(UTC)
     stamp = business_date.strftime("%Y%m%d")
-    cursor = SESSION_LAST_BAR
+    cursor = exchange.last_bar
     seen: dict[time, QuoteBar] = {}
     calls = 0
 
-    while calls < MAX_STOCK_BAR_CALLS:
+    while calls < exchange.max_calls:
         body, _, _ = send_get(
             token,
             app_key,
@@ -875,7 +918,8 @@ def fetch_stock_bars(
             STOCK_CHART_PATH,
             STOCK_CHART_TR_ID,
             {
-                "FID_COND_MRKT_DIV_CODE": "J",  # J = KRX. NX(NXT)와 UN(통합)은 쓰지 않는다
+                # J = KRX, NX = NXT. UN(통합)은 쓰지 않는다 — 두 거래소 체결이 섞인다.
+                "FID_COND_MRKT_DIV_CODE": exchange.division_code,
                 "FID_INPUT_ISCD": stock.value,
                 "FID_INPUT_DATE_1": stamp,
                 "FID_INPUT_HOUR_1": cursor.strftime("%H%M%S"),
@@ -895,17 +939,18 @@ def fetch_stock_bars(
         earliest = min(_bar_time(row) for row in same_day)
         for row in same_day:
             moment = _bar_time(row)
-            if not (SESSION_FIRST_BAR <= moment <= SESSION_LAST_BAR):
+            if not (exchange.first_bar <= moment <= exchange.last_bar):
                 continue
             seen[moment] = _stock_bar(row, business_date, moment, previous_close)
 
-        if earliest <= SESSION_FIRST_BAR:
+        if earliest <= exchange.first_bar:
             break
         cursor = (datetime.combine(business_date, earliest) - timedelta(minutes=1)).time()
 
     bars = tuple(seen[moment] for moment in sorted(seen))
     return StockBarFetch(
         stock_code=stock.value,
+        exchange=exchange,
         business_date=business_date,
         bars=bars,
         call_count=calls,
@@ -959,6 +1004,7 @@ def store_stock_bars(connection: Connection, fetch: StockBarFetch) -> int:
                 json.dumps(
                     {
                         "stock_code": fetch.stock_code,
+                        "exchange": fetch.exchange.value,
                         "business_date": fetch.business_date.isoformat(),
                         "interval": "1m",
                         "call_count": fetch.call_count,
@@ -970,11 +1016,12 @@ def store_stock_bars(connection: Connection, fetch: StockBarFetch) -> int:
         source_record_id = cursor.fetchone()[0]
         execute_upserts(
             cursor,
-            QUOTE_BAR_UPSERT,
+            STOCK_BAR_UPSERT,
             [
                 (
                     SOURCE,
                     fetch.stock_code,
+                    fetch.exchange.value,
                     bar.bar_at,
                     bar.open,
                     bar.high,
@@ -982,7 +1029,6 @@ def store_stock_bars(connection: Connection, fetch: StockBarFetch) -> int:
                     bar.close,
                     bar.volume,
                     bar.previous_close,
-                    None,  # 종목은 월물이 없다
                     source_record_id,
                 )
                 for bar in fetch.bars
@@ -1028,7 +1074,11 @@ def parse_market_movement(response: KisResponse, observed_at: datetime) -> Marke
 
 # 쿼리는 `sql/` 볼륨에 둔다. 배포 Airflow가 `/opt/airflow/sql`로 마운트하는 폴더다.
 SOURCE_RECORD_INSERT = read_sql("postgres", "source_record", "insert.sql")
-QUOTE_BAR_UPSERT = read_sql("postgres", "quote_bar", "upsert.sql")
+# 봉은 kind별 테이블로 갈라 저장한다. 지수는 index_bar, 선물은 index_future_bar(월물 포함),
+# 종목은 stock_bar(거래소 축 포함)다. 기존 quote_bar는 이들을 합쳐 보여 주는 읽기 전용 뷰다.
+INDEX_BAR_UPSERT = read_sql("postgres", "index_bar", "upsert.sql")
+INDEX_FUTURE_BAR_UPSERT = read_sql("postgres", "index_future_bar", "upsert.sql")
+STOCK_BAR_UPSERT = read_sql("postgres", "stock_bar", "upsert.sql")
 MARKET_MOVEMENT_UPSERT = read_sql("postgres", "market_movement_snapshot", "upsert.sql")
 
 
@@ -1116,9 +1166,10 @@ def store_bars(
         )
         source_record_id = cursor.fetchone()[0]
         # 봉마다 왕복하지 않고 묶어 보낸다. 폴링 1회가 계약·지수 합쳐 수백 행이다.
+        # 선물(월물 있음)과 지수는 저장 테이블이 다르다.
         execute_upserts(
             cursor,
-            QUOTE_BAR_UPSERT,
+            INDEX_FUTURE_BAR_UPSERT,
             [
                 (
                     SOURCE,
@@ -1134,6 +1185,28 @@ def store_bars(
                     source_record_id,
                 )
                 for response, bars in parsed
+                if response.contract_code is not None
+                for bar in bars
+            ],
+        )
+        execute_upserts(
+            cursor,
+            INDEX_BAR_UPSERT,
+            [
+                (
+                    SOURCE,
+                    response.symbol,
+                    bar.bar_at,
+                    bar.open,
+                    bar.high,
+                    bar.low,
+                    bar.close,
+                    bar.volume,
+                    bar.previous_close,
+                    source_record_id,
+                )
+                for response, bars in parsed
+                if response.contract_code is None
                 for bar in bars
             ],
         )

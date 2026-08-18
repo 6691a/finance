@@ -8,12 +8,13 @@ from sqlalchemy import Table
 
 from apps.models.finance import ExchangeRate
 from apps.models.market import (
+    IndexBar,
+    IndexDaily,
     IndicatorObservation,
     MarketInvestorFlowSnapshot,
     MarketMovementSnapshot,
-    QuoteBar,
-    QuoteDaily,
     StockInvestorEstimateSnapshot,
+    StockInvestorTradeDaily,
 )
 from apps.models.reference import IndicatorSeries, QuoteSymbol
 from modules.briefing import market
@@ -45,6 +46,27 @@ RATE_ROWS = [
 FLOW_ROWS = [("KOSPI", MIDDAY, Decimal(-152300000000), Decimal(88400000000), Decimal(61200000000))]
 
 STOCK_FLOW_ROWS = [("005930", "삼성전자", date(2026, 8, 18), 1_971_000, -648_000, 1_323_000, MIDDAY)]
+
+# 마감 확정: 종가·전일종가와 12분류 중 브리핑이 읽는 몫. 거래일이 실행일과 같아야 그려진다.
+STOCK_TRADE_ROWS = [
+    (
+        "005930",
+        "삼성전자",
+        date(2026, 8, 18),
+        Decimal(268500),
+        Decimal(281500),
+        -1_500_000,
+        820_000,
+        640_000,
+        500_000,
+        120_000,
+        10_000,
+        5_000,
+        30_000,
+        5_000,
+        155_000,
+    )
+]
 
 MOVEMENT_ROWS = [("KOSPI", MIDDAY, 512, 61, 341)]
 
@@ -101,6 +123,7 @@ def summary(now: datetime = MIDDAY):
         RATE_ROWS,
         FLOW_ROWS,
         STOCK_FLOW_ROWS,
+        STOCK_TRADE_ROWS,
         MOVEMENT_ROWS,
         QUOTE_TREND_ROWS,
         RATE_TREND_ROWS,
@@ -140,7 +163,7 @@ def test_every_row_carries_its_own_as_of_time():
             ("kis", "KOSPI", "코스피", "index", "KR", Decimal("2687.45"), Decimal("2665.60"), stale),
             ("kis", "KOSDAQ", "코스닥", "index", "KR", Decimal("745.10"), Decimal("747.42"), MIDDAY),
         ],
-        [], [], [], [], [], [], [], [], [],
+        [], [], [], [], [], [], [], [], [], [],
     )
     blocks_out = market.render_blocks(market.collect_summary(connection, MIDDAY), MarketScope.KOREA, None)
     table = next(block for block in blocks_out if block["type"] == "table")
@@ -166,6 +189,7 @@ def test_yields_are_not_drawn_as_percent_moves():
     """
     connection = FakeConnection(
         [("yahoo", "US10Y", "미국 10년물 금리", "rate", "US", Decimal("4.70"), Decimal("4.65"), MIDDAY)],
+        [],
         [],
         [],
         [],
@@ -236,6 +260,7 @@ def test_a_thin_sample_is_marked_so_the_prompt_can_discount_it():
         RATE_ROWS,
         FLOW_ROWS,
         STOCK_FLOW_ROWS,
+        STOCK_TRADE_ROWS,
         MOVEMENT_ROWS,
         [("kis", "KOSPI", date(2026, 8, 17), Decimal(2600)), ("kis", "KOSPI", date(2026, 8, 18), Decimal(2687))],
         [],
@@ -349,7 +374,9 @@ def test_stock_estimates_are_counted_in_shares_not_won():
 @pytest.mark.parametrize(
     ("statement", "table", "columns"),
     [
-        (market.LATEST_QUOTES, QuoteBar.__table__, ("provider", "symbol", "close", "previous_close", "bar_at")),
+        # LATEST_QUOTES와 QUOTE_TREND는 quote_bar/quote_daily **뷰**를 읽는다. 뷰의 컬럼은
+        # kind 테이블과 같으므로 대표로 IndexBar/IndexDaily 모델과 대조한다.
+        (market.LATEST_QUOTES, IndexBar.__table__, ("provider", "symbol", "close", "previous_close", "bar_at")),
         (market.LATEST_QUOTES, QuoteSymbol.__table__, ("label", "kind", "country")),
         (market.LATEST_EXCHANGE_RATES, ExchangeRate.__table__, ("currency", "round", "exchange_standard_rate")),
         (
@@ -369,8 +396,13 @@ def test_stock_estimates_are_counted_in_shares_not_won():
             StockInvestorEstimateSnapshot.__table__,
             ("stock_code", "business_date", "source_time_code", "foreign_net_buy_qty"),
         ),
-        (market.QUOTE_TREND, QuoteBar.__table__, ("provider", "symbol", "bar_at", "close")),
-        (market.QUOTE_TREND, QuoteDaily.__table__, ("business_date",)),
+        (
+            market.LATEST_STOCK_TRADES,
+            StockInvestorTradeDaily.__table__,
+            ("stock_code", "business_date", "close_price", "institution_net_buy_qty", "pension_fund_net_buy_qty"),
+        ),
+        (market.QUOTE_TREND, IndexBar.__table__, ("provider", "symbol", "bar_at", "close")),
+        (market.QUOTE_TREND, IndexDaily.__table__, ("business_date",)),
         (market.RATE_TREND, IndicatorObservation.__table__, ("observation_date", "value")),
         (market.EXCHANGE_RATE_TREND, ExchangeRate.__table__, ("currency", "exchange_standard_rate")),
         (market.FLOW_TREND, MarketInvestorFlowSnapshot.__table__, ("market_code", "foreign_net_buy_amount")),

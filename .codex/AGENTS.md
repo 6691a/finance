@@ -215,6 +215,25 @@ API, 크롤링, 웹소켓 수집 결과의 출처와 상태를 가볍게 보존�
 
 ## 종목 마스터 테이블 목적
 
+### 봉 테이블 (`<kind>_bar` / `<kind>_daily` / `stock_bar`)
+
+시세 봉은 kind별 물리 테이블에 쌓는다(2026-08-18 분리): `index_bar`, `index_future_bar`,
+`fx_bar`, `rate_bar`, `bond_future_bar`, `commodity_bar`, `crypto_bar`와 각각의 `_daily`,
+그리고 개별 종목의 `stock_bar`/`stock_daily`다. 심볼의 성격(라벨·국가·kind)은
+`quote_symbol` 마스터가 갖는다.
+
+- **`quote_bar`/`quote_daily`는 이들을 UNION ALL 한 읽기 전용 뷰다.** 조회(브리핑 SQL,
+  Grafana)는 뷰를 써도 되지만 **쓰기는 반드시 물리 테이블로 간다.** 수집기가 kind별
+  upsert 파일(`airflow/sql/postgres/<table>/upsert.sql`)을 쓴다.
+- 매크로 테이블의 자연키는 `(provider, symbol, bar_at|business_date)`다. `contract_code`는
+  `index_future_bar`에만 있다.
+- `stock_bar`는 **거래소(`exchange`: KRX/NXT/NYSE)가 자연키의 한 축이다.** 같은 종목이
+  KRX와 NXT에서 따로 체결되므로 거래소 없이 시각만 키로 쓰면 서로를 덮어쓴다. 통합(`UN`)
+  시세는 받지 않는다. 뷰에는 KRX·NYSE만 태워 심볼이 겹치지 않게 한다. NXT는 물리 테이블을
+  직접 조회한다.
+- 국내 종목 일봉은 `stock_daily`가 아니라 `stock_investor_trade_daily`가 갖는다(수급과 함께).
+  `stock_daily`는 해외 상장 종목(TSMC ADR)용이다.
+
 ### `reference.instrument`
 
 시세·뉴스·시그널이 참조하는 추적 종목 마스터다. 관측값이 아니라 기준 정보이므로 `source_record_id`로 수집 계보를 연결하지 않는다.

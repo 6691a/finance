@@ -73,6 +73,7 @@ from modules.collectors.kis import (
     KisHTTPError,
     KisPayloadError,
     KisResultError,
+    StockExchange,
     access_token,
     fetch_stock_bars,
     store_stock_bars,
@@ -149,10 +150,13 @@ def previous_close(connection: Any, stock_code: str, business_date: date) -> Dec
 
 @dag(
     dag_id="kis_stock_minute_bars_daily",
-    dag_display_name="🕯️ 종목 1분봉 (KIS)",
-    description="장 마감 뒤 삼성전자·SK하이닉스의 정규장 1분봉을 받아 quote_bar에 저장한다.",
-    # KST 평일 18:40 = UTC 평일 09:40. 확정 일별 수급(18:10)이 전일종가를 채운 뒤에 돈다.
-    schedule="40 18 * * 1-5",
+    dag_display_name=""
+                     ""
+                     "",
+    description="장 마감 뒤 삼성전자·SK하이닉스의 1분봉을 KRX·NXT 각각 받아 stock_bar에 저장한다.",
+    # KST 평일 20:40 = UTC 평일 11:40. 확정 일별 수급(18:10)이 전일종가를 채운 뒤이고,
+    # NXT 애프터마켓(~20:00)까지 끝난 뒤라 하루치가 완결이다.
+    schedule="40 20 * * 1-5",
     start_date=pendulum.datetime(2026, 8, 15, tz=KST_TIMEZONE),  # KST 2026-08-15 00:00 = UTC 2026-08-14 15:00
     catchup=False,
     max_active_runs=1,
@@ -193,8 +197,6 @@ def kis_stock_minute_bars_daily():
         for offset in range(days):
             target = business_date - timedelta(days=offset)
             for stock in DomesticStock:
-                name = f"{stock.value}:{target.isoformat()}"
-
                 connection = _connection()
                 try:
                     base = previous_close(connection, stock.value, target)
@@ -202,42 +204,47 @@ def kis_stock_minute_bars_daily():
                     connection.close()
                 if base is None:
                     # 확정 일별 수급이 아직 그 구간을 채우지 않았다. 분모를 지어내지 않는다.
-                    logger.warning("%s has no previous close yet; skipping", name)
+                    logger.warning("%s:%s has no previous close yet; skipping", stock.value, target.isoformat())
                     continue
 
-                try:
-                    fetch = fetch_stock_bars(token, app_key, app_secret, stock, target, base)
-                except KisHTTPError as error:
-                    if error.status in UNRECOVERABLE_STATUSES:
-                        raise AirflowFailException(f"{name}: {error}") from error
-                    logger.warning("%s failed with HTTP %s", name, error.status)
-                    failures.append(name)
-                    continue
-                except (KisResultError, KisPayloadError) as error:
-                    logger.warning("%s failed: %s", name, error)
-                    failures.append(name)
-                    continue
-                except ConnectionError as error:
-                    logger.warning("%s failed to connect: %s", name, error)
-                    failures.append(name)
-                    continue
+                # 같은 종목을 KRX 한 번, NXT 한 번 받는다. 통합(UN)은 두 거래소 체결이
+                # 섞여 쓰지 않는다. NXT 전일 기준가도 KRX 확정 종가다.
+                for exchange in StockExchange:
+                    name = f"{stock.value}:{exchange.value}:{target.isoformat()}"
 
-                if not fetch.bars:
-                    logger.info("%s returned no bars; probably a closed day", name)
-                    continue
+                    try:
+                        fetch = fetch_stock_bars(token, app_key, app_secret, stock, target, base, exchange)
+                    except KisHTTPError as error:
+                        if error.status in UNRECOVERABLE_STATUSES:
+                            raise AirflowFailException(f"{name}: {error}") from error
+                        logger.warning("%s failed with HTTP %s", name, error.status)
+                        failures.append(name)
+                        continue
+                    except (KisResultError, KisPayloadError) as error:
+                        logger.warning("%s failed: %s", name, error)
+                        failures.append(name)
+                        continue
+                    except ConnectionError as error:
+                        logger.warning("%s failed to connect: %s", name, error)
+                        failures.append(name)
+                        continue
 
-                connection = _connection()
-                try:
-                    rows = store_stock_bars(connection, fetch)
-                    connection.commit()
-                except Exception:
-                    connection.rollback()
-                    raise
-                finally:
-                    connection.close()
+                    if not fetch.bars:
+                        logger.info("%s returned no bars; probably a closed day", name)
+                        continue
 
-                stored += rows
-                logger.info("Stored %s bars for %s in %s calls", rows, name, fetch.call_count)
+                    connection = _connection()
+                    try:
+                        rows = store_stock_bars(connection, fetch)
+                        connection.commit()
+                    except Exception:
+                        connection.rollback()
+                        raise
+                    finally:
+                        connection.close()
+
+                    stored += rows
+                    logger.info("Stored %s bars for %s in %s calls", rows, name, fetch.call_count)
 
         if failures:
             raise AirflowFailException(f"{len(failures)} KIS calls failed: {', '.join(failures)}")

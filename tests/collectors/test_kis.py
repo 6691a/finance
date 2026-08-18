@@ -9,19 +9,22 @@ import pytest
 from pydantic import SecretStr
 from sqlalchemy import Table
 
-from apps.models.market import MarketMovementSnapshot
-from apps.models.market import QuoteBar as QuoteBarModel
+from apps.models.market import IndexBar, IndexFutureBar, MarketMovementSnapshot
+from apps.models.market import StockBar as StockBarModel
+from apps.models.market import StockExchange as StockExchangeModel
 from apps.models.raw import SourceRecord
 from modules.collectors import kis
 from modules.collectors.kis import (
     CONTRACT_MONTHS,
+    INDEX_BAR_UPSERT,
+    INDEX_FUTURE_BAR_UPSERT,
     MARKET_MOVEMENT_UPSERT,
     MAX_BARS_PER_REQUEST,
     MOVEMENT_INDEXES,
-    QUOTE_BAR_UPSERT,
     SESSION_FIRST_BAR,
     SESSION_LAST_BAR,
     SOURCE_RECORD_INSERT,
+    STOCK_BAR_UPSERT,
     TOKEN_REFRESH_MARGIN,
     DomesticFuture,
     DomesticIndex,
@@ -29,6 +32,7 @@ from modules.collectors.kis import (
     KisPayloadError,
     KisResponse,
     KisResultError,
+    StockExchange,
     SymbolOutcome,
     access_token,
     expiry_date,
@@ -171,18 +175,42 @@ def required_columns(table: Table) -> set[str]:
 
 
 def upsert_calls(cursor: FakeCursor) -> list[tuple]:
-    return [parameters for statement, parameters in cursor.calls if "INSERT INTO quote_bar" in statement]
+    return [parameters for statement, parameters in cursor.calls if "_bar (" in statement]
 
 
-def test_quote_bar_upsert_matches_the_model_and_its_natural_key():
-    table = QuoteBarModel.__table__
-    columns = inserted_columns(QUOTE_BAR_UPSERT)
+@pytest.mark.parametrize(
+    ("statement", "model"),
+    [
+        (INDEX_BAR_UPSERT, IndexBar),
+        (INDEX_FUTURE_BAR_UPSERT, IndexFutureBar),
+        (STOCK_BAR_UPSERT, StockBarModel),
+    ],
+)
+def test_bar_upserts_match_their_models(statement, model):
+    table = model.__table__
+    columns = inserted_columns(statement)
 
     assert set(columns) <= {column.name for column in table.columns}
     assert required_columns(table) <= set(columns)
-    assert placeholder_count(QUOTE_BAR_UPSERT) == len(columns)
+    assert placeholder_count(statement) == len(columns)
+
+
+def test_the_collector_exchanges_match_the_model_enum():
+    """`stock_bar.exchange`의 CHECK와 수집기 enum이 어긋나면 저장이 런타임에 터진다.
+
+    모델 쪽에는 해외 상장 종목용 NYSE가 더 있다. 수집기(KIS)는 국내 두 거래소만 안다.
+    """
+    assert {member.value for member in StockExchange} <= {member.value for member in StockExchangeModel}
+    assert StockExchange.KRX.division_code == "J"
+    assert StockExchange.NXT.division_code == "NX"
+
+
+def test_the_future_upsert_carries_the_contract_code():
     # 월물 코드를 저장하지 않으면 롤오버 갭을 시장 급변과 구분할 수 없다.
-    assert "contract_code" in columns
+    assert "contract_code" in inserted_columns(INDEX_FUTURE_BAR_UPSERT)
+    # 지수·종목 쪽에는 월물 칸이 없다.
+    assert "contract_code" not in inserted_columns(INDEX_BAR_UPSERT)
+    assert "contract_code" not in inserted_columns(STOCK_BAR_UPSERT)
 
 
 def test_source_record_insert_matches_the_model():
@@ -783,11 +811,11 @@ def test_store_stock_bars_writes_the_stock_code_as_the_symbol(monkeypatch):
 
     assert store_stock_bars(connection, fetch) == 2
 
-    rows = [args for statement, args in connection.recorded_cursor.calls if "INSERT INTO quote_bar" in statement]
+    rows = [args for statement, args in connection.recorded_cursor.calls if "INSERT INTO stock_bar" in statement]
     assert [row[1] for row in rows] == ["005930", "005930"]
     assert all(row[0] == "kis" for row in rows)
-    # 종목은 월물이 없다.
-    assert all(row[9] is None for row in rows)
+    # 거래소가 자연키의 한 축이라 행마다 함께 저장된다. 기본은 KRX다.
+    assert all(row[2] == "KRX" for row in rows)
 
 
 def test_store_stock_bars_records_the_call_count(monkeypatch):

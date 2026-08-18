@@ -7,17 +7,35 @@ from typing import Self
 import pytest
 from sqlalchemy import Table
 
-from apps.models.market import QuoteBar as QuoteBarModel
-from apps.models.market import QuoteDaily as QuoteDailyModel
+from apps.models.market import (
+    BondFutureBar,
+    BondFutureDaily,
+    CommodityBar,
+    CommodityDaily,
+    CryptoBar,
+    CryptoDaily,
+    FxBar,
+    FxDaily,
+    IndexBar,
+    IndexDaily,
+    IndexFutureBar,
+    IndexFutureDaily,
+    RateBar,
+    RateDaily,
+    StockBar,
+    StockDaily,
+)
 from apps.models.raw import SourceRecord
 from modules.collectors.yahoo import (
     BAR_RETENTION_DAYS,
     DAILY_RANGE,
     DAILY_SOURCE_KEY,
+    MACRO_BAR_UPSERTS,
+    MACRO_DAILY_UPSERTS,
     MAX_BACKFILL_DAYS,
-    QUOTE_BAR_UPSERT,
-    QUOTE_DAILY_UPSERT,
     SOURCE_RECORD_INSERT,
+    STOCK_BAR_UPSERT,
+    STOCK_DAILY_UPSERT,
     QuoteSymbol,
     SymbolOutcome,
     YahooPayloadError,
@@ -160,26 +178,60 @@ def required_columns(table: Table) -> set[str]:
     }
 
 
+BAR_MODEL_BY_KIND = {
+    "index": IndexBar,
+    "index_future": IndexFutureBar,
+    "fx": FxBar,
+    "rate": RateBar,
+    "bond_future": BondFutureBar,
+    "commodity": CommodityBar,
+    "crypto": CryptoBar,
+}
+
+DAILY_MODEL_BY_KIND = {
+    "index": IndexDaily,
+    "index_future": IndexFutureDaily,
+    "fx": FxDaily,
+    "rate": RateDaily,
+    "bond_future": BondFutureDaily,
+    "commodity": CommodityDaily,
+    "crypto": CryptoDaily,
+}
+
+
 def upsert_calls(cursor: FakeCursor) -> list[tuple]:
-    return [parameters for statement, parameters in cursor.calls if "INSERT INTO quote_bar" in statement]
+    return [parameters for statement, parameters in cursor.calls if "_bar (" in statement]
 
 
-def test_quote_bar_upsert_matches_the_model_and_its_natural_key():
+@pytest.mark.parametrize("kind", sorted(BAR_MODEL_BY_KIND))
+def test_bar_upserts_match_their_models_and_natural_keys(kind):
     # 수집기는 문자열 SQL을 쓰고 모델을 import하지 않는다. 컬럼이 어긋나면 런타임에야 터지므로
-    # 모델 metadata와 여기서 맞춰 둔다.
-    table = QuoteBarModel.__table__
-    columns = inserted_columns(QUOTE_BAR_UPSERT)
+    # 모델 metadata와 여기서 맞춰 둔다. kind마다 테이블이 갈리므로 전부 돈다.
+    table = BAR_MODEL_BY_KIND[kind].__table__
+    statement = MACRO_BAR_UPSERTS[kind]
+    columns = inserted_columns(statement)
 
     assert set(columns) <= {column.name for column in table.columns}
     assert required_columns(table) <= set(columns)
-    assert placeholder_count(QUOTE_BAR_UPSERT) == len(columns)
+    assert placeholder_count(statement) == len(columns)
 
     natural_key = next(
         tuple(column.name for column in constraint.columns)
         for constraint in table.constraints
-        if constraint.name == "uq_quote_bar_natural_key"
+        if constraint.name == f"uq_{table.name}_natural_key"
     )
-    assert f"ON CONFLICT ({', '.join(natural_key)}) DO UPDATE" in QUOTE_BAR_UPSERT
+    assert f"ON CONFLICT ({', '.join(natural_key)}) DO UPDATE" in statement
+
+
+def test_stock_bar_upsert_matches_the_model_and_its_natural_key():
+    table = StockBar.__table__
+    columns = inserted_columns(STOCK_BAR_UPSERT)
+
+    assert set(columns) <= {column.name for column in table.columns}
+    assert required_columns(table) <= set(columns)
+    assert placeholder_count(STOCK_BAR_UPSERT) == len(columns)
+    # 거래소가 자연키에 들어간다. 빠지면 KRX와 NXT가 서로를 덮어쓴다.
+    assert "ON CONFLICT (provider, stock_code, exchange, bar_at) DO UPDATE" in STOCK_BAR_UPSERT
 
 
 def test_source_record_insert_matches_the_model():
@@ -609,20 +661,32 @@ def daily_response_for(symbol: QuoteSymbol = QuoteSymbol.USDKRW, body: bytes | N
     )
 
 
-def test_quote_daily_upsert_matches_the_model_and_its_natural_key():
-    table = QuoteDailyModel.__table__
-    columns = inserted_columns(QUOTE_DAILY_UPSERT)
+@pytest.mark.parametrize("kind", sorted(DAILY_MODEL_BY_KIND))
+def test_daily_upserts_match_their_models_and_natural_keys(kind):
+    table = DAILY_MODEL_BY_KIND[kind].__table__
+    statement = MACRO_DAILY_UPSERTS[kind]
+    columns = inserted_columns(statement)
 
     assert set(columns) <= {column.name for column in table.columns}
     assert required_columns(table) <= set(columns)
-    assert placeholder_count(QUOTE_DAILY_UPSERT) == len(columns)
+    assert placeholder_count(statement) == len(columns)
 
     natural_key = next(
         tuple(column.name for column in constraint.columns)
         for constraint in table.constraints
-        if constraint.name == "uq_quote_daily_natural_key"
+        if constraint.name == f"uq_{table.name}_natural_key"
     )
-    assert f"ON CONFLICT ({', '.join(natural_key)}) DO UPDATE" in QUOTE_DAILY_UPSERT
+    assert f"ON CONFLICT ({', '.join(natural_key)}) DO UPDATE" in statement
+
+
+def test_stock_daily_upsert_matches_the_model_and_its_natural_key():
+    table = StockDaily.__table__
+    columns = inserted_columns(STOCK_DAILY_UPSERT)
+
+    assert set(columns) <= {column.name for column in table.columns}
+    assert required_columns(table) <= set(columns)
+    assert placeholder_count(STOCK_DAILY_UPSERT) == len(columns)
+    assert "ON CONFLICT (provider, stock_code, exchange, business_date) DO UPDATE" in STOCK_DAILY_UPSERT
 
 
 def test_build_daily_url_requests_daily_bars_and_escapes_the_symbol():
@@ -726,7 +790,7 @@ def test_store_daily_writes_rows_in_the_upsert_column_order():
     rows = [
         parameters
         for statement, parameters in connection.recorded_cursor.calls
-        if "INSERT INTO quote_daily" in statement
+        if "_daily (" in statement
     ]
     assert len(rows) == 2
     provider, symbol, business_date, opened, high, low, close, volume, source_record_id = rows[0]

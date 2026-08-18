@@ -116,58 +116,62 @@ class QuoteSymbol(StrEnum):
 
     yahoo_symbol: str
     label: str
+    kind: str
 
-    def __new__(cls, symbol: str, yahoo_symbol: str, label: str) -> Self:
+    def __new__(cls, symbol: str, yahoo_symbol: str, label: str, kind: str) -> Self:
         member = str.__new__(cls, symbol)
         member._value_ = symbol
         member.yahoo_symbol = yahoo_symbol
         member.label = label
+        # kind가 저장 테이블(`<kind>_bar`/`<kind>_daily`)을 정한다. 값은 quote_symbol
+        # 마스터의 kind와 같아야 하고 tests/migrations 의 카탈로그 테스트가 대조한다.
+        member.kind = kind
         return member
 
-    SP500_FUT = ("SP500_FUT", "ES=F", "S&P500 선물")
-    NASDAQ100_FUT = ("NASDAQ100_FUT", "NQ=F", "나스닥100 선물")
+    SP500_FUT = ("SP500_FUT", "ES=F", "S&P500 선물", "index_future")
+    NASDAQ100_FUT = ("NASDAQ100_FUT", "NQ=F", "나스닥100 선물", "index_future")
     # 다우는 풀사이즈가 상장폐지돼 `E-mini Dow $5`가 정규 계약이다(초소형은 `MYM`).
     # 가치·경기민감 쪽이 무거워 ES·NQ와 갈리는 날이 있다.
-    DOW_FUT = ("DOW_FUT", "YM=F", "다우 선물")
-    VIX = ("VIX", "^VIX", "VIX 변동성 지수")
-    SOX = ("SOX", "^SOX", "필라델피아 반도체 지수")
+    DOW_FUT = ("DOW_FUT", "YM=F", "다우 선물", "index_future")
+    VIX = ("VIX", "^VIX", "VIX 변동성 지수", "index")
+    SOX = ("SOX", "^SOX", "필라델피아 반도체 지수", "index")
     # 한국 정규장과 시간대가 겹치는 유일한 해외 현물이다. 그 구간에 살아 있는 다른 해외
     # 값은 선물뿐이라, 이 둘이 아시아 위험선호를 같은 축에서 볼 수 있게 해 준다.
-    NIKKEI225 = ("NIKKEI225", "^N225", "닛케이225")
-    TAIEX = ("TAIEX", "^TWII", "대만 가권지수")
+    NIKKEI225 = ("NIKKEI225", "^N225", "닛케이225", "index")
+    TAIEX = ("TAIEX", "^TWII", "대만 가권지수", "index")
     # 미 10년물 금리. FRED는 하루 한 값이라 장중 움직임을 못 본다. 값은 퍼센트 그대로다
     # (4.66 = 4.66%). **변화율이 아니라 bp로 읽는 값이다.**
-    US10Y = ("US10Y", "^TNX", "미국 10년물 금리")
+    US10Y = ("US10Y", "^TNX", "미국 10년물 금리", "rate")
     # 거의 24시간 움직여 한국 장중 구간을 채운다. 하나은행 고시환율(`exchange_rate`)과는
     # 성격이 다르다. 저쪽은 은행이 하루 몇 차례 고시하는 값이고 이쪽은 장외 시장 환율이다.
-    USDKRW = ("USDKRW", "KRW=X", "원/달러")
-    USDJPY = ("USDJPY", "JPY=X", "엔/달러")
-    DXY = ("DXY", "DX-Y.NYB", "달러인덱스")
+    USDKRW = ("USDKRW", "KRW=X", "원/달러", "fx")
+    USDJPY = ("USDJPY", "JPY=X", "엔/달러", "fx")
+    DXY = ("DXY", "DX-Y.NYB", "달러인덱스", "fx")
     # 역외 위안. 시장 스트레스를 본토(CNY)보다 빨리 반영한다.
     #
     # **이 심볼만 일봉 과거가 없다.** `interval=1d`를 `range=max`로 요청해도 오늘 하루만
     # 온다(실측 2026-08-15). 분봉은 정상이라 장중 감시에는 지장이 없지만, 상관 분석의
     # 표본은 운영 시작일부터만 쌓인다. 본토 `CNY=X`는 10년치가 오므로 과거가 꼭 필요하면
     # 그쪽을 별도 심볼로 추가한다. 역외와 본토는 값의 뜻이 달라 대체하지 않는다.
-    USDCNH = ("USDCNH", "CNH=X", "위안/달러(역외)")
-    JPYKRW = ("JPYKRW", "JPYKRW=X", "원/엔")
+    USDCNH = ("USDCNH", "CNH=X", "위안/달러(역외)", "fx")
+    JPYKRW = ("JPYKRW", "JPYKRW=X", "원/엔", "fx")
     # 중화권·소형주 지수. 한국 장중과 겹치는 아시아 심리 지표를 넓힌다.
-    HSI = ("HSI", "^HSI", "항셍")
-    SSE_COMP = ("SSE_COMP", "000001.SS", "상하이종합")
-    RUSSELL2000 = ("RUSSELL2000", "^RUT", "러셀2000")
+    HSI = ("HSI", "^HSI", "항셍", "index")
+    SSE_COMP = ("SSE_COMP", "000001.SS", "상하이종합", "index")
+    RUSSELL2000 = ("RUSSELL2000", "^RUT", "러셀2000", "index")
     # 현물 `^RUT`는 한국 정규장에 0봉이다(실측). `SOX`↔`NASDAQ100_FUT`,
     # `US10Y`↔`US10Y_FUT`와 같은 짝을 러셀에만 안 만들어 뒀던 것을 채운다.
-    RUSSELL2000_FUT = ("RUSSELL2000_FUT", "RTY=F", "러셀2000 선물")
+    RUSSELL2000_FUT = ("RUSSELL2000_FUT", "RTY=F", "러셀2000 선물", "index_future")
     # 미 10년 국채선물. `US10Y`(수익률)와 달리 **가격**이고 거의 24시간 거래된다.
     # 아시아 세션에 살아 있는 유일한 미 금리 신호라 둘 다 받는다.
-    US10Y_FUT = ("US10Y_FUT", "ZN=F", "미 10년 국채선물")
+    US10Y_FUT = ("US10Y_FUT", "ZN=F", "미 10년 국채선물", "bond_future")
     # 원자재 최근월물. 금은 위험회피·실질금리, 은·구리는 경기·산업수요, 유가는 인플레.
-    GOLD = ("GOLD", "GC=F", "금")
-    SILVER = ("SILVER", "SI=F", "은")
-    COPPER = ("COPPER", "HG=F", "구리")
-    WTI = ("WTI", "CL=F", "WTI 원유")
+    GOLD = ("GOLD", "GC=F", "금", "commodity")
+    SILVER = ("SILVER", "SI=F", "은", "commodity")
+    COPPER = ("COPPER", "HG=F", "구리", "commodity")
+    WTI = ("WTI", "CL=F", "WTI 원유", "commodity")
     # 반도체 공급망 참조가. 시그널 대상이 아니라 맥락용이다.
-    TSMC_ADR = ("TSMC_ADR", "TSM", "TSMC ADR")
+    TSMC_ADR = ("TSMC_ADR", "TSM", "TSMC ADR", "equity")
     # **주말을 채우는 유일한 값이다.** 선물도 토 06:00 KST면 멈춰서 월요일 07:00까지
     # 48시간 동안 봉이 하나도 없다(실측). 암호화폐는 그 구간에 1,628봉이 온다.
     # 주말 뉴스에 위험선호가 꺾였는지를 월요일 개장 전에 볼 수 있는 유일한 창구다.
@@ -175,8 +179,8 @@ class QuoteSymbol(StrEnum):
     # `range=1d`는 67봉만 주는데 데이터가 없어서가 아니라 이 심볼의 "하루" 구간이
     # 다르기 때문이다. `range=5d`는 5,828봉이 연속이다. 폴링 구간(15분)에는 지장 없고
     # 백필할 때만 이 차이를 확인한다.
-    BTC = ("BTC", "BTC-USD", "비트코인")
-    ETH = ("ETH", "ETH-USD", "이더리움")
+    BTC = ("BTC", "BTC-USD", "비트코인", "crypto")
+    ETH = ("ETH", "ETH-USD", "이더리움", "crypto")
 
 
 # 미국 현물장 달력을 따르는 심볼. 미국 확정 휴장일에는 이것만 요청에서 뺀다.
@@ -588,7 +592,17 @@ def parse_bars(body: bytes, since: datetime | None = None, until: datetime | Non
 
 # 쿼리는 `sql/` 볼륨에 둔다. 배포 Airflow가 `/opt/airflow/sql`로 마운트하는 폴더다.
 SOURCE_RECORD_INSERT = read_sql("postgres", "source_record", "insert.sql")
-QUOTE_BAR_UPSERT = read_sql("postgres", "quote_bar", "upsert.sql")
+
+# kind마다 저장 테이블이 다르다. 기존 quote_bar는 이들을 합쳐 보여 주는 읽기 전용 뷰다.
+# 종목(equity)은 거래소 축이 있어 모양이 다르고, 지수선물은 월물 칸이 있다.
+MACRO_BAR_KINDS = ("index", "index_future", "fx", "rate", "bond_future", "commodity", "crypto")
+MACRO_BAR_UPSERTS: dict[str, str] = {
+    kind: read_sql("postgres", f"{kind}_bar", "upsert.sql") for kind in MACRO_BAR_KINDS
+}
+STOCK_BAR_UPSERT = read_sql("postgres", "stock_bar", "upsert.sql")
+
+# Yahoo로 받는 종목은 전부 뉴욕 상장 ADR이다. 국내 종목(KRX/NXT)은 KIS가 받는다.
+STOCK_EXCHANGE = "NYSE"
 
 
 def store_bars(
@@ -676,29 +690,48 @@ def store_bars(
         )
         source_record_id = cursor.fetchone()[0]
         # 봉마다 왕복하지 않고 묶어 보낸다. 백필은 한 번에 수만 행이라 차이가 크다.
-        execute_upserts(
-            cursor,
-            QUOTE_BAR_UPSERT,
-            [
-                (
-                    SOURCE,
-                    response.symbol.value,
-                    bar.bar_at,
-                    bar.open,
-                    bar.high,
-                    bar.low,
-                    bar.close,
-                    bar.volume,
-                    bar.previous_close,
-                    # Yahoo 는 연속 심볼(`ES=F`)을 주므로 월물 코드가 없다. KIS 선물만 채운다.
-                    None,
-                    source_record_id,
-                )
-                for response, bars in parsed
-                for bar in bars
-            ],
-        )
+        # kind마다 저장 테이블이 달라 같은 폴링의 봉을 kind별로 갈라 보낸다.
+        for statement, rows in _bar_upserts(parsed, source_record_id):
+            execute_upserts(cursor, statement, rows)
     return bar_count, tuple(outcomes)
+
+
+def _bar_upserts(
+    parsed: Sequence[tuple[YahooResponse, tuple[QuoteBar, ...]]],
+    source_record_id: int,
+) -> list[tuple[str, list[tuple]]]:
+    """같은 폴링의 봉을 kind별 (upsert 문, 행 목록)으로 가른다.
+
+    지수선물 테이블에는 월물 칸이 있지만 Yahoo는 연속 심볼(`ES=F`)이라 항상 NULL이다.
+    KIS 선물만 월물을 채운다. 종목(equity)은 거래소 축이 있어 stock_bar로 간다.
+    """
+    grouped: dict[str, list[tuple]] = {}
+    for response, bars in parsed:
+        symbol = response.symbol
+        for bar in bars:
+            if symbol.kind == "equity":
+                row = (
+                    SOURCE, symbol.value, STOCK_EXCHANGE, bar.bar_at,
+                    bar.open, bar.high, bar.low, bar.close,
+                    bar.volume, bar.previous_close, source_record_id,
+                )
+            elif symbol.kind == "index_future":
+                row = (
+                    SOURCE, symbol.value, bar.bar_at,
+                    bar.open, bar.high, bar.low, bar.close,
+                    bar.volume, bar.previous_close, None, source_record_id,
+                )
+            else:
+                row = (
+                    SOURCE, symbol.value, bar.bar_at,
+                    bar.open, bar.high, bar.low, bar.close,
+                    bar.volume, bar.previous_close, source_record_id,
+                )
+            grouped.setdefault(symbol.kind, []).append(row)
+    return [
+        (STOCK_BAR_UPSERT if kind == "equity" else MACRO_BAR_UPSERTS[kind], rows)
+        for kind, rows in grouped.items()
+    ]
 
 
 # ---------------------------------------------------------------------------
@@ -848,7 +881,11 @@ def parse_daily_bars(body: bytes) -> ParsedDailyBars:
     return ParsedDailyBars(bars=tuple(bars), timezone_name=timezone_name)
 
 
-QUOTE_DAILY_UPSERT = read_sql("postgres", "quote_daily", "upsert.sql")
+# 분봉과 같은 kind 분리다. 기존 quote_daily는 합쳐 보여 주는 읽기 전용 뷰다.
+MACRO_DAILY_UPSERTS: dict[str, str] = {
+    kind: read_sql("postgres", f"{kind}_daily", "upsert.sql") for kind in MACRO_BAR_KINDS
+}
+STOCK_DAILY_UPSERT = read_sql("postgres", "stock_daily", "upsert.sql")
 
 
 def store_daily_bars(
@@ -920,23 +957,32 @@ def store_daily_bars(
             ),
         )
         source_record_id = cursor.fetchone()[0]
-        execute_upserts(
-            cursor,
-            QUOTE_DAILY_UPSERT,
-            [
-                (
-                    SOURCE,
-                    response.symbol.value,
-                    bar.business_date,
-                    bar.open,
-                    bar.high,
-                    bar.low,
-                    bar.close,
-                    bar.volume,
-                    source_record_id,
-                )
-                for response, bars in parsed
-                for bar in bars
-            ],
-        )
+        for statement, rows in _daily_upserts(parsed, source_record_id):
+            execute_upserts(cursor, statement, rows)
     return bar_count, tuple(outcomes)
+
+
+def _daily_upserts(
+    parsed: Sequence[tuple[YahooResponse, tuple[DailyBar, ...]]],
+    source_record_id: int,
+) -> list[tuple[str, list[tuple]]]:
+    """일봉을 kind별 (upsert 문, 행 목록)으로 가른다. 종목은 거래소 축이 있어 stock_daily로 간다."""
+    grouped: dict[str, list[tuple]] = {}
+    for response, bars in parsed:
+        symbol = response.symbol
+        for bar in bars:
+            if symbol.kind == "equity":
+                row = (
+                    SOURCE, symbol.value, STOCK_EXCHANGE, bar.business_date,
+                    bar.open, bar.high, bar.low, bar.close, bar.volume, source_record_id,
+                )
+            else:
+                row = (
+                    SOURCE, symbol.value, bar.business_date,
+                    bar.open, bar.high, bar.low, bar.close, bar.volume, source_record_id,
+                )
+            grouped.setdefault(symbol.kind, []).append(row)
+    return [
+        (STOCK_DAILY_UPSERT if kind == "equity" else MACRO_DAILY_UPSERTS[kind], rows)
+        for kind, rows in grouped.items()
+    ]

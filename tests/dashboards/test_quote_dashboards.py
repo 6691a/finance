@@ -22,6 +22,10 @@ PATHS = sorted(DASHBOARD_DIR.glob("quote-*.json"))
 # 통합 대시보드는 종류를 가리지 않는다. 나머지는 `kind` 하나로 좁힌다.
 UNIFIED = "quote-intraday.json"
 
+# 종목 화면만 다른 테이블을 읽는다. 봉이 `stock_bar`(거래소 축 포함)로 갈라졌기 때문이다.
+# 그래서 SQL·변수 동일성 검사에서 빠지고, 자기 검사(아래 stock 전용 테스트)를 따로 받는다.
+STOCK = "quote-equity.json"
+
 # 패널 SQL 이 대시보드마다 달라도 되는 자리는 여기 적힌 것뿐이다. 이걸 걷어낸 뒤에도
 # 다르면 복사본이 어긋난 것이다.
 #
@@ -66,13 +70,25 @@ def test_there_are_dashboards_to_check():
     assert len(PATHS) >= 2
 
 
-@pytest.mark.parametrize("path", PATHS, ids=lambda p: p.name)
+@pytest.mark.parametrize("path", [p for p in PATHS if p.name != STOCK], ids=lambda p: p.name)
 def test_every_dashboard_carries_the_same_variables(path):
     # 변수 하나가 빠지면 그 화면만 다른 조건으로 조회한다.
     assert list(variables(load(path))) == ["provider", "symbol", "session", "window_min", "threshold"]
 
 
-@pytest.mark.parametrize("path", [p for p in PATHS if p.name != UNIFIED], ids=lambda p: p.name)
+def test_the_stock_dashboard_adds_the_exchange_axis():
+    """종목 화면은 stock_bar를 읽고 거래소 변수가 하나 더 있다."""
+    dashboard = load(DASHBOARD_DIR / STOCK)
+
+    assert list(variables(dashboard)) == ["exchange", "provider", "symbol", "session", "window_min", "threshold"]
+    for sql in panel_sql(dashboard).values():
+        assert "stock_bar" in sql
+        assert "quote_bar" not in sql
+        # 거래소를 안 걸면 KRX와 NXT 봉이 한 선에 섞인다.
+        assert "exchange IN (${exchange:sqlstring})" in sql
+
+
+@pytest.mark.parametrize("path", [p for p in PATHS if p.name not in (UNIFIED, STOCK)], ids=lambda p: p.name)
 def test_panel_sql_matches_the_unified_dashboard(path):
     """`kind` 조건을 걷어내면 모든 대시보드의 패널 SQL 이 글자 그대로 같아야 한다.
 

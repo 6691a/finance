@@ -24,7 +24,7 @@ ALL_BRIEFINGS = [
 
 def test_korea_briefing_runs_during_the_domestic_session():
     # 오전장 요약과 마감 후. 주말은 cron이 뺀다.
-    assert slack_kr_market_briefing.slack_kr_market_briefing.schedule == "30 12,16 * * 1-5"
+    assert slack_kr_market_briefing.slack_kr_market_briefing.schedule == "30 12,16,19 * * 1-5"
 
 
 def test_us_briefing_runs_the_morning_after():

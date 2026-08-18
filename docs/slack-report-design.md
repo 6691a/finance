@@ -284,7 +284,7 @@ FRED·yahoo 일봉)이 끝난 뒤가 08:00이다. 미국 휴장일은 `us_equity
 
 | SQL 파일 | 하는 일 |
 | --- | --- |
-| `quote_bar/select_latest_briefing_bars.sql` | 심볼마다 마지막 봉 하나(`DISTINCT ON`), `quote_symbol` 조인으로 이름·종류·나라. 나라로 거르지 않고 전부 받아 파이썬이 나눈다 |
+| `quote_bar/select_latest_briefing_bars.sql` | 심볼마다 마지막 봉 하나(`DISTINCT ON`), `quote_symbol` 조인으로 이름·종류·나라. 나라로 거르지 않고 전부 받아 파이썬이 나눈다. 2026-08-18부터 `quote_bar`는 kind별 테이블(`index_bar`, `fx_bar`, …)을 합쳐 보여 주는 **뷰**라 이 쿼리는 그대로 돈다 |
 | `exchange_rate/select_latest_with_previous.sql` | 통화마다 마지막 고시와 직전 **고시일**의 마지막 회차. 하루에 여러 회차가 있어 "전일 대비"는 회차가 아니라 날짜로 갈라야 한다 |
 | `indicator_observation/select_latest_pair.sql` | 계열마다 최신·직전 값. `kind`·`maturity_months`로 좁히는 것이 핵심이다. 한 테이블에 물가지수와 소매판매가 함께 있어 안 걸면 단위가 다른 값이 한 표에 섞인다 |
 | `market_investor_flow_snapshot/select_latest.sql` | 시장별 마지막 수급 스냅샷 |

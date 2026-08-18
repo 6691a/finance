@@ -52,9 +52,11 @@ from modules.utility import CONNECTION_ID, KST_TIMEZONE
 
 logger = logging.getLogger(__name__)
 
-# KST 평일 12:30·16:30 = UTC 월~금 03:30, 07:30. 오전장 요약과 마감 후 한 번씩이다.
+# KST 평일 12:30·16:30·19:30 = UTC 월~금 03:30, 07:30, 10:30.
+# 오전장 요약, 마감 직후(지수 중심), 확정 수급까지 실은 마감 확정 리포트 순서다.
+# 종목 마감 확정 섹션은 KST 18:10 수집 뒤에야 값이 있어 19:30 발송에만 나타난다.
 # 주기를 바꾸려면 이 한 줄만 고친다.
-SCHEDULE = "30 12,16 * * 1-5"
+SCHEDULE = "30 12,16,19 * * 1-5"
 
 REPORT_NAME = "한국장 브리핑"
 

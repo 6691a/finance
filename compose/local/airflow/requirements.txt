@@ -1,8 +1,17 @@
 # DAG 런타임에만 필요한 추가 패키지. 이미지 빌드에서 설치한다.
 # Airflow 3.3.0 이미지에 이미 들어 있는 것은 여기 적지 않는다:
 # apache-airflow-providers-postgres, psycopg2-binary, pydantic.
+# 쓰지 않는다는 뜻이 아니다. 모든 DAG가 PostgresHook을 쓰지만 베이스 이미지가 6.8.0을
+# 싣고 오므로 여기 적으면 constraints와 부딪히기만 한다.
 #
 # 버전 범위는 백엔드 pyproject.toml과 맞춘다. 백엔드에 없는 패키지만 새 줄로 추가한다.
+#
+# **단, Airflow 공식 constraints가 핀하는 패키지에는 범위를 적지 않는다.** 백엔드는 uv가
+# 푸는 별도 환경이라 Airflow의 핀을 따르지 않아 두 숫자가 어긋난다. 범위를 적으면
+# `pip install`이 ResolutionImpossible로 죽어 이미지 자체가 빌드되지 않는다. 실측:
+# 백엔드가 요구한 `sentry-sdk>=2.68.0`에 constraints는 `==2.64.0`,
+# `apache-airflow-providers-postgres>=7.0.1`에 constraints는 `==6.8.0`이었다.
+# 이름만 적어 두면 constraints가 고른 버전이 들어간다.
 
 # modules/collectors/hana.py: scrapling.fetchers.Fetcher와 curl_cffi.curl.CurlError.
 # curl_cffi는 scrapling 기본 의존성이 아니라 fetchers extra에 들어 있다.
@@ -20,3 +29,7 @@ langgraph>=1.2.0
 openai>=2.0.0
 # LangSmith 추적. `LANGSMITH_*`가 비어 있으면 아무 것도 보내지 않는다.
 langsmith>=0.11.0
+# Airflow의 sentry 통합이 쓴다. 개발에서는 `sentry_on = false`라 켜지지 않지만 배포
+# 환경에서 켜므로 이미지에는 반드시 들어가야 한다. 베이스 이미지에는 없다.
+# 버전은 위 규칙대로 constraints에 맡긴다.
+sentry-sdk

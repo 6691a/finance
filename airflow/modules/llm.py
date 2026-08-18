@@ -127,6 +127,12 @@ def classify(error: openai.OpenAIError, *, had_schema: bool = False) -> Exceptio
     if isinstance(error, openai.APIConnectionError | openai.APITimeoutError):
         # 네트워크 실패는 재시도할 값어치가 있다. DAG이 판단한다.
         return ConnectionError(f"chat request failed: {error}")
+    if isinstance(error, openai.RateLimitError):
+        # 429는 설정 문제가 아니라 지금 너무 빨리 부른 것이다. 잠시 뒤면 풀리므로 재시도할
+        # 값어치가 있는 쪽에 넣는다. `LlmError`로 올리면 동시 호출 수를 올린 순간부터
+        # 배치 전체가 즉시 실패로 끝난다. `RateLimitError`는 `APIStatusError`의 하위
+        # 타입이라 아래 분기보다 먼저 봐야 한다.
+        return ConnectionError(f"rate limited: HTTP {error.status_code}")
     if isinstance(error, openai.APIStatusError):
         detail = str(error.response.text)[:500] if error.response is not None else str(error)
         if had_schema and any(marker in detail.lower() for marker in UNSUPPORTED_MARKERS):

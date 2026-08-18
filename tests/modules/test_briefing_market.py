@@ -1,5 +1,5 @@
 import json
-from datetime import UTC, date, datetime
+from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 from typing import Self
 
@@ -111,6 +111,51 @@ def test_change_is_computed_from_the_stored_previous_close():
 
     assert quotes["KOSPI"].change_percent == pytest.approx(0.82, abs=0.01)
     assert quotes["NIKKEI225"].change_percent < 0
+
+
+def test_the_quote_window_survives_a_long_holiday():
+    """연휴 뒤 첫 실행에서도 직전 거래일 종가가 창에 들어와야 한다.
+
+    실측(2026-08-18 화): 광복절 대체공휴일로 직전 거래일이 금요일 08-14였고, 4일 창은
+    그 세션 종료(KST 15:30)를 놓쳐 국내 시세가 통째로 비었다. 설날·추석은 더 길다.
+    """
+    assert market.QUOTE_LOOKBACK >= timedelta(days=8)
+    assert market.FLOW_LOOKBACK >= timedelta(days=8)
+
+
+def test_every_section_says_how_old_its_values_are():
+    """수급·등락은 시세보다 며칠 묵어 있을 수 있다.
+
+    실측(2026-08-18): 수급이 08-14, 등락이 08-13 값인데 context가 시세 기준 시각만 알려
+    요약이 나흘 묵은 수급을 현재로 읽었다. 묵은 값을 숨기지 않는 것이 context의 일이다.
+    """
+    context = market.render_blocks(summary(), MarketScope.KOREA, None)[-1]
+    text = context["elements"][0]["text"]
+
+    assert "수급" in text
+    assert "등락" in text
+
+
+def test_yields_are_not_drawn_as_percent_moves():
+    """금리 심볼(US10Y)은 시세 표에 넣지 않는다.
+
+    4.65 → 4.70을 `+1.19%`로 그리면 5bp 움직임이 1% 넘게 뛴 것처럼 보인다. 금리는
+    indicator_observation 쪽 표가 bp로 그린다.
+    """
+    connection = FakeConnection(
+        [("yahoo", "US10Y", "미국 10년물 금리", "rate", "US", Decimal("4.70"), Decimal("4.65"), MIDDAY)],
+        [],
+        [],
+        [],
+        [],
+        [],
+        [],
+        [],
+        [],
+    )
+    result = market.collect_summary(connection, MORNING)
+
+    assert "미국 10년물 금리" not in _block_text(market.render_blocks(result, MarketScope.US, None))
 
 
 def test_korea_report_shows_domestic_quotes_and_us_futures_only():

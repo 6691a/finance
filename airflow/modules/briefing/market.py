@@ -45,8 +45,13 @@ SESSION_OPEN_HOUR_KST = 9
 SESSION_CLOSE_MINUTE_KST = 15 * 60 + 45
 
 # 조회 구간. 봉은 휴일 연휴를 건너 마지막 값을 찾아야 하고, 금리는 월간 계열이 섞여 있어 넉넉히 본다.
-QUOTE_LOOKBACK = timedelta(days=4)
-FLOW_LOOKBACK = timedelta(days=4)
+#
+# **연휴를 건너려면 10일이 필요하다.** 4일로 두었다가 2026-08-18(화) 실측에서 국내 시세가
+# 통째로 비었다. 광복절 대체공휴일로 직전 거래일이 금요일이었고, 그 세션은 KST 15:30에
+# 끝나는데 조회는 그보다 늦은 시각에 돌아 4일 창을 아슬하게 벗어났다. 설날·추석은 더 길다.
+# 값이 오래됐다는 사실은 창을 좁혀 숨기는 것이 아니라 context 블록의 기준 시각이 알린다.
+QUOTE_LOOKBACK = timedelta(days=10)
+FLOW_LOOKBACK = timedelta(days=10)
 EXCHANGE_RATE_LOOKBACK = timedelta(days=14)
 RATE_LOOKBACK = timedelta(days=45)
 
@@ -60,6 +65,13 @@ GOVERNMENT_BOND = "government_bond"
 # 한국장 시간에도 값이 움직이는 해외 시장. 미국 현물은 닫혀 있어 넣지 않는다.
 ASIA_COUNTRIES = frozenset({"JP", "TW", "HK", "CN"})
 INDEX_FUTURE = "index_future"
+
+# 시세 표에 그리는 종류. 등락을 퍼센트로 그려도 뜻이 통하는 것만 넣는다.
+#
+# **`rate`를 넣지 않는다.** 금리를 퍼센트 변화로 그리면 4.65 → 4.70이 `+1.08%`가 되어
+# 5bp 움직임이 1% 넘게 뛴 것처럼 보인다. 금리는 `indicator_observation` 쪽 표가 bp로 그린다.
+# `fx`도 넣지 않는다. 환율은 하나은행 고시 표가 따로 있어 같은 값이 두 표에 다르게 나온다.
+QUOTED_KINDS = frozenset({"index", "index_future", "equity", "commodity", "bond_future", "crypto"})
 
 # 추세를 재는 구간. 거래일 20일을 담으려면 주말·공휴일을 감안해 달력으로 이만큼 봐야 한다.
 # 더 늘리면 "요즘"이 아니라 "지난 분기"를 재게 되고, 오늘의 움직임이 늘 평범해 보인다.
@@ -386,6 +398,9 @@ def comment_input(summary: MarketSummary, scope: MarketScope) -> str:
                 "institution_net_buy_billion_krw": _billion(flow.institution_net_buy_amount),
                 "individual_net_buy_billion_krw": _billion(flow.individual_net_buy_amount),
                 "foreign_streak_days": summary.foreign_streaks.get(flow.market_code),
+                # 장중 스냅샷이라 시세보다 며칠 묵어 있을 수 있다. 모델이 그걸 모르면
+                # 나흘 지난 순매수를 오늘 것으로 읽고 "오늘 수급은…"이라고 쓴다.
+                "as_of_kst": flow.observed_at.astimezone(KST_TIMEZONE).isoformat(),
             }
             for flow in summary.flows
         ],
@@ -396,6 +411,7 @@ def comment_input(summary: MarketSummary, scope: MarketScope) -> str:
                 "market": movement.market_code,
                 "rising": movement.rising_count,
                 "falling": movement.falling_count,
+                "as_of_kst": movement.observed_at.astimezone(KST_TIMEZONE).isoformat(),
             }
             for movement in summary.movements
         ]
@@ -488,11 +504,11 @@ def _sign_streaks(
 
 
 def _korea_quotes(summary: MarketSummary) -> tuple[QuoteChange, ...]:
-    return tuple(quote for quote in summary.quotes if quote.country == "KR")
+    return tuple(quote for quote in summary.quotes if quote.country == "KR" and quote.kind in QUOTED_KINDS)
 
 
 def _us_quotes(summary: MarketSummary) -> tuple[QuoteChange, ...]:
-    return tuple(quote for quote in summary.quotes if quote.country == "US")
+    return tuple(quote for quote in summary.quotes if quote.country == "US" and quote.kind in QUOTED_KINDS)
 
 
 def _intraday_overseas(summary: MarketSummary) -> tuple[QuoteChange, ...]:
@@ -503,7 +519,8 @@ def _intraday_overseas(summary: MarketSummary) -> tuple[QuoteChange, ...]:
     return tuple(
         quote
         for quote in summary.quotes
-        if (quote.country == "US" and quote.kind == INDEX_FUTURE) or quote.country in ASIA_COUNTRIES
+        if quote.kind in QUOTED_KINDS
+        and ((quote.country == "US" and quote.kind == INDEX_FUTURE) or quote.country in ASIA_COUNTRIES)
     )
 
 
@@ -570,7 +587,18 @@ def _as_of(summary: MarketSummary, scope: MarketScope) -> list[str]:
         lines.append(f"환율 {newest.posted_on:%m/%d} {newest.round}회차")
     if scope is MarketScope.US and summary.rates:
         lines.append(f"금리 {max(rate.observation_date for rate in summary.rates):%m/%d}")
+    # 수급·등락은 장중 스냅샷이라 시세보다 며칠 묵어 있을 수 있다. 여기 안 적으면 나흘 지난
+    # 순매수를 오늘 것으로 읽는다. 실제로 그런 일이 있었다.
+    if summary.flows:
+        lines.append(f"수급 {_day_stamp(max(flow.observed_at for flow in summary.flows))}")
+    if summary.movements:
+        lines.append(f"등락 {_day_stamp(max(movement.observed_at for movement in summary.movements))}")
     return lines or ["표시할 값이 없다"]
+
+
+def _day_stamp(moment: datetime) -> str:
+    local = moment.astimezone(KST_TIMEZONE)
+    return f"{local:%m/%d} {local:%H:%M}"
 
 
 def _number(value: Decimal) -> str:

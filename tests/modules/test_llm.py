@@ -120,6 +120,13 @@ def test_network_failure_is_reported_as_retryable():
     assert isinstance(classify(openai.APIConnectionError(request=request)), ConnectionError)
 
 
+def test_rate_limiting_is_reported_as_retryable():
+    """429를 재시도 못 할 오류로 올리면 동시 호출 수를 올린 순간부터 배치 전체가 즉시 죽는다."""
+    error = status_error(openai.RateLimitError, 429, '{"error":"rate limit exceeded"}')
+
+    assert isinstance(classify(error), ConnectionError)
+
+
 class Nested(BaseModel):
     model_config = ConfigDict(frozen=True)
 

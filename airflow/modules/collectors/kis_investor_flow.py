@@ -54,7 +54,12 @@
 그래서 두 가지를 함께 건다. 시장 코드는 이 모듈의 Enum이 정한 것만 보내고, **모든 값이 0인
 응답은 저장하지 않고 실패시킨다.** 장중에 전 투자자 분류가 정확히 0인 일은 없다.
 
-**코스닥은 아직 켜지 않는다.** 근거 있는 코드를 얻기 전까지 Enum에 넣지 않는다.
+정답 코드 목록은 공식 GitHub `legacy/postman/실전계좌_POSTMAN_샘플코드_v2.6.json`의 질의
+설명에 있었다. 시장은 문자 코드(코스피 `KSP`, 코스닥 `KSQ`), 업종은 업종코드(종합
+`0001`/`1001`)다. **처음에 쓰던 `999/S001`은 코스피가 아니라 주식선물이다.** 공식 예제의
+기본값이라 코스피로 오인했고, 2026-08-18까지 `KOSPI`로 저장된 행은 실제로는 주식선물
+매매동향이다(실측: 같은 날 `KSP/0001`과 `999/S001`의 값이 서로 다르고, `KSP/0001`만 마감
+뉴스의 투자자별 순매수와 부호가 일치했다).
 
 ## 시장 응답의 12개 분류와 두 항등식
 
@@ -67,9 +72,11 @@
 개인 + 외국인 + 기관계 + 기타법인 + 기타단체 = 0
 ```
 
-둘 다 실측으로 정확히 성립했고 `MarketFlowRow.from_payload`가 매 응답 검증한다. 시장 전체는
+둘 다 실측으로 성립했고 `MarketFlowRow.from_payload`가 매 응답 검증한다. 시장 전체는
 닫혀 있어서 누가 팔면 누군가는 받는다. 닫히지 않으면 분류를 빠뜨렸거나 필드를 잘못 읽은
-것이다.
+것이다. 다만 수량이 칸마다 따로 반올림되어 와서(실측: 코스닥 외국인 매수-매도와 순매수가
+1 차이) 정확한 등호가 아니라 반올림 항 수만큼의 오차를 봐준다. 칸이 밀린 응답은 그 폭을
+훨씬 넘으므로 검증의 목적은 그대로다.
 
 **접미사가 분류마다 다르다.** 사모펀드·기타법인·기타단체만 `_ntby_vol`이고 나머지는
 `_ntby_qty`다. `f"{prefix}_ntby_qty"` 한 벌로 조립하면 그 셋이 오류 없이 0이 된다.
@@ -151,7 +158,8 @@ class InvestorFlowMarket(StrEnum):
     """수급을 받을 시장. 값이 `KrxMarket`과 같고 조회 코드 둘을 함께 든다.
 
     **확인된 코드만 넣는다.** 잘못된 코드가 오류가 아니라 값 0으로 오기 때문에, 후보를 넣어
-    두면 조용히 0이 쌓인다. 코스닥은 근거 있는 코드를 얻은 뒤에 더한다.
+    두면 조용히 0이 쌓인다. 코드의 근거는 모듈 문서의 "잘못된 시장 코드가 0으로 온다" 절에
+    있다(공식 postman 컬렉션 + 실측 대조).
     """
 
     primary_code: str
@@ -164,7 +172,8 @@ class InvestorFlowMarket(StrEnum):
         member.secondary_code = secondary
         return member
 
-    KOSPI = ("KOSPI", "999", "S001")
+    KOSPI = ("KOSPI", "KSP", "0001")
+    KOSDAQ = ("KOSDAQ", "KSQ", "1001")
 
 
 class StockEstimateRow(BaseModel):
@@ -254,8 +263,10 @@ class MarketFlowRow(BaseModel):
             sell = _int(row.get(f"{prefix}_seln_vol"), f"{prefix}_seln_vol")
             buy = _int(row.get(f"{prefix}_shnu_vol"), f"{prefix}_shnu_vol")
             net = _int(row.get(f"{prefix}_ntby_qty"), f"{prefix}_ntby_qty")
-            # 매수 - 매도 = 순매수. 실측에서 세 분류 모두 맞았다.
-            if buy - sell != net:
+            # 매수 - 매도 = 순매수. 수량 필드가 칸마다 따로 반올림되어 오므로(실측: 코스닥
+            # 외국인이 1 차이) 항이 3개인 이 식은 2까지 봐준다. 칸이 밀린 응답은 이 폭을
+            # 훨씬 넘는다.
+            if abs(buy - sell - net) > 2:
                 raise KisPayloadError(f"{name} net buy does not add up: {buy} - {sell} != {net}")
             values |= {
                 f"{name}_sell_qty": sell,
@@ -267,11 +278,12 @@ class MarketFlowRow(BaseModel):
         for name, field in INSTITUTION_PARTS + OTHER_PARTS:
             values[f"{name}_net_buy_qty"] = _int(row.get(field), field)
 
+        # 세부 일곱 + 기관계, 반올림 항 8개라 4까지 봐준다.
         parts = sum(values[f"{name}_net_buy_qty"] for name, _ in INSTITUTION_PARTS)
-        if parts != values["institution_net_buy_qty"]:
+        if abs(parts - values["institution_net_buy_qty"]) > 4:
             raise KisPayloadError(f"institution parts do not add up: {parts} != {values['institution_net_buy_qty']}")
 
-        # 시장 전체는 닫혀 있다. 누가 팔면 누군가는 받는다(실측: 정확히 0).
+        # 시장 전체는 닫혀 있다. 누가 팔면 누군가는 받는다. 반올림 항 5개라 3까지 봐준다.
         closed = (
             values["individual_net_buy_qty"]
             + values["foreign_net_buy_qty"]
@@ -279,7 +291,7 @@ class MarketFlowRow(BaseModel):
             + values["other_corporation_net_buy_qty"]
             + values["other_organization_net_buy_qty"]
         )
-        if closed != 0:
+        if abs(closed) > 3:
             raise KisPayloadError(f"investor categories do not close to zero: {closed}")
 
         return cls(**values)

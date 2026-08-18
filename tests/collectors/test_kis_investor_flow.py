@@ -204,10 +204,16 @@ def test_stock_codes_match_the_other_collectors():
 
 
 def test_only_confirmed_markets_are_requestable():
-    """잘못된 코드가 오류 없이 0을 돌려주므로 후보를 Enum에 넣어 두면 조용히 0이 쌓인다."""
-    assert [market.value for market in InvestorFlowMarket] == ["KOSPI"]
-    assert InvestorFlowMarket.KOSPI.primary_code == "999"
-    assert InvestorFlowMarket.KOSPI.secondary_code == "S001"
+    """잘못된 코드가 오류 없이 0을 돌려주므로 후보를 Enum에 넣어 두면 조용히 0이 쌓인다.
+
+    코드의 근거는 공식 postman 컬렉션과 실측 대조다(모듈 문서). `999/S001`은 코스피가
+    아니라 주식선물이라 되돌리면 안 된다.
+    """
+    assert [market.value for market in InvestorFlowMarket] == ["KOSPI", "KOSDAQ"]
+    assert InvestorFlowMarket.KOSPI.primary_code == "KSP"
+    assert InvestorFlowMarket.KOSPI.secondary_code == "0001"
+    assert InvestorFlowMarket.KOSDAQ.primary_code == "KSQ"
+    assert InvestorFlowMarket.KOSDAQ.secondary_code == "1001"
 
 
 def test_estimates_keep_every_slot(monkeypatch):
@@ -275,7 +281,8 @@ def test_market_flow_reads_the_institution_breakdown(monkeypatch):
 
 
 def test_the_institution_parts_must_add_up_to_the_institution_total(monkeypatch):
-    broken = market_row(fund_ntby_qty="21679")
+    # 반올림 오차 허용 폭(4)을 넘는 어긋남이어야 실패한다.
+    broken = market_row(fund_ntby_qty="21683")
     monkeypatch.setattr(kis_investor_flow, "send_get", fake_send_get(body(output=[broken])))
 
     with pytest.raises(KisPayloadError, match="institution parts do not add up"):
@@ -284,7 +291,8 @@ def test_the_institution_parts_must_add_up_to_the_institution_total(monkeypatch)
 
 def test_the_investor_categories_must_close_to_zero(monkeypatch):
     """시장 전체는 닫혀 있다. 닫히지 않으면 분류 하나를 빠뜨린 것이다."""
-    broken = market_row(etc_corp_ntby_vol="1201")
+    # 반올림 오차 허용 폭(3)을 넘는 어긋남이어야 실패한다.
+    broken = market_row(etc_corp_ntby_vol="1204")
     monkeypatch.setattr(kis_investor_flow, "send_get", fake_send_get(body(output=[broken])))
 
     with pytest.raises(KisPayloadError, match="do not close to zero"):
@@ -311,6 +319,16 @@ def test_an_all_zero_market_response_fails(monkeypatch):
         fetch_market_flow(TOKEN, APP_KEY, APP_SECRET, InvestorFlowMarket.KOSPI, OBSERVED_AT)
 
 
+def test_market_flow_tolerates_per_field_rounding(monkeypatch):
+    """수량이 칸마다 따로 반올림되어 온다(실측: 코스닥 외국인 매수-매도와 순매수가 1 차이)."""
+    rounded = market_row(frgn_ntby_qty="-26242")
+    monkeypatch.setattr(kis_investor_flow, "send_get", fake_send_get(body(output=[rounded])))
+
+    row = fetch_market_flow(TOKEN, APP_KEY, APP_SECRET, InvestorFlowMarket.KOSDAQ, OBSERVED_AT).row
+
+    assert row.foreign_net_buy_qty == -26242
+
+
 def test_market_flow_rejects_a_net_that_does_not_add_up(monkeypatch):
     broken = market_row(frgn_ntby_qty="999")
     monkeypatch.setattr(kis_investor_flow, "send_get", fake_send_get(body(output=[broken])))
@@ -325,7 +343,7 @@ def test_market_flow_sends_both_codes(monkeypatch):
 
     fetch_market_flow(TOKEN, APP_KEY, APP_SECRET, InvestorFlowMarket.KOSPI, OBSERVED_AT)
 
-    assert send.sent[0]["query"] == {"FID_INPUT_ISCD": "999", "FID_INPUT_ISCD_2": "S001"}
+    assert send.sent[0]["query"] == {"FID_INPUT_ISCD": "KSP", "FID_INPUT_ISCD_2": "0001"}
 
 
 def test_result_code_failures_are_raised(monkeypatch):

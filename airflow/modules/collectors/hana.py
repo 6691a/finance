@@ -48,15 +48,7 @@ from scrapling import Selector
 from scrapling.fetchers import Fetcher
 
 from modules.sql import read_sql
-
-try:
-    # psycopg2 전용 고속 경로. 이 모듈의 필수 의존성은 아니라서 없으면 `None`으로 두고
-    # `_execute_upserts`가 PEP 249 `executemany`로 물러선다.
-    from psycopg2.extensions import cursor as _Psycopg2Cursor
-    from psycopg2.extras import execute_batch as _execute_batch
-except ImportError:  # pragma: no cover - Airflow 이미지에는 psycopg2가 항상 있다
-    _Psycopg2Cursor = None
-    _execute_batch = None
+from modules.upsert import execute_upserts
 
 HANA_URL = "https://www.kebhana.com/cms/rate/wpfxd651_07i_01.do"
 
@@ -114,10 +106,6 @@ EXPECTED_CELL_COUNT = 11
 # 1,696회차, 금 08:24 ~ 일 06:57). 연휴가 붙으면 더 늘어난다. 상한은 회차와 시각이 아예 어긋난
 # 표를 걸러 내려고 두는 것이라 최장 연휴에 맞춰 잡는다.
 MAX_DAY_OFFSET = 6
-
-# upsert를 한 번에 보낼 행 수. 고시일자 하나가 통화당 1500행 가까이 되고, DB가 원격이면
-# 행마다 왕복하는 비용이 그대로 곱해진다.
-UPSERT_PAGE_SIZE = 500
 
 
 class Cursor(Protocol):
@@ -412,26 +400,6 @@ def _upsert_parameters(rate: HanaRate) -> tuple[Any, ...]:
     )
 
 
-def _execute_upserts(cursor: Cursor, parameters: Sequence[Sequence[Any]]) -> None:
-    """upsert 여러 건을 한 번에 보낸다.
-
-    psycopg2의 `executemany`는 내부적으로 행마다 왕복해서 직접 반복문을 도는 것과 같다
-    (측정: 1475행에 0.64s vs 0.66s). 같은 드라이버의 `execute_batch`는 문장을 묶어 보내
-    0.18s다. 로컬에서는 차이가 초 단위지만 DB가 원격이면 왕복 지연이 행 수만큼 곱해진다.
-
-    `execute_batch`가 없으면 PEP 249 표준 `executemany`로 물러선다. psycopg3의
-    `executemany`는 자체적으로 파이프라이닝을 하므로 그쪽에서는 물러서도 느리지 않다.
-
-    **판정 기준은 import 가능 여부가 아니라 커서의 드라이버다.** 한 이미지에 psycopg2와
-    psycopg3이 함께 있고 provider가 psycopg3 연결을 주면, import는 성공하는데
-    `execute_batch`가 psycopg3 커서를 받아 `mogrify`를 찾다 죽는다.
-    """
-    if _execute_batch is None or not isinstance(cursor, _Psycopg2Cursor):
-        cursor.executemany(EXCHANGE_RATE_UPSERT, parameters)
-        return
-    _execute_batch(cursor, EXCHANGE_RATE_UPSERT, parameters, page_size=UPSERT_PAGE_SIZE)
-
-
 def store_rates(connection: Connection, rates: Sequence[HanaRate]) -> int:
     """고시 환율을 저장하고 쓴 행 수를 돌려준다. 커밋과 롤백은 호출자가 결정한다.
 
@@ -446,5 +414,5 @@ def store_rates(connection: Connection, rates: Sequence[HanaRate]) -> int:
         return 0
 
     with connection.cursor() as cursor:
-        _execute_upserts(cursor, [_upsert_parameters(rate) for rate in rates])
+        execute_upserts(cursor, EXCHANGE_RATE_UPSERT, [_upsert_parameters(rate) for rate in rates])
     return len(rates)

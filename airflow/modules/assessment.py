@@ -488,6 +488,16 @@ class AssessmentBatch:
         ]
 
     def _assess_one(self, task: dict[str, Any]) -> dict[str, Any]:
+        """문서 하나를 평가한다. **모델에 닿지 못한 실패는 잡지 않는다.**
+
+        `AssessmentError`만 결과로 바꾼다. 그건 이 문서의 응답 형식이 두 번 깨졌다는 뜻이고,
+        문서 하나의 문제라 나머지를 저장하는 것이 설계다.
+
+        제공처 예외(`ConnectionError`, `LlmError`)는 그대로 위로 올린다. 키가 틀렸거나
+        네트워크가 끊긴 것은 이 문서의 문제가 아니라 남은 문서 전부가 똑같이 실패할 문제다.
+        잡아서 결과로 담으면 원인이 문자열로 뭉개져 DAG가 재시도 여부를 가를 수 없고,
+        태스크는 "0건 처리" 성공으로 끝난다. 재시도 여부 판단은 DAG가 한다.
+        """
         document: PendingDocument = task["document"]
         try:
             assessment = self._assessor.assess(document, task["candidates"])
@@ -495,9 +505,6 @@ class AssessmentBatch:
             # 문서는 태그 없이 남는다. 다음 실행이 다시 집는다.
             logger.warning("document %s could not be assessed: %s", document.id, error)
             return {"results": [AssessmentResult(document_id=document.id, error=str(error))]}
-        except Exception as error:  # noqa: BLE001 - 제공처 예외 종류가 열려 있다
-            logger.warning("document %s failed to reach the model: %s", document.id, type(error).__name__)
-            return {"results": [AssessmentResult(document_id=document.id, error=type(error).__name__)]}
         return {"results": [AssessmentResult(document_id=document.id, assessment=assessment)]}
 
 

@@ -29,7 +29,7 @@ from modules.assessment import (
     filter_tags,
     store_assessment,
 )
-from modules.llm import UnsupportedResponseFormat
+from modules.llm import LlmError, UnsupportedResponseFormat
 
 ASSESSED_AT = datetime(2026, 8, 15, 3, 25, tzinfo=UTC)
 
@@ -87,6 +87,19 @@ class PickyModel(ScriptedModel):
             self._schema = None
             raise UnsupportedResponseFormat("json_schema is not supported")
         return super().invoke(messages)
+
+
+class UnreachableModel(ScriptedModel):
+    """제공처에 닿지 못하는 모델. 키가 틀렸거나 네트워크가 끊긴 자리다."""
+
+    def __init__(self, error: Exception) -> None:
+        super().__init__()
+        self.error = error
+        self.attempts = 0
+
+    def invoke(self, messages) -> AIMessage:
+        self.attempts += 1
+        raise self.error
 
 
 def assessor(*replies: str, model_class: type[ScriptedModel] = ScriptedModel) -> tuple[DocumentAssessor, ScriptedModel]:
@@ -325,6 +338,38 @@ def test_batch_keeps_one_failure_from_spreading():
     assert by_id[DOCUMENT.id].assessment is None
     assert by_id[DOCUMENT.id].error
     assert by_id[other.id].assessment is not None
+
+
+@pytest.mark.parametrize("error", [ConnectionError("network is down"), LlmError("HTTP 401: invalid key")])
+def test_batch_does_not_swallow_a_failure_to_reach_the_model(error):
+    """모델에 닿지 못한 실패는 결과로 바꾸지 않고 그대로 올린다.
+
+    이 문서만의 문제가 아니라 남은 문서 전부가 똑같이 실패할 문제다. 잡아서 결과에 담으면
+    원인이 문자열로 뭉개져 DAG가 재시도 여부를 가를 수 없고, 태스크는 0건 성공으로 끝난다.
+    """
+    unreachable = UnreachableModel(error)
+    assessing = DocumentAssessor(unreachable, settings())
+
+    with pytest.raises(type(error)):
+        AssessmentBatch(assessing, max_concurrency=1).run([DOCUMENT], CANDIDATES)
+
+
+def test_batch_still_tries_every_document_before_the_failure_surfaces():
+    """팬아웃은 중간에 끊기지 않는다. 한 superstep의 노드가 다 돌고 나서 예외가 올라온다.
+
+    키가 틀리면 남은 문서도 전부 한 번씩 부르고 나서 태스크가 죽는다는 뜻이다. 낭비지만
+    `Send` 팬아웃을 중간에 끊으려면 노드마다 상태를 보고 건너뛰는 장치를 넣어야 하고,
+    그건 배치 상한(`batch_size`)이 이미 막고 있는 비용보다 비싸다. 여기서 중요한 것은
+    호출 횟수가 아니라 **예외가 삼켜지지 않고 올라온다**는 것이다.
+    """
+    documents = [DOCUMENT.model_copy(update={"id": number}) for number in (31, 32, 33)]
+    unreachable = UnreachableModel(LlmError("HTTP 401: invalid key"))
+    assessing = DocumentAssessor(unreachable, settings())
+
+    with pytest.raises(LlmError):
+        AssessmentBatch(assessing, max_concurrency=1).run(documents, CANDIDATES)
+
+    assert unreachable.attempts == len(documents)
 
 
 def test_batch_returns_one_result_per_document():

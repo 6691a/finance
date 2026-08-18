@@ -39,7 +39,7 @@ FRED는 월간 값을 그 달 1일로 준다(실측 2026-08-16: 7월 CPI가 `202
 ## 필요한 환경
 
 - `FRED_API_KEY`. URL 질의 문자열에 들어가므로 예외 메시지와 로그에 URL을 넣지 않는다.
-- `CONNECTION_ID`가 가리키는 Airflow 연결.
+- `CONNECTION_ID`가 가리키는 Airflow 연결. 접속 정보는 `AIRFLOW_CONN_FINANCE`가 갖는다.
 """
 
 import logging
@@ -68,13 +68,11 @@ from modules.period import (
     PeriodError,
     resolve_observation_period,
 )
-from modules.utility import KST_TIMEZONE
+from modules.utility import CONNECTION_ID, KST_TIMEZONE
 
 logger = logging.getLogger(__name__)
 
-CONNECTION_ID = "news"
-
-# 월간 지표는 발표가 한 달 넘게 늦고 정정도 잦다. 7일이면 아직 나오지 않은 이번 달만 묻는다.
+# 월간 지표는 발표가 한 달 넘게 늦고 정정도 잦다. 190일이면 최근 여섯 달치 정정까지 다시 받는다.
 LOOKBACK_DAYS_MACRO = 190
 
 # 설정 오류라 재시도해도 같은 결과인 HTTP 상태.
@@ -116,7 +114,7 @@ UNRECOVERABLE_STATUSES = frozenset({400, 401, 403, 404})
         ),
     },
     doc_md=__doc__,
-    tags=["fred", "macro", "monthly"],
+    tags=["fred", "macro", "daily"],
 )
 def fred_macro_daily():
     @task(task_display_name="지표 수집·저장")

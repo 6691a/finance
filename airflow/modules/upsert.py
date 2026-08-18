@@ -6,7 +6,7 @@
 왕복 지연이 행 수만큼 곱해진다.**
 
 장중 수집은 폴링마다 수백 행을 쓰고 백필은 한 번에 수만 행을 쓴다. `hana.py`가 자기 안에
-두고 쓰던 것을 여기로 꺼내 `yahoo.py`와 `kis.py`가 함께 쓴다.
+두고 쓰던 것을 여기로 꺼내 이제 모든 수집기가 이것 하나를 쓴다.
 """
 
 from collections.abc import Sequence
@@ -21,7 +21,7 @@ except ImportError:  # pragma: no cover - Airflow 이미지에는 psycopg2가 �
     _Psycopg2Cursor = None
     _execute_batch = None
 
-# 한 번에 묶어 보낼 문장 수. `hana.py`와 같은 값이다.
+# 한 번에 묶어 보낼 문장 수. 고시일자 하나가 통화당 1500행 가까이 되는 환율 수집이 기준이다.
 UPSERT_PAGE_SIZE = 500
 
 

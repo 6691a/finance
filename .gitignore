@@ -6,22 +6,20 @@ config.yaml
 # 디렉터리째 막으면 안쪽 `!` 예외가 먹지 않는다. 그래서 `docs/*`다.
 docs/*
 !docs/kis-semiconductor-minute-bars.md
-!docs/kis-investor-flow.md
 !docs/kis-program-trading.md
-!docs/kis-market-positioning-daily.md
-!docs/dart-disclosure-earnings.md
-!docs/kis-market-movement-distribution.md
-!docs/kis-market-session-calendar.md
 !docs/economic-document-archive-design.md
 !docs/document-assessment-workflow.md
-# 이번 작업의 판단 근거는 문서에만 있다. 이 둘은 예외로 추적한다.
-!docs/quote-bar-intraday.md
+!docs/us-macro-indicators.md
+!docs/slack-report-design.md
 !docs/collection-map.html
 
 # 실행하면 앱키와 시세 응답이 출력에 남는다. 커밋하지 않는다.
 notebooks/
 
 compose/local/airflow/data/
+
+# Claude Code가 만드는 작업용 워크트리. 저장소 안에 또 다른 저장소라 추적하지 않는다.
+.claude/worktrees/
 
 __pycache__/
 *.py[cod]

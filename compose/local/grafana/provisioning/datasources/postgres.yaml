@@ -15,13 +15,15 @@ datasources:
     type: postgres
     access: proxy
     url: db:5432
-    database: finance
     user: finance
     isDefault: true
     editable: false
     secureJsonData:
       password: finance
     jsonData:
+      # Grafana 11부터 Postgres 접속 DB는 최상위 database가 아니라 jsonData.database다.
+      # 최상위에 두면 백엔드만 읽어서 프런트엔드가 쿼리를 보내지 않고 패널이 전부 No data가 된다.
+      database: finance
       sslmode: disable
       postgresVersion: 1700
       maxOpenConns: 5

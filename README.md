@@ -287,6 +287,21 @@ DAG마다 절을 두지 않습니다. 상세는 각 DAG 파일의 `doc_md`에 �
 
 `yahoo_quote_intraday`에만 시간 창이 없습니다. 한국 장중의 미국 선물 변동을 보는 것이 이 수집의 목적이라 미국 장 시간에만 도는 스케줄로는 목적을 못 이룹니다.
 
+### Slack 브리핑 DAG 목록
+
+수집하지 않고 **읽어서 내보내기만 하는** DAG들입니다. 설계는 [docs/slack-report-design.md](docs/slack-report-design.md)에 있습니다.
+
+| DAG | 스케줄(KST) | 채널 | 내용 |
+| --- | --- | --- | --- |
+| `slack_kr_market_briefing` | 평일 12:30·16:30 | `SLACK_CHANNEL_MARKET` | 국내 지수·선물, 장중 해외(미국 선물·아시아), 환율, 수급 |
+| `slack_us_market_briefing` | 화~토 08:00 | `SLACK_CHANNEL_MARKET` | 밤사이 미국 마감, 주요국 10년 금리, 전일 국내 복기와 조합 요약 |
+| `slack_document_briefing` | 매일 08:00·17:00 | `SLACK_CHANNEL_DOCUMENT` | 최근 12시간 평가 집계와 `value_score` 상위 문서 |
+| `slack_ops_briefing` | 매일 08:00 | `SLACK_CHANNEL_OPS` | 지난 24시간 수집 성공·실패·무소식 |
+
+표는 SQL 집계가 만들고 LLM은 그 위에 요약만 씁니다. **숫자는 LLM이 만들지 않습니다.** 요약이 실패해도 리포트는 나가고, 실패했다는 사실은 메시지에 남습니다. 조용히 빠지면 요약이 원래 없는 리포트와 구분되지 않기 때문입니다.
+
+미국 정규장은 KST로 밤이라 장중 알림을 보내지 않습니다. 대신 다음 날 아침 리포트가 밤사이 결과와 전일 한국장을 같은 메시지에 놓고, 그 조합에 대한 요약을 붙입니다.
+
 ### 미국 국채 수집 DAG
 
 [airflow/dags/fred_treasury_daily.py](airflow/dags/fred_treasury_daily.py)는 FRED에서 국채 수익률 곡선(`DGS3MO`, `DGS2`, `DGS10`, `DGS30`)을 한국 시간 화~토 07:30(UTC 월~금 22:30)에 수집합니다.

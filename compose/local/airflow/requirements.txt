@@ -18,6 +18,5 @@ langgraph>=1.2.0
 # modules/llm.py가 예외 타입을 직접 import한다. ChatXAI가 BaseChatOpenAI 서브클래스라
 # 제공처 오류가 openai 예외 그대로 올라온다. 전이 의존을 몰래 쓰지 않고 여기 적는다.
 openai>=2.0.0
-apache-airflow-providers-postgres>=7.0.1
-sentry-sdk>=2.68.0
+# LangSmith 추적. `LANGSMITH_*`가 비어 있으면 아무 것도 보내지 않는다.
 langsmith>=0.11.0

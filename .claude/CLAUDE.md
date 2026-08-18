@@ -296,6 +296,29 @@ ruff isort `known-first-party`가 `pyproject.toml`에 맞춰져 있다.
 - **재시도 여부 판단을 위에 맡기려면 판단할 것을 위로 올려야 한다.** 아래에서 분류해 놓고
   위로 문자열만 보내면 그 분류는 존재하지 않는 것과 같다.
 
+### DAG의 실패 판정
+
+이미 스무 개 DAG가 아래 세 형태 중 하나를 따른다. 새 DAG도 이 중 하나를 고른다.
+
+- **항목별 실패 수집** — 여러 항목을 한 태스크에서 돌 때. 항목 하나가 실패하면 원인을
+  `failures`에 모으고 계속한다. **마지막에 반드시 판정한다.** `dart_disclosure_intraday`,
+  `document_ingestion_hourly`는 전부 실패했을 때, `kis_*`와 `yahoo_*`는 하나라도 실패했을 때
+  태스크를 죽인다. 어느 쪽을 고르든 실패를 세고 이름을 메시지에 싣는다.
+- **태스크 매핑** — 항목마다 태스크를 매핑한다(`.expand`). 실패가 곧 그 태스크의 실패라
+  따로 판정할 것이 없고 재시도도 실패한 항목만 다시 돈다. `fred_*`, `ecos_*`,
+  `exchange_rate_daily`가 그렇다.
+- **단일 요청** — 응답 하나가 결과 전부다. 수집기 예외를 그대로 올린다. `bbk`, `boe`,
+  `ecb_*`, `mof`, `market_calendar`가 그렇다.
+
+어느 형태든 **되돌릴 수 없는 오류는 즉시 `AirflowFailException`으로 바꾼다.** 설정·인증·주소
+문제(HTTP 4xx)는 재시도해도 같은 답이다. 재시도할 값어치가 있는 것(`ConnectionError`)은
+그대로 올려 Airflow가 재시도하게 둔다. **그 판단은 DAG가 한다.** 수집기는 종류만 정확히
+올린다.
+
+층이 하나 더 끼면 이 규칙이 새기 쉽다. `document_assessment_hourly`는 LangGraph 배치 노드가
+사이에 있어서, 그 노드가 예외를 문자열로 바꾸는 바람에 DAG가 판단할 것을 잃었다. **중간 층은
+예외를 통과시킨다.**
+
 ## LLM 코드
 
 LLM을 부르는 코드는 **Pydantic, LangChain, LangGraph 위에서만 쓴다.** 세 층의 역할이 겹치지 않는다.

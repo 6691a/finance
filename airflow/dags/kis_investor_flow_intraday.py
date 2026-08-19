@@ -40,7 +40,8 @@
 
 - **한 대상이 실패해도 다른 대상은 저장한다.** 호출 하나가 트랜잭션 하나다.
 - HTTP 400/403/404: 설정 오류라 즉시 실패한다.
-- 시장 응답이 전부 0이면 실패시킨다. 코드가 틀렸다는 뜻이다.
+- 시장 응답이 전부 0이면 실패시킨다. 코드가 틀렸다는 뜻이다. 단 09:05 이전 run 은
+  skip 한다. 장 시작 직후에는 옳은 코드도 첫 집계 전이라 전부 0으로 온다.
 - 종목 응답 0행은 정상이다. 갱신 전이면 슬롯이 없다.
 
 ## 필요한 환경
@@ -98,6 +99,10 @@ ESTIMATE_CALL_TIMES: tuple[time, ...] = (
 # 설정 오류라 재시도해도 같은 결과인 HTTP 상태.
 UNRECOVERABLE_STATUSES = frozenset({400, 403, 404})
 
+# KIS가 이 조회의 첫 집계를 내는 시각. 실측으로 09:05 run 은 값이 있었고 09:00 정각과
+# 09:02 재시도는 전부 0이었다(2026-08-19).
+FIRST_AGGREGATION_TIME = time(9, 5)
+
 
 def _credentials() -> tuple[SecretStr, SecretStr]:
     app_key = os.environ.get("KIS_APP_KEY")
@@ -111,6 +116,16 @@ def _connection() -> Any:
     # 반환 타입은 provider 버전에 따라 psycopg2/psycopg3 래퍼로 갈린다. 런타임 객체는
     # 어느 쪽이든 PEP 249 연결이라 commit·rollback을 갖는다.
     return PostgresHook(postgres_conn_id=CONNECTION_ID).get_conn()
+
+
+def before_first_aggregation(now_kst: datetime) -> bool:
+    """장 시작 직후라 KIS가 첫 집계를 아직 안 냈는지.
+
+    cron 의 마지막 슬롯(전일 15:55)은 data interval 이 다음 날 09:00에 끝나서 매 거래일
+    첫 run 이 09:00 정각에 뜬다. 그 시각의 응답은 전부 0이라 all-zero 가드가 시장 코드
+    오류로 오탐하므로 이 run 은 skip 한다. 빈 장 스냅샷이라 잃는 값도 없다.
+    """
+    return now_kst.time() < FIRST_AGGREGATION_TIME
 
 
 def wants_stock_estimates(now_kst: datetime, params: dict[str, Any]) -> bool:
@@ -162,6 +177,9 @@ def kis_investor_flow_intraday():
             connection.close()
         if closed:
             raise AirflowSkipException(f"KRX is closed on {now_kst.date()}")
+
+        if before_first_aggregation(now_kst):
+            raise AirflowSkipException("KIS has not published the first aggregation yet")
 
         app_key, app_secret = _credentials()
         token = access_token(Variable, app_key, app_secret)

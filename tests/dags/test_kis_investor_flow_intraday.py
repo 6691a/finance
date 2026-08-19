@@ -50,3 +50,21 @@ def test_a_manual_run_can_override_the_slot_check(given):
     now = datetime(2026, 8, 14, 10, 55, tzinfo=KST_TIMEZONE)
 
     assert kis_investor_flow_intraday.wants_stock_estimates(now, {"include_stock_estimates": given}) is given
+
+
+@pytest.mark.parametrize(
+    ("hour", "minute", "expected"),
+    [
+        # 전일 15:55 슬롯이 다음 날 09:00 정각에 실행된다. 그 시각에는 KIS가 첫 집계를
+        # 아직 안 내서 응답이 전부 0이고, all-zero 가드가 시장 코드 오류로 오탐한다.
+        (9, 0, True),
+        (9, 4, True),
+        (9, 5, False),
+        (9, 10, False),
+        (20, 41, False),  # 장 마감 후 수동 실행은 최종 누적값이 있다
+    ],
+)
+def test_runs_before_the_first_aggregation_are_skipped(hour, minute, expected):
+    now = datetime(2026, 8, 19, hour, minute, tzinfo=KST_TIMEZONE)
+
+    assert kis_investor_flow_intraday.before_first_aggregation(now) is expected

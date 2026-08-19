@@ -150,9 +150,7 @@ def previous_close(connection: Any, stock_code: str, business_date: date) -> Dec
 
 @dag(
     dag_id="kis_stock_minute_bars_daily",
-    dag_display_name=""
-                     ""
-                     "",
+    dag_display_name="📊 삼성전자·SK하이닉스 1분봉 확정 (KIS)",
     description="장 마감 뒤 삼성전자·SK하이닉스의 1분봉을 KRX·NXT 각각 받아 stock_bar에 저장한다.",
     # KST 평일 20:40 = UTC 평일 11:40. 확정 일별 수급(18:10)이 전일종가를 채운 뒤이고,
     # NXT 애프터마켓(~20:00)까지 끝난 뒤라 하루치가 완결이다.

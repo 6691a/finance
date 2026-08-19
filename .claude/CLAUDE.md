@@ -157,6 +157,10 @@ DAG가 쓰는 코드는 **위치는 Airflow를, 규칙은 백엔드를** 따른�
 - 외부 입력은 Pydantic으로 검증하고, 시각은 timezone-aware UTC이며, 주석은 한국어로 쓴다.
 - `dags/`에는 스케줄, 재시도, 태스크 매핑, Hook 사용, 실패 분류만 둔다.
   파싱·검증·저장 규칙은 `modules/`에 둔다.
+- **모든 DAG는 화면용 메타데이터를 채운다.** `dag_display_name`(이모지 + 한글 이름 +
+  제공처. 예: `📈 국내 지수·선물 1분봉 (KIS)`), 한 문장 `description`,
+  `doc_md=__doc__`(모듈 docstring에 설계 배경)이 필수다. `Param`에도 `title`과
+  `description`을 단다. 빈 문자열로 두지 않는다.
 - 의존성은 Airflow 환경에 있는 것만 쓴다. 표준 라이브러리, Pydantic, PEP 249 연결,
   그리고 HTML 수집용 `scrapling[fetchers]`다. SQLAlchemy 모델과 `core.config`는 import하지 않는다.
   여기에 더 넣으려면 운영 Airflow 이미지에 먼저 들어가야 한다.

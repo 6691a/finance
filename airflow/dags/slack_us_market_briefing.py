@@ -2,8 +2,9 @@
 
 `docs/slack-report-design.md` 1부의 미국장 절반이다. 미국 정규장은 KST로 전날 22:30에
 시작해 당일 05:00(서머타임)에 끝난다. **그 시간에는 알림을 보내지 않는다.** 대신 아침에 한
-번, 밤사이 결과와 전일 한국장을 **같은 메시지에** 놓고 그 조합에 대한 요약을 붙인다. 미국
-값만 나열하는 것이 목적이 아니라 그 변화가 오늘 한국장에 어떤 맥락인지를 남기는 것이 목적이다.
+번, 밤사이 결과와 전일 한국장을 **같은 메시지에** 놓는다. 미국 값만 나열하는 것이 목적이
+아니라 그 변화가 오늘 한국장에 어떤 맥락인지를 한 화면에 남기는 것이 목적이다.
+LLM 요약은 없다 — 2026-08-19까지 붙였지만 표가 이미 말하는 것 이상을 쓰지 못해 뺐다.
 
 ## 왜 화~토인가
 
@@ -26,7 +27,6 @@ KST 날짜로 물으면 세션 하나가 두 날짜에 걸친다. `market.us_ses
 시간대만 나눠 보내는 것이라 채널을 쪼개지 않는다.
 """
 
-import logging
 import os
 from datetime import UTC, datetime, timedelta
 from typing import Any
@@ -43,12 +43,8 @@ from modules.market_session import us_equity_open_day
 from modules.slack import SlackError, post_message
 from modules.utility import CONNECTION_ID, KST_TIMEZONE
 
-logger = logging.getLogger(__name__)
-
 # KST 화~토 08:00 = UTC 월~금 23:00. 미국 마감과 아침 수집이 끝난 뒤다.
 SCHEDULE = "0 8 * * 2-6"
-
-REPORT_NAME = "미국장 마감 브리핑"
 
 
 def _connection() -> Any:
@@ -97,29 +93,13 @@ def slack_us_market_briefing():
         finally:
             connection.close()
 
-        comment, comment_error = _comment(summary)
-        blocks = market.render_blocks(summary, MarketScope.US, comment, comment_error)
+        blocks = market.render_blocks(summary, MarketScope.US)
         text = market.render_text(summary, MarketScope.US)
 
         try:
             return post_message(token, channel, text=text, blocks=blocks)
         except SlackError as error:
             raise AirflowFailException(str(error)) from error
-
-    def _comment(summary: market.MarketSummary) -> tuple[str | None, str | None]:
-        """밤사이 미국 값과 전일 한국 값을 한 입력으로 주고 그 조합의 요약을 받는다."""
-        # LangChain import는 무겁다. DAG 파일 최상단에 두면 NAS dag-processor가
-        # DagBag 30초 타임아웃으로 죽는다(2026-08-19 실측). 태스크 실행 때만 읽는다.
-        from modules.briefing.comment import BriefingCommentator, CommentError
-        from modules.llm import LlmError, briefing_model
-
-        try:
-            return BriefingCommentator(briefing_model()).comment(
-                REPORT_NAME, market.comment_input(summary, MarketScope.US)
-            ), None
-        except (ConnectionError, LlmError, CommentError) as error:
-            logger.warning("briefing comment failed; sending the tables without it: %s", error)
-            return None, str(error)
 
     send_briefing()
 

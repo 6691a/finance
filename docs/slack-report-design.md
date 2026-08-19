@@ -14,10 +14,10 @@
 | 2부 | 뉴스·문서 평가 요약 | `SLACK_CHANNEL_DOCUMENT` | 신규 평가 문서 집계와 LLM이 고른 읽을 것·주의 |
 | 3부 | 수집 운영 현황 | `SLACK_CHANNEL_OPS` | `source_record` 기반 수집 성공·실패·무소식 |
 
-본문은 **SQL 집계를 고정 템플릿의 표로 렌더링한 것**이고, LLM은 그 표의 값을 근거로
-**요약**을 쓴다. 요약 길이는 한 단락으로 고정하지 않고 내용에 맞게 문장·불릿을 쓰되
-상한만 둔다. 숫자는 전부 SQL이 만들고 LLM은 숫자를 만들지 않는다
-([경제 문서 아카이브 설계](economic-document-archive-design.md) §1의 경계와 같다).
+본문은 **SQL 집계를 고정 템플릿의 표로 렌더링한 것**이다. 숫자는 전부 SQL이 만들고
+LLM은 숫자를 만들지 않는다([경제 문서 아카이브 설계](economic-document-archive-design.md)
+§1의 경계와 같다). 시장 리포트(1부)의 LLM 요약은 2026-08-19에 뺐다 — 표가 이미 말하는
+것 이상을 쓰지 못했다. LLM은 2부의 문서 선별에만 남아 있다.
 
 구현이 끝난 상태이고 이 문서는 왜 그렇게 만들었는지를 남긴다. 코드는 `airflow/modules/briefing/`과
 `airflow/dags/slack_*_briefing.py`에 있다.

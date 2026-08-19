@@ -133,7 +133,7 @@ class PickState(TypedDict):
 class DocumentPicker:
     """후보 목록을 받아 읽을 것과 주의할 것을 고른다.
 
-    흐름은 `BriefingCommentator`와 같은 모양이다. `call` → (형식이 깨지면) `repair` → `call`.
+    흐름은 `call` → (형식이 깨지면) `repair` → `call`이다.
     교정은 한 번뿐이다.
     """
 

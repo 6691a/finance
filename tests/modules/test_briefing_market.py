@@ -8,7 +8,6 @@ from sqlalchemy import Table
 
 from apps.models.market import (
     IndexBar,
-    IndexDaily,
     IndicatorObservation,
     KrxMarketFundsDaily,
     KrxStockSecuritiesLendingDaily,
@@ -120,16 +119,6 @@ class FakeConnection:
         return cursor
 
 
-# 추세용 일별 이력. 조용하다가 마지막 날 크게 움직인 코스피와, 5일 내리 판 외국인.
-QUOTE_TREND_ROWS = [("kis", "KOSPI", date(2026, 8, 1 + day), Decimal(2600 + day)) for day in range(14)] + [
-    ("kis", "KOSPI", date(2026, 8, 18), Decimal("2687.45"))
-]
-
-RATE_TREND_ROWS = [("fred", "DGS10", date(2026, 8, 1 + day), Decimal("4.18")) for day in range(14)] + [
-    ("fred", "DGS10", date(2026, 8, 18), Decimal("4.21"))
-]
-
-FLOW_TREND_ROWS = [("KOSPI", date(2026, 8, 14 + day), Decimal(-100_000_000_000 - day)) for day in range(5)]
 
 
 def summary(now: datetime = MIDDAY):
@@ -143,9 +132,6 @@ def summary(now: datetime = MIDDAY):
         FUNDS_ROWS,
         SHORT_POSITION_ROWS,
         SPREAD_ROWS,
-        QUOTE_TREND_ROWS,
-        RATE_TREND_ROWS,
-        FLOW_TREND_ROWS,
     )
     return market.collect_summary(connection, now)
 
@@ -180,9 +166,9 @@ def test_every_row_carries_its_own_as_of_time():
             ("kis", "KOSPI", "코스피", "index", "KR", Decimal("2687.45"), Decimal("2665.60"), stale),
             ("kis", "KOSDAQ", "코스닥", "index", "KR", Decimal("745.10"), Decimal("747.42"), MIDDAY),
         ],
-        [], [], [], [], [], [], [], [], [], [], [], [], [],
+        [], [], [], [], [], [], [], [],
     )
-    blocks_out = market.render_blocks(market.collect_summary(connection, MIDDAY), MarketScope.KOREA, None)
+    blocks_out = market.render_blocks(market.collect_summary(connection, MIDDAY), MarketScope.KOREA)
     table = next(block for block in blocks_out if block["type"] == "table")
     rows = [[cell["text"] for cell in row] for row in table["rows"]]
 
@@ -193,7 +179,7 @@ def test_every_row_carries_its_own_as_of_time():
 
 def test_the_context_flags_the_oldest_value():
     """행마다 시각이 붙어도 한눈에 "가장 묵은 게 언제냐"는 따로 보여야 한다."""
-    context = market.render_blocks(summary(), MarketScope.KOREA, None)[-1]
+    context = market.render_blocks(summary(), MarketScope.KOREA)[-1]
 
     assert "가장 오래된" in context["elements"][0]["text"]
 
@@ -206,15 +192,15 @@ def test_yields_are_not_drawn_as_percent_moves():
     """
     connection = FakeConnection(
         [("yahoo", "US10Y", "미국 10년물 금리", "rate", "US", Decimal("4.70"), Decimal("4.65"), MIDDAY)],
-        *([[]] * 13),
+        *([[]] * 8),
     )
     result = market.collect_summary(connection, MORNING)
 
-    assert "미국 10년물 금리" not in _block_text(market.render_blocks(result, MarketScope.US, None))
+    assert "미국 10년물 금리" not in _block_text(market.render_blocks(result, MarketScope.US))
 
 
 def test_korea_report_shows_domestic_quotes_and_us_futures_only():
-    text = _block_text(market.render_blocks(summary(), MarketScope.KOREA, "요약"))
+    text = _block_text(market.render_blocks(summary(), MarketScope.KOREA))
 
     assert "코스피" in text
     assert "S&P500 선물" in text
@@ -225,7 +211,7 @@ def test_korea_report_shows_domestic_quotes_and_us_futures_only():
 
 
 def test_us_report_shows_overseas_rates_and_the_korean_recap():
-    text = _block_text(market.render_blocks(summary(MORNING), MarketScope.US, "요약"))
+    text = _block_text(market.render_blocks(summary(MORNING), MarketScope.US))
 
     assert "필라델피아 반도체 지수" in text
     assert "미국 10년물" in text
@@ -233,84 +219,12 @@ def test_us_report_shows_overseas_rates_and_the_korean_recap():
     assert "코스피" in text
 
 
-def test_us_comment_reads_both_markets():
-    """미국장 리포트의 요약은 밤사이 미국 값과 전일 한국 값을 함께 본다."""
-    payload = json.loads(market.comment_input(summary(MORNING), MarketScope.US))
-
-    countries = {quote["country"] for quote in payload["quotes"]}
-    assert {"KR", "US"} <= countries
-    assert payload["rates"]
 
 
-def test_korea_comment_leaves_out_the_rate_section():
-    payload = json.loads(market.comment_input(summary(), MarketScope.KOREA))
-
-    assert "rates" not in payload
 
 
-def test_the_comment_input_says_whether_todays_move_is_unusual():
-    """이게 없으면 모델은 +0.82%가 큰 값인지 모른다. 판단의 근거는 접근 권한이 아니라
-    비교 기준이다."""
-    payload = json.loads(market.comment_input(summary(), MarketScope.KOREA))
-
-    kospi = next(quote for quote in payload["quotes"] if quote["label"] == "코스피")
-    trend = kospi["trend"]
-    # 2주 내내 하루 1포인트씩 오르다가 마지막 날 크게 뛰었다.
-    assert trend["move_percentile"] > 90
-    assert trend["observations"] == 15
-    assert trend["window_low"] < trend["window_high"]
 
 
-def test_a_thin_sample_is_marked_so_the_prompt_can_discount_it():
-    connection = FakeConnection(
-        QUOTE_ROWS,
-        RATE_ROWS,
-        FLOW_ROWS,
-        STOCK_FLOW_ROWS,
-        STOCK_TRADE_ROWS,
-        MOVEMENT_ROWS,
-        FUNDS_ROWS,
-        SHORT_POSITION_ROWS,
-        SPREAD_ROWS,
-        [("kis", "KOSPI", date(2026, 8, 17), Decimal(2600)), ("kis", "KOSPI", date(2026, 8, 18), Decimal(2687))],
-        [],
-        [],
-    )
-    payload = json.loads(market.comment_input(market.collect_summary(connection, MIDDAY), MarketScope.KOREA))
-
-    kospi = next(quote for quote in payload["quotes"] if quote["label"] == "코스피")
-    assert kospi["trend"]["thin"]
-
-
-def test_a_series_without_history_simply_has_no_trend():
-    """새로 붙인 심볼은 이력이 없다. 그것 때문에 리포트가 죽으면 안 된다."""
-    payload = json.loads(market.comment_input(summary(), MarketScope.KOREA))
-
-    kosdaq_futures = [quote for quote in payload["quotes"] if quote["label"] == "코스피200 선물"]
-    assert kosdaq_futures[0]["trend"] is None
-
-
-def test_the_flow_streak_is_reported_in_days():
-    """ "외국인 5일 연속 순매도"는 하루치 금액보다 많은 것을 말해 준다."""
-    payload = json.loads(market.comment_input(summary(), MarketScope.KOREA))
-
-    # 이력 5일이 모두 순매도라 5일이다. 금액이 매일 줄었는지가 아니라 어느 편이었는지를 센다.
-    assert payload["investor_flows"][0]["foreign_streak_days"] == -5
-
-
-def test_rate_trends_are_measured_in_basis_points():
-    payload = json.loads(market.comment_input(summary(MORNING), MarketScope.US))
-
-    dgs10 = next(rate for rate in payload["rates"] if rate["label"] == "미국 10년물")
-    assert dgs10["trend"]["change"] == pytest.approx(3.0, abs=0.1)
-
-
-def test_missing_comment_drops_its_block():
-    with_comment = market.render_blocks(summary(), MarketScope.KOREA, "요약")
-    without = market.render_blocks(summary(), MarketScope.KOREA, None)
-
-    assert "요약" in _block_text(with_comment)
-    assert len(without) == len(with_comment) - 2  # divider + section
 
 
 def test_us_session_date_follows_new_york_not_seoul():
@@ -331,7 +245,7 @@ def test_session_state_uses_the_korean_clock(now, expected):
 
 
 def test_header_is_written_in_korean_time():
-    blocks = market.render_blocks(summary(), MarketScope.KOREA, None)
+    blocks = market.render_blocks(summary(), MarketScope.KOREA)
 
     header = blocks[0]["text"]["text"]
     assert "12:30" in header
@@ -354,20 +268,16 @@ def test_rows_are_ordered_for_reading_not_alphabetically():
     # 크립토는 country가 XX라 나라 목록의 뒤로 밀린다.
     assert [quote.country for quote in market._intraday_overseas(result)] == ["US", "JP", "XX"]
 
-    table = next(block for block in market.render_blocks(result, MarketScope.KOREA, None) if block["type"] == "table")
+    table = next(block for block in market.render_blocks(result, MarketScope.KOREA) if block["type"] == "table")
     assert [row[0]["text"] for row in table["rows"]] == ["구분", "코스피", "코스피200 선물"]
 
 
 def test_the_korea_report_draws_the_realtime_fx_table():
     """환율은 장외 실시간(fx_bar)만 그린다. 하나은행 고시 수집은 2026-08에 끝났다."""
-    korea = _block_text(market.render_blocks(summary(), MarketScope.KOREA, None))
+    korea = _block_text(market.render_blocks(summary(), MarketScope.KOREA))
 
     assert "환율(실시간·장외)" in korea
     assert "원/달러(장외)" in korea
-    # 실시간 환율은 LLM 입력에도 quotes로 들어간다.
-    payload = json.loads(market.comment_input(summary(), MarketScope.KOREA))
-    assert any(quote["label"] == "원/달러(장외)" for quote in payload["quotes"])
-    assert "exchange_rates" not in payload
 
 
 def test_us_rows_are_grouped_by_kind():
@@ -395,8 +305,8 @@ def test_us_listed_adrs_are_drawn_in_the_us_table_only():
 
 
 def test_crypto_is_drawn_in_both_reports_despite_having_no_country():
-    korea = _block_text(market.render_blocks(summary(), MarketScope.KOREA, None))
-    us = _block_text(market.render_blocks(summary(MORNING), MarketScope.US, None))
+    korea = _block_text(market.render_blocks(summary(), MarketScope.KOREA))
+    us = _block_text(market.render_blocks(summary(MORNING), MarketScope.US))
 
     assert "비트코인" in korea
     assert "비트코인" in us
@@ -404,7 +314,7 @@ def test_crypto_is_drawn_in_both_reports_despite_having_no_country():
 
 def test_market_funds_are_drawn_with_computed_deltas():
     """예탁금 증감은 API 값이고 신용융자·미수금 증감은 전일 행과의 차이다."""
-    rendered = market.render_blocks(summary(), MarketScope.KOREA, None)
+    rendered = market.render_blocks(summary(), MarketScope.KOREA)
     table = next(
         block for block in rendered if block["type"] == "table" and block["rows"][1][0]["text"] == "고객예탁금"
     )
@@ -416,7 +326,7 @@ def test_market_funds_are_drawn_with_computed_deltas():
 
 
 def test_short_sale_and_lending_share_one_table():
-    rendered = market.render_blocks(summary(), MarketScope.KOREA, None)
+    rendered = market.render_blocks(summary(), MarketScope.KOREA)
     table = next(
         block for block in rendered if block["type"] == "table" and block["rows"][0][0]["text"] == "종목"
         and block["rows"][0][1]["text"] == "공매도 비중"
@@ -435,11 +345,11 @@ def test_rate_spreads_are_measured_in_bp_and_show_inversion_as_negative():
     assert spreads["미국 10년-2년"].change_bp == pytest.approx(5.0)
     assert spreads["한미 10년"].spread_bp == pytest.approx(-116.0)
 
-    us = _block_text(market.render_blocks(result, MarketScope.US, None))
+    us = _block_text(market.render_blocks(result, MarketScope.US))
     assert "금리 스프레드" in us
     assert "-116bp" in us
     # 스프레드는 미국장(아침) 리포트 소관이다. 금리와 같은 이유다.
-    assert "금리 스프레드" not in _block_text(market.render_blocks(summary(), MarketScope.KOREA, None))
+    assert "금리 스프레드" not in _block_text(market.render_blocks(summary(), MarketScope.KOREA))
 
 
 def test_chart_series_keep_the_symbol_order_and_skip_empty_ones():
@@ -458,7 +368,7 @@ def test_chart_series_keep_the_symbol_order_and_skip_empty_ones():
 
 def test_each_chart_file_gets_its_own_image_block_after_the_domestic_table():
     with_chart = market.render_blocks(
-        summary(), MarketScope.KOREA, None, chart_files=(("F0AAA", "코스피"), ("F0BBB", "삼성전자"))
+        summary(), MarketScope.KOREA, chart_files=(("F0AAA", "코스피"), ("F0BBB", "삼성전자"))
     )
 
     images = [block for block in with_chart if block["type"] == "image"]
@@ -469,8 +379,8 @@ def test_each_chart_file_gets_its_own_image_block_after_the_domestic_table():
 
 def test_chart_failure_is_visible_and_absence_is_silent():
     """실패는 채널에 남고, 그릴 봉이 없는 것은 정상 흐름이라 아무 것도 남지 않는다."""
-    failed = market.render_blocks(summary(), MarketScope.KOREA, None, chart_error="boom")
-    silent = market.render_blocks(summary(), MarketScope.KOREA, None)
+    failed = market.render_blocks(summary(), MarketScope.KOREA, chart_error="boom")
+    silent = market.render_blocks(summary(), MarketScope.KOREA)
 
     assert "차트 생성 실패" in _block_text(failed)
     assert "차트" not in _block_text(silent)
@@ -478,7 +388,7 @@ def test_chart_failure_is_visible_and_absence_is_silent():
 
 def test_stock_estimates_are_counted_in_shares_not_won():
     """종목 수급은 추정 **수량**이다. 억원인 시장 수급과 한 표에 섞으면 자릿수가 뜻을 잃는다."""
-    rendered = market.render_blocks(summary(), MarketScope.KOREA, None)
+    rendered = market.render_blocks(summary(), MarketScope.KOREA)
     titles = [block["text"]["text"] for block in rendered if block["type"] == "section"]
     table = next(
         block for block in rendered if block["type"] == "table" and block["rows"][0][0]["text"] == "종목"
@@ -487,16 +397,12 @@ def test_stock_estimates_are_counted_in_shares_not_won():
     assert "*종목 추정 순매수(주)*" in titles
     assert [cell["text"] for cell in table["rows"][1]] == ["삼성전자", "+1,971,000", "-648,000", "+1,323,000", "08/18"]
 
-    payload = json.loads(market.comment_input(summary(), MarketScope.KOREA))
-    assert payload["stock_investor_estimates"][0]["foreign_net_buy_shares"] == 1_971_000
-    assert payload["stock_investor_estimates"][0]["estimate"] is True
-
 
 @pytest.mark.parametrize(
     ("statement", "table", "columns"),
     [
-        # LATEST_QUOTES와 QUOTE_TREND는 quote_bar/quote_daily **뷰**를 읽는다. 뷰의 컬럼은
-        # kind 테이블과 같으므로 대표로 IndexBar/IndexDaily 모델과 대조한다.
+        # LATEST_QUOTES는 quote_bar **뷰**를 읽는다. 뷰의 컬럼은
+        # kind 테이블과 같으므로 대표로 IndexBar 모델과 대조한다.
         (market.LATEST_QUOTES, IndexBar.__table__, ("provider", "symbol", "close", "previous_close", "bar_at")),
         (market.LATEST_QUOTES, QuoteSymbol.__table__, ("label", "kind", "country")),
         (
@@ -539,10 +445,6 @@ def test_stock_estimates_are_counted_in_shares_not_won():
             ("balance_quantity", "balance_change_quantity"),
         ),
         (market.SPREAD_PAIRS, IndicatorObservation.__table__, ("provider", "series_id", "observation_date", "value")),
-        (market.QUOTE_TREND, IndexBar.__table__, ("provider", "symbol", "bar_at", "close")),
-        (market.QUOTE_TREND, IndexDaily.__table__, ("business_date",)),
-        (market.RATE_TREND, IndicatorObservation.__table__, ("observation_date", "value")),
-        (market.FLOW_TREND, MarketInvestorFlowSnapshot.__table__, ("market_code", "foreign_net_buy_amount")),
     ],
 )
 def test_queries_name_columns_that_exist(statement: str, table: Table, columns: tuple[str, ...]):

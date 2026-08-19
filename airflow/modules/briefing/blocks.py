@@ -68,16 +68,3 @@ def divider() -> dict[str, Any]:
 
 def context(lines: Sequence[str]) -> dict[str, Any]:
     return {"type": "context", "elements": [{"type": "mrkdwn", "text": " · ".join(lines)[:MAX_SECTION_CHARS]}]}
-
-
-def comment_blocks(comment: str | None, error: str | None = None) -> list[dict[str, Any]]:
-    """요약 블록. LLM이 실패해도 리포트는 나가지만 **실패했다는 사실은 채널에 남긴다.**
-
-    로그만 남기고 조용히 빠지면 요약이 원래 없는 리포트와 구분되지 않는다. 그 상태가
-    며칠 이어져도 아무도 모른다.
-    """
-    if comment:
-        return [divider(), section(f"💬 {comment}")]
-    if error:
-        return [divider(), context([f"⚠️ 요약 생성 실패: {error}"])]
-    return []

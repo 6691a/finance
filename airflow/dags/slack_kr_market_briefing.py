@@ -1,7 +1,7 @@
 """국내 정규장 시장 브리핑을 Slack에 보낸다.
 
-`docs/slack-report-design.md` 1부의 한국장 절반이다. 표는 SQL 집계가 만들고 LLM은 그 위에
-요약만 쓴다. **숫자는 LLM이 만들지 않는다.**
+`docs/slack-report-design.md` 1부의 한국장 절반이다. 표는 SQL 집계가 만든다.
+LLM 요약은 없다 — 2026-08-19까지 붙였지만 표가 이미 말하는 것 이상을 쓰지 못해 뺐다.
 
 ## 왜 미국장과 나뉘어 있나
 
@@ -14,10 +14,9 @@
 
 ## 실패를 어떻게 가르나
 
-- 요약(LLM)이 실패해도 **리포트는 나간다.** 표가 본체이고 요약은 덧붙임이다. 대신 실패했다는
-  사실을 메시지에 남긴다. 조용히 빠지면 요약이 원래 없는 리포트와 구분되지 않는다.
-- 당일 분봉 차트(matplotlib PNG → Slack 파일 업로드)도 같은 원칙이다. 그리거나 올리다
-  실패하면 표만 보내고 실패를 메시지에 남긴다. 개장 전처럼 그릴 봉이 없으면 오류가 아니라
+- 당일 분봉 차트(matplotlib PNG → Slack 파일 업로드)가 실패해도 **리포트는 나간다.**
+  표가 본체이고 차트는 덧붙임이다. 대신 실패했다는 사실을 메시지에 남긴다. 조용히 빠지면
+  차트가 원래 없는 리포트와 구분되지 않는다. 개장 전처럼 그릴 봉이 없으면 오류가 아니라
   생략이다.
 - Slack이 거절하면(`SlackError`) 재시도해도 같은 결과라 태스크를 실패시킨다.
 - Slack이 잠깐 죽었으면(`ConnectionError`) 올려서 Airflow가 재시도한다. 발송이 마지막
@@ -31,8 +30,6 @@
 - 차트는 운영 Airflow 이미지에 matplotlib과 한글 폰트(`fonts-nanum`)가 있어야 그려진다.
   없으면 차트만 빠지고 표는 나간다.
 - `SLACK_CHANNEL_MARKET`. 채널 ID다. 워크스페이스마다 다른 배포 설정이라 코드에 두지 않는다.
-- `XAI_API_KEY`. 요약 모델은 `modules/llm.py`의 `briefing_model()`이 코드로 정하고 키는 그
-  LangChain 클래스가 자기 이름으로 읽는다.
 - `CONNECTION_ID`가 가리키는 Airflow 연결.
 """
 
@@ -46,6 +43,7 @@ import pendulum
 from airflow.exceptions import AirflowFailException, AirflowSkipException
 from airflow.providers.postgres.hooks.postgres import PostgresHook
 from airflow.sdk import dag, task
+from airflow.timetables.trigger import MultipleCronTriggerTimetable
 from pydantic import SecretStr
 
 from modules.briefing import chart, market
@@ -56,14 +54,16 @@ from modules.utility import CONNECTION_ID, KST_TIMEZONE
 
 logger = logging.getLogger(__name__)
 
-# KST 평일 12:30·16:30·19:30 = UTC 월~금 03:30, 07:30, 10:30.
-# 오전장 요약, 마감 직후(지수 중심), 확정 수급까지 실은 마감 확정 리포트 순서다.
-# 종목 마감 확정 섹션은 KST 18:10 수집 뒤에야 값이 있어 19:30 발송에만 나타난다.
-# 주기를 바꾸려면 이 한 줄만 고친다.
-SCHEDULE = "30 12,16,19 * * 1-5"
-
-REPORT_NAME = "한국장 브리핑"
-
+# 장중 10:00·12:30, 마감 구간 15:00부터 15:30까지 10분 간격, 그리고 확정 수급
+# (KST 18:10 수집)까지 실은 19:30 마감 확정 리포트다.
+# 분이 제각각이라 cron 하나로 못 적는다. 시각을 바꾸려면 이 목록만 고친다.
+SCHEDULE = MultipleCronTriggerTimetable(
+    "0 10 * * 1-5",  # KST 평일 10:00 = UTC 01:00
+    "30 12 * * 1-5",  # KST 평일 12:30 = UTC 03:30
+    "0,10,20,30 15 * * 1-5",  # KST 평일 15:00~15:30 10분 간격 = UTC 06:00~06:30
+    "30 19 * * 1-5",  # KST 평일 19:30 = UTC 10:30
+    timezone=KST_TIMEZONE,
+)
 
 def _connection() -> Any:
     # 반환 타입은 provider 버전에 따라 psycopg2/psycopg3 래퍼로 갈린다. 어느 쪽이든 PEP 249다.
@@ -116,16 +116,8 @@ def slack_kr_market_briefing():
         finally:
             connection.close()
 
-        comment, comment_error = _comment(summary)
         chart_files, chart_error = _chart(token, chart_series, now)
-        blocks = market.render_blocks(
-            summary,
-            MarketScope.KOREA,
-            comment,
-            comment_error,
-            chart_files=chart_files,
-            chart_error=chart_error,
-        )
+        blocks = market.render_blocks(summary, MarketScope.KOREA, chart_files=chart_files, chart_error=chart_error)
         text = market.render_text(summary, MarketScope.KOREA)
 
         try:
@@ -169,25 +161,6 @@ def slack_kr_market_briefing():
         # 업로드 직후에는 image 블록이 invalid_blocks로 거절된다. slack 모듈 주석 참고.
         time.sleep(UPLOAD_PROCESSING_WAIT_SECONDS)
         return uploads, None
-
-    def _comment(summary: market.MarketSummary) -> tuple[str | None, str | None]:
-        """요약을 만든다. **실패해도 리포트를 막지 않는다.**
-
-        표가 본체라 요약이 없어도 보낼 값어치가 있다. 대신 실패 원인을 함께 돌려주어
-        메시지에 남긴다. 로그만 남기면 아무도 보지 않는 경고가 된다.
-        """
-        # LangChain import는 무겁다. DAG 파일 최상단에 두면 NAS dag-processor가
-        # DagBag 30초 타임아웃으로 죽는다(2026-08-19 실측). 태스크 실행 때만 읽는다.
-        from modules.briefing.comment import BriefingCommentator, CommentError
-        from modules.llm import LlmError, briefing_model
-
-        try:
-            return BriefingCommentator(briefing_model()).comment(
-                REPORT_NAME, market.comment_input(summary, MarketScope.KOREA)
-            ), None
-        except (ConnectionError, LlmError, CommentError) as error:
-            logger.warning("briefing comment failed; sending the tables without it: %s", error)
-            return None, str(error)
 
     send_briefing()
 

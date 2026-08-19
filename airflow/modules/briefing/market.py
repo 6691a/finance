@@ -80,6 +80,10 @@ INDEX_FUTURE = "index_future"
 KOREA_SYMBOL_ORDER = ("KOSPI", "KOSPI200", "KOSPI200_FUT", "KOSDAQ", "KOSDAQ150_FUT")
 OVERSEAS_COUNTRY_ORDER = ("US", "JP", "CN", "HK", "TW")
 
+# 미국장 표의 줄 순서는 종류로 묶는다. 정렬 없이 두면 SQL이 심볼 이름순으로 줘서
+# 금·나스닥·비트코인이 섞인다. 같은 종류(원자재끼리, 크립토끼리)가 붙어야 비교가 된다.
+US_KIND_ORDER = ("index", "index_future", "bond_future", "commodity", "crypto", "equity")
+
 # 장중 차트에 그리는 심볼. 이 순서가 이미지 순서다. 해외를 붙일 때도 이 목록만 늘린다.
 # quote_bar 뷰를 읽으므로 종목(stock_bar)·지수(index_bar)·환율(fx_bar)이 한 쿼리로 나온다.
 CHART_SYMBOLS = (
@@ -875,10 +879,14 @@ def _korea_quotes(summary: MarketSummary) -> tuple[QuoteChange, ...]:
 
 def _us_quotes(summary: MarketSummary) -> tuple[QuoteChange, ...]:
     """미국 심볼과 크립토. 크립토는 country가 `XX`(나라 없음)라 종류로 넣는다."""
-    return tuple(
-        quote
-        for quote in summary.quotes
-        if quote.kind in QUOTED_KINDS and (quote.country == "US" or quote.kind == "crypto")
+    return _ordered(
+        (
+            quote
+            for quote in summary.quotes
+            if quote.kind in QUOTED_KINDS and (quote.country == "US" or quote.kind == "crypto")
+        ),
+        lambda quote: quote.kind,
+        US_KIND_ORDER,
     )
 
 

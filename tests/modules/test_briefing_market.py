@@ -392,6 +392,14 @@ def test_the_korea_report_swaps_the_stale_fx_table_for_the_realtime_one():
     assert any(quote["label"] == "원/달러(장외)" for quote in payload["quotes"])
 
 
+def test_us_rows_are_grouped_by_kind():
+    """정렬 없이 두면 SQL이 심볼 이름순으로 줘서 금·나스닥·비트코인이 섞인다."""
+    kinds = [quote.kind for quote in market._us_quotes(summary())]
+
+    assert kinds == sorted(kinds, key=market.US_KIND_ORDER.index)
+    assert kinds == ["index", "index_future", "crypto"]  # 픽스처의 SOX, SP500_FUT, BTCUSD 순서
+
+
 def test_crypto_is_drawn_in_both_reports_despite_having_no_country():
     korea = _block_text(market.render_blocks(summary(), MarketScope.KOREA, None))
     us = _block_text(market.render_blocks(summary(MORNING), MarketScope.US, None))

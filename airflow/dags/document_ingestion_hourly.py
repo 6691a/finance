@@ -17,9 +17,9 @@ Enum으로 들고 있는 것과 반대인데, **이용조건은 출처마다 다
 ## 왜 매시간인가
 
 RSS는 최근 항목만 준다. **수집을 시작하기 전 기간은 영영 비어 있고 놓친 항목도 돌아오지
-않는다.** 그래서 주기는 피드가 밀어내는 속도보다 빨라야 한다. 연합뉴스 경제 피드가 한 번에
-120건을 싣고 있어 1시간이면 충분하다. 특정 출처가 넘치기 시작하면 그 출처만 별도 DAG으로
-뗀다.
+않는다.** 그래서 주기는 피드가 밀어내는 속도보다 빨라야 한다. 가장 빠른 연합인포맥스
+전체기사 피드가 50건에 약 2.6시간 분량(시간당 ~18건, 2026-08-19 실측)이라 1시간이면
+충분하다. 특정 출처가 넘치기 시작하면 그 출처만 별도 DAG으로 뗀다.
 
 ## 실패 처리
 
@@ -72,7 +72,7 @@ def _connection() -> Any:
 def collect_source(source: FeedSource, detected_at: datetime) -> tuple[int, SourceOutcome]:
     """출처 하나를 받아 저장한다. 이 함수 하나가 트랜잭션 하나다."""
     response = fetch_feed(source)
-    items, truncated = parse_feed(response.body)
+    items, truncated = parse_feed(response.body, source.slug)
 
     connection = _connection()
     try:

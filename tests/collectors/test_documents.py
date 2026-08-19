@@ -236,6 +236,41 @@ def test_parse_reads_atom_entries():
     assert items[0].published_at == datetime(2026, 8, 14, 22, 30, tzinfo=UTC)
 
 
+EINFOMAX_RSS = """<?xml version="1.0" encoding="utf-8" ?>
+<rss version="2.0"><channel>
+  <title>연합인포맥스 - 전체기사</title>
+  <item>
+    <nsid>AKR20260819148600016</nsid>
+    <title>이랜드월드 회사채 수요예측 미매각</title>
+    <link>https://news.einfomax.co.kr/news/articleView.html?idxno=4430828</link>
+    <description><![CDATA[이랜드월드(BBB)가 회사채 수요예측에서 모집액을 채우지 못했다.]]></description>
+    <author><![CDATA[아무개 기자]]></author>
+    <pubDate>2026-08-19 17:01:32</pubDate>
+  </item>
+</channel></rss>
+"""
+
+
+def test_parse_reads_the_einfomax_naive_kst_pubdate():
+    # NDsoft CMS는 pubDate를 시간대 없는 KST로 준다. 출처가 선언한 시간대로 읽어
+    # UTC로 정규화한다. KST 17:01:32 = UTC 08:01:32.
+    items, _ = parse_feed(EINFOMAX_RSS.encode("utf-8"), "einfomax")
+
+    assert len(items) == 1
+    item = items[0]
+    # guid가 없어 canonical URL이 external_id다.
+    assert item.external_id == "https://news.einfomax.co.kr/news/articleView.html?idxno=4430828"
+    assert item.summary == "이랜드월드(BBB)가 회사채 수요예측에서 모집액을 채우지 못했다."
+    assert item.published_at == datetime(2026, 8, 19, 8, 1, 32, tzinfo=UTC)
+
+
+def test_parse_still_drops_naive_times_from_undeclared_sources():
+    # 시간대 선언이 없는 출처의 naive 시각은 지어내지 않고 버린다.
+    items, _ = parse_feed(EINFOMAX_RSS.encode("utf-8"), "example")
+
+    assert items[0].published_at is None
+
+
 def test_parse_rejects_a_page_that_is_not_a_feed():
     # 주소가 바뀐 사이트는 404 대신 HTML 안내를 200으로 준다. 0건으로 넘기면 몇 달째 비어
     # 있어도 알 수 없다.

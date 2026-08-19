@@ -32,6 +32,7 @@ from datetime import UTC, datetime
 from email.utils import parsedate_to_datetime
 from typing import Any, Protocol, Self
 from xml.etree import ElementTree
+from zoneinfo import ZoneInfo
 
 from curl_cffi.curl import CurlError
 from pydantic import AwareDatetime, BaseModel, ConfigDict, field_validator, model_validator
@@ -52,6 +53,11 @@ IMPERSONATE = "chrome"
 
 # Atom 네임스페이스. RSS 2.0은 네임스페이스가 없다.
 ATOM = "{http://www.w3.org/2005/Atom}"
+
+# pubDate를 시간대 없이 주는 피드의 기준 시간대. NDsoft CMS(연합인포맥스)는
+# `2026-08-19 17:01:32` 형태의 naive KST를 준다. 제공처가 시간대 기준을 정하면 그
+# 기준을 따른다는 수집기 규칙 그대로다. 여기 없는 출처의 naive 시각은 계속 버린다.
+NAIVE_FEED_TIMEZONES: dict[str, ZoneInfo] = {"einfomax": ZoneInfo("Asia/Seoul")}
 
 # 한 피드에서 한 번에 받아들일 최대 항목 수. 피드가 갑자기 수천 건을 실어 보내면 그건
 # 우리가 기대한 발견 채널이 아니다. 조용히 다 삼키지 않고 잘렸다는 사실을 남긴다.
@@ -227,11 +233,14 @@ def _text(element: ElementTree.Element | None) -> str | None:
     return element.text
 
 
-def _published_at(raw: str | None) -> datetime | None:
+def _published_at(raw: str | None, naive_timezone: ZoneInfo | None = None) -> datetime | None:
     """RSS의 RFC 822와 Atom의 ISO 8601을 모두 받는다. 모르는 표기는 값 없음으로 둔다.
 
     발행 시각을 지어내지 않는다. `document.published_at`은 NULL을 허용하고, 우리가 그 문서를
     처음 본 시각은 `detected_at`이 따로 갖는다.
+
+    `naive_timezone`은 출처가 시간대 없는 시각을 준다고 선언한 경우의 기준 시간대다
+    (`NAIVE_FEED_TIMEZONES`). 선언이 없는 출처의 naive 시각은 버린다.
     """
     if not raw:
         return None
@@ -245,11 +254,15 @@ def _published_at(raw: str | None) -> datetime | None:
         parsed = datetime.fromisoformat(text)
     except ValueError:
         return None
+    if parsed.tzinfo is not None:
+        return parsed
+    if naive_timezone is not None:
+        return parsed.replace(tzinfo=naive_timezone).astimezone(UTC)
     # naive로 오면 시간대를 모른다는 뜻이다. UTC로 단정하지 않고 버린다.
-    return parsed if parsed.tzinfo is not None else None
+    return None
 
 
-def parse_feed(body: bytes) -> tuple[tuple[FeedItem, ...], bool]:
+def parse_feed(body: bytes, source_slug: str | None = None) -> tuple[tuple[FeedItem, ...], bool]:
     """RSS 2.0과 Atom에서 항목을 뽑는다. (항목, 잘렸는지)를 돌려준다.
 
     **응답이 XML이 아니면 실패시킨다.** 주소가 바뀐 사이트는 404 대신 HTML 안내 페이지를
@@ -265,6 +278,7 @@ def parse_feed(body: bytes) -> tuple[tuple[FeedItem, ...], bool]:
 
     entries = root.findall(".//item") or root.findall(f".//{ATOM}entry")
     truncated = len(entries) > MAX_ITEMS_PER_FEED
+    naive_timezone = NAIVE_FEED_TIMEZONES.get(source_slug) if source_slug else None
 
     items: list[FeedItem] = []
     for entry in entries[:MAX_ITEMS_PER_FEED]:
@@ -286,7 +300,8 @@ def parse_feed(body: bytes) -> tuple[tuple[FeedItem, ...], bool]:
             or _text(entry.find(f"{ATOM}content"))
         )
         published = _published_at(
-            _text(entry.find("pubDate")) or _text(entry.find(f"{ATOM}published")) or _text(entry.find(f"{ATOM}updated"))
+            _text(entry.find("pubDate")) or _text(entry.find(f"{ATOM}published")) or _text(entry.find(f"{ATOM}updated")),
+            naive_timezone,
         )
         items.append(
             FeedItem(

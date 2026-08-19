@@ -29,6 +29,9 @@ from modules.sql import read_sql
 logger = logging.getLogger(__name__)
 
 TITLE_SIMILARITY_THRESHOLD = 0.75
+# 정규화 후 이보다 짧은 제목은 완전일치만 중복으로 본다. "Virginia"와 "West Virginia"처럼
+# 짧은 제목은 몇 글자 차이로도 유사도가 임계를 넘는다(운영 실측 2026-08-19).
+MIN_FUZZY_LENGTH = 10
 DEFAULT_DEDUP_BATCH = 200
 
 PENDING_DEDUP = read_sql("postgres", "document", "select_dedup_pending.sql")
@@ -94,6 +97,30 @@ def title_similarity(a: str, b: str) -> float:
     return SequenceMatcher(None, normalize_title(a), normalize_title(b)).ratio()
 
 
+def titles_duplicate(a: str, b: str) -> bool:
+    """두 제목이 같은 기사인가. 유사도 임계에 운영 실측(2026-08-19) 오판 가드 셋을 더한다.
+
+    1. 짧은 제목은 완전일치만 받는다 — "Virginia" vs "West Virginia".
+    2. 숫자열이 다르면 다른 기사다 — "[연합뉴스 이 시각 헤드라인] - 07:30" vs "- 10:30".
+    3. 양쪽 모두에 상대에 없는 낱말이 있으면 다른 기사다 — "[표] 유가증권시장 …" vs
+       "[표] 코스닥시장 …", "GDP by Industry" vs "GDP by State". 스텁 제목은 본기사 제목의
+       부분집합이라, 진짜 중복은 낱말이 한쪽에만 더 붙는다.
+    """
+    left = normalize_title(a)
+    right = normalize_title(b)
+    if left == right:
+        return True
+    if len(left) < MIN_FUZZY_LENGTH or len(right) < MIN_FUZZY_LENGTH:
+        return False
+    if re.findall(r"\d+", left) != re.findall(r"\d+", right):
+        return False
+    left_words = set(re.findall(r"[^\W\d_]+", left))
+    right_words = set(re.findall(r"[^\W\d_]+", right))
+    if (left_words - right_words) and (right_words - left_words):
+        return False
+    return SequenceMatcher(None, left, right).ratio() >= TITLE_SIMILARITY_THRESHOLD
+
+
 def _anchor(document: DedupDocument) -> datetime:
     return document.published_at or document.detected_at
 
@@ -109,11 +136,7 @@ def resolve_links(
     새 root로 옮기되, 무리 밖에 연결된 문서는 건드리지 않는다 — 오판을 밖으로 번지게 하지
     않기 위해서다.
     """
-    matches = [
-        candidate
-        for candidate in candidates
-        if title_similarity(document.title, candidate.title) >= TITLE_SIMILARITY_THRESHOLD
-    ]
+    matches = [candidate for candidate in candidates if titles_duplicate(document.title, candidate.title)]
     if not matches:
         return ()
 

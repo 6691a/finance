@@ -16,6 +16,7 @@ from modules.dedup import (
     normalize_title,
     resolve_links,
     title_similarity,
+    titles_duplicate,
 )
 from modules.sql import read_sql
 
@@ -66,6 +67,50 @@ class TestTitleSimilarity:
         a = "코스피, 장초반 5∼6%대 급락…매도 사이드카 발동"
         b = "원/달러 환율 1,400원 돌파…9개월 만에 최고"
         assert title_similarity(a, b) < TITLE_SIMILARITY_THRESHOLD
+
+
+class TestTitlesDuplicate:
+    """운영 DB 실측(2026-08-19)에서 나온 오판을 가드로 막는다. 같은 틀에 낱말·숫자만
+    다른 기사가 유사도만으로는 임계를 넘는다."""
+
+    def test_the_observed_yonhap_pair_passes_the_guards(self):
+        a = "코스피, 장초반 5∼6%대 급락…매도 사이드카 발동"
+        b = "[속보] 코스피 5~6%대 급락…매도 사이드카 발동"
+        assert titles_duplicate(a, b)
+
+    def test_summary_tagged_reissues_are_duplicates(self):
+        assert titles_duplicate("통상 사령탑 여한구 산업부 통상교섭본부장 경질", "통상 사령탑 여한구 산업부 통상교섭본부장 경질(종합)")
+
+    def test_identical_short_titles_are_still_duplicates(self):
+        assert titles_duplicate("Virginia", "Virginia")
+
+    def test_short_titles_require_an_exact_match(self):
+        # 실측 오판: ustr의 서로 다른 주(州) 페이지.
+        assert not titles_duplicate("Virginia", "West Virginia")
+
+    def test_different_numbers_are_different_articles(self):
+        # 실측 오판: 매시간 나오는 헤드라인 요약. 시각만 다르고 틀은 같다.
+        assert not titles_duplicate("[연합뉴스 이 시각 헤드라인] - 07:30", "[연합뉴스 이 시각 헤드라인] - 10:30")
+
+    def test_unique_words_on_both_sides_are_different_articles(self):
+        # 실측 오판: 같은 틀의 다른 시장 표, 다른 은행 인가 공지, 다른 통계 보고서.
+        assert not titles_duplicate(
+            "[표] 유가증권시장 2026년 상반기 연결 영업이익 상·하위 20개사",
+            "[표] 코스닥시장 2026년 상반기 연결 영업이익 상·하위 20개사",
+        )
+        assert not titles_duplicate(
+            "Gross Domestic Product by Industry, 2nd Quarter 2023 and Comprehensive Update",
+            "Gross Domestic Product by State, 2nd Quarter 2023 and Comprehensive Update",
+        )
+        assert not titles_duplicate(
+            "Federal Reserve Board announces approval of the application by Coastal Bend Bancshares, Inc.",
+            "Federal Reserve Board announces approval of the application by FS Bancorp, Inc.",
+        )
+
+    def test_extra_words_on_one_side_only_stay_duplicates(self):
+        # 스텁 제목은 본기사 제목의 부분집합인 경우가 대부분이다. 한쪽에만 낱말이 더 있는
+        # 것은 중복이다.
+        assert titles_duplicate("최근 코스피 꾸준한 반등에도…거래대금·거래량 연중 최저수준", "최근 코스피 반등에도…거래대금·거래량 연중 최저수준(종합)")
 
 
 class TestResolveLinks:

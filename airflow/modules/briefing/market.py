@@ -845,6 +845,9 @@ def _stock_trade_sections(summary: MarketSummary) -> list[dict[str, Any]]:
 
     추정(장중) 표와 나눈다. 하나는 장중 스냅샷이고 하나는 마감 확정치라 같은 표에 섞으면
     어느 쪽인지 알 수 없다. 기관 세부 일곱은 열이 많아 표를 따로 그린다.
+
+    제목에 KRX를 밝힌다. 시세 표가 15:30 이후 NXT 봉을 보이므로, 여기 종가가 그와 다른
+    이유(KRX 정규장 확정치이고 NXT 체결은 이 집계에 없음)가 제목에서 보여야 한다.
     """
     trades = _closed_trades(summary)
     if not trades:
@@ -878,12 +881,12 @@ def _stock_trade_sections(summary: MarketSummary) -> list[dict[str, Any]]:
     ]
     return [
         *blocks.table_section(
-            "종목 마감 확정(주)",
+            "종목 마감 확정(주·KRX)",
             ("종목", "종가", "등락", "외국인", "기관", "개인", "기준"),
             closing_rows,
         ),
         *blocks.table_section(
-            "기관 세부(주)",
+            "기관 세부(주·KRX)",
             ("종목", "금융투자", "투신", "사모", "은행", "보험", "종금", "연기금", "기준"),
             detail_rows,
         ),

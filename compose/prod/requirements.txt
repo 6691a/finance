@@ -1,0 +1,14 @@
+# kis-realtime 운영 의존성. 하한은 루트 pyproject.toml과 맞춘다.
+# compose/local/realtime/requirements.txt와 같은 내용이다 — 함께 고친다(테스트가 대조).
+sqlalchemy[asyncio]>=2.0.51
+asyncpg>=0.31.0
+pydantic>=2.11
+pydantic-settings>=2
+pyyaml>=6
+# apps.core.config가 apps.core.redis(RedisConfig)를 import해서 필요하다. 연결은 안 한다.
+redis>=8.1.0
+websockets>=17.0.1
+# 프로세스를 죽이는 예외를 Sentry로 보낸다. config.yaml의 sentry_dsn이 비면 비활성.
+sentry-sdk>=2
+# slim 이미지에 시스템 tzdata가 없을 때 zoneinfo("Asia/Seoul")의 순수 파이썬 폴백.
+tzdata

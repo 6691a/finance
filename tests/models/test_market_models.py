@@ -373,3 +373,25 @@ def test_investor_flow_tables_document_every_column():
     for model in (StockInvestorEstimateSnapshot, MarketInvestorFlowSnapshot):
         assert model.__table__.comment
         assert all(column.comment for column in model.__table__.columns)
+
+
+def test_stock_bar_tracks_ingest_method_and_finality():
+    from sqlalchemy import CheckConstraint
+
+    from apps.models.market import StockBar
+
+    table = StockBar.__table__
+    ingest_method = table.c.ingest_method
+    is_final = table.c.is_final
+
+    # WebSocket 잠정봉과 REST 확정봉을 가르는 축이다. default를 두지 않아
+    # 모든 INSERT가 두 컬럼을 명시해야 한다.
+    assert ingest_method.nullable is False
+    assert ingest_method.server_default is None
+    assert ingest_method.comment
+    assert is_final.nullable is False
+    assert is_final.server_default is None
+    assert is_final.comment
+    assert "ck_stock_bar_ingest_method" in {
+        constraint.name for constraint in table.constraints if isinstance(constraint, CheckConstraint)
+    }

@@ -1,0 +1,40 @@
+# DAG 런타임에만 필요한 추가 패키지. 이미지 빌드에서 설치한다.
+# Airflow 3.3.0 이미지에 이미 들어 있는 것은 여기 적지 않는다:
+# apache-airflow-providers-postgres, psycopg2-binary, pydantic.
+# 쓰지 않는다는 뜻이 아니다. 모든 DAG가 PostgresHook을 쓰지만 베이스 이미지가 6.8.0을
+# 싣고 오므로 여기 적으면 constraints와 부딪히기만 한다.
+#
+# 버전 범위는 백엔드 pyproject.toml과 맞춘다. 백엔드에 없는 패키지만 새 줄로 추가한다.
+#
+# **단, Airflow 공식 constraints가 핀하는 패키지에는 범위를 적지 않는다.** 백엔드는 uv가
+# 푸는 별도 환경이라 Airflow의 핀을 따르지 않아 두 숫자가 어긋난다. 범위를 적으면
+# `pip install`이 ResolutionImpossible로 죽어 이미지 자체가 빌드되지 않는다. 실측:
+# 백엔드가 요구한 `sentry-sdk>=2.68.0`에 constraints는 `==2.64.0`,
+# `apache-airflow-providers-postgres>=7.0.1`에 constraints는 `==6.8.0`이었다.
+# 이름만 적어 두면 constraints가 고른 버전이 들어간다.
+
+# modules/collectors/hana.py: scrapling.fetchers.Fetcher와 curl_cffi.curl.CurlError.
+# curl_cffi는 scrapling 기본 의존성이 아니라 fetchers extra에 들어 있다.
+scrapling[fetchers]>=0.4.12
+
+# modules/llm.py: langchain_xai.ChatXAI로 모델을 부른다. 처음에는 SDK 없이 urllib으로
+# POST했지만 2026-08-16에 바꿨다. LangChain으로 부르면 LangSmith 추적이 코드 없이 따라오고
+# 툴 루프를 직접 짜지 않아도 된다. 재시도는 여전히 Airflow가 하며 max_retries=0으로 SDK
+# 재시도를 끈다.
+langchain-xai>=1.3.0
+# modules/assessment.py: 문서 평가 흐름과 배치 팬아웃 그래프.
+langgraph>=1.2.0
+# modules/llm.py가 예외 타입을 직접 import한다. ChatXAI가 BaseChatOpenAI 서브클래스라
+# 제공처 오류가 openai 예외 그대로 올라온다. 전이 의존을 몰래 쓰지 않고 여기 적는다.
+openai>=2.0.0
+# modules/slack.py: slack_sdk.WebClient로 chat.postMessage를 부른다. 재시도 핸들러는 붙이지
+# 않는다. SDK가 먼저 재시도하면 태스크 타임아웃 안에서 몇 번을 불렀는지 로그와 어긋난다.
+# 버전은 위 규칙대로 constraints에 맡긴다. Airflow가 slack provider를 함께 핀하므로
+# 범위를 적으면 이미지 빌드가 ResolutionImpossible로 죽는다.
+slack-sdk
+# LangSmith 추적. `LANGSMITH_*`가 비어 있으면 아무 것도 보내지 않는다.
+langsmith>=0.11.0
+# Airflow의 sentry 통합이 쓴다. 개발에서는 `sentry_on = false`라 켜지지 않지만 배포
+# 환경에서 켜므로 이미지에는 반드시 들어가야 한다. 베이스 이미지에는 없다.
+# 버전은 위 규칙대로 constraints에 맡긴다.
+sentry-sdk

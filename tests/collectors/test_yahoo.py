@@ -229,7 +229,8 @@ def test_stock_bar_upsert_matches_the_model_and_its_natural_key():
 
     assert set(columns) <= {column.name for column in table.columns}
     assert required_columns(table) <= set(columns)
-    assert placeholder_count(STOCK_BAR_UPSERT) == len(columns)
+    # ingest_method/is_final 은 SQL 리터럴('rest', true)이라 placeholder 가 없다.
+    assert placeholder_count(STOCK_BAR_UPSERT) == len(columns) - 2
     # 거래소가 자연키에 들어간다. 빠지면 KRX와 NXT가 서로를 덮어쓴다.
     assert "ON CONFLICT (provider, stock_code, exchange, bar_at) DO UPDATE" in STOCK_BAR_UPSERT
 

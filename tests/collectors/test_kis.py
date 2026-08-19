@@ -179,20 +179,31 @@ def upsert_calls(cursor: FakeCursor) -> list[tuple]:
 
 
 @pytest.mark.parametrize(
-    ("statement", "model"),
+    ("statement", "model", "literal_count"),
     [
-        (INDEX_BAR_UPSERT, IndexBar),
-        (INDEX_FUTURE_BAR_UPSERT, IndexFutureBar),
-        (STOCK_BAR_UPSERT, StockBarModel),
+        (INDEX_BAR_UPSERT, IndexBar, 0),
+        (INDEX_FUTURE_BAR_UPSERT, IndexFutureBar, 0),
+        # stock_bar 는 ingest_method/is_final 이 SQL 리터럴('rest', true)이다.
+        (STOCK_BAR_UPSERT, StockBarModel, 2),
     ],
 )
-def test_bar_upserts_match_their_models(statement, model):
+def test_bar_upserts_match_their_models(statement, model, literal_count):
     table = model.__table__
     columns = inserted_columns(statement)
 
     assert set(columns) <= {column.name for column in table.columns}
     assert required_columns(table) <= set(columns)
-    assert placeholder_count(statement) == len(columns)
+    assert placeholder_count(statement) == len(columns) - literal_count
+
+
+def test_the_stock_bar_rest_upsert_confirms_finality():
+    # REST 확정 경로는 가드 없이 무조건 덮고 is_final=true 로 전환한다(문서 5.2).
+    columns = inserted_columns(STOCK_BAR_UPSERT)
+    assert "ingest_method" in columns
+    assert "is_final" in columns
+    assert "'rest'" in STOCK_BAR_UPSERT
+    assert "is_final = true" in STOCK_BAR_UPSERT
+    assert "WHERE stock_bar.is_final" not in STOCK_BAR_UPSERT
 
 
 def test_the_collector_exchanges_match_the_model_enum():

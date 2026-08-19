@@ -2,6 +2,9 @@
 -- 멱등 키는 (provider, stock_code, exchange, bar_at)다. 같은 종목이 KRX와 NXT에서 따로
 -- 체결되므로 거래소가 키에 들어간다. 통합(UN) 시세는 받지 않는다.
 --
+-- REST 확정 경로다. 신규 삽입과 기존 websocket/rest 행 갱신을 모두 허용하고
+-- is_final=true로 확정한다(문서 5.2). WebSocket 잠정 경로는 upsert_websocket.sql이다.
+--
 -- 정의의 원본은 `apps/models/market.py`의 `StockBar`이고
 -- `tests/collectors/test_kis.py`가 여기 컬럼을 그 모델 metadata와 대조한다.
 INSERT INTO stock_bar (
@@ -15,8 +18,10 @@ INSERT INTO stock_bar (
     close,
     volume,
     previous_close,
+    ingest_method,
+    is_final,
     source_record_id
-) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, 'rest', true, %s)
 ON CONFLICT (provider, stock_code, exchange, bar_at) DO UPDATE SET
     open = EXCLUDED.open,
     high = EXCLUDED.high,
@@ -24,5 +29,7 @@ ON CONFLICT (provider, stock_code, exchange, bar_at) DO UPDATE SET
     close = EXCLUDED.close,
     volume = EXCLUDED.volume,
     previous_close = EXCLUDED.previous_close,
+    ingest_method = 'rest',
+    is_final = true,
     source_record_id = EXCLUDED.source_record_id,
     updated_at = now()

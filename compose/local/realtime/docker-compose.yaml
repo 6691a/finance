@@ -1,0 +1,26 @@
+# KIS 실시간 WebSocket 1분봉 수집기 — 개발.
+#
+# `just dev`의 DB(호스트 15432)를 보는 config.yaml이 필요하다. 운영은 compose/prod/다.
+# 사용 전 `cp .env.sample .env` 후 채운다.
+services:
+  kis-realtime:
+    build: .
+    image: news-kis-realtime
+    env_file:
+      - .env
+    restart: unless-stopped
+    # SIGTERM 뒤 세션 레코드를 닫을 시간. 열린 분은 저장하지 않으므로 길 필요가 없다.
+    stop_grace_period: 30s
+    volumes:
+      # CODE_DIR = 저장소 루트. 체크아웃 안에서는 기본값이면 된다.
+      - ${CODE_DIR:-../../..}/apps:/app/apps:ro
+      - ${CONFIG_FILE:-../../../config.yaml}:/app/config.yaml:ro
+    extra_hosts:
+      # Linux 호환. mac/Windows Docker Desktop에서는 이미 있는 이름이라 무해하다.
+      - "host.docker.internal:host-gateway"
+    healthcheck:
+      test: ["CMD", "python", "-m", "apps.realtime", "--healthcheck"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s

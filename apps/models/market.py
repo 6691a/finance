@@ -494,6 +494,7 @@ class StockBar(EntityBase):
         UniqueConstraint("provider", "stock_code", "exchange", "bar_at", name="uq_stock_bar_natural_key"),
         Index("ix_stock_bar_source_record_id", "source_record_id"),
         CheckConstraint("exchange IN ('KRX', 'NXT', 'NYSE')", name="ck_stock_bar_exchange"),
+        CheckConstraint("ingest_method IN ('websocket', 'rest')", name="ck_stock_bar_ingest_method"),
         table_options(
             comment="개별 종목의 1분봉을 거래소 단위로 누적하는 테이블",
             database="default",
@@ -544,6 +545,16 @@ class StockBar(EntityBase):
             "직전 거래일 확정 종가. 변동률의 분모다. NXT 봉도 KRX 확정 종가를 쓴다 — "
             "전일 기준가가 거래소마다 따로 있지 않기 때문이다"
         ),
+    )
+    ingest_method: Mapped[str] = mapped_column(
+        Text,
+        nullable=False,
+        comment="이 행을 마지막으로 쓴 수집 경로(websocket 또는 rest). REST 확정이 WebSocket 잠정을 이긴다",
+    )
+    is_final: Mapped[bool] = mapped_column(
+        Boolean,
+        nullable=False,
+        comment="REST가 완료 봉을 확정했는지. WebSocket 잠정 봉은 false이고 REST upsert만 true로 바꾼다",
     )
     source_record_id: Mapped[int] = mapped_column(
         BigInteger,

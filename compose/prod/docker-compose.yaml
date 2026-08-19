@@ -1,0 +1,31 @@
+# KIS 실시간 WebSocket 1분봉 수집기 — 운영.
+#
+# 개발용은 compose/local/realtime/이고 이 스택은 운영 DB를 본다.
+# 설정은 FastAPI와 같은 config.yaml 하나다(KIS 키·DB·Sentry). 서비스 전용 노브만 .env다.
+# 사용 전 `cp .env.sample .env` 후 경로를 채우고, config.yaml을 CONFIG_FILE 위치에 둔다.
+# config.yaml의 대상 alias는 read_only: false여야 한다 — 아니면 시작 시 거부된다.
+services:
+  kis-realtime:
+    build: .
+    image: news-kis-realtime
+    env_file:
+      - .env
+    restart: unless-stopped
+    # SIGTERM 뒤 세션 레코드를 닫을 시간. 열린 분은 저장하지 않으므로 길 필요가 없다.
+    stop_grace_period: 30s
+    volumes:
+      # CODE_DIR = 저장소 루트. 운영 NAS도 clone(/volume1/docker/news) 안에서 실행하므로
+      # 기본값을 쓴다. clone 밖에서 돌릴 때만 .env에 경로를 넣는다.
+      - ${CODE_DIR:-../..}/apps:/app/apps:ro
+      - ${CONFIG_FILE:-../../config.yaml}:/app/config.yaml:ro
+    healthcheck:
+      test: ["CMD", "python", "-m", "apps.realtime", "--healthcheck"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+    logging:
+      driver: json-file
+      options:
+        max-size: "50m"
+        max-file: "5"

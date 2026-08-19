@@ -356,6 +356,15 @@ def test_market_funds_are_drawn_with_computed_deltas():
     assert rows[2] == ["미수금", "9,100", "-400", "08/18"]
 
 
+def test_every_table_ends_with_a_reference_stamp():
+    """모든 표의 마지막 열은 기준이다. 장중·확정·일별이 섞인 리포트라 기준 없는 표는
+    어느 시점 값인지 알 수 없다."""
+    for scope in (MarketScope.KOREA, MarketScope.US):
+        for block in market.render_blocks(summary(MORNING if scope is MarketScope.US else MIDDAY), scope):
+            if block["type"] == "table":
+                assert block["rows"][0][-1]["text"] == "기준", block["rows"][0]
+
+
 def test_short_sale_and_lending_share_one_table():
     rendered = market.render_blocks(summary(), MarketScope.KOREA)
     table = next(
@@ -428,7 +437,10 @@ def test_stock_estimates_are_counted_in_shares_not_won():
     )
 
     assert "*종목 추정 순매수(주)*" in titles
-    assert [cell["text"] for cell in table["rows"][1]] == ["삼성전자", "+1,971,000", "-648,000", "+1,323,000", "08/18"]
+    # 기준은 수집 시각이다. 장중 몇 차례 갱신되는 추정이라 날짜만으로는 아침 값과 마감 값이 같아 보인다.
+    assert [cell["text"] for cell in table["rows"][1]] == [
+        "삼성전자", "+1,971,000", "-648,000", "+1,323,000", "08/18 12:30",
+    ]
 
 
 @pytest.mark.parametrize(

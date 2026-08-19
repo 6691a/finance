@@ -27,6 +27,13 @@ logger = logging.getLogger(__name__)
 # 한 번의 전송을 기다리는 시간. 이보다 오래 걸리면 그 실행은 포기하고 Airflow가 다시 집는다.
 REQUEST_TIMEOUT_SECONDS = 30
 
+# 업로드 직후 Slack이 파일을 비동기 처리하는 동안은 `slack_file` image 블록이
+# `invalid_blocks`로 거절된다(실측: 즉시 거절, 3초 뒤 성공). 준비 여부를 묻는
+# `files.info`는 `files:read` 스코프가 따로 필요해, 부르는 쪽이 **모든 업로드를 끝낸 뒤
+# 발송 전에 한 번** 이만큼 기다린다.
+# ponytail: 고정 5초 대기. 이걸로도 어긋나면 그 실행은 실패하고 Airflow 재시도가 집는다.
+UPLOAD_PROCESSING_WAIT_SECONDS = 5
+
 # 잠시 뒤 다시 부르면 될 실패. 나머지 코드는 설정이 틀린 것이라 재시도해도 같은 결과다.
 RETRYABLE_API_ERRORS = frozenset(
     {

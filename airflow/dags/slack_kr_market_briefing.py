@@ -38,6 +38,7 @@
 
 import logging
 import os
+import time
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
@@ -52,7 +53,7 @@ from modules.briefing.comment import BriefingCommentator, CommentError
 from modules.briefing.market import MarketScope
 from modules.llm import LlmError, briefing_model
 from modules.market_session import krx_open_day
-from modules.slack import SlackError, post_message, upload_file
+from modules.slack import UPLOAD_PROCESSING_WAIT_SECONDS, SlackError, post_message, upload_file
 from modules.utility import CONNECTION_ID, KST_TIMEZONE
 
 logger = logging.getLogger(__name__)
@@ -118,13 +119,13 @@ def slack_kr_market_briefing():
             connection.close()
 
         comment, comment_error = _comment(summary)
-        chart_file_id, chart_error = _chart(token, chart_series, now)
+        chart_files, chart_error = _chart(token, chart_series, now)
         blocks = market.render_blocks(
             summary,
             MarketScope.KOREA,
             comment,
             comment_error,
-            chart_file_id=chart_file_id,
+            chart_files=chart_files,
             chart_error=chart_error,
         )
         text = market.render_text(summary, MarketScope.KOREA)
@@ -137,23 +138,29 @@ def slack_kr_market_briefing():
 
     def _chart(
         token: SecretStr, series: tuple[market.ChartSeries, ...], now: datetime
-    ) -> tuple[str | None, str | None]:
-        """당일 분봉 차트를 그려 올린다. **실패해도 리포트를 막지 않는다.**
+    ) -> tuple[tuple[tuple[str, str], ...] | None, str | None]:
+        """계열마다 차트 한 장을 그려 올린다. **실패해도 리포트를 막지 않는다.**
 
         표가 본체다. 개장 전처럼 그릴 봉이 없으면 실패가 아니라 생략이라 오류도 남기지
-        않는다. 실패 원인은 요약과 같은 방식으로 메시지에 남긴다.
+        않는다. 한 장이라도 실패하면 전부 버리고 원인을 메시지에 남긴다 — 일부만 실린
+        차트는 빠진 심볼이 안 보이기 때문이다.
         """
         if not series:
             return None, None
+        local = now.astimezone(KST_TIMEZONE)
         try:
-            png = chart.render_chart_png(series, now)
-            local = now.astimezone(KST_TIMEZONE)
-            return upload_file(
-                token,
-                filename=f"kr-market-{local:%Y%m%d-%H%M}.png",
-                title=f"한국장 당일 흐름 {local:%m/%d %H:%M} KST",
-                content=png,
-            ), None
+            uploads = tuple(
+                (
+                    upload_file(
+                        token,
+                        filename=f"kr-{one.symbol}-{local:%Y%m%d-%H%M}.png",
+                        title=f"{one.label} 당일 흐름 {local:%m/%d %H:%M} KST",
+                        content=chart.render_series_png(one),
+                    ),
+                    one.label,
+                )
+                for one in series
+            )
         except ImportError as error:
             # matplotlib이 운영 이미지에 없다. 재시도해도 같으므로 표만 보낸다.
             logger.warning("chart backend unavailable; sending the tables without it: %s", error)
@@ -161,6 +168,9 @@ def slack_kr_market_briefing():
         except (ConnectionError, SlackError, chart.ChartError) as error:
             logger.warning("chart failed; sending the tables without it: %s", error)
             return None, str(error)
+        # 업로드 직후에는 image 블록이 invalid_blocks로 거절된다. slack 모듈 주석 참고.
+        time.sleep(UPLOAD_PROCESSING_WAIT_SECONDS)
+        return uploads, None
 
     def _comment(summary: market.MarketSummary) -> tuple[str | None, str | None]:
         """요약을 만든다. **실패해도 리포트를 막지 않는다.**

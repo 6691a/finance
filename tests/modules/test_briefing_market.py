@@ -386,12 +386,15 @@ def test_chart_series_keep_the_symbol_order_and_skip_empty_ones():
     assert series[0].label == "코스피"
 
 
-def test_the_chart_block_sits_after_the_domestic_table():
-    with_chart = market.render_blocks(summary(), MarketScope.KOREA, None, chart_file_id="F0AAA")
+def test_each_chart_file_gets_its_own_image_block_after_the_domestic_table():
+    with_chart = market.render_blocks(
+        summary(), MarketScope.KOREA, None, chart_files=(("F0AAA", "코스피"), ("F0BBB", "삼성전자"))
+    )
 
-    image = next(block for block in with_chart if block["type"] == "image")
-    assert image["slack_file"] == {"id": "F0AAA"}
-    assert with_chart[with_chart.index(image) - 1]["type"] == "table"
+    images = [block for block in with_chart if block["type"] == "image"]
+    assert [image["slack_file"]["id"] for image in images] == ["F0AAA", "F0BBB"]
+    assert images[0]["alt_text"] == "코스피 당일 분봉 차트"
+    assert with_chart[with_chart.index(images[0]) - 1]["type"] == "table"
 
 
 def test_chart_failure_is_visible_and_absence_is_silent():

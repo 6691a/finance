@@ -473,7 +473,7 @@ def render_blocks(
     comment: str | None,
     error: str | None = None,
     *,
-    chart_file_id: str | None = None,
+    chart_files: Sequence[tuple[str, str]] | None = None,
     chart_error: str | None = None,
 ):
     """Slack 블록. 값은 Slack 기본 `table` 블록에 넣는다(`blocks` 모듈 docstring 참고)."""
@@ -482,7 +482,7 @@ def render_blocks(
         rendered = [
             blocks.header(f"📈 한국장 브리핑 · {blocks.timestamp(local)} · {session_state(summary.generated_at)}"),
             *_quote_section("국내 지수·선물", _korea_quotes(summary)),
-            *_chart_section(chart_file_id, chart_error),
+            *_chart_section(chart_files, chart_error),
             *_quote_section("장중 해외", _intraday_overseas(summary)),
             *_flow_section(summary),
             *_stock_flow_section(summary),
@@ -735,14 +735,14 @@ def _quote_section(title: str, quotes: Sequence[QuoteChange]) -> list[dict[str, 
     return blocks.table_section(title, ("구분", "종가", "등락", "기준"), rows)
 
 
-def _chart_section(file_id: str | None, error: str | None) -> list[dict[str, Any]]:
-    """당일 분봉 차트. **실패는 채널에 남긴다.**
+def _chart_section(files: Sequence[tuple[str, str]] | None, error: str | None) -> list[dict[str, Any]]:
+    """당일 분봉 차트. 계열마다 image 블록 하나다(`(file_id, label)`). **실패는 채널에 남긴다.**
 
     조용히 빠지면 차트가 원래 없는 리포트와 구분되지 않는다(요약 실패와 같은 원칙).
     둘 다 없으면 개장 전처럼 그릴 봉이 없는 정상 흐름이라 아무 것도 그리지 않는다.
     """
-    if file_id:
-        return [blocks.image(file_id, "당일 분봉 차트")]
+    if files:
+        return [blocks.image(file_id, f"{label} 당일 분봉 차트") for file_id, label in files]
     if error:
         return [blocks.context([f"⚠️ 차트 생성 실패: {error}"])]
     return []

@@ -50,8 +50,12 @@ kis_websocket_domain: ws://ops.koreainvestment.com:21000
 fred_api_key: ""
 ecos_api_key: ""
 
+# 비우면 Sentry 전체 비활성. 채우면 에러 이벤트, 로그 전송, 트레이싱이 켜진다.
 sentry_dsn: ""
 sentry_environment: development
-sentry_release: finance@local
+# 실제 배포 버전을 넣을 게 아니면 비워 둔다. 고정 문자열은 릴리스 추적을 거짓으로 만든다.
+sentry_release: ""
+# 트랜잭션 샘플링 비율. realtime은 HTTP 트랜잭션이 없어 DB 스팬 정도만 잡힌다.
 sentry_traces_sample_rate: 0.1
+# 에러 이벤트 샘플링. 1.0이 SDK 기본값과 같다.
 sentry_error_sample_rate: 1.0

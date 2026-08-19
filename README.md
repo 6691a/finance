@@ -606,19 +606,20 @@ ORDER BY ts
 | Airflow | `compose/prod/airflow/docker-compose.yaml` | `airflow/{dags,logs,plugins,modules,utility,sql,airflow.cfg}` |
 | KIS 실시간 수집기 | `compose/prod/docker-compose.yaml` | `apps/`, clone 루트의 `config.yaml` |
 
-배포는 개발 머신에서 한 번에 합니다. `main`에 push한 뒤:
+배포 순서: `main`에 push → NAS clone에서 `git pull` (직접 실행) → 개발 머신에서:
 
 ```bash
 just deploy          # ssh 별칭 nas 기준. 다른 별칭이면 `just deploy <host>`
 ```
 
-레시피가 NAS에서 `git pull --ff-only` 후 두 스택을 `up -d --build` 합니다. 변경 종류별
+레시피가 NAS에서 두 스택을 `up -d --build` 하고 realtime을 재시작합니다. 변경 종류별
 반영 방식은 다음과 같습니다.
 
 - `airflow/dags`·`modules` 등 bind-mount 코드 — dag-processor가 재파싱하고 태스크는
-  실행마다 새 프로세스이므로 pull만으로 반영됩니다.
-- `apps/` — 상주 프로세스라 pull로는 반영되지 않습니다. deploy 레시피가 변경을 감지해
-  realtime 컨테이너만 재시작합니다.
+  실행마다 새 프로세스이므로 pull만으로 반영됩니다. `just deploy`도 필요 없습니다.
+- `apps/` — 상주 프로세스라 pull로는 반영되지 않습니다. deploy 레시피가 realtime
+  컨테이너를 재시작합니다. 열린 분은 원래 저장하지 않고 마감 후 REST가 확정본을
+  채우므로 재시작 비용은 몇 초 끊김뿐입니다.
 - compose 파일·Dockerfile·requirements — `up -d --build`가 이미지·설정 변경을 감지해
   재생성합니다.
 - `airflow/airflow.cfg` — 컨테이너 재시작이 필요합니다. NAS에서 airflow 스택을

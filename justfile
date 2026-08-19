@@ -35,19 +35,17 @@ realtime-prod:
 realtime-prod-down:
     docker compose -f {{realtime_prod_compose}} down
 
-# 운영 배포. NAS clone(/volume1/docker/finance)에서 pull 후 두 스택 up.
+# 운영 배포. NAS clone(/volume1/docker/finance)에서 git pull을 먼저 직접 한 뒤 실행한다.
 # compose·Dockerfile·requirements 변경은 up -d --build가 스스로 재생성하고,
-# bind-mount 코드(apps/)만 감지 못 하므로 그 경우에만 realtime을 재시작한다.
+# bind-mount 코드(apps/)는 up이 감지 못 하므로 realtime은 무조건 재시작한다.
+# 열린 분은 원래 저장하지 않고 마감 후 REST가 확정본을 채우므로 몇 초 끊김만 비용이다.
 # airflow는 재시작 불필요 — dags/modules는 dag-processor가 재파싱한다.
 # airflow/airflow.cfg 변경만 수동 스택 재시작이 필요하다(README 배포 절).
 deploy host="nas":
     ssh {{host}} 'set -e; cd /volume1/docker/finance; \
-        before=$(git rev-parse HEAD); \
-        git pull --ff-only; \
         docker compose -f compose/prod/airflow/docker-compose.yaml up -d --build; \
         docker compose -f compose/prod/docker-compose.yaml up -d --build; \
-        git diff --quiet "$before" HEAD -- apps/ \
-            || docker compose -f compose/prod/docker-compose.yaml restart'
+        docker compose -f compose/prod/docker-compose.yaml restart'
 
 # Run an Alembic command across every migration-enabled database alias.
 # Example: `just migrate upgrade head`.

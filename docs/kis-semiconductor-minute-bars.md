@@ -13,7 +13,7 @@
 > **2026-08-18 갱신 2 — 7장 WebSocket 구현됨** (2026-08-19 위치 확정): 상주 수집기는
 > **`apps/realtime/`**(백엔드 트리)다. Airflow가 실행하지 않는 코드는 `airflow/`에 두지
 > 않는 규칙이 새로 확정돼, 문서 7.1·11.1의 `airflow/modules/collectors/kis_realtime.py`·
-> Airflow 이미지 공유 배포는 대체됐다. 실행은 `python -m apps.realtime`, 배포는 별도
+> Airflow 이미지 공유 배포는 대체됐다. 실행은 `python -m apps.realtime.main`, 배포는 별도
 > 스택 `compose/prod/`(개발은 `compose/local/realtime/`), 설정은 FastAPI와 같은
 > `config.yaml`(`apps.core.config`), 저장은 `apps.models` ORM
 > (`apps/realtime/repository.py`)이다. `stock_bar`에 `ingest_method`/`is_final` 컬럼이

@@ -162,7 +162,7 @@
 ## 관측과 Sentry 규칙
 
 Sentry 프로젝트는 둘이다. Airflow는 NAS `.env`의 `AIRFLOW__SENTRY__*`로, realtime은
-`config.yaml`의 `sentry_*`로 붙는다. realtime의 `sentry_sdk.init`(`apps/realtime/service.py`)이
+`config.yaml`의 `sentry_*`로 붙는다. realtime의 `sentry_sdk.init`(`apps/realtime/main.py`)이
 켜 둔 것: 에러 이벤트, 표준 logging 자동 전달(ERROR 이상 이벤트, WARNING breadcrumb,
 INFO 이상 Sentry Logs), 트레이싱(`sentry_traces_sample_rate`), 트랜잭션 연동 프로파일링.
 DSN이 비면 전체 비활성이다. 새 상주 서비스(FastAPI 등)도 같은 `settings.sentry_*`로 init한다.

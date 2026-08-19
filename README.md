@@ -645,7 +645,7 @@ NAS에만 두는 파일은 셋이고 전부 gitignore 대상입니다: `compose/
 Sentry 프로젝트는 둘입니다. Airflow는 NAS `.env`의 `AIRFLOW__SENTRY__*`로, realtime은
 `config.yaml`의 `sentry_*`로 붙습니다(`sentry_dsn`이 비면 전체 비활성).
 
-realtime(`apps/realtime/service.py`)에서 켜 둔 것:
+realtime(`apps/realtime/main.py`)에서 켜 둔 것:
 
 | 기능 | 동작 |
 | --- | --- |

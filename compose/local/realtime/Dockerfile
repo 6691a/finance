@@ -11,4 +11,4 @@ RUN pip install --no-cache-dir -r /tmp/requirements.txt
 ENV PYTHONPATH=/app PYTHONUNBUFFERED=1
 WORKDIR /app
 
-CMD ["python", "-m", "apps.realtime"]
+CMD ["python", "-m", "apps.realtime.main"]

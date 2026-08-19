@@ -15,30 +15,31 @@ from pydantic import SecretStr
 
 from apps.models.market import StockExchange
 from apps.models.raw import SourceStatus
+from apps.realtime import heartbeat as heartbeat_module
 from apps.realtime import repository as repository_module
 from apps.realtime import service
-from apps.realtime.service import (
+from apps.realtime.aggregator import SESSION_WINDOWS, MinuteAggregator, in_session
+from apps.realtime.frames import (
     FRAME_SPECS,
     KRX_FIELDS,
     KRX_TR_ID,
     KST,
     NXT_FIELDS,
     NXT_TR_ID,
-    SESSION_WINDOWS,
-    AuthRejectedError,
-    DomesticStock,
     EncryptedFrameError,
     FrameContractError,
-    MinuteAggregator,
     PingPong,
-    RealtimeSettings,
     SubscribeResult,
     Tick,
-    build_registry,
-    in_connect_window,
-    in_session,
     parse_control_frame,
     parse_data_frame,
+)
+from apps.realtime.service import (
+    AuthRejectedError,
+    DomesticStock,
+    RealtimeSettings,
+    build_registry,
+    in_connect_window,
 )
 
 SUBSCRIBED = frozenset({"005930", "000660"})
@@ -491,7 +492,7 @@ async def test_connection_echoes_pingpong_and_closes_the_session(monkeypatch, tm
     monkeypatch.setattr(service, "connect", lambda url, ping_interval=None: socket)
     settings = make_settings()
     repository = FakeRepository()
-    heartbeat = service._Heartbeat(tmp_path / "heartbeat.json")
+    heartbeat = heartbeat_module.Heartbeat(tmp_path / "heartbeat.json")
 
     with pytest.raises(service._StreamEnded):
         await service.run_connection(settings, build_registry(settings), repository, SecretStr("approval"), heartbeat)
@@ -512,7 +513,7 @@ async def test_all_rejected_subscriptions_mean_an_auth_problem(monkeypatch, tmp_
     monkeypatch.setattr(service, "connect", lambda url, ping_interval=None: socket)
     settings = make_settings()
     repository = FakeRepository()
-    heartbeat = service._Heartbeat(tmp_path / "heartbeat.json")
+    heartbeat = heartbeat_module.Heartbeat(tmp_path / "heartbeat.json")
 
     with pytest.raises(AuthRejectedError):
         await service.run_connection(settings, build_registry(settings), repository, SecretStr("approval"), heartbeat)
@@ -527,7 +528,7 @@ async def test_flush_timer_stores_bars_after_the_delay(tmp_path):
     aggregator.add(tick(minute=2, second=10))
     repository = FakeRepository()
     counters = {"stored_bars": 0, "skipped_no_previous_close": 0}
-    heartbeat = service._Heartbeat(tmp_path / "heartbeat.json")
+    heartbeat = heartbeat_module.Heartbeat(tmp_path / "heartbeat.json")
     now = datetime(2026, 8, 18, 9, 2, 40, tzinfo=KST).astimezone(UTC)
     slept: list[float] = []
 
@@ -569,7 +570,7 @@ async def test_flush_timer_skips_series_without_a_previous_close(tmp_path):
     aggregator.add(tick(minute=2))
     repository = FakeRepository()
     counters = {"stored_bars": 0, "skipped_no_previous_close": 0}
-    heartbeat = service._Heartbeat(tmp_path / "heartbeat.json")
+    heartbeat = heartbeat_module.Heartbeat(tmp_path / "heartbeat.json")
 
     async def sleeper(seconds: float) -> None:
         if counters["skipped_no_previous_close"]:
@@ -621,18 +622,18 @@ async def test_watchdog_stops_at_the_connect_window_edge():
 
 def test_healthcheck_reads_the_heartbeat_file(tmp_path):
     path = Path(tmp_path) / "heartbeat.json"
-    service.write_heartbeat(path, "ready", frames=10)
+    heartbeat_module.write_heartbeat(path, "ready", frames=10)
 
-    assert service.healthcheck(path) == 0
+    assert heartbeat_module.healthcheck(path) == 0
 
-    service.write_heartbeat(path, "failed")
-    assert service.healthcheck(path) == 1
-    assert service.healthcheck(Path(tmp_path) / "missing.json") == 1
+    heartbeat_module.write_heartbeat(path, "failed")
+    assert heartbeat_module.healthcheck(path) == 1
+    assert heartbeat_module.healthcheck(Path(tmp_path) / "missing.json") == 1
 
 
 def test_healthcheck_flags_a_stale_heartbeat(tmp_path):
     path = Path(tmp_path) / "heartbeat.json"
-    service.write_heartbeat(path, "ready")
+    heartbeat_module.write_heartbeat(path, "ready")
 
-    later = datetime.now(UTC) + timedelta(seconds=service.HEARTBEAT_STALE_SECONDS + 1)
-    assert service.healthcheck(path, now=later) == 1
+    later = datetime.now(UTC) + timedelta(seconds=heartbeat_module.HEARTBEAT_STALE_SECONDS + 1)
+    assert heartbeat_module.healthcheck(path, now=later) == 1

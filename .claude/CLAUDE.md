@@ -12,7 +12,7 @@ Codex용 규칙 원본은 [.codex/AGENTS.md](../.codex/AGENTS.md)이며 두 문�
 | `../apps/core/redis.py` | Redis 연결 관리 |
 | `../apps/core/container.py` | dependency-injector 컨테이너 |
 | `apps/models/` | SQLAlchemy 모델. 파일 이름 = PostgreSQL 스키마 이름 |
-| `apps/realtime/` | KIS 실시간 WebSocket 수집 서비스. `python -m apps.realtime`, `compose/prod/` 배포 |
+| `apps/realtime/` | KIS 실시간 WebSocket 수집 서비스. `python -m apps.realtime.main`, `compose/prod/` 배포 |
 | `migrations/` | Alembic. 리비전 파일은 `migrations/versions` 하나를 모든 별칭이 공유한다 |
 | `migrations/routing.py` | 어떤 테이블이 어떤 DB 별칭에 속하는지 판단하는 순수 함수 |
 | `../airflow/dags/` | Airflow DAG |
@@ -146,7 +146,7 @@ ruff isort `known-first-party`가 `pyproject.toml`에 맞춰져 있다.
 **`airflow/` 아래에는 DAG가 실제로 import·실행하는 코드만 둔다.** Airflow가 실행하지
 않는 상주 서비스·API는 `apps/` 아래에 백엔드 규칙(ORM, `config.yaml`, async)으로 두고
 (앞으로 올) FastAPI와 코드를 공유한다. 배포만 컨테이너로 가른다. `apps/realtime/`(KIS
-실시간 WebSocket 수집, `python -m apps.realtime`, `compose/prod/` 배포)가 그 예다.
+실시간 WebSocket 수집, `python -m apps.realtime.main`, `compose/prod/` 배포)가 그 예다.
 두 트리가 같은 도메인 상수(종목 코드, 세션 창)를 쓰면 **중복을 허용하되 테스트로
 대조한다**(`tests/realtime/test_kis_realtime.py`의 `*_match_the_airflow_collector`).
 한쪽 트리가 다른 쪽을 import하지 않는 것이 우선이다.
@@ -335,7 +335,7 @@ DAG가 쓰는 코드는 **위치는 Airflow를, 규칙은 백엔드를** 따른�
 ## 관측과 Sentry
 
 Sentry 프로젝트는 둘이다. Airflow는 NAS `.env`의 `AIRFLOW__SENTRY__*`로, realtime은
-`config.yaml`의 `sentry_*`로 붙는다. realtime의 `sentry_sdk.init`(`apps/realtime/service.py`)이
+`config.yaml`의 `sentry_*`로 붙는다. realtime의 `sentry_sdk.init`(`apps/realtime/main.py`)이
 켜 둔 것: 에러 이벤트, 표준 logging 자동 전달(ERROR 이상 이벤트, WARNING breadcrumb,
 INFO 이상 Sentry Logs), 트레이싱(`sentry_traces_sample_rate`), 트랜잭션 연동 프로파일링.
 DSN이 비면 전체 비활성이다. 새 상주 서비스(FastAPI 등)도 같은 `settings.sentry_*`로 init한다.

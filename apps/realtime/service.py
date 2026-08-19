@@ -21,45 +21,50 @@ Airflow가 실행하지 않는 상주 서비스라 백엔드 트리에 있다. �
 문서 4.2의 NXT 3분할 창(애프터 15:40 시작) 대신 실측(kis.py: 애프터 15:30~20:00,
 세션 사이 공백은 봉이 자연히 빔)을 따른다. REST가 저장하는 범위와 정확히 일치해야
 WS에만 구멍이 생기지 않는다.
+
+파일 구성: 프레임 계약은 `frames`, 분봉 집계는 `aggregator`, 상태 파일은
+`heartbeat`, 조립·진입점은 `app`이다. 이 모듈은 연결과 서비스 루프만 갖는다.
 """
 
-import argparse
 import asyncio
 import json
 import logging
-import os
 import random
 import signal
 import uuid
-from collections.abc import Callable, Coroutine, Mapping, Sequence
+from collections.abc import Callable, Coroutine, Mapping
 from datetime import UTC, datetime, time, timedelta
-from decimal import Decimal, InvalidOperation
+from decimal import Decimal
 from enum import StrEnum
 from pathlib import Path
 from typing import Any, Self
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlparse
 from urllib.request import Request, urlopen
-from zoneinfo import ZoneInfo
 
-from pydantic import AwareDatetime, BaseModel, ConfigDict, SecretStr, field_validator
+from pydantic import BaseModel, ConfigDict, SecretStr, field_validator
 from websockets.asyncio.client import connect
 from websockets.exceptions import WebSocketException
 
-from apps.models.market import StockExchange
 from apps.models.raw import SourceStatus
+from apps.realtime.aggregator import MinuteAggregator, in_session, minute_of
+from apps.realtime.frames import (
+    KRX_TR_ID,
+    KST,
+    NXT_TR_ID,
+    EncryptedFrameError,
+    FrameContractError,
+    PingPong,
+    parse_control_frame,
+    parse_data_frame,
+)
+from apps.realtime.heartbeat import Heartbeat
 from apps.realtime.repository import PROVIDER, RealtimeRepository
 
 logger = logging.getLogger(__name__)
 
-KST = ZoneInfo("Asia/Seoul")
-
 APPROVAL_PATH = "/oauth2/Approval"
 REQUEST_TIMEOUT_SECONDS = 30
-
-KRX_TR_ID = "H0STCNT0"
-NXT_TR_ID = "H0NXCNT0"
-RECORD_FIELD_COUNT = 46
 
 # 연결당 구독 상한. 공식 helper의 한계다. 다른 KIS 문서(프로그램매매 등)가 같은 연결에
 # 채널을 더 태울 예정이라 시작 시점에 총 수를 검증한다.
@@ -68,13 +73,6 @@ MAX_SUBSCRIPTIONS_PER_CONNECTION = 40
 # 연결 창(KST). 밖에서는 프로세스가 살아 있되 연결하지 않는다(문서 11.1).
 CONNECT_WINDOW_OPEN = time(7, 50)
 CONNECT_WINDOW_CLOSE = time(20, 10)
-
-# 세션 창(KST, 분 기준 양끝 포함). REST 일별 수집(`modules.collectors.kis`)과 같은
-# 값이어야 WS에만 구멍이 생기지 않는다. 테스트가 둘을 대조한다.
-SESSION_WINDOWS: dict[StockExchange, tuple[time, time]] = {
-    StockExchange.KRX: (time(9, 0), time(15, 30)),
-    StockExchange.NXT: (time(8, 0), time(20, 0)),
-}
 
 # 어떤 프레임(PINGPONG 포함)도 이 시간 동안 없으면 죽은 소켓으로 보고 재연결한다.
 # 평일 휴일에도 PINGPONG은 오므로 완전 침묵은 유휴가 아니라 장애다.
@@ -109,75 +107,11 @@ class DomesticStock(StrEnum):
     SK_HYNIX = ("000660", "SK하이닉스")
 
 
-# H0STCNT0(KRX 주식 체결) 46필드. 순서가 계약이다 — 열이 밀리면 값이 조용히 옆 칸으로
-# 간다. 개수와 순서를 응답마다 검증한다. 실 캡처 픽스처로 대조한다.
-KRX_FIELDS: tuple[str, ...] = (
-    "MKSC_SHRN_ISCD",
-    "STCK_CNTG_HOUR",
-    "STCK_PRPR",
-    "PRDY_VRSS_SIGN",
-    "PRDY_VRSS",
-    "PRDY_CTRT",
-    "WGHN_AVRG_STCK_PRC",
-    "STCK_OPRC",
-    "STCK_HGPR",
-    "STCK_LWPR",
-    "ASKP1",
-    "BIDP1",
-    "CNTG_VOL",
-    "ACML_VOL",
-    "ACML_TR_PBMN",
-    "SELN_CNTG_CSNU",
-    "SHNU_CNTG_CSNU",
-    "NTBY_CNTG_CSNU",
-    "CTTR",
-    "SELN_CNTG_SMTN",
-    "SHNU_CNTG_SMTN",
-    "CCLD_DVSN",
-    "SHNU_RATE",
-    "PRDY_VOL_VRSS_ACML_VOL_RATE",
-    "OPRC_HOUR",
-    "OPRC_VRSS_PRPR_SIGN",
-    "OPRC_VRSS_PRPR",
-    "HGPR_HOUR",
-    "HGPR_VRSS_PRPR_SIGN",
-    "HGPR_VRSS_PRPR",
-    "LWPR_HOUR",
-    "LWPR_VRSS_PRPR_SIGN",
-    "LWPR_VRSS_PRPR",
-    "BSOP_DATE",
-    "NEW_MKOP_CLS_CODE",
-    "TRHT_YN",
-    "ASKP_RSQN1",
-    "BIDP_RSQN1",
-    "TOTAL_ASKP_RSQN",
-    "TOTAL_BIDP_RSQN",
-    "VOL_TNRT",
-    "PRDY_SMNS_HOUR_ACML_VOL",
-    "PRDY_SMNS_HOUR_ACML_VOL_RATE",
-    "HOUR_CLS_CODE",
-    "MRKT_TRTM_CLS_CODE",
-    "VI_STND_PRC",
-)
-
-# H0NXCNT0(NXT 주식 체결)은 KRX와 필드 수가 같지만 스키마가 하나 다르다.
-# KRX의 CCLD_DVSN 자리에 NXT는 CNTG_CLS_CODE가 온다(문서 3.5).
-NXT_FIELDS: tuple[str, ...] = tuple("CNTG_CLS_CODE" if name == "CCLD_DVSN" else name for name in KRX_FIELDS)
-
-
 class ApprovalError(RuntimeError):
     """approval key 발급이 거절됐다. 설정·인증 문제라 재시도해도 같은 답이다."""
 
     def __init__(self, detail: str) -> None:
         super().__init__(f"KIS approval issue failed: {detail}")
-
-
-class FrameContractError(ValueError):
-    """프레임이 46필드 파이프·캐럿 계약을 지키지 않았다. 재시도해도 같은 답이다."""
-
-
-class EncryptedFrameError(RuntimeError):
-    """암호화(encrypt=Y) 프레임. 평문 파싱은 금지고 격리 후 재연결한다(문서 3.5)."""
 
 
 class AuthRejectedError(RuntimeError):
@@ -202,7 +136,7 @@ class _StreamEnded(Exception):
 
 class RealtimeSettings(BaseModel):
     """서비스 설정. KIS 키·도메인은 `config.yaml`(`apps.core.config`)에서, 서비스 전용
-    노브(NXT 플래그, flush 지연)는 환경변수에서 온다. 조립은 `main()`이 한다."""
+    노브(NXT 플래그, flush 지연)는 환경변수에서 온다. 조립은 `app.main()`이 한다."""
 
     model_config = ConfigDict(frozen=True)
 
@@ -274,28 +208,6 @@ def issue_approval_key(rest_domain: str, app_key: SecretStr, app_secret: SecretS
     return SecretStr(key)
 
 
-class FrameSpec(BaseModel):
-    """TR ID 하나의 프레임 계약. 필드 목록을 고정해 열 밀림을 잡는다."""
-
-    model_config = ConfigDict(frozen=True)
-
-    exchange: StockExchange
-    fields: tuple[str, ...]
-
-    @property
-    def field_count(self) -> int:
-        return len(self.fields)
-
-    def index(self, name: str) -> int:
-        return self.fields.index(name)
-
-
-FRAME_SPECS: dict[str, FrameSpec] = {
-    KRX_TR_ID: FrameSpec(exchange=StockExchange.KRX, fields=KRX_FIELDS),
-    NXT_TR_ID: FrameSpec(exchange=StockExchange.NXT, fields=NXT_FIELDS),
-}
-
-
 class Subscription(BaseModel):
     """구독 채널 하나. 같은 연결에 다른 문서의 채널이 더 실릴 수 있다."""
 
@@ -315,324 +227,12 @@ def build_registry(settings: RealtimeSettings) -> tuple[Subscription, ...]:
     return tuple(subscriptions)
 
 
-class Tick(BaseModel):
-    """체결 하나에서 집계에 쓰는 다섯 값만 추린 것."""
-
-    model_config = ConfigDict(frozen=True)
-
-    exchange: StockExchange
-    stock_code: str
-    occurred_at: AwareDatetime
-    price: Decimal
-    volume: int
-
-    @field_validator("occurred_at")
-    @classmethod
-    def normalize_to_utc(cls, moment: datetime) -> datetime:
-        return moment.astimezone(UTC)
-
-    @field_validator("price")
-    @classmethod
-    def require_positive_finite(cls, value: Decimal) -> Decimal:
-        if not value.is_finite() or value <= 0:
-            raise ValueError(f"price must be positive and finite, got {value}")
-        return value
-
-    @field_validator("volume")
-    @classmethod
-    def require_non_negative(cls, value: int) -> int:
-        if value < 0:
-            raise ValueError(f"volume must not be negative, got {value}")
-        return value
-
-
-class PingPong(BaseModel):
-    model_config = ConfigDict(frozen=True)
-
-    raw: str
-
-
-class SubscribeResult(BaseModel):
-    model_config = ConfigDict(frozen=True)
-
-    tr_id: str
-    tr_key: str
-    ok: bool
-    code: str
-    message: str
-
-
-def parse_data_frame(raw: str, subscribed_codes: frozenset[str]) -> tuple[Tick, ...]:
-    """`암호화|TR_ID|건수|필드^...` 데이터 프레임을 틱으로 바꾼다.
-
-    검증에 실패하면 `FrameContractError`다. 열이 밀린 채 조용히 저장되는 것보다
-    멈추는 편이 낫다.
-    """
-    head = raw.split("|", 3)
-    if len(head) != 4:
-        raise FrameContractError(f"data frame needs 4 pipe sections, got {len(head)}")
-    encrypted, tr_id, count_raw, body = head
-
-    if encrypted == "1":
-        raise EncryptedFrameError(f"encrypted frame for {tr_id}")
-    if encrypted != "0":
-        raise FrameContractError(f"unknown encrypt flag {encrypted!r}")
-
-    spec = FRAME_SPECS.get(tr_id)
-    if spec is None:
-        raise FrameContractError(f"unsupported TR ID {tr_id!r}")
-
-    try:
-        count = int(count_raw)
-    except ValueError:
-        raise FrameContractError(f"record count is not a number: {count_raw!r}") from None
-    if count < 1:
-        raise FrameContractError(f"record count must be >= 1, got {count}")
-
-    fields = body.split("^")
-    if len(fields) != count * spec.field_count:
-        raise FrameContractError(
-            f"{tr_id} expects {count * spec.field_count} fields for {count} records, got {len(fields)}"
-        )
-
-    code_index = spec.index("MKSC_SHRN_ISCD")
-    date_index = spec.index("BSOP_DATE")
-    hour_index = spec.index("STCK_CNTG_HOUR")
-    price_index = spec.index("STCK_PRPR")
-    volume_index = spec.index("CNTG_VOL")
-
-    ticks = []
-    for start in range(0, len(fields), spec.field_count):
-        record = fields[start : start + spec.field_count]
-        stock_code = record[code_index]
-        if stock_code not in subscribed_codes:
-            raise FrameContractError(f"unsubscribed stock code {stock_code!r} in {tr_id}")
-        try:
-            occurred_at = datetime.strptime(record[date_index] + record[hour_index], "%Y%m%d%H%M%S").replace(
-                tzinfo=KST
-            )
-            price = Decimal(record[price_index])
-            volume = int(record[volume_index])
-        except (ValueError, InvalidOperation):
-            raise FrameContractError(
-                f"invalid tick fields for {stock_code}: date={record[date_index]!r} hour={record[hour_index]!r}"
-            ) from None
-        ticks.append(
-            Tick(
-                exchange=spec.exchange,
-                stock_code=stock_code,
-                occurred_at=occurred_at,
-                price=price,
-                volume=volume,
-            )
-        )
-    return tuple(ticks)
-
-
-def parse_control_frame(raw: str) -> PingPong | SubscribeResult:
-    """JSON 제어 프레임을 PINGPONG과 구독 ACK/NACK으로 가른다."""
-    try:
-        payload = json.loads(raw)
-        header = payload["header"]
-        tr_id = header["tr_id"]
-    except (ValueError, KeyError, TypeError):
-        raise FrameContractError("control frame is not the expected JSON shape") from None
-
-    if tr_id == "PINGPONG":
-        return PingPong(raw=raw)
-
-    body = payload.get("body") or {}
-    return SubscribeResult(
-        tr_id=tr_id,
-        tr_key=header.get("tr_key", ""),
-        ok=body.get("rt_cd") == "0",
-        code=body.get("msg_cd", ""),
-        message=body.get("msg1", ""),
-    )
-
-
-class AggregatedBar(BaseModel):
-    """닫힌 1분봉 하나. `bar_at`은 분 시작(UTC)이다."""
-
-    model_config = ConfigDict(frozen=True)
-
-    exchange: StockExchange
-    stock_code: str
-    bar_at: AwareDatetime
-    open: Decimal
-    high: Decimal
-    low: Decimal
-    close: Decimal
-    volume: int
-
-
-class _OpenBar:
-    """집계 중인 분 하나. 순수 가변 상태라 Pydantic을 쓰지 않는다."""
-
-    __slots__ = ("close", "close_key", "high", "low", "open", "open_key", "volume")
-
-    def __init__(self, tick: Tick, sequence: int) -> None:
-        self.open = tick.price
-        self.open_key = (tick.occurred_at, sequence)
-        self.close = tick.price
-        self.close_key = (tick.occurred_at, sequence)
-        self.high = tick.price
-        self.low = tick.price
-        self.volume = tick.volume
-
-    def absorb(self, tick: Tick, sequence: int) -> None:
-        key = (tick.occurred_at, sequence)
-        # 이벤트 시각이 기준이고 동시각은 수신 순서다(문서 7.2). sequence가 그 순서다.
-        if key < self.open_key:
-            self.open = tick.price
-            self.open_key = key
-        if key >= self.close_key:
-            self.close = tick.price
-            self.close_key = key
-        self.high = max(self.high, tick.price)
-        self.low = min(self.low, tick.price)
-        self.volume += tick.volume
-
-
-def _minute_of(moment: datetime) -> datetime:
-    return moment.replace(second=0, microsecond=0)
-
-
-class MinuteAggregator:
-    """틱을 (거래소, 종목, 분) 단위 봉으로 모은다. I/O가 없는 순수 상태 기계다."""
-
-    def __init__(self) -> None:
-        self._bars: dict[tuple[StockExchange, str, datetime], _OpenBar] = {}
-        self._sequence = 0
-        self._watermark: datetime | None = None
-        self._flushed_until: datetime | None = None
-        self.late_tick_count = 0
-        self.skipped_partial_count = 0
-        self.dropped_open_count = 0
-
-    def mark_connected(self, now: datetime) -> None:
-        """연결(재연결) 시각이 담긴 분을 저장 금지 수위선으로 기록한다.
-
-        체결 프레임에 전역 체결 ID가 없어 분 중간에 붙은 연결의 첫 분은 앞부분이
-        비었는지 알 수 없다. 그 분은 버리고 REST 확정에 맡긴다(문서 7.2).
-        """
-        watermark = _minute_of(now.astimezone(UTC))
-        if self._watermark is None or watermark > self._watermark:
-            self._watermark = watermark
-
-    def add(self, tick: Tick) -> None:
-        bar_at = _minute_of(tick.occurred_at)
-        if self._flushed_until is not None and bar_at < self._flushed_until:
-            # 이미 닫은 분의 늦은 틱. 병합하면 flush된 값과 어긋나므로 버리고 센다.
-            self.late_tick_count += 1
-            return
-        self._sequence += 1
-        key = (tick.exchange, tick.stock_code, bar_at)
-        open_bar = self._bars.get(key)
-        if open_bar is None:
-            self._bars[key] = _OpenBar(tick, self._sequence)
-        else:
-            open_bar.absorb(tick, self._sequence)
-
-    def flush_before(self, boundary: datetime) -> tuple[AggregatedBar, ...]:
-        """`boundary`(분 시작, UTC) 이전의 분을 전부 닫아 돌려준다."""
-        boundary = _minute_of(boundary.astimezone(UTC))
-        closed = []
-        for key in sorted(key for key in self._bars if key[2] < boundary):
-            exchange, stock_code, bar_at = key
-            open_bar = self._bars.pop(key)
-            if self._watermark is not None and bar_at <= self._watermark:
-                # 연결 시각이 담긴 분은 불완전하다. 저장하지 않는다.
-                self.skipped_partial_count += 1
-                continue
-            closed.append(
-                AggregatedBar(
-                    exchange=exchange,
-                    stock_code=stock_code,
-                    bar_at=bar_at,
-                    open=open_bar.open,
-                    high=open_bar.high,
-                    low=open_bar.low,
-                    close=open_bar.close,
-                    volume=open_bar.volume,
-                )
-            )
-        if self._flushed_until is None or boundary > self._flushed_until:
-            self._flushed_until = boundary
-        return tuple(closed)
-
-    def drop_open_minutes(self) -> None:
-        """끊김·종료 시 열린 분을 폐기한다. 불완전한 봉을 완전한 것처럼 저장하지 않는다."""
-        self.dropped_open_count += len(self._bars)
-        self._bars.clear()
-
-
-def in_session(exchange: StockExchange, occurred_at: datetime) -> bool:
-    """틱이 담길 분이 REST 일별 수집과 같은 창 안인지 본다.
-
-    KRX 09:00~15:30, NXT 08:00~20:00(분 기준, 양끝 포함). NXT 세션 사이 공백은 체결이
-    없어 자연히 봉이 비므로 창을 셋으로 나누지 않는다(kis.py 실측).
-    """
-    first_bar, last_bar = SESSION_WINDOWS[exchange]
-    minute = _minute_of(occurred_at.astimezone(KST)).time()
-    return first_bar <= minute <= last_bar
-
-
 def in_connect_window(now: datetime) -> bool:
     moment = now.astimezone(KST)
     # 주말 가드일 뿐 휴일 캘린더는 없다. 휴일의 무체결은 정상 유휴로 남는다(문서 4.2).
     if moment.weekday() >= 5:
         return False
     return CONNECT_WINDOW_OPEN <= moment.time() < CONNECT_WINDOW_CLOSE
-
-
-HEARTBEAT_STATES = ("idle", "connecting", "ready", "degraded", "failed")
-HEARTBEAT_STALE_SECONDS = 120.0
-
-
-def write_heartbeat(path: Path, state: str, **extra: Any) -> None:
-    """healthcheck가 읽는 상태 파일. 임시 파일에 쓰고 바꿔치기해 찢긴 읽기를 막는다."""
-    if state not in HEARTBEAT_STATES:
-        raise ValueError(f"unknown heartbeat state {state!r}")
-    payload = {"state": state, "written_at": datetime.now(UTC).isoformat(), **extra}
-    temporary = path.with_suffix(".tmp")
-    temporary.write_text(json.dumps(payload, ensure_ascii=False))
-    temporary.replace(path)
-
-
-def healthcheck(path: Path, now: datetime | None = None) -> int:
-    """docker healthcheck 진입점. 0=건강, 1=이상."""
-    now = now or datetime.now(UTC)
-    try:
-        payload = json.loads(path.read_text())
-        state = payload["state"]
-        written_at = datetime.fromisoformat(payload["written_at"])
-    except (OSError, ValueError, KeyError):
-        return 1
-    if state not in HEARTBEAT_STATES or state == "failed":
-        return 1
-    if (now - written_at).total_seconds() > HEARTBEAT_STALE_SECONDS:
-        return 1
-    return 0
-
-
-class _Heartbeat:
-    """상태 파일 쓰기를 카운터와 함께 감싼 것. 파일 쓰기 실패는 수집을 멈출 이유가
-    아니므로 경고만 남긴다 — 상태 파일은 관측용이지 데이터가 아니다."""
-
-    def __init__(self, path: Path) -> None:
-        self._path = path
-        self.state = "idle"
-
-    def update(self, state: str, **extra: Any) -> None:
-        if state != self.state:
-            # 전이만 남긴다. idle 유지 30초마다 한 줄씩 쌓이면 로그가 소음이 된다.
-            logger.info("State %s -> %s", self.state, state)
-        self.state = state
-        try:
-            write_heartbeat(self._path, state, **extra)
-        except OSError:
-            logger.warning("Heartbeat write failed at %s", self._path)
 
 
 def _first_cause(error: BaseException) -> BaseException:
@@ -664,7 +264,7 @@ async def _flush_timer(
     delay_seconds: float,
     counters: dict[str, int],
     heartbeat_extra: Callable[[], dict[str, Any]],
-    heartbeat: _Heartbeat,
+    heartbeat: Heartbeat,
     clock: Callable[[], datetime] = lambda: datetime.now(UTC),
     sleeper: Callable[[float], Coroutine[Any, Any, None]] = asyncio.sleep,
 ) -> None:
@@ -672,7 +272,7 @@ async def _flush_timer(
     (문서 7.3). `clock`/`sleeper` 주입은 테스트용이다."""
     while True:
         now = clock()
-        boundary = _minute_of(now) + timedelta(minutes=1)
+        boundary = minute_of(now) + timedelta(minutes=1)
         await sleeper((boundary - now).total_seconds() + delay_seconds)
         bars = aggregator.flush_before(boundary)
         rows = []
@@ -725,7 +325,7 @@ async def run_connection(
     registry: tuple[Subscription, ...],
     repository: RealtimeRepository,
     approval_key: SecretStr,
-    heartbeat: _Heartbeat,
+    heartbeat: Heartbeat,
 ) -> None:
     """물리 연결 하나. 세션 레코드 하나가 이 연결의 계보다(문서 10.1).
 
@@ -897,7 +497,7 @@ async def run_connection(
 
 async def run_service(settings: RealtimeSettings, repository: RealtimeRepository) -> None:
     """바깥 루프. 연결 창 안에서 연결을 유지하고 밖에서는 유휴로 기다린다."""
-    heartbeat = _Heartbeat(settings.heartbeat_path)
+    heartbeat = Heartbeat(settings.heartbeat_path)
     registry = build_registry(settings)
     logger.info(
         "kis-realtime 시작: 구독 %d건(%s), NXT=%s, 연결 창 평일 07:50~20:10 KST",
@@ -981,81 +581,3 @@ async def _wait_or_shutdown(shutdown: asyncio.Event, seconds: float) -> None:
         await asyncio.wait_for(shutdown.wait(), timeout=seconds)
     except TimeoutError:
         pass
-
-
-def _env_bool(value: str | None) -> bool:
-    return (value or "").strip().lower() in {"1", "true", "yes"}
-
-
-def main(argv: Sequence[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description="KIS 실시간 1분봉 수집기")
-    parser.add_argument("--healthcheck", action="store_true", help="heartbeat 파일로 상태만 확인하고 나간다")
-    arguments = parser.parse_args(argv)
-
-    heartbeat_path = Path(os.environ.get("KIS_REALTIME_HEARTBEAT_FILE", str(DEFAULT_HEARTBEAT_PATH)))
-    if arguments.healthcheck:
-        # config.yaml 없이도 돌아야 한다. healthcheck는 30초마다 도는 가장 싼 경로다.
-        return healthcheck(heartbeat_path)
-
-    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s")
-
-    # config.yaml이 필요한 import는 실행 시점으로 미룬다. 테스트와 healthcheck는
-    # 설정 파일 없이 이 모듈을 import한다.
-    from apps.core.config import settings
-
-    realtime = RealtimeSettings(
-        app_key=SecretStr(settings.kis_app_key),
-        app_secret=SecretStr(settings.kis_app_secret),
-        rest_domain=settings.kis_rest_domain,
-        websocket_domain=settings.kis_websocket_domain,
-        enable_nxt=_env_bool(os.environ.get("KIS_ENABLE_NXT_WEBSOCKET")),
-        finalization_delay_seconds=float(os.environ.get("WS_FINALIZATION_DELAY_SECONDS", "3")),
-        heartbeat_path=heartbeat_path,
-        db_alias=os.environ.get("REALTIME_DB_ALIAS", "default"),
-    )
-
-    alias_config = settings.databases.get(realtime.db_alias)
-    if alias_config is None or not alias_config.runtime_enabled:
-        raise ValueError(f"database alias {realtime.db_alias!r} is missing or disabled in config.yaml")
-    if alias_config.read_only:
-        # 읽기 전용 연결로 시작하면 첫 flush에서야 터진다. 지금 멈추는 편이 낫다.
-        raise ValueError(f"database alias {realtime.db_alias!r} is read_only; provisional bars cannot be stored")
-
-    # Sentry도 FastAPI와 같은 config.yaml 값을 쓴다. DSN이 비면 SDK가 비활성으로 초기화된다.
-    # 기본 LoggingIntegration이 ERROR 이상을 이벤트로 보내고 warning은 breadcrumb으로 남는다.
-    import sentry_sdk
-
-    sentry_sdk.init(
-        dsn=settings.sentry_dsn or None,
-        environment=settings.sentry_environment or None,
-        release=settings.sentry_release or None,
-        sample_rate=settings.sentry_error_sample_rate,
-        # 요청·사용자 데이터가 없는 상주 수집기라 실릴 PII 자체가 없다.
-        send_default_pii=True,
-        # 로그를 Sentry Logs로도 보낸다. 위 이벤트/breadcrumb과 별개 채널이다.
-        enable_logs=True,
-        # 트레이싱 비율은 config.yaml이 정한다(운영 0.1). 이 서비스에는 HTTP 트랜잭션이
-        # 없어 DB 스팬 정도만 잡히고, 프로파일러는 트랜잭션이 있을 때만 돈다.
-        traces_sample_rate=settings.sentry_traces_sample_rate,
-        profile_session_sample_rate=1.0,
-        profile_lifecycle="trace",
-    )
-    logger.info("Sentry %s", "활성" if settings.sentry_dsn else "비활성")
-
-    from apps.core.database import Database
-
-    database = Database(databases=settings.databases)
-
-    async def amain() -> None:
-        repository = RealtimeRepository(database.get_session_factory(realtime.db_alias))
-        try:
-            await run_service(realtime, repository)
-        finally:
-            await database.dispose()
-
-    asyncio.run(amain())
-    return 0
-
-
-if __name__ == "__main__":
-    raise SystemExit(main())

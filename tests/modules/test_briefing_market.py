@@ -35,6 +35,9 @@ QUOTE_ROWS = [
     ("yahoo", "NIKKEI225", "닛케이225", "index", "JP", Decimal(38000), Decimal(38100), MIDDAY),
     ("yahoo", "BTCUSD", "비트코인", "crypto", "XX", Decimal(118000), Decimal(115000), MIDDAY),
     ("yahoo", "USDKRW", "원/달러(장외)", "fx", "KR", Decimal("1391.20"), Decimal("1388.60"), MIDDAY),
+    # 미국 상장 ADR. country는 회사 국적(TW·KR)이라 국내·아시아 표로 새기 쉬운 값이다.
+    ("yahoo", "TSMC_ADR", "TSMC ADR", "equity", "TW", Decimal("192.40"), Decimal("189.10"), MIDDAY),
+    ("yahoo", "SK_HYNIX_ADR", "SK하이닉스 ADR", "equity", "KR", Decimal("155.62"), Decimal("151.30"), MIDDAY),
 ]
 
 RATE_ROWS = [
@@ -372,7 +375,23 @@ def test_us_rows_are_grouped_by_kind():
     kinds = [quote.kind for quote in market._us_quotes(summary())]
 
     assert kinds == sorted(kinds, key=market.US_KIND_ORDER.index)
-    assert kinds == ["index", "index_future", "crypto"]  # 픽스처의 SOX, SP500_FUT, BTCUSD 순서
+    # 픽스처의 SOX, SP500_FUT, BTCUSD, ADR 두 개 순서
+    assert kinds == ["index", "index_future", "crypto", "equity", "equity"]
+
+
+def test_us_listed_adrs_are_drawn_in_the_us_table_only():
+    """ADR의 country는 회사 국적(TW·KR)이지만 거래는 뉴욕 세션이다.
+
+    국적으로 거르면 SK하이닉스 ADR이 국내 표에, TSMC ADR이 장중 해외 표에 섞여
+    뉴욕 마감값이 장중 값처럼 보인다.
+    """
+    result = summary()
+
+    us_symbols = [quote.symbol for quote in market._us_quotes(result)]
+    assert "TSMC_ADR" in us_symbols
+    assert "SK_HYNIX_ADR" in us_symbols
+    assert all(quote.symbol not in ("TSMC_ADR", "SK_HYNIX_ADR") for quote in market._korea_quotes(result))
+    assert all(quote.symbol not in ("TSMC_ADR", "SK_HYNIX_ADR") for quote in market._intraday_overseas(result))
 
 
 def test_crypto_is_drawn_in_both_reports_despite_having_no_country():

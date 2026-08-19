@@ -1030,7 +1030,15 @@ def main(argv: Sequence[str] | None = None) -> int:
         environment=settings.sentry_environment or None,
         release=settings.sentry_release or None,
         sample_rate=settings.sentry_error_sample_rate,
-        send_default_pii=False,
+        # 요청·사용자 데이터가 없는 상주 수집기라 실릴 PII 자체가 없다.
+        send_default_pii=True,
+        # 로그를 Sentry Logs로도 보낸다. 위 이벤트/breadcrumb과 별개 채널이다.
+        enable_logs=True,
+        # 트레이싱 비율은 config.yaml이 정한다(운영 0.1). 이 서비스에는 HTTP 트랜잭션이
+        # 없어 DB 스팬 정도만 잡히고, 프로파일러는 트랜잭션이 있을 때만 돈다.
+        traces_sample_rate=settings.sentry_traces_sample_rate,
+        profile_session_sample_rate=1.0,
+        profile_lifecycle="trace",
     )
     logger.info("Sentry %s", "활성" if settings.sentry_dsn else "비활성")
 

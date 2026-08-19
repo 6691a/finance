@@ -613,10 +613,14 @@ git pull
 just deploy            # 두 스택 전부
 just deploy-airflow    # airflow만
 just deploy-realtime   # realtime만
+just build-airflow     # Dockerfile·requirements 변경 시에만, 이어서 deploy
+just build-realtime
 ```
 
-`deploy`는 두 스택을 `up -d --build` 하고 realtime을 재시작합니다. just가 없으면
-레시피 안의 docker compose 명령을 그대로 실행합니다. 변경 종류별
+`deploy`는 두 스택을 `up -d` 하고 realtime을 재시작합니다. 이미지 빌드는 분리돼
+있습니다 — NAS buildkit이 느리고 코드가 bind-mount라 매 배포에 빌드할 이유가
+없습니다. 빌드가 `DeadlineExceeded`로 죽으면 `DOCKER_BUILDKIT=0`을 앞에 붙입니다.
+just가 없으면 레시피 안의 docker compose 명령을 그대로 실행합니다. 변경 종류별
 반영 방식은 다음과 같습니다.
 
 - `airflow/dags`·`modules` 등 bind-mount 코드 — dag-processor가 재파싱하고 태스크는
@@ -624,8 +628,9 @@ just deploy-realtime   # realtime만
 - `apps/` — 상주 프로세스라 pull로는 반영되지 않습니다. deploy 레시피가 realtime
   컨테이너를 재시작합니다. 열린 분은 원래 저장하지 않고 마감 후 REST가 확정본을
   채우므로 재시작 비용은 몇 초 끊김뿐입니다.
-- compose 파일·Dockerfile·requirements — `up -d --build`가 이미지·설정 변경을 감지해
-  재생성합니다.
+- compose 파일 — `up -d`가 설정 변경을 감지해 재생성합니다.
+- Dockerfile·requirements — `just build-<스택>` 후 `just deploy-<스택>`. 드문 일이라
+  deploy에 넣지 않았습니다.
 - `airflow/airflow.cfg` — 컨테이너 재시작이 필요합니다. NAS에서 airflow 스택을
   `docker compose restart` 합니다(드문 일이라 deploy 레시피에 넣지 않았습니다).
 

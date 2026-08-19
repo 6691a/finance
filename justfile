@@ -37,19 +37,27 @@ realtime-prod-down:
 
 # 운영 배포. NAS clone(/volume1/docker/finance)에서 git pull 후 그 안에서 실행한다.
 # `just deploy`는 전부, `just deploy-airflow`/`just deploy-realtime`은 그 스택만.
-# compose·Dockerfile·requirements 변경은 up -d --build가 스스로 재생성한다.
+# 이미지 재빌드는 여기서 하지 않는다 — Dockerfile·requirements 변경 시 `just build`.
 deploy: deploy-airflow deploy-realtime
 
 # airflow는 up만 한다. dags/modules는 bind-mount라 dag-processor가 재파싱하고,
 # airflow/airflow.cfg 변경만 수동 스택 재시작이 필요하다(README 배포 절).
 deploy-airflow:
-    docker compose -f compose/prod/airflow/docker-compose.yaml up -d --build
+    docker compose -f compose/prod/airflow/docker-compose.yaml up -d
 
 # bind-mount 코드(apps/)는 up이 감지 못 하므로 realtime은 무조건 재시작한다.
 # 열린 분은 원래 저장하지 않고 마감 후 REST가 확정본을 채우므로 몇 초 끊김만 비용이다.
 deploy-realtime:
-    docker compose -f compose/prod/docker-compose.yaml up -d --build
+    docker compose -f compose/prod/docker-compose.yaml up -d
     docker compose -f compose/prod/docker-compose.yaml restart
+
+# 운영 이미지 재빌드. Dockerfile·requirements가 바뀐 스택만 돌리고 이어서 deploy 한다.
+# NAS buildkit이 타임아웃 나면 DOCKER_BUILDKIT=0을 앞에 붙여 legacy builder로 돌린다.
+build-airflow:
+    docker compose -f compose/prod/airflow/docker-compose.yaml build
+
+build-realtime:
+    docker compose -f compose/prod/docker-compose.yaml build
 
 # Run an Alembic command across every migration-enabled database alias.
 # Example: `just migrate upgrade head`.

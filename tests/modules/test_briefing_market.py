@@ -11,6 +11,9 @@ from apps.models.market import (
     IndexBar,
     IndexDaily,
     IndicatorObservation,
+    KrxMarketFundsDaily,
+    KrxStockSecuritiesLendingDaily,
+    KrxStockShortSaleDaily,
     MarketInvestorFlowSnapshot,
     MarketMovementSnapshot,
     StockInvestorEstimateSnapshot,
@@ -31,6 +34,8 @@ QUOTE_ROWS = [
     ("yahoo", "SP500_FUT", "S&P500 선물", "index_future", "US", Decimal("5621.50"), Decimal("5600.25"), MIDDAY),
     ("yahoo", "SOX", "필라델피아 반도체 지수", "index", "US", Decimal("5310.00"), Decimal("5200.00"), MIDDAY),
     ("yahoo", "NIKKEI225", "닛케이225", "index", "JP", Decimal(38000), Decimal(38100), MIDDAY),
+    ("yahoo", "BTCUSD", "비트코인", "crypto", "XX", Decimal(118000), Decimal(115000), MIDDAY),
+    ("yahoo", "USDKRW", "원/달러(장외)", "fx", "KR", Decimal("1391.20"), Decimal("1388.60"), MIDDAY),
 ]
 
 FX_ROWS = [
@@ -69,6 +74,24 @@ STOCK_TRADE_ROWS = [
 ]
 
 MOVEMENT_ROWS = [("KOSPI", MIDDAY, 512, 61, 341)]
+
+# 증시자금 최신 2영업일. 신용융자·미수금 증감은 전일 행과의 차이로 계산된다.
+FUNDS_ROWS = [
+    (date(2026, 8, 18), Decimal("512345.00"), Decimal("-2345.00"), Decimal("205000.00"), Decimal("9100.00")),
+    (date(2026, 8, 17), Decimal("514690.00"), Decimal("1000.00"), Decimal("203500.00"), Decimal("9500.00")),
+]
+
+SHORT_POSITION_ROWS = [
+    ("005930", "삼성전자", date(2026, 8, 18), 1_200_000, Decimal("3.42"), 25_000_000, -350_000),
+]
+
+# 스프레드 다리. 미국 10-2 = 53bp(전일 48bp), 한미 10년 = -116bp.
+SPREAD_ROWS = [
+    ("fred", "DGS2", date(2026, 8, 17), Decimal("3.68"), Decimal("3.70")),
+    ("fred", "DGS10", date(2026, 8, 17), Decimal("4.21"), Decimal("4.18")),
+    ("ecos", "KTB2Y", date(2026, 8, 18), Decimal("2.55"), Decimal("2.54")),
+    ("ecos", "KTB10Y", date(2026, 8, 18), Decimal("3.05"), Decimal("3.09")),
+]
 
 
 class FakeCursor:
@@ -125,6 +148,9 @@ def summary(now: datetime = MIDDAY):
         STOCK_FLOW_ROWS,
         STOCK_TRADE_ROWS,
         MOVEMENT_ROWS,
+        FUNDS_ROWS,
+        SHORT_POSITION_ROWS,
+        SPREAD_ROWS,
         QUOTE_TREND_ROWS,
         RATE_TREND_ROWS,
         FX_TREND_ROWS,
@@ -163,7 +189,7 @@ def test_every_row_carries_its_own_as_of_time():
             ("kis", "KOSPI", "코스피", "index", "KR", Decimal("2687.45"), Decimal("2665.60"), stale),
             ("kis", "KOSDAQ", "코스닥", "index", "KR", Decimal("745.10"), Decimal("747.42"), MIDDAY),
         ],
-        [], [], [], [], [], [], [], [], [], [],
+        [], [], [], [], [], [], [], [], [], [], [], [], [],
     )
     blocks_out = market.render_blocks(market.collect_summary(connection, MIDDAY), MarketScope.KOREA, None)
     table = next(block for block in blocks_out if block["type"] == "table")
@@ -189,16 +215,7 @@ def test_yields_are_not_drawn_as_percent_moves():
     """
     connection = FakeConnection(
         [("yahoo", "US10Y", "미국 10년물 금리", "rate", "US", Decimal("4.70"), Decimal("4.65"), MIDDAY)],
-        [],
-        [],
-        [],
-        [],
-        [],
-        [],
-        [],
-        [],
-        [],
-        [],
+        *([[]] * 13),
     )
     result = market.collect_summary(connection, MORNING)
 
@@ -262,6 +279,9 @@ def test_a_thin_sample_is_marked_so_the_prompt_can_discount_it():
         STOCK_FLOW_ROWS,
         STOCK_TRADE_ROWS,
         MOVEMENT_ROWS,
+        FUNDS_ROWS,
+        SHORT_POSITION_ROWS,
+        SPREAD_ROWS,
         [("kis", "KOSPI", date(2026, 8, 17), Decimal(2600)), ("kis", "KOSPI", date(2026, 8, 18), Decimal(2687))],
         [],
         [],
@@ -342,7 +362,8 @@ def test_rows_are_ordered_for_reading_not_alphabetically():
     result = summary()
 
     assert [quote.symbol for quote in market._korea_quotes(result)] == ["KOSPI", "KOSPI200_FUT"]
-    assert [quote.country for quote in market._intraday_overseas(result)] == ["US", "JP"]
+    # 크립토는 country가 XX라 나라 목록의 뒤로 밀린다.
+    assert [quote.country for quote in market._intraday_overseas(result)] == ["US", "JP", "XX"]
 
     table = next(block for block in market.render_blocks(result, MarketScope.KOREA, None) if block["type"] == "table")
     assert [row[0]["text"] for row in table["rows"]] == ["구분", "코스피", "코스피200 선물"]
@@ -355,14 +376,68 @@ def test_rows_are_ordered_for_reading_not_alphabetically():
     assert [row[0]["text"] for row in fx["rows"][1:]] == ["USD", "JPY"]
 
 
-def test_the_korea_report_drops_the_stale_fx_table():
-    """하나은행 고시는 하루 한 번 수집이라 장중에는 늘 전일 최종 회차다. 장중 브리핑에서 뺀다."""
+def test_the_korea_report_swaps_the_stale_fx_table_for_the_realtime_one():
+    """하나은행 고시는 하루 한 번 수집이라 장중에는 늘 전일 최종 회차다. 장중 브리핑은
+    장외 실시간 환율(fx_bar)을 그리고 고시 표는 아침 리포트로 보낸다."""
     korea = _block_text(market.render_blocks(summary(), MarketScope.KOREA, None))
 
-    assert "환율" not in korea
-    # 미리보기 한 줄과 LLM 입력에서도 함께 뺀다. 화면에 없는 숫자를 모델이 쓰면 안 된다.
+    assert "하나은행" not in korea
+    assert "환율(실시간·장외)" in korea
+    assert "원/달러(장외)" in korea
+    # 미리보기 한 줄과 LLM 입력에서도 고시 값을 뺀다. 화면에 없는 숫자를 모델이 쓰면 안 된다.
     assert "USD" not in market.render_text(summary(), MarketScope.KOREA)
-    assert json.loads(market.comment_input(summary(), MarketScope.KOREA))["exchange_rates"] == []
+    payload = json.loads(market.comment_input(summary(), MarketScope.KOREA))
+    assert payload["exchange_rates"] == []
+    # 대신 실시간 환율은 quotes로 들어간다.
+    assert any(quote["label"] == "원/달러(장외)" for quote in payload["quotes"])
+
+
+def test_crypto_is_drawn_in_both_reports_despite_having_no_country():
+    korea = _block_text(market.render_blocks(summary(), MarketScope.KOREA, None))
+    us = _block_text(market.render_blocks(summary(MORNING), MarketScope.US, None))
+
+    assert "비트코인" in korea
+    assert "비트코인" in us
+
+
+def test_market_funds_are_drawn_with_computed_deltas():
+    """예탁금 증감은 API 값이고 신용융자·미수금 증감은 전일 행과의 차이다."""
+    rendered = market.render_blocks(summary(), MarketScope.KOREA, None)
+    table = next(
+        block for block in rendered if block["type"] == "table" and block["rows"][1][0]["text"] == "고객예탁금"
+    )
+    rows = [[cell["text"] for cell in row] for row in table["rows"][1:]]
+
+    assert rows[0] == ["고객예탁금", "512,345", "-2,345", "08/18"]
+    assert rows[1] == ["신용융자 잔고", "205,000", "+1,500", "08/18"]
+    assert rows[2] == ["미수금", "9,100", "-400", "08/18"]
+
+
+def test_short_sale_and_lending_share_one_table():
+    rendered = market.render_blocks(summary(), MarketScope.KOREA, None)
+    table = next(
+        block for block in rendered if block["type"] == "table" and block["rows"][0][0]["text"] == "종목"
+        and block["rows"][0][1]["text"] == "공매도 비중"
+    )
+    rows = [[cell["text"] for cell in row] for row in table["rows"][1:]]
+
+    assert rows[0] == ["삼성전자", "3.42%", "1,200,000", "25,000,000", "-350,000", "08/18"]
+
+
+def test_rate_spreads_are_measured_in_bp_and_show_inversion_as_negative():
+    """스프레드는 bp이고 한미 역전(-116bp)의 음수가 그대로 보여야 한다."""
+    result = summary(MORNING)
+
+    spreads = {spread.label: spread for spread in result.spreads}
+    assert spreads["미국 10년-2년"].spread_bp == pytest.approx(53.0)
+    assert spreads["미국 10년-2년"].change_bp == pytest.approx(5.0)
+    assert spreads["한미 10년"].spread_bp == pytest.approx(-116.0)
+
+    us = _block_text(market.render_blocks(result, MarketScope.US, None))
+    assert "금리 스프레드" in us
+    assert "-116bp" in us
+    # 스프레드는 미국장(아침) 리포트 소관이다. 금리와 같은 이유다.
+    assert "금리 스프레드" not in _block_text(market.render_blocks(summary(), MarketScope.KOREA, None))
 
 
 def test_the_us_report_labels_the_fx_table_as_previous_day():
@@ -454,6 +529,22 @@ def test_stock_estimates_are_counted_in_shares_not_won():
         ),
         (market.INTRADAY_SERIES, IndexBar.__table__, ("provider", "symbol", "bar_at", "close")),
         (market.INTRADAY_SERIES, QuoteSymbol.__table__, ("label",)),
+        (
+            market.LATEST_MARKET_FUNDS,
+            KrxMarketFundsDaily.__table__,
+            ("business_date", "customer_deposit", "customer_deposit_change", "credit_loan_balance", "unsettled_amount"),
+        ),
+        (
+            market.LATEST_SHORT_POSITIONS,
+            KrxStockShortSaleDaily.__table__,
+            ("stock_code", "business_date", "short_sale_quantity", "short_sale_volume_ratio"),
+        ),
+        (
+            market.LATEST_SHORT_POSITIONS,
+            KrxStockSecuritiesLendingDaily.__table__,
+            ("balance_quantity", "balance_change_quantity"),
+        ),
+        (market.SPREAD_PAIRS, IndicatorObservation.__table__, ("provider", "series_id", "observation_date", "value")),
         (market.QUOTE_TREND, IndexBar.__table__, ("provider", "symbol", "bar_at", "close")),
         (market.QUOTE_TREND, IndexDaily.__table__, ("business_date",)),
         (market.RATE_TREND, IndicatorObservation.__table__, ("observation_date", "value")),

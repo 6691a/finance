@@ -328,6 +328,20 @@ DAG가 쓰는 코드는 **위치는 Airflow를, 규칙은 백엔드를** 따른�
 사이에 있어서, 그 노드가 예외를 문자열로 바꾸는 바람에 DAG가 판단할 것을 잃었다. **중간 층은
 예외를 통과시킨다.**
 
+## 관측과 Sentry
+
+Sentry 프로젝트는 둘이다. Airflow는 NAS `.env`의 `AIRFLOW__SENTRY__*`로, realtime은
+`config.yaml`의 `sentry_*`로 붙는다. realtime의 `sentry_sdk.init`(`apps/realtime/service.py`)이
+켜 둔 것: 에러 이벤트, 표준 logging 자동 전달(ERROR 이상 이벤트, WARNING breadcrumb,
+INFO 이상 Sentry Logs), 트레이싱(`sentry_traces_sample_rate`), 트랜잭션 연동 프로파일링.
+DSN이 비면 전체 비활성이다. 새 상주 서비스(FastAPI 등)도 같은 `settings.sentry_*`로 init한다.
+
+- 메트릭(`sentry_sdk.metrics`의 count/gauge/distribution)은 아직 안 쓴다.
+- **측정할 가치가 있는 지점을 발견하면 사용자에게 제안한다.** 처리 건수, 큐·버퍼 깊이,
+  외부 API 지연, 저장 실패율처럼 나중에 대시보드나 알림이 필요해질 값이 코드에 생기면
+  Sentry metrics 후보로 지점과 이유를 알린다. 사용자가 스스로 인지하지 못할 수 있다는
+  전제로 먼저 말하되, 계측 코드를 임의로 추가하지는 않는다.
+
 ## LLM 코드
 
 LLM을 부르는 코드는 **Pydantic, LangChain, LangGraph 위에서만 쓴다.** 세 층의 역할이 겹치지 않는다.

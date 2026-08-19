@@ -640,6 +640,24 @@ NAS에만 두는 파일은 셋이고 전부 gitignore 대상입니다: `compose/
 `up -d --build` 합니다. Airflow 과거 태스크 로그를 유지하려면 이전 `logs/` 내용을
 `airflow/logs/`로 복사합니다(생략해도 동작에는 지장 없음).
 
+## 관측 (Sentry)
+
+Sentry 프로젝트는 둘입니다. Airflow는 NAS `.env`의 `AIRFLOW__SENTRY__*`로, realtime은
+`config.yaml`의 `sentry_*`로 붙습니다(`sentry_dsn`이 비면 전체 비활성).
+
+realtime(`apps/realtime/service.py`)에서 켜 둔 것:
+
+| 기능 | 동작 |
+| --- | --- |
+| 에러 이벤트 | 잡히지 않은 예외와 `logger.error` 이상. 샘플링은 `sentry_error_sample_rate` |
+| 로그 | 표준 logging 자동 전달 — WARNING은 breadcrumb, INFO 이상은 Sentry Logs 탭(`enable_logs`) |
+| 트레이싱 | `sentry_traces_sample_rate`. HTTP 트랜잭션이 없어 DB 스팬 위주 |
+| 프로파일링 | `profile_lifecycle="trace"` — 트랜잭션이 있을 때만 돔 |
+
+메트릭(`sentry_sdk.metrics`)은 아직 쓰지 않습니다. 처리 건수·지연·실패율처럼 측정할
+가치가 생기는 지점은 개발 중에 후보로 제안받아 판단합니다(`.claude/CLAUDE.md`의
+관측 규칙).
+
 ## graphify
 
 저장소의 코드를 지식 그래프로 뽑아 `graphify-out/`에 둡니다. 에이전트가 파일을 훑는 대신 `graphify query "<질문>"`으로 필요한 부분만 받아 가는 용도입니다. 결과물은 Git에서 제외합니다.

@@ -10,6 +10,14 @@
 `document`에 적는다. **점수로 문서를 버리지 않는다.** 무엇을 쓸지는 4단계 리포트 프롬프트가
 정한다. 지금 버리면 나중에 기준을 바꿀 때 되돌릴 수 없다.
 
+## 평가 전에 중복을 연결한다
+
+같은 출처에서 제목만 조금 다른 같은 기사([속보] 스텁 vs 본기사)를 `modules/dedup.py`가
+제목 유사도로 묶어 `canonical_document_id`에 연결한다. 연결된 문서는 평가와 브리핑에서
+빠진다 — 같은 기사를 두 번 평가하지 않고 브리핑에 두 번 싣지 않는다. **버리는 것이
+아니다.** 문서는 그대로 남고, 오판이면 컬럼을 NULL로 되돌리면 끝이다. 중복 연결이
+실패해도 평가는 돈다(`trigger_rule="all_done"`).
+
 ## 실패는 상태가 아니다
 
 한 문서의 평가가 실패하면 그 문서는 `assessed_at`이 NULL인 채로 남고 다음 실행이 다시
@@ -69,6 +77,7 @@ from modules.assessment import (
     pending_documents,
     store_assessment,
 )
+from modules.dedup import link_duplicates
 from modules.llm import LlmError, document_model, model_name
 from modules.utility import CONNECTION_ID, KST_TIMEZONE
 
@@ -108,7 +117,22 @@ def _connection() -> Any:
     tags=["documents", "llm", "hourly"],
 )
 def document_assessment_hourly():
-    @task(task_display_name="문서 태깅·점수")
+    @task(task_display_name="중복 연결")
+    def dedup() -> int:
+        # 평가 전에 같은 기사([속보] 스텁 vs 본기사)를 대표에 연결한다. 연결된 문서는
+        # 평가·브리핑에서 빠진다. 외부 API가 없어 실패는 DB 오류뿐이고, 그건 그대로 올려
+        # Airflow가 재시도한다.
+        connection = _connection()
+        try:
+            outcome = link_duplicates(connection)
+        finally:
+            connection.close()
+        logger.info("Checked %s documents, linked %s duplicates", outcome.checked, outcome.linked)
+        return outcome.linked
+
+    # 중복 연결이 실패해도 평가는 돈다. 못 걸러진 문서는 평가되더라도 다음 실행이
+    # 연결하고 브리핑 필터가 가린다. 손해는 LLM 호출 몇 건이다.
+    @task(task_display_name="문서 태깅·점수", trigger_rule="all_done")
     def evaluate() -> int:
         context = get_current_context()
         params = dict(context.get("params") or {})
@@ -192,7 +216,7 @@ def document_assessment_hourly():
         logger.info("Assessed %s documents with %s (%s failed)", assessed, settings.prompt_revision, failures)
         return assessed
 
-    evaluate()
+    dedup() >> evaluate()
 
 
 document_assessment_hourly = document_assessment_hourly()

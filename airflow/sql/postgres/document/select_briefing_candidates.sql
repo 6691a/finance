@@ -19,6 +19,7 @@ FROM document
 LEFT JOIN document_instrument AS tag
        ON tag.document_id = document.id
 WHERE document.assessed_at >= %s
+  AND document.canonical_document_id IS NULL
 GROUP BY document.id
 ORDER BY document.value_score DESC NULLS LAST, document.assessed_at DESC
 LIMIT %s

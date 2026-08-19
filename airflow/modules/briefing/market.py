@@ -811,6 +811,9 @@ def _stock_flow_section(summary: MarketSummary) -> list[dict[str, Any]]:
 
     시장 수급과 표를 나눈다. 저쪽은 억원이고 이쪽은 주 수라 한 표에 넣으면 자릿수가 뜻을
     잃는다. **추정치라는 것도 제목에 적는다.** 확정 수급은 장 마감 뒤에야 나온다.
+
+    기준은 날짜가 아니라 수집 시각이다. KIS가 장중 몇 차례 갱신하는 값이라 날짜만 적으면
+    아침 추정과 마감 추정이 같은 줄로 보인다(시장 수급 표와 같은 이유).
     """
     if not summary.stock_flows:
         return []
@@ -820,7 +823,7 @@ def _stock_flow_section(summary: MarketSummary) -> list[dict[str, Any]]:
             f"{flow.foreign_net_buy_qty:+,}",
             f"{flow.institution_net_buy_qty:+,}",
             f"{flow.total_net_buy_qty:+,}",
-            f"{flow.business_date:%m/%d}",
+            _day_stamp(flow.collected_at),
         )
         for flow in summary.stock_flows
     ]
@@ -858,6 +861,7 @@ def _stock_trade_sections(summary: MarketSummary) -> list[dict[str, Any]]:
         )
         for trade in trades
     ]
+    # 모든 표에는 기준이 있어야 한다. 확정 일별 수급이라 시각이 아니라 거래일이다.
     detail_rows = [
         (
             trade.label,
@@ -868,6 +872,7 @@ def _stock_trade_sections(summary: MarketSummary) -> list[dict[str, Any]]:
             f"{trade.insurance_net_buy_qty:+,}",
             f"{trade.merchant_bank_net_buy_qty:+,}",
             f"{trade.pension_fund_net_buy_qty:+,}",
+            f"{trade.business_date:%m/%d}",
         )
         for trade in trades
     ]
@@ -879,7 +884,7 @@ def _stock_trade_sections(summary: MarketSummary) -> list[dict[str, Any]]:
         ),
         *blocks.table_section(
             "기관 세부(주)",
-            ("종목", "금융투자", "투신", "사모", "은행", "보험", "종금", "연기금"),
+            ("종목", "금융투자", "투신", "사모", "은행", "보험", "종금", "연기금", "기준"),
             detail_rows,
         ),
     ]

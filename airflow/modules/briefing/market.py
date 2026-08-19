@@ -807,21 +807,35 @@ def _sign_streaks(
     return {key: sign_streak([value for _, value in points]) for key, points in series.items()}
 
 
+def _us_listed_adr(quote: QuoteChange) -> bool:
+    """미국 상장 ADR인가. Yahoo로 받는 종목(equity)은 전부 미국 상장 ADR이다(수집기 주석 참고).
+
+    `country`는 회사 국적(TSMC=TW, SK하이닉스=KR)이라 거래 세션을 말해 주지 않는다.
+    국적으로 거르면 ADR이 국내 표나 아시아 표에 섞여 뉴욕 마감값이 장중 값처럼 보인다.
+    """
+    return quote.provider == "yahoo" and quote.kind == "equity"
+
+
 def _korea_quotes(summary: MarketSummary) -> tuple[QuoteChange, ...]:
     return _ordered(
-        (quote for quote in summary.quotes if quote.country == "KR" and quote.kind in QUOTED_KINDS),
+        (
+            quote
+            for quote in summary.quotes
+            if quote.country == "KR" and quote.kind in QUOTED_KINDS and not _us_listed_adr(quote)
+        ),
         lambda quote: quote.symbol,
         KOREA_SYMBOL_ORDER,
     )
 
 
 def _us_quotes(summary: MarketSummary) -> tuple[QuoteChange, ...]:
-    """미국 심볼과 크립토. 크립토는 country가 `XX`(나라 없음)라 종류로 넣는다."""
+    """미국 심볼·크립토·미국 상장 ADR. 크립토는 country가 `XX`(나라 없음)라 종류로 넣는다."""
     return _ordered(
         (
             quote
             for quote in summary.quotes
-            if quote.kind in QUOTED_KINDS and (quote.country == "US" or quote.kind == "crypto")
+            if quote.kind in QUOTED_KINDS
+            and (quote.country == "US" or quote.kind == "crypto" or _us_listed_adr(quote))
         ),
         lambda quote: quote.kind,
         US_KIND_ORDER,
@@ -832,6 +846,7 @@ def _intraday_overseas(summary: MarketSummary) -> tuple[QuoteChange, ...]:
     """한국장 시간에도 값이 움직이는 해외 심볼.
 
     미국은 선물만 넣는다. 현물 지수는 이 시간에 닫혀 있어 어제 종가를 오늘 값처럼 보이게 한다.
+    미국 상장 ADR도 같은 이유로 뺀다. country가 아시아(TW·KR)라도 거래는 뉴욕이다.
     크립토는 24시간 거래라 항상 실시간이다. country가 나라가 아닌 `XX`라 뒤로 밀린다.
     """
     return _ordered(
@@ -839,6 +854,7 @@ def _intraday_overseas(summary: MarketSummary) -> tuple[QuoteChange, ...]:
             quote
             for quote in summary.quotes
             if quote.kind in QUOTED_KINDS
+            and not _us_listed_adr(quote)
             and (
                 (quote.country == "US" and quote.kind == INDEX_FUTURE)
                 or quote.country in ASIA_COUNTRIES

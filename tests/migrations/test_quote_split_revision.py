@@ -66,3 +66,12 @@ def test_the_old_tables_become_compatibility_views(capsys):
     assert "CREATE VIEW quote_daily" in sql
     # 뷰에 NXT를 태우면 같은 종목·같은 분에 두 줄이 생긴다.
     assert "WHERE exchange IN ('KRX', 'NYSE')" in sql
+
+
+def test_nasdaq_joins_the_exchange_axis(capsys):
+    # SK하이닉스 ADR(SKHY)은 나스닥 상장이다. CHECK와 호환 뷰가 NASDAQ을 태워야
+    # 봉이 저장되고 브리핑·Grafana 조회(뷰)에 보인다.
+    sql = head_sql(capsys)
+
+    assert "exchange IN ('KRX', 'NXT', 'NYSE', 'NASDAQ')" in sql
+    assert "WHERE exchange IN ('KRX', 'NYSE', 'NASDAQ')" in sql

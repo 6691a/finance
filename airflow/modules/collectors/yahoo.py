@@ -172,6 +172,8 @@ class QuoteSymbol(StrEnum):
     WTI = ("WTI", "CL=F", "WTI 원유", "commodity")
     # 반도체 공급망 참조가. 시그널 대상이 아니라 맥락용이다.
     TSMC_ADR = ("TSMC_ADR", "TSM", "TSMC ADR", "equity")
+    # 나스닥 상장 ADR(2026-07 상장). TSMC ADR과 같은 반도체 맥락용이다.
+    SK_HYNIX_ADR = ("SK_HYNIX_ADR", "SKHY", "SK하이닉스 ADR", "equity")
     # **주말을 채우는 유일한 값이다.** 선물도 토 06:00 KST면 멈춰서 월요일 07:00까지
     # 48시간 동안 봉이 하나도 없다(실측). 암호화폐는 그 구간에 1,628봉이 온다.
     # 주말 뉴스에 위험선호가 꺾였는지를 월요일 개장 전에 볼 수 있는 유일한 창구다.
@@ -187,7 +189,7 @@ class QuoteSymbol(StrEnum):
 #
 # 선물·환율·원자재는 휴장일에도 거의 24시간 거래되고, 아시아 지수와 암호화폐는 미국 달력과
 # 무관하다. 그래서 DAG 전체를 멈추지 않고 이 목록만 거른다. `^VIX`와 `^SOX`는 CBOE·나스닥
-# 산출이지만 미국 현물장과 같은 날 쉬고, `TSM`은 뉴욕 상장 ADR이다.
+# 산출이지만 미국 현물장과 같은 날 쉬고, `TSM`(뉴욕)·`SKHY`(나스닥)는 미국 상장 ADR이다.
 US_EQUITY_SYMBOLS: frozenset[str] = frozenset(
     {
         QuoteSymbol.VIX.value,
@@ -195,6 +197,7 @@ US_EQUITY_SYMBOLS: frozenset[str] = frozenset(
         QuoteSymbol.US10Y.value,
         QuoteSymbol.RUSSELL2000.value,
         QuoteSymbol.TSMC_ADR.value,
+        QuoteSymbol.SK_HYNIX_ADR.value,
     }
 )
 
@@ -601,8 +604,9 @@ MACRO_BAR_UPSERTS: dict[str, str] = {
 }
 STOCK_BAR_UPSERT = read_sql("postgres", "stock_bar", "upsert.sql")
 
-# Yahoo로 받는 종목은 전부 뉴욕 상장 ADR이다. 국내 종목(KRX/NXT)은 KIS가 받는다.
-STOCK_EXCHANGE = "NYSE"
+# Yahoo로 받는 종목은 전부 미국 상장 ADR이다. 국내 종목(KRX/NXT)은 KIS가 받는다.
+# 저장 심볼 → 상장 거래소. equity 심볼을 늘리면 여기도 늘린다. 빠지면 KeyError로 죽는다.
+STOCK_EXCHANGES = {"TSMC_ADR": "NYSE", "SK_HYNIX_ADR": "NASDAQ"}
 
 
 def store_bars(
@@ -711,7 +715,7 @@ def _bar_upserts(
         for bar in bars:
             if symbol.kind == "equity":
                 row = (
-                    SOURCE, symbol.value, STOCK_EXCHANGE, bar.bar_at,
+                    SOURCE, symbol.value, STOCK_EXCHANGES[symbol.value], bar.bar_at,
                     bar.open, bar.high, bar.low, bar.close,
                     bar.volume, bar.previous_close, source_record_id,
                 )
@@ -973,7 +977,7 @@ def _daily_upserts(
         for bar in bars:
             if symbol.kind == "equity":
                 row = (
-                    SOURCE, symbol.value, STOCK_EXCHANGE, bar.business_date,
+                    SOURCE, symbol.value, STOCK_EXCHANGES[symbol.value], bar.business_date,
                     bar.open, bar.high, bar.low, bar.close, bar.volume, source_record_id,
                 )
             else:

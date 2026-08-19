@@ -53,6 +53,15 @@ def _row(cells: Sequence[str]) -> list[dict[str, Any]]:
     return [{"type": "raw_text", "text": cell} for cell in cells]
 
 
+def image(slack_file_id: str, alt_text: str) -> dict[str, Any]:
+    """Slack에 올려 둔 파일을 가리키는 image 블록. 외부 URL이 아니라 파일 ID를 쓴다.
+
+    외부 URL은 공개 호스팅이 필요하고 링크가 죽으면 빈 칸이 남는다. `slack.upload_file`이
+    돌려준 ID를 그대로 받는다.
+    """
+    return {"type": "image", "slack_file": {"id": slack_file_id}, "alt_text": alt_text}
+
+
 def divider() -> dict[str, Any]:
     return {"type": "divider"}
 

@@ -246,7 +246,7 @@ def fetch_series(api_key: SecretStr, request: FredRequest) -> FredResponse:
             status = response.status
     # `from None`은 여기서 의도적이다. `from error`로 바꾸지 않는다. URL에 API 키가 들어 있고
     # `HTTPError`는 그 URL을 `filename`에 담는다. 체인을 남기면 Sentry나 Airflow 로그가 원인
-    # 예외를 붙잡을 때 키가 함께 실린다. hana 수집기는 URL에 비밀이 없어서 체인을 남긴다.
+    # 예외를 붙잡을 때 키가 함께 실린다. `mof.py`·`boe.py`는 URL에 비밀이 없어서 체인을 남긴다.
     except HTTPError as error:
         raise FredHTTPError(error.code, error.headers.get("Retry-After")) from None
     except URLError as error:

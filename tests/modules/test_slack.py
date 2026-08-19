@@ -26,6 +26,12 @@ class FakeWebClient:
             raise self.error
         return self.response
 
+    def files_upload_v2(self, **kwargs):
+        self.calls.append(kwargs)
+        if self.error is not None:
+            raise self.error
+        return self.response
+
 
 def api_error(code: str) -> SlackApiError:
     return SlackApiError(f"failed: {code}", {"ok": False, "error": code})
@@ -103,3 +109,32 @@ def test_missing_timestamp_is_an_error(monkeypatch):
 
     with pytest.raises(slack.SlackError):
         slack.post_message(TOKEN, "C123", text="한 줄")
+
+
+def test_upload_returns_the_file_id_without_sharing(monkeypatch):
+    """채널을 넘기지 않는다. 파일은 메시지 블록이 `slack_file`로 참조한다."""
+    client = FakeWebClient(response={"ok": True, "files": [{"id": "F0AAA"}]})
+    monkeypatch.setattr(slack, "WebClient", client)
+
+    file_id = slack.upload_file(TOKEN, filename="chart.png", title="차트", content=b"\x89PNG")
+
+    assert file_id == "F0AAA"
+    assert client.calls[0] == {"file": b"\x89PNG", "filename": "chart.png", "title": "차트"}
+    assert client.kwargs["retry_handlers"] == []
+
+
+def test_upload_without_a_file_id_is_an_error(monkeypatch):
+    monkeypatch.setattr(slack, "WebClient", FakeWebClient(response={"ok": True, "files": []}))
+
+    with pytest.raises(slack.SlackError):
+        slack.upload_file(TOKEN, filename="chart.png", title="차트", content=b"x")
+
+
+def test_upload_errors_are_classified_like_messages(monkeypatch):
+    monkeypatch.setattr(slack, "WebClient", FakeWebClient(error=api_error("ratelimited")))
+    with pytest.raises(ConnectionError):
+        slack.upload_file(TOKEN, filename="chart.png", title="차트", content=b"x")
+
+    monkeypatch.setattr(slack, "WebClient", FakeWebClient(error=api_error("invalid_auth")))
+    with pytest.raises(slack.SlackError):
+        slack.upload_file(TOKEN, filename="chart.png", title="차트", content=b"x")

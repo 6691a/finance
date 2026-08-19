@@ -24,7 +24,7 @@
   대해 정한 "배치 단위로 남긴다"와 같은 판단이다. 원본 응답(`payload`)도 남기지 않는다.
   5분마다 5개 × 40KB면 하루 57MB다.
 - **요청은 `urlopen`이 아니라 scrapling `Fetcher`다.** Yahoo가 기본 파이썬 User-Agent에
-  429를 준다. `hana.py`와 같은 이유·같은 도구이고 새 의존성은 없다.
+  429를 준다. `Fetcher`(curl_cffi)가 실제 브라우저 지문을 흉내 내고 새 의존성은 없다.
 
 Yahoo v8 chart는 비공식 API다. 키가 없고 비용도 없지만 언제든 막힐 수 있다. 저장 계약이
 `provider`로 갈라져 있어 제공처를 바꿔야 할 때 교체 범위는 이 파일 하나다.
@@ -470,7 +470,7 @@ def _request(symbol: QuoteSymbol, url: str) -> YahooResponse:
         )
     except CurlError as error:
         # 타임아웃, DNS 실패, TLS 실패는 재시도 가능한 오류로 올린다. 원인을 체인으로 남긴다.
-        # URL에 비밀이 없어서 `hana.py`처럼 체인을 유지한다(`fred.py`는 키가 URL에 있어 끊는다).
+        # URL에 비밀이 없어서 체인을 유지한다(`fred.py`는 키가 URL에 있어 끊는다).
         raise ConnectionError(f"Yahoo request failed: {error}") from error
 
     if not 200 <= response.status < 300:
@@ -535,7 +535,7 @@ def parse_bars(body: bytes, since: datetime | None = None, until: datetime | Non
         raise YahooPayloadError(f"Yahoo returned an empty chart for {result.meta.symbol}")
 
     # 봉은 위치로 읽는다. 배열 길이가 어긋나면 값이 조용히 옆 칸으로 밀리므로 먼저 막는다.
-    # `hana.py`가 표의 칸 수를 검증하는 것과 같은 이유다. `volume`은 빠질 수 있어 뺀다.
+    # `mof.py`가 CSV 헤더 전체를 대조하는 것과 같은 이유다. `volume`은 빠질 수 있어 뺀다.
     expected = len(result.timestamp)
     lengths = {
         "open": len(arrays.open),

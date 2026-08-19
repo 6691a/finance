@@ -148,7 +148,6 @@ def without_the_psycopg2_fast_path(monkeypatch):
     psycopg2가 설치돼 있으면 `store_bars`는 `execute_batch`를 탄다. 그건 문장을 묶어
     보내므로 커서에 도착하는 SQL이 드라이버 사정에 따라 달라진다. 컬럼 순서 같은 이
     모듈의 계약을 검증하려면 행 단위가 그대로 보이는 경로여야 한다.
-    `test_hana.py`가 먼저 쓴 방식이다.
     """
     monkeypatch.setattr("modules.upsert._execute_batch", None)
 

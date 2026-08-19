@@ -19,7 +19,7 @@ RSS와 Atom은 표준 라이브러리로 읽는다. `xml.etree.ElementTree`가 X
 `email.utils.parsedate_to_datetime`이 RFC 822 날짜를 처리한다. `feedparser`를 넣을 이유가 없다.
 
 요청은 `urlopen`이 아니라 scrapling `Fetcher`다. 여러 언론사가 기본 파이썬 User-Agent를
-막는다. `hana.py`·`yahoo.py`와 같은 도구이고 새 의존성은 없다.
+막는다. `yahoo.py`와 같은 도구이고 새 의존성은 없다.
 """
 
 import hashlib

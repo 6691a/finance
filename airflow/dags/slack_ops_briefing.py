@@ -12,11 +12,10 @@
 표와 실패 목록이 이미 사실을 다 말한다. 감시하는 쪽이 감시받는 쪽(모델 호출)에 의존하면
 모델이 죽은 날 이 리포트도 같이 흔들린다. 요약이 필요하면 Airflow 로그를 본다.
 
-## source_record에 안 잡히는 둘
+## source_record에 안 잡히는 하나
 
-환율(`exchange_rate_daily`)은 계보 컬럼이 없어 고시 신선도로, 문서 평가
-(`document_assessment_hourly`)는 새 수집이 아니라 밀린 건수로 본다. `modules/briefing/ops.py`
-docstring에 이유가 있다.
+문서 평가(`document_assessment_hourly`)는 새 수집이 아니라 밀린 건수로 본다.
+`modules/briefing/ops.py` docstring에 이유가 있다.
 
 ## 필요한 환경
 

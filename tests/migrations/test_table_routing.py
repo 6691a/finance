@@ -46,11 +46,10 @@ def test_project_models_route_to_the_alias_they_declare():
 
     tables = Base.metadata.tables.values()
 
-    # Every model table, `exchange_rate` included, is on `default`. Nothing is
-    # left for another alias to own, so a `default` autogenerate run excludes
-    # nothing and any other alias excludes everything.
+    # Every model table is on `default`. Nothing is left for another alias to
+    # own, so a `default` autogenerate run excludes nothing and any other alias
+    # excludes everything.
     assert excluded_tables(tables, "default") == EMPTY
-    assert (None, "exchange_rate") in excluded_tables(tables, "finance")
     assert (None, "instrument") in excluded_tables(tables, "finance")
 
 

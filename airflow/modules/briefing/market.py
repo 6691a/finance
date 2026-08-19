@@ -28,16 +28,19 @@ from modules.sql import read_sql
 from modules.utility import KST_TIMEZONE
 
 LATEST_QUOTES = read_sql("postgres", "quote_bar", "select_latest_briefing_bars.sql")
-LATEST_EXCHANGE_RATES = read_sql("postgres", "exchange_rate", "select_latest_with_previous.sql")
 LATEST_RATES = read_sql("postgres", "indicator_observation", "select_latest_pair.sql")
 LATEST_FLOWS = read_sql("postgres", "market_investor_flow_snapshot", "select_latest.sql")
 LATEST_MOVEMENTS = read_sql("postgres", "market_movement_snapshot", "select_latest.sql")
 LATEST_STOCK_FLOWS = read_sql("postgres", "stock_investor_estimate_snapshot", "select_latest.sql")
 LATEST_STOCK_TRADES = read_sql("postgres", "stock_investor_trade_daily", "select_latest.sql")
+LATEST_MARKET_FUNDS = read_sql("postgres", "krx_market_funds_daily", "select_latest_pair.sql")
+LATEST_SHORT_POSITIONS = read_sql("postgres", "krx_stock_short_sale_daily", "select_latest_with_lending.sql")
+SPREAD_PAIRS = read_sql("postgres", "indicator_observation", "select_spread_pairs.sql")
+
+INTRADAY_SERIES = read_sql("postgres", "quote_bar", "select_intraday_series.sql")
 
 QUOTE_TREND = read_sql("postgres", "quote_bar", "select_daily_trend.sql")
 RATE_TREND = read_sql("postgres", "indicator_observation", "select_trend.sql")
-EXCHANGE_RATE_TREND = read_sql("postgres", "exchange_rate", "select_trend.sql")
 FLOW_TREND = read_sql("postgres", "market_investor_flow_snapshot", "select_daily_trend.sql")
 
 US_EASTERN = timezone("America/New_York")
@@ -54,12 +57,7 @@ SESSION_CLOSE_MINUTE_KST = 15 * 60 + 45
 # 값이 오래됐다는 사실은 창을 좁혀 숨기는 것이 아니라 context 블록의 기준 시각이 알린다.
 QUOTE_LOOKBACK = timedelta(days=10)
 FLOW_LOOKBACK = timedelta(days=10)
-EXCHANGE_RATE_LOOKBACK = timedelta(days=14)
 RATE_LOOKBACK = timedelta(days=45)
-
-# 브리핑에 그릴 통화. 하나은행이 고시하는 전부를 넣으면 표가 화면을 넘는다.
-# 이 순서가 그대로 표의 줄 순서다.
-BRIEFING_CURRENCIES = ("USD", "JPY", "EUR", "CNY")
 
 # 국가 비교의 기준 만기. 나라마다 고시 만기가 달라 10년물만 두 나라 이상이 항상 갖는다.
 TEN_YEAR_MONTHS = 120
@@ -75,11 +73,36 @@ INDEX_FUTURE = "index_future"
 KOREA_SYMBOL_ORDER = ("KOSPI", "KOSPI200", "KOSPI200_FUT", "KOSDAQ", "KOSDAQ150_FUT")
 OVERSEAS_COUNTRY_ORDER = ("US", "JP", "CN", "HK", "TW")
 
+# 미국장 표의 줄 순서는 종류로 묶는다. 정렬 없이 두면 SQL이 심볼 이름순으로 줘서
+# 금·나스닥·비트코인이 섞인다. 같은 종류(원자재끼리, 크립토끼리)가 붙어야 비교가 된다.
+US_KIND_ORDER = ("index", "index_future", "bond_future", "commodity", "crypto", "equity")
+
+# 장중 차트에 그리는 심볼. 이 순서가 이미지 순서다. 해외를 붙일 때도 이 목록만 늘린다.
+# quote_bar 뷰를 읽으므로 종목(stock_bar)·지수(index_bar)·환율(fx_bar)이 한 쿼리로 나온다.
+CHART_SYMBOLS = (
+    ("kis", "KOSPI"),
+    ("kis", "KOSDAQ"),
+    ("kis", "005930"),
+    ("kis", "000660"),
+    ("yahoo", "USDKRW"),
+)
+
+# 실시간 환율 표의 줄 순서. 목록에 없는 fx 심볼(USDJPY 등)은 뒤로 밀린다.
+FX_SYMBOL_ORDER = ("USDKRW", "JPYKRW", "DXY")
+
+# 금리 스프레드. (라벨, 왼쪽 다리, 오른쪽 다리)이고 값은 왼쪽-오른쪽을 bp로 그린다.
+# 장단기 역전이면 음수가 그대로 보인다.
+SPREAD_LEGS = (
+    ("미국 10년-2년", ("fred", "DGS10"), ("fred", "DGS2")),
+    ("한국 10년-2년", ("ecos", "KTB10Y"), ("ecos", "KTB2Y")),
+    ("한미 10년", ("ecos", "KTB10Y"), ("fred", "DGS10")),
+)
+
 # 시세 표에 그리는 종류. 등락을 퍼센트로 그려도 뜻이 통하는 것만 넣는다.
 #
 # **`rate`를 넣지 않는다.** 금리를 퍼센트 변화로 그리면 4.65 → 4.70이 `+1.08%`가 되어
 # 5bp 움직임이 1% 넘게 뛴 것처럼 보인다. 금리는 `indicator_observation` 쪽 표가 bp로 그린다.
-# `fx`도 넣지 않는다. 환율은 하나은행 고시 표가 따로 있어 같은 값이 두 표에 다르게 나온다.
+# `fx`도 넣지 않는다. 환율은 실시간 환율 표(`_fx_quotes`)가 따로 그린다.
 QUOTED_KINDS = frozenset({"index", "index_future", "equity", "commodity", "bond_future", "crypto"})
 
 # 추세를 재는 구간. 거래일 20일을 담으려면 주말·공휴일을 감안해 달력으로 이만큼 봐야 한다.
@@ -125,22 +148,6 @@ class QuoteChange(BaseModel):
         if not self.previous_close:
             return 0.0
         return float((self.close - self.previous_close) / self.previous_close * 100)
-
-
-class FxChange(BaseModel):
-    model_config = ConfigDict(frozen=True)
-
-    currency: str
-    posted_on: date
-    round: int
-    rate: Decimal
-    previous_rate: Decimal | None = None
-
-    @property
-    def change_percent(self) -> float | None:
-        if not self.previous_rate:
-            return None
-        return float((self.rate - self.previous_rate) / self.previous_rate * 100)
 
 
 class RateChange(BaseModel):
@@ -231,6 +238,56 @@ class MovementSnapshot(BaseModel):
     falling_count: int
 
 
+class MarketFundsSnapshot(BaseModel):
+    """증시자금 최신 영업일. 단위는 KIS 표기 그대로 억원이다.
+
+    고객예탁금 전일대비는 API가 준 값이고, 신용융자·미수금의 전일대비는 전일 행이
+    있을 때만 계산한다. 수집 첫날에는 `None`이다.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    business_date: date
+    customer_deposit: Decimal
+    customer_deposit_change: Decimal
+    credit_loan_balance: Decimal
+    credit_loan_change: Decimal | None = None
+    unsettled_amount: Decimal
+    unsettled_change: Decimal | None = None
+
+
+class StockShortPositionSnapshot(BaseModel):
+    """종목 하나의 공매도와 같은 날 대차 잔고. 대차는 공매도의 재고라 한 표에 그린다.
+
+    대차 행이 아직 없으면 `None`이다. 비중은 KIS 표기 그대로의 퍼센트다.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    stock_code: str
+    label: str
+    business_date: date
+    short_sale_quantity: int
+    short_sale_volume_ratio: Decimal
+    lending_balance_quantity: int | None = None
+    lending_balance_change: int | None = None
+
+
+class RateSpread(BaseModel):
+    """금리 스프레드 하나. 값은 bp이고 역전이면 음수다.
+
+    전일 대비는 각 다리의 직전 관측 기준이라 두 나라 휴장이 어긋난 날에는 하루가
+    밀린 값과 비교될 수 있다. `observed_on`은 두 다리 중 오래된 쪽 날짜다.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    label: str
+    spread_bp: float
+    change_bp: float | None = None
+    observed_on: date
+
+
 class MarketSummary(BaseModel):
     """두 리포트가 함께 쓰는 집계 결과. 시각은 전부 UTC다.
 
@@ -242,23 +299,33 @@ class MarketSummary(BaseModel):
 
     generated_at: AwareDatetime
     quotes: tuple[QuoteChange, ...] = ()
-    exchange_rates: tuple[FxChange, ...] = ()
     rates: tuple[RateChange, ...] = ()
     flows: tuple[FlowSnapshot, ...] = ()
     stock_flows: tuple[StockFlowSnapshot, ...] = ()
     stock_trades: tuple[StockTradeSnapshot, ...] = ()
     movements: tuple[MovementSnapshot, ...] = ()
+    funds: MarketFundsSnapshot | None = None
+    short_positions: tuple[StockShortPositionSnapshot, ...] = ()
+    spreads: tuple[RateSpread, ...] = ()
     quote_trends: dict[str, Trend] = {}
     """`provider:symbol` → 추세."""
 
     rate_trends: dict[str, Trend] = {}
     """`provider:series_id` → 추세. 변화는 bp다."""
 
-    exchange_rate_trends: dict[str, Trend] = {}
-    """통화 → 추세."""
-
     foreign_streaks: dict[str, int] = {}
     """시장 코드 → 외국인 순매수가 며칠째 같은 편인가. 부호가 방향이다(`-5`는 5일 연속 순매도)."""
+
+
+class ChartSeries(BaseModel):
+    """장중 차트의 계열 하나. 당일 정규장 분봉 종가만 담는다."""
+
+    model_config = ConfigDict(frozen=True)
+
+    provider: str
+    symbol: str
+    label: str
+    points: tuple[tuple[AwareDatetime, Decimal], ...]
 
 
 def collect_summary(connection: Connection, now: datetime) -> MarketSummary:
@@ -276,18 +343,6 @@ def collect_summary(connection: Connection, now: datetime) -> MarketSummary:
             close=row[5],
             previous_close=row[6],
             bar_at=row[7],
-        ),
-    )
-    exchange_rates = _fetch(
-        connection,
-        LATEST_EXCHANGE_RATES,
-        (list(BRIEFING_CURRENCIES), (now - EXCHANGE_RATE_LOOKBACK).date()),
-        lambda row: FxChange(
-            currency=row[0],
-            posted_on=row[1],
-            round=row[2],
-            rate=row[3],
-            previous_rate=row[4],
         ),
     )
     rates = _fetch(
@@ -365,6 +420,23 @@ def collect_summary(connection: Connection, now: datetime) -> MarketSummary:
             falling_count=row[4],
         ),
     )
+    funds = _market_funds(connection)
+    # 당일(KST)은 제외한다. KIS가 장중에 당일 공매도 행을 0으로 보낸다(SQL 주석 참고).
+    short_positions = _fetch(
+        connection,
+        LATEST_SHORT_POSITIONS,
+        ((now - FLOW_LOOKBACK).date(), now.astimezone(KST_TIMEZONE).date()),
+        lambda row: StockShortPositionSnapshot(
+            stock_code=row[0],
+            label=row[1],
+            business_date=row[2],
+            short_sale_quantity=row[3],
+            short_sale_volume_ratio=row[4],
+            lending_balance_quantity=row[5],
+            lending_balance_change=row[6],
+        ),
+    )
+    spreads = _rate_spreads(connection, (now - RATE_LOOKBACK).date())
     # 추세는 값 자체가 아니라 "이게 큰 값인가"에 답하는 근거다. 요약을 쓰는 모델이 비교
     # 기준 없이는 +0.82%가 큰지 알 수 없어서 미리 계산해 넣는다.
     trend_since = (now - TREND_LOOKBACK).date()
@@ -376,29 +448,99 @@ def collect_summary(connection: Connection, now: datetime) -> MarketSummary:
         ChangeKind.ABSOLUTE,
         2,
     )
-    exchange_rate_trends = _trends(
-        connection,
-        EXCHANGE_RATE_TREND,
-        (list(BRIEFING_CURRENCIES), trend_since),
-        ChangeKind.RELATIVE,
-        1,
-    )
     foreign_streaks = _sign_streaks(connection, FLOW_TREND, (now - TREND_LOOKBACK,), 1)
 
     return MarketSummary(
         generated_at=now,
         quotes=quotes,
-        exchange_rates=exchange_rates,
         rates=rates,
         flows=flows,
         stock_flows=stock_flows,
         stock_trades=stock_trades,
         movements=movements,
+        funds=funds,
+        short_positions=short_positions,
+        spreads=spreads,
         quote_trends=quote_trends,
         rate_trends=rate_trends,
-        exchange_rate_trends=exchange_rate_trends,
         foreign_streaks=foreign_streaks,
     )
+
+
+def collect_chart_series(connection: Connection, now: datetime) -> tuple[ChartSeries, ...]:
+    """장중 차트에 그릴 당일 분봉. `CHART_SYMBOLS` 순서를 지킨다.
+
+    봉이 없는 심볼은 계열 자체를 만들지 않는다. 개장 전이나 갓 붙인 심볼 때문에
+    리포트가 죽으면 안 된다(`*_trends`와 같은 원칙). 전부 비면 차트를 생략한다.
+    """
+    local = now.astimezone(KST_TIMEZONE)
+    session_open = local.replace(hour=SESSION_OPEN_HOUR_KST, minute=0, second=0, microsecond=0)
+    providers = sorted({provider for provider, _ in CHART_SYMBOLS})
+    symbols = [symbol for _, symbol in CHART_SYMBOLS]
+    with connection.cursor() as cursor:
+        cursor.execute(INTRADAY_SERIES, (providers, symbols, session_open))
+        rows = cursor.fetchall()
+
+    grouped: dict[tuple[str, str], list[tuple[datetime, Decimal]]] = {}
+    labels: dict[tuple[str, str], str] = {}
+    for provider, symbol, label, bar_at, close in rows:
+        grouped.setdefault((provider, symbol), []).append((bar_at, close))
+        labels[(provider, symbol)] = label
+
+    series = []
+    for provider, symbol in CHART_SYMBOLS:
+        points = grouped.get((provider, symbol))
+        if not points:
+            continue
+        series.append(
+            ChartSeries(provider=provider, symbol=symbol, label=labels[(provider, symbol)], points=tuple(points))
+        )
+    return tuple(series)
+
+
+def _market_funds(connection: Connection) -> MarketFundsSnapshot | None:
+    """증시자금 최신 영업일. 전일 행이 있으면 신용융자·미수금 증감도 계산한다."""
+    with connection.cursor() as cursor:
+        cursor.execute(LATEST_MARKET_FUNDS, ())
+        rows = cursor.fetchall()
+    if not rows:
+        return None
+    latest = rows[0]
+    previous = rows[1] if len(rows) > 1 else None
+    return MarketFundsSnapshot(
+        business_date=latest[0],
+        customer_deposit=latest[1],
+        customer_deposit_change=latest[2],
+        credit_loan_balance=latest[3],
+        credit_loan_change=latest[3] - previous[3] if previous else None,
+        unsettled_amount=latest[4],
+        unsettled_change=latest[4] - previous[4] if previous else None,
+    )
+
+
+def _rate_spreads(connection: Connection, since: date) -> tuple[RateSpread, ...]:
+    """`SPREAD_LEGS`의 스프레드. 다리 한쪽이라도 관측값이 없으면 그 스프레드는 만들지 않는다."""
+    providers = sorted({provider for _, *legs in SPREAD_LEGS for provider, _ in legs})
+    series_ids = sorted({series_id for _, *legs in SPREAD_LEGS for _, series_id in legs})
+    with connection.cursor() as cursor:
+        cursor.execute(SPREAD_PAIRS, (providers, series_ids, since))
+        rows = cursor.fetchall()
+    observed = {(row[0], row[1]): (row[2], row[3], row[4]) for row in rows}
+
+    spreads = []
+    for label, left_key, right_key in SPREAD_LEGS:
+        left = observed.get(left_key)
+        right = observed.get(right_key)
+        if left is None or right is None:
+            continue
+        spread_bp = float((left[1] - right[1]) * 100)
+        change_bp = None
+        if left[2] is not None and right[2] is not None:
+            change_bp = spread_bp - float((left[2] - right[2]) * 100)
+        spreads.append(
+            RateSpread(label=label, spread_bp=spread_bp, change_bp=change_bp, observed_on=min(left[0], right[0]))
+        )
+    return tuple(spreads)
 
 
 def session_state(now: datetime) -> str:
@@ -419,18 +561,29 @@ def us_session_date(now: datetime) -> date:
     return now.astimezone(US_EASTERN).date()
 
 
-def render_blocks(summary: MarketSummary, scope: MarketScope, comment: str | None, error: str | None = None):
+def render_blocks(
+    summary: MarketSummary,
+    scope: MarketScope,
+    comment: str | None,
+    error: str | None = None,
+    *,
+    chart_files: Sequence[tuple[str, str]] | None = None,
+    chart_error: str | None = None,
+):
     """Slack 블록. 값은 Slack 기본 `table` 블록에 넣는다(`blocks` 모듈 docstring 참고)."""
     local = summary.generated_at.astimezone(KST_TIMEZONE)
     if scope is MarketScope.KOREA:
         rendered = [
             blocks.header(f"📈 한국장 브리핑 · {blocks.timestamp(local)} · {session_state(summary.generated_at)}"),
             *_quote_section("국내 지수·선물", _korea_quotes(summary)),
+            *_chart_section(chart_files, chart_error),
             *_quote_section("장중 해외", _intraday_overseas(summary)),
-            *_exchange_rate_section(summary),
+            *_quote_section("환율(실시간·장외)", _fx_quotes(summary)),
             *_flow_section(summary),
             *_stock_flow_section(summary),
             *_stock_trade_sections(summary),
+            *_market_funds_section(summary),
+            *_short_position_section(summary),
             *_movement_section(summary),
         ]
     else:
@@ -439,8 +592,8 @@ def render_blocks(summary: MarketSummary, scope: MarketScope, comment: str | Non
             blocks.header(f"🌙 미국장 마감 · {session:%m/%d}(현지) · {blocks.timestamp(local)}"),
             *_quote_section("미국 지수·선물", _us_quotes(summary)),
             *_rate_section(summary),
+            *_rate_spread_section(summary),
             *_quote_section("전일 국내", _korea_quotes(summary)),
-            *_exchange_rate_section(summary),
             *_flow_section(summary),
             *_stock_flow_section(summary),
         ]
@@ -453,9 +606,7 @@ def render_text(summary: MarketSummary, scope: MarketScope) -> str:
     """블록을 못 그리는 자리에 뜨는 한 줄. 알림 미리보기가 이걸 읽는다."""
     quotes = _korea_quotes(summary) if scope is MarketScope.KOREA else _us_quotes(summary)
     parts = [f"{quote.label} {_number(quote.close)} {_percent(quote.change_percent)}" for quote in quotes[:2]]
-    if scope is MarketScope.KOREA:
-        parts += [f"{fx.currency} {_number(fx.rate)}" for fx in summary.exchange_rates if fx.currency == "USD"]
-    else:
+    if scope is not MarketScope.KOREA:
         parts += [f"{rate.label} {_rate(rate.value)}" for rate in summary.rates if rate.country == "US"][:1]
     title = "한국장 브리핑" if scope is MarketScope.KOREA else "미국장 마감"
     return f"{title} · " + " · ".join(parts) if parts else f"{title} · 값 없음"
@@ -468,7 +619,9 @@ def comment_input(summary: MarketSummary, scope: MarketScope) -> str:
     없어 "올랐다"밖에 못 쓴다. 이력이 없는 계열은 `trend`가 `null`이다.
     """
     quotes = _korea_quotes(summary) + (
-        _intraday_overseas(summary) if scope is MarketScope.KOREA else _us_quotes(summary)
+        _intraday_overseas(summary) + _fx_quotes(summary)
+        if scope is MarketScope.KOREA
+        else _us_quotes(summary)
     )
     payload: dict[str, Any] = {
         "as_of_kst": summary.generated_at.astimezone(KST_TIMEZONE).isoformat(),
@@ -482,15 +635,6 @@ def comment_input(summary: MarketSummary, scope: MarketScope) -> str:
                 "trend": _trend_payload(summary.quote_trends.get(f"{quote.provider}:{quote.symbol}")),
             }
             for quote in quotes
-        ],
-        "exchange_rates": [
-            {
-                "currency": fx.currency,
-                "rate": float(fx.rate),
-                "change_percent": round(fx.change_percent, 2) if fx.change_percent is not None else None,
-                "trend": _trend_payload(summary.exchange_rate_trends.get(fx.currency)),
-            }
-            for fx in summary.exchange_rates
         ],
         "investor_flows": [
             {
@@ -544,6 +688,28 @@ def comment_input(summary: MarketSummary, scope: MarketScope) -> str:
             }
             for movement in summary.movements
         ]
+        if summary.funds is not None:
+            payload["market_funds_billion_krw"] = {
+                "business_date": summary.funds.business_date.isoformat(),
+                "customer_deposit": float(summary.funds.customer_deposit),
+                "customer_deposit_change": float(summary.funds.customer_deposit_change),
+                "credit_loan_balance": float(summary.funds.credit_loan_balance),
+                "credit_loan_change": (
+                    float(summary.funds.credit_loan_change) if summary.funds.credit_loan_change is not None else None
+                ),
+            }
+        payload["short_positions"] = [
+            {
+                "stock": position.label,
+                "code": position.stock_code,
+                "short_sale_volume_ratio_percent": float(position.short_sale_volume_ratio),
+                "short_sale_shares": position.short_sale_quantity,
+                "lending_balance_shares": position.lending_balance_quantity,
+                "lending_balance_change_shares": position.lending_balance_change,
+                "business_date": position.business_date.isoformat(),
+            }
+            for position in summary.short_positions
+        ]
     else:
         # 미국장 리포트의 요약은 밤사이 금리와 전일 한국 값을 함께 읽는다.
         payload["session_date"] = us_session_date(summary.generated_at).isoformat()
@@ -556,6 +722,15 @@ def comment_input(summary: MarketSummary, scope: MarketScope) -> str:
                 "trend": _trend_payload(summary.rate_trends.get(f"{rate.provider}:{rate.series_id}")),
             }
             for rate in summary.rates
+        ]
+        payload["rate_spreads_bp"] = [
+            {
+                "label": spread.label,
+                "spread_bp": round(spread.spread_bp, 1),
+                "change_bp": round(spread.change_bp, 1) if spread.change_bp is not None else None,
+                "observed_on": spread.observed_on.isoformat(),
+            }
+            for spread in summary.spreads
         ]
     return json.dumps(payload, ensure_ascii=False)
 
@@ -641,23 +816,46 @@ def _korea_quotes(summary: MarketSummary) -> tuple[QuoteChange, ...]:
 
 
 def _us_quotes(summary: MarketSummary) -> tuple[QuoteChange, ...]:
-    return tuple(quote for quote in summary.quotes if quote.country == "US" and quote.kind in QUOTED_KINDS)
+    """미국 심볼과 크립토. 크립토는 country가 `XX`(나라 없음)라 종류로 넣는다."""
+    return _ordered(
+        (
+            quote
+            for quote in summary.quotes
+            if quote.kind in QUOTED_KINDS and (quote.country == "US" or quote.kind == "crypto")
+        ),
+        lambda quote: quote.kind,
+        US_KIND_ORDER,
+    )
 
 
 def _intraday_overseas(summary: MarketSummary) -> tuple[QuoteChange, ...]:
     """한국장 시간에도 값이 움직이는 해외 심볼.
 
     미국은 선물만 넣는다. 현물 지수는 이 시간에 닫혀 있어 어제 종가를 오늘 값처럼 보이게 한다.
+    크립토는 24시간 거래라 항상 실시간이다. country가 나라가 아닌 `XX`라 뒤로 밀린다.
     """
     return _ordered(
         (
             quote
             for quote in summary.quotes
             if quote.kind in QUOTED_KINDS
-            and ((quote.country == "US" and quote.kind == INDEX_FUTURE) or quote.country in ASIA_COUNTRIES)
+            and (
+                (quote.country == "US" and quote.kind == INDEX_FUTURE)
+                or quote.country in ASIA_COUNTRIES
+                or quote.kind == "crypto"
+            )
         ),
         lambda quote: quote.country,
         OVERSEAS_COUNTRY_ORDER,
+    )
+
+
+def _fx_quotes(summary: MarketSummary) -> tuple[QuoteChange, ...]:
+    """장외 실시간 환율. 은행 고시가 아니라 장중에 움직이는 시장 값이다."""
+    return _ordered(
+        (quote for quote in summary.quotes if quote.kind == "fx"),
+        lambda quote: quote.symbol,
+        FX_SYMBOL_ORDER,
     )
 
 
@@ -677,14 +875,17 @@ def _quote_section(title: str, quotes: Sequence[QuoteChange]) -> list[dict[str, 
     return blocks.table_section(title, ("구분", "종가", "등락", "기준"), rows)
 
 
-def _exchange_rate_section(summary: MarketSummary) -> list[dict[str, Any]]:
-    if not summary.exchange_rates:
-        return []
-    rows = [
-        (fx.currency, _number(fx.rate), _percent(fx.change_percent), f"{fx.posted_on:%m/%d} {fx.round}회차")
-        for fx in _ordered(summary.exchange_rates, lambda fx: fx.currency, BRIEFING_CURRENCIES)
-    ]
-    return blocks.table_section("환율(하나은행 고시)", ("통화", "매매기준율", "전일 대비", "기준"), rows)
+def _chart_section(files: Sequence[tuple[str, str]] | None, error: str | None) -> list[dict[str, Any]]:
+    """당일 분봉 차트. 계열마다 image 블록 하나다(`(file_id, label)`). **실패는 채널에 남긴다.**
+
+    조용히 빠지면 차트가 원래 없는 리포트와 구분되지 않는다(요약 실패와 같은 원칙).
+    둘 다 없으면 개장 전처럼 그릴 봉이 없는 정상 흐름이라 아무 것도 그리지 않는다.
+    """
+    if files:
+        return [blocks.image(file_id, f"{label} 당일 분봉 차트") for file_id, label in files]
+    if error:
+        return [blocks.context([f"⚠️ 차트 생성 실패: {error}"])]
+    return []
 
 
 def _rate_section(summary: MarketSummary) -> list[dict[str, Any]]:
@@ -695,6 +896,56 @@ def _rate_section(summary: MarketSummary) -> list[dict[str, Any]]:
         for rate in summary.rates
     ]
     return blocks.table_section("주요국 10년 금리", ("국가", "금리", "전일 대비", "기준"), rows)
+
+
+def _rate_spread_section(summary: MarketSummary) -> list[dict[str, Any]]:
+    """금리 스프레드. 역전(음수)이 그대로 보이도록 부호를 항상 붙인다."""
+    if not summary.spreads:
+        return []
+    rows = [
+        (
+            spread.label,
+            f"{spread.spread_bp:+,.0f}bp",
+            _basis_points(spread.change_bp),
+            f"{spread.observed_on:%m/%d}",
+        )
+        for spread in summary.spreads
+    ]
+    return blocks.table_section("금리 스프레드", ("구분", "스프레드", "전일 대비", "기준"), rows)
+
+
+def _market_funds_section(summary: MarketSummary) -> list[dict[str, Any]]:
+    """증시자금. 단위는 KIS 표기 그대로 억원이다. 전일 확정치라 기준일을 행마다 적는다."""
+    if summary.funds is None:
+        return []
+    funds = summary.funds
+    stamp = f"{funds.business_date:%m/%d}"
+    rows = [
+        ("고객예탁금", f"{funds.customer_deposit:,.0f}", _signed_amount(funds.customer_deposit_change), stamp),
+        ("신용융자 잔고", f"{funds.credit_loan_balance:,.0f}", _signed_amount(funds.credit_loan_change), stamp),
+        ("미수금", f"{funds.unsettled_amount:,.0f}", _signed_amount(funds.unsettled_change), stamp),
+    ]
+    return blocks.table_section("증시자금(억원)", ("구분", "잔고", "전일 대비", "기준"), rows)
+
+
+def _short_position_section(summary: MarketSummary) -> list[dict[str, Any]]:
+    """종목 공매도와 대차 잔고. 대차는 공매도의 재고라 한 표에 그린다. 단위는 주다."""
+    if not summary.short_positions:
+        return []
+    rows = [
+        (
+            position.label,
+            f"{position.short_sale_volume_ratio:.2f}%",
+            f"{position.short_sale_quantity:,}",
+            f"{position.lending_balance_quantity:,}" if position.lending_balance_quantity is not None else "-",
+            _signed_amount(position.lending_balance_change),
+            f"{position.business_date:%m/%d}",
+        )
+        for position in summary.short_positions
+    ]
+    return blocks.table_section(
+        "공매도·대차(주)", ("종목", "공매도 비중", "공매도 수량", "대차 잔고", "잔고 증감", "기준"), rows
+    )
 
 
 # `market_investor_flow_snapshot`의 순매수 대금은 **백만원 단위**다(KIS `*_ntby_tr_pbmn`).
@@ -865,6 +1116,13 @@ def _basis_points(change: float | None) -> str:
 def _amount(value: Decimal) -> str:
     """수급 대금을 억원으로 줄인다. 조 단위 숫자를 그대로 두면 표가 화면을 넘는다."""
     return f"{value / MILLIONS_PER_HUNDRED_MILLION:+,.0f}"
+
+
+def _signed_amount(value: Decimal | int | None) -> str:
+    """부호를 항상 붙인 증감. 전일 행이 없어 계산하지 못한 값은 `-`다."""
+    if value is None:
+        return "-"
+    return f"{value:+,.0f}"
 
 
 def _billion(value: Decimal) -> float:

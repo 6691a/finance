@@ -1,11 +1,10 @@
 import json
-from datetime import UTC, date, datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from typing import Self
 
 import pytest
 from sqlalchemy import Table
 
-from apps.models.finance import ExchangeRate
 from apps.models.raw import SourceRecord
 from modules.briefing import ops
 
@@ -18,7 +17,6 @@ HEALTHY_ROWS = [
     (name, 4, 4, 0, 120, TUESDAY) for name, _, _ in [(source.name, 0, 0) for source in ops.EXPECTED_SOURCES]
 ]
 
-FRESH_FX = (date(2026, 8, 18), datetime(2026, 8, 17, 23, 5, tzinfo=UTC))
 NO_BACKLOG = (0, 0, 0, 0, 0, 0, None)
 
 
@@ -54,8 +52,8 @@ class FakeConnection:
         return cursor
 
 
-def summary(rows=None, failures=(), fx=FRESH_FX, backlog=NO_BACKLOG, now=TUESDAY):
-    connection = FakeConnection(HEALTHY_ROWS if rows is None else rows, list(failures), fx, backlog)
+def summary(rows=None, failures=(), backlog=NO_BACKLOG, now=TUESDAY):
+    connection = FakeConnection(HEALTHY_ROWS if rows is None else rows, list(failures), backlog)
     return ops.collect_summary(connection, now)
 
 
@@ -96,14 +94,6 @@ def test_failed_runs_break_the_all_green():
     assert "500" in _block_text(ops.render_blocks(result))
 
 
-def test_stale_exchange_rates_are_caught_without_a_source_record():
-    """환율 수집은 source_record를 남기지 않는다. 신선도로만 살아 있는지 알 수 있다."""
-    result = summary(fx=(date(2026, 8, 11), datetime(2026, 8, 10, 23, 5, tzinfo=UTC)))
-
-    assert not result.is_healthy
-    assert result.exchange_rate_stale
-
-
 def test_assessment_backlog_is_caught_without_a_source_record():
     """문서 평가도 source_record를 남기지 않는다. 밀린 건수가 그 신호다."""
     piled_up = ops.ASSESSMENT_BACKLOG_LIMIT + 1
@@ -138,7 +128,7 @@ def test_unknown_sources_are_folded_into_one_row():
 
 
 def test_the_window_is_a_full_day():
-    connection = FakeConnection(HEALTHY_ROWS, [], FRESH_FX, NO_BACKLOG)
+    connection = FakeConnection(HEALTHY_ROWS, [], NO_BACKLOG)
     ops.collect_summary(connection, TUESDAY)
 
     assert connection.cursors[0].calls[0][1][0] == TUESDAY - timedelta(hours=ops.WINDOW_HOURS)
@@ -157,7 +147,6 @@ def test_fallback_text_is_one_line():
             ("source", "started_at", "completed_at", "status", "record_count"),
         ),
         (ops.RECENT_FAILURES, SourceRecord.__table__, ("source_key", "metadata")),
-        (ops.EXCHANGE_RATE_FRESHNESS, ExchangeRate.__table__, ("date", "created_at")),
     ],
 )
 def test_queries_name_columns_that_exist(statement: str, table: Table, columns: tuple[str, ...]):

@@ -14,6 +14,7 @@ from apps.models.market import (
     KrxStockShortSaleDaily,
     MarketInvestorFlowSnapshot,
     MarketMovementSnapshot,
+    StockBar,
     StockInvestorEstimateSnapshot,
     StockInvestorTradeDaily,
 )
@@ -37,6 +38,12 @@ QUOTE_ROWS = [
     # 미국 상장 ADR. country는 회사 국적(TW·KR)이라 국내·아시아 표로 새기 쉬운 값이다.
     ("yahoo", "TSMC_ADR", "TSMC ADR", "equity", "TW", Decimal("192.40"), Decimal("189.10"), MIDDAY),
     ("yahoo", "SK_HYNIX_ADR", "SK하이닉스 ADR", "equity", "KR", Decimal("155.62"), Decimal("151.30"), MIDDAY),
+]
+
+# 국내 종목은 quote_bar 뷰가 아니라 stock_bar 직접 조회다(NXT 포함). 마지막 칸이 거래소다.
+DOMESTIC_STOCK_ROWS = [
+    ("kis", "005930", "삼성전자", "equity", "KR", Decimal(268500), Decimal(266000), MIDDAY, "KRX"),
+    ("kis", "000660", "SK하이닉스", "equity", "KR", Decimal(298000), Decimal(295500), MIDDAY, "KRX"),
 ]
 
 RATE_ROWS = [
@@ -124,6 +131,7 @@ class FakeConnection:
 def summary(now: datetime = MIDDAY):
     connection = FakeConnection(
         QUOTE_ROWS,
+        DOMESTIC_STOCK_ROWS,
         RATE_ROWS,
         FLOW_ROWS,
         STOCK_FLOW_ROWS,
@@ -166,7 +174,7 @@ def test_every_row_carries_its_own_as_of_time():
             ("kis", "KOSPI", "코스피", "index", "KR", Decimal("2687.45"), Decimal("2665.60"), stale),
             ("kis", "KOSDAQ", "코스닥", "index", "KR", Decimal("745.10"), Decimal("747.42"), MIDDAY),
         ],
-        [], [], [], [], [], [], [], [],
+        [], [], [], [], [], [], [], [], [],
     )
     blocks_out = market.render_blocks(market.collect_summary(connection, MIDDAY), MarketScope.KOREA)
     table = next(block for block in blocks_out if block["type"] == "table")
@@ -175,6 +183,28 @@ def test_every_row_carries_its_own_as_of_time():
     assert rows[0][-1] == "기준"  # 열 제목
     assert rows[1] == ["코스피", "2,687.45", "▲ +0.82%", "08/15 12:30"]  # 묵은 줄
     assert rows[2] == ["코스닥", "745.10", "▼ -0.31%", "08/18 12:30"]  # 최신 줄
+
+
+def test_nxt_bars_are_labeled_so_they_do_not_read_as_krx_closes():
+    """15:30 이후 국내 종목 행은 NXT 봉이다. KRX 마감값처럼 읽히면 안 되니 라벨에 밝힌다.
+
+    KRX는 기본이라 접미사가 없다. 라벨만 다르고 값·시각 렌더링은 같다.
+    """
+    after_hours = datetime(2026, 8, 18, 9, 59, tzinfo=UTC)  # KST 18:59 NXT 애프터마켓
+    connection = FakeConnection(
+        [],
+        [
+            ("kis", "005930", "삼성전자", "equity", "KR", Decimal(268500), Decimal(266000), after_hours, "NXT"),
+            ("kis", "000660", "SK하이닉스", "equity", "KR", Decimal(298000), Decimal(295500), after_hours, "KRX"),
+        ],
+        [], [], [], [], [], [], [], [],
+    )
+    result = market.collect_summary(connection, after_hours)
+    table = next(block for block in market.render_blocks(result, MarketScope.KOREA) if block["type"] == "table")
+    labels = [row[0]["text"] for row in table["rows"]]
+
+    assert "삼성전자(NXT)" in labels
+    assert "SK하이닉스" in labels
 
 
 def test_the_context_flags_the_oldest_value():
@@ -192,7 +222,7 @@ def test_yields_are_not_drawn_as_percent_moves():
     """
     connection = FakeConnection(
         [("yahoo", "US10Y", "미국 10년물 금리", "rate", "US", Decimal("4.70"), Decimal("4.65"), MIDDAY)],
-        *([[]] * 8),
+        *([[]] * 9),
     )
     result = market.collect_summary(connection, MORNING)
 
@@ -264,12 +294,13 @@ def test_rows_are_ordered_for_reading_not_alphabetically():
     """가나다·알파벳 순서는 코스닥을 코스피 위로 올린다."""
     result = summary()
 
-    assert [quote.symbol for quote in market._korea_quotes(result)] == ["KOSPI", "KOSPI200_FUT"]
+    # 목록에 없는 국내 종목(stock_bar 직접 조회)은 지수·선물 뒤로 밀린다.
+    assert [quote.symbol for quote in market._korea_quotes(result)] == ["KOSPI", "KOSPI200_FUT", "005930", "000660"]
     # 크립토는 country가 XX라 나라 목록의 뒤로 밀린다.
     assert [quote.country for quote in market._intraday_overseas(result)] == ["US", "JP", "XX"]
 
     table = next(block for block in market.render_blocks(result, MarketScope.KOREA) if block["type"] == "table")
-    assert [row[0]["text"] for row in table["rows"]] == ["구분", "코스피", "코스피200 선물"]
+    assert [row[0]["text"] for row in table["rows"]] == ["구분", "코스피", "코스피200 선물", "삼성전자", "SK하이닉스"]
 
 
 def test_the_korea_report_draws_the_realtime_fx_table():
@@ -354,12 +385,14 @@ def test_rate_spreads_are_measured_in_bp_and_show_inversion_as_negative():
 
 def test_chart_series_keep_the_symbol_order_and_skip_empty_ones():
     """봉이 없는 심볼은 계열이 없다. 개장 전이나 새 심볼로 리포트가 죽으면 안 된다."""
-    rows = [
-        ("kis", "005930", "삼성전자", MIDDAY, Decimal(268000)),
+    view_rows = [
         ("kis", "KOSPI", "코스피", MIDDAY - timedelta(minutes=1), Decimal("2685.10")),
         ("kis", "KOSPI", "코스피", MIDDAY, Decimal("2687.45")),
     ]
-    series = market.collect_chart_series(FakeConnection(rows), MIDDAY)
+    stock_rows = [
+        ("kis", "005930", "삼성전자", MIDDAY, Decimal(268000)),
+    ]
+    series = market.collect_chart_series(FakeConnection(view_rows, stock_rows), MIDDAY)
 
     assert [one.symbol for one in series] == ["KOSPI", "005930"]  # CHART_SYMBOLS 순서
     assert len(series[0].points) == 2
@@ -429,6 +462,15 @@ def test_stock_estimates_are_counted_in_shares_not_won():
         ),
         (market.INTRADAY_SERIES, IndexBar.__table__, ("provider", "symbol", "bar_at", "close")),
         (market.INTRADAY_SERIES, QuoteSymbol.__table__, ("label",)),
+        # 국내 종목 조회는 stock_bar 물리 테이블을 직접 읽는다(NXT 포함).
+        (
+            market.LATEST_DOMESTIC_STOCKS,
+            StockBar.__table__,
+            ("provider", "stock_code", "exchange", "close", "previous_close", "bar_at"),
+        ),
+        (market.LATEST_DOMESTIC_STOCKS, QuoteSymbol.__table__, ("label", "kind", "country")),
+        (market.DOMESTIC_STOCK_SERIES, StockBar.__table__, ("provider", "stock_code", "exchange", "bar_at", "close")),
+        (market.DOMESTIC_STOCK_SERIES, QuoteSymbol.__table__, ("label",)),
         (
             market.LATEST_MARKET_FUNDS,
             KrxMarketFundsDaily.__table__,

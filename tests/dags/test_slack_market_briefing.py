@@ -23,13 +23,13 @@ ALL_BRIEFINGS = [
 
 
 def test_korea_briefing_runs_during_the_domestic_session():
-    """오전장 두 번, 마감 구간(15:00~15:30)은 10분 간격, 확정 수급은 19:30이다.
+    """매시 정각 10:00~19:00(정규장·NXT 애프터마켓), 15:30 KRX 마감, 20:15 최종이다.
 
     분이 제각각이라 cron 하나가 아니라 다중 cron 타임테이블이다. 주말은 cron이 뺀다.
     """
     timetable = slack_kr_market_briefing.slack_kr_market_briefing.schedule
 
-    assert timetable.summary == "0 10 * * 1-5, 30 12 * * 1-5, 0,10,20,30 15 * * 1-5, 30 19 * * 1-5"
+    assert timetable.summary == "0 10-19 * * 1-5, 30 15 * * 1-5, 15 20 * * 1-5"
 
 
 def test_us_briefing_runs_the_morning_after():

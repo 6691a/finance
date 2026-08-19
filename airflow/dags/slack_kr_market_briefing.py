@@ -49,9 +49,7 @@ from airflow.sdk import dag, task
 from pydantic import SecretStr
 
 from modules.briefing import chart, market
-from modules.briefing.comment import BriefingCommentator, CommentError
 from modules.briefing.market import MarketScope
-from modules.llm import LlmError, briefing_model
 from modules.market_session import krx_open_day
 from modules.slack import UPLOAD_PROCESSING_WAIT_SECONDS, SlackError, post_message, upload_file
 from modules.utility import CONNECTION_ID, KST_TIMEZONE
@@ -178,6 +176,11 @@ def slack_kr_market_briefing():
         표가 본체라 요약이 없어도 보낼 값어치가 있다. 대신 실패 원인을 함께 돌려주어
         메시지에 남긴다. 로그만 남기면 아무도 보지 않는 경고가 된다.
         """
+        # LangChain import는 무겁다. DAG 파일 최상단에 두면 NAS dag-processor가
+        # DagBag 30초 타임아웃으로 죽는다(2026-08-19 실측). 태스크 실행 때만 읽는다.
+        from modules.briefing.comment import BriefingCommentator, CommentError
+        from modules.llm import LlmError, briefing_model
+
         try:
             return BriefingCommentator(briefing_model()).comment(
                 REPORT_NAME, market.comment_input(summary, MarketScope.KOREA)

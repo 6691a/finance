@@ -30,7 +30,7 @@
 import logging
 import os
 from datetime import UTC, datetime, timedelta
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import pendulum
 from airflow.exceptions import AirflowFailException
@@ -39,9 +39,10 @@ from airflow.sdk import dag, task
 from pydantic import SecretStr
 
 from modules.briefing import documents
-from modules.briefing.picks import DocumentPicker, Pick, PickError
-from modules.llm import LlmError, briefing_model
 from modules.slack import SlackError, post_message
+
+if TYPE_CHECKING:
+    from modules.briefing.picks import Pick
 from modules.utility import CONNECTION_ID, KST_TIMEZONE
 
 logger = logging.getLogger(__name__)
@@ -95,12 +96,17 @@ def slack_document_briefing():
         except SlackError as error:
             raise AirflowFailException(str(error)) from error
 
-    def _pick(summary: documents.DocumentSummary) -> tuple[tuple[Pick, ...] | None, str | None]:
+    def _pick(summary: documents.DocumentSummary) -> "tuple[tuple[Pick, ...] | None, str | None]":
         """평가한 문서가 없으면 부르지 않는다. 고를 것이 없다.
 
         실패하면 `None`을 돌려 점수 순서로 떨어진다. 발송이 태스크의 마지막 단계라 여기서
         태스크를 죽이면 재시도가 같은 표를 한 번 더 채널에 보낸다.
         """
+        # LangChain import는 무겁다. DAG 파일 최상단에 두면 NAS dag-processor가
+        # DagBag 30초 타임아웃으로 죽는다(2026-08-19 실측). 태스크 실행 때만 읽는다.
+        from modules.briefing.picks import DocumentPicker, PickError
+        from modules.llm import LlmError, briefing_model
+
         if summary.is_empty:
             return None, None
         try:

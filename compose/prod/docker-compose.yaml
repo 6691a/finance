@@ -13,7 +13,7 @@ networks:
 services:
   kis-realtime:
     build: .
-    image: news-kis-realtime
+    image: finance-kis-realtime
     env_file:
       - .env
     restart: unless-stopped

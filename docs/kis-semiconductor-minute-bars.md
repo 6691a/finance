@@ -7,9 +7,26 @@
 > **2026-08-18 갱신**: 저장 스키마는 이 문서와 다르게 확정됐다. `krx_equity_bar`/`nxt_equity_bar`
 > 물리 테이블 분리 대신 단일 `stock_bar`에 `exchange`(KRX/NXT) 컬럼을 자연키 축으로 둔다
 > (`apps/models/market.py`, 커밋 `e6cf001`). 마감 후 REST 확정본은 `kis_stock_minute_bars_daily`
-> DAG로 구현됐다. WebSocket 실시간 경로, `kis_quote_intraday`의 5분 REST 조정,
-> `kis_equity_backfill` 백필 DAG는 여전히 미구현이다. 이후 절의 테이블 이름과 SQL 경로는
-> 구현 시 `stock_bar` 기준으로 바꿔 읽는다.
+> DAG로 구현됐다. `kis_quote_intraday`의 5분 REST 조정, `kis_equity_backfill` 백필 DAG는
+> 여전히 미구현이다. 이후 절의 테이블 이름과 SQL 경로는 구현 시 `stock_bar` 기준으로 바꿔 읽는다.
+
+> **2026-08-18 갱신 2 — 7장 WebSocket 구현됨** (2026-08-19 위치 확정): 상주 수집기는
+> **`apps/realtime/`**(백엔드 트리)다. Airflow가 실행하지 않는 코드는 `airflow/`에 두지
+> 않는 규칙이 새로 확정돼, 문서 7.1·11.1의 `airflow/modules/collectors/kis_realtime.py`·
+> Airflow 이미지 공유 배포는 대체됐다. 실행은 `python -m apps.realtime`, 배포는 별도
+> 스택 `compose/prod/`(개발은 `compose/local/realtime/`), 설정은 FastAPI와 같은
+> `config.yaml`(`apps.core.config`), 저장은 `apps.models` ORM
+> (`apps/realtime/repository.py`)이다. `stock_bar`에 `ingest_method`/`is_final` 컬럼이
+> 붙었고(리비전 `d41f7c9b3a12`), WS는 `provisional_upsert`(ORM)로 `is_final=false` 행만
+> 갱신하며 REST(`airflow/sql/postgres/stock_bar/upsert.sql`)는 무조건 덮고
+> `is_final=true`로 확정한다. 문서와 다른 구현 결정: ① `previous_close`는 시작 시 REST가
+> 아니라 일별 DAG처럼 `stock_investor_trade_daily`에서 읽는다 — REST access token이
+> 필요 없고 approval key만 쓴다. ② 세션 필터는 4.2의 NXT 3분할 창(애프터 15:40~) 대신
+> REST 수집과 같은 단일 창(KRX 09:00~15:30, NXT 08:00~20:00)이다 — 실측(`kis.py`: 애프터
+> 15:30~20:00)이 문서와 어긋났고, REST 저장 범위와 같아야 WS에만 구멍이 생기지 않는다.
+> ③ Airflow 수집기와 겹치는 종목·세션 상수는 의도적 중복이고
+> `tests/realtime/test_kis_realtime.py`가 대조한다. 인증 거절 코드가 픽스처로 확정되기
+> 전까지 "구독 전건 거절 = 인증 문제"로 판정해 approval key를 1회 재발급한다.
 
 ## 1. 결론
 
@@ -539,6 +556,10 @@ REST 조정과 백필은 한정된 수집 단위의 source row·봉 upsert·완�
 commit한다. 연결 전체를 감싸는 장기 DB 트랜잭션은 만들지 않는다.
 
 ## 11. 배포와 운영
+
+> **2026-08-19 갱신 — 이 절의 배포 서술은 대체됐다.** 실서비스는 `compose/prod/`의 별도
+> 스택으로 돌고, 배포는 NAS clone(`/volume1/docker/news`)에 `just deploy`가 pull·up 한다.
+> 현행 절차는 README의 `배포` 절이 기준이다. 아래 11.1은 대체 전 설계 기록이다.
 
 ### 11.1 compose 서비스
 

@@ -1,5 +1,7 @@
 airflow_compose := "compose/local/airflow/docker-compose.yaml"
 dev_compose := "compose/local/docker-compose.yaml"
+realtime_compose := "compose/local/realtime/docker-compose.yaml"
+realtime_prod_compose := "compose/prod/docker-compose.yaml"
 
 # Application PostgreSQL, Redis and Grafana.
 dev:
@@ -16,6 +18,42 @@ airflow:
 
 airflow-down:
     docker compose -f {{airflow_compose}} down
+
+# KIS 실시간 WebSocket 수집기(개발). `just dev`의 DB(15432)가 먼저 떠 있어야 한다.
+realtime:
+    docker compose -f {{realtime_compose}} build
+    docker compose -f {{realtime_compose}} up -d
+
+realtime-down:
+    docker compose -f {{realtime_compose}} down
+
+# KIS 실시간 WebSocket 수집기(운영). 운영 호스트에서 실행하며 운영 DB를 본다.
+realtime-prod:
+    docker compose -f {{realtime_prod_compose}} build
+    docker compose -f {{realtime_prod_compose}} up -d
+
+realtime-prod-down:
+    docker compose -f {{realtime_prod_compose}} down
+
+# 운영 배포. NAS clone(/volume1/docker/news)에서 pull 후 두 스택 up.
+# compose·Dockerfile·requirements 변경은 up -d --build가 스스로 재생성하고,
+# bind-mount 코드(apps/)만 감지 못 하므로 그 경우에만 realtime을 재시작한다.
+# airflow는 재시작 불필요 — dags/modules는 dag-processor가 재파싱한다.
+# airflow/airflow.cfg 변경만 수동 스택 재시작이 필요하다(README 배포 절).
+deploy host="nas":
+    #!/usr/bin/env bash
+    set -euo pipefail
+    ssh {{host}} bash -s <<'EOF'
+    set -euo pipefail
+    cd /volume1/docker/news
+    before=$(git rev-parse HEAD)
+    git pull --ff-only
+    docker compose -f compose/prod/airflow/docker-compose.yaml up -d --build
+    docker compose -f compose/prod/docker-compose.yaml up -d --build
+    if ! git diff --quiet "$before" HEAD -- apps/; then
+        docker compose -f compose/prod/docker-compose.yaml restart
+    fi
+    EOF
 
 # Run an Alembic command across every migration-enabled database alias.
 # Example: `just migrate upgrade head`.

@@ -232,7 +232,7 @@ import 뿌리는 `airflow/`입니다. DAG는 배포와 같은 이름으로 `from
 
 ### 겹치는 코드의 위치와 규칙
 
-- **위치는 Airflow를 따릅니다.** 배포에서 보이지 않는 경로에 실행 코드를 두면 DAG가 죽습니다. 백엔드와 Airflow가 함께 쓰는 수집 코드는 `airflow/modules` 아래 한 벌만 둡니다. 사본을 `apps/`에 만들지 않습니다.
+- **`airflow/` 아래에는 DAG가 실제로 실행하는 코드만 둡니다.** DAG가 쓰는 수집 코드는 `airflow/modules` 아래 한 벌만 둡니다. 배포에서 보이지 않는 경로에 실행 코드를 두면 DAG가 죽습니다. 반대로 Airflow가 실행하지 않는 상주 서비스(`apps/realtime/` — KIS 실시간 WebSocket 수집)는 `apps/` 아래에 백엔드 규칙(ORM, `config.yaml`)으로 두고 별도 컨테이너(`compose/prod/`)로 배포합니다. 두 트리가 겹치는 도메인 상수는 중복을 허용하되 테스트로 대조합니다.
 - **규칙은 백엔드를 따릅니다.** 외부 입력은 Pydantic으로 검증하고, 시각은 timezone-aware UTC이며, 주석은 한국어로 씁니다.
 - **`dags/`에는 오케스트레이션만 둡니다.** 스케줄, 재시도, 태스크 매핑, Hook 사용, 실패 분류가 여기에 해당합니다. 파싱·검증·저장 규칙은 `modules/`에 둡니다.
 - **의존성은 Airflow 환경에 있는 것만 씁니다.** 표준 라이브러리, Pydantic, PEP 249 연결이 기본이고, 여기에 HTML 수집용 `scrapling[fetchers]`와 LLM 호출용 `langchain-xai`·`langgraph`가 더해집니다. 목록은 [compose/local/airflow/requirements.txt](compose/local/airflow/requirements.txt)에 있고, 새로 쓰려면 운영 Airflow 이미지에 먼저 들어가야 합니다. SQLAlchemy 모델과 `core.config`는 import하지 않습니다.
@@ -594,6 +594,46 @@ ORDER BY ts
 - **`exchange_standard_rate`가 0인 통화가 있습니다.** 최근 구간의 CNY·RUB·TWD가 그렇습니다(2024년 데이터는 정상). 패널은 `CASE WHEN exchange_standard_rate > 0 THEN exchange_standard_rate ELSE (buy + sell) / 2 END`로 대체값을 씁니다.
 
 1분 간격 고시라 구간이 길면 행이 많아집니다. 시계열 패널은 `$__timeGroupAlias(..., $__interval)`로 다운샘플링합니다.
+
+## 배포
+
+운영은 Synology NAS 한 대이고 저장소 clone 하나(`/volume1/docker/news`)에서 두 compose
+스택을 실행합니다. 두 스택 모두 코드를 이미지에 굽지 않고 clone 안의 트리를 bind-mount
+하므로, 배포는 clone을 `git pull` 하는 것이 전부입니다.
+
+| 스택 | compose | 마운트하는 트리 |
+| --- | --- | --- |
+| Airflow | `compose/prod/airflow/docker-compose.yaml` | `airflow/{dags,logs,plugins,modules,utility,sql,airflow.cfg}` |
+| KIS 실시간 수집기 | `compose/prod/docker-compose.yaml` | `apps/`, clone 루트의 `config.yaml` |
+
+배포는 개발 머신에서 한 번에 합니다. `main`에 push한 뒤:
+
+```bash
+just deploy          # ssh 별칭 nas 기준. 다른 별칭이면 `just deploy <host>`
+```
+
+레시피가 NAS에서 `git pull --ff-only` 후 두 스택을 `up -d --build` 합니다. 변경 종류별
+반영 방식은 다음과 같습니다.
+
+- `airflow/dags`·`modules` 등 bind-mount 코드 — dag-processor가 재파싱하고 태스크는
+  실행마다 새 프로세스이므로 pull만으로 반영됩니다.
+- `apps/` — 상주 프로세스라 pull로는 반영되지 않습니다. deploy 레시피가 변경을 감지해
+  realtime 컨테이너만 재시작합니다.
+- compose 파일·Dockerfile·requirements — `up -d --build`가 이미지·설정 변경을 감지해
+  재생성합니다.
+- `airflow/airflow.cfg` — 컨테이너 재시작이 필요합니다. NAS에서 airflow 스택을
+  `docker compose restart` 합니다(드문 일이라 deploy 레시피에 넣지 않았습니다).
+
+NAS에만 두는 파일은 셋이고 전부 gitignore 대상입니다: `compose/prod/airflow/.env`(Airflow
+환경변수·API 키, Sentry DSN 포함), `compose/prod/.env`(realtime 노브), clone 루트의
+`config.yaml`(KIS 키·DB·Sentry — FastAPI와 같은 파일). 키 구성은 각 디렉터리의
+`.env.sample`이 기준입니다. Sentry는 `airflow.cfg`가 아니라 `.env`의
+`AIRFLOW__SENTRY__*`로 켭니다 — cfg는 저장소 파일을 마운트하므로 DSN을 넣으면 커밋됩니다.
+
+최초 세팅(1회): NAS에 deploy key를 등록해 `git clone git@github.com:6691a/finance.git
+/volume1/docker/news`, 세 파일을 `.env.sample`과 대조해 채우고, 각 compose를
+`up -d --build` 합니다. Airflow 과거 태스크 로그를 유지하려면 이전 `logs/` 내용을
+`airflow/logs/`로 복사합니다(생략해도 동작에는 지장 없음).
 
 ## graphify
 

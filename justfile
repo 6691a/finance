@@ -41,19 +41,13 @@ realtime-prod-down:
 # airflow는 재시작 불필요 — dags/modules는 dag-processor가 재파싱한다.
 # airflow/airflow.cfg 변경만 수동 스택 재시작이 필요하다(README 배포 절).
 deploy host="nas":
-    #!/usr/bin/env bash
-    set -euo pipefail
-    ssh {{host}} bash -s <<'EOF'
-    set -euo pipefail
-    cd /volume1/docker/news
-    before=$(git rev-parse HEAD)
-    git pull --ff-only
-    docker compose -f compose/prod/airflow/docker-compose.yaml up -d --build
-    docker compose -f compose/prod/docker-compose.yaml up -d --build
-    if ! git diff --quiet "$before" HEAD -- apps/; then
-        docker compose -f compose/prod/docker-compose.yaml restart
-    fi
-    EOF
+    ssh {{host}} 'set -e; cd /volume1/docker/news; \
+        before=$(git rev-parse HEAD); \
+        git pull --ff-only; \
+        docker compose -f compose/prod/airflow/docker-compose.yaml up -d --build; \
+        docker compose -f compose/prod/docker-compose.yaml up -d --build; \
+        git diff --quiet "$before" HEAD -- apps/ \
+            || docker compose -f compose/prod/docker-compose.yaml restart'
 
 # Run an Alembic command across every migration-enabled database alias.
 # Example: `just migrate upgrade head`.

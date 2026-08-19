@@ -610,10 +610,13 @@ ORDER BY ts
 
 ```bash
 git pull
-just deploy   # just가 없으면 레시피 안의 docker compose 세 줄을 그대로 실행
+just deploy            # 두 스택 전부
+just deploy-airflow    # airflow만
+just deploy-realtime   # realtime만
 ```
 
-레시피가 두 스택을 `up -d --build` 하고 realtime을 재시작합니다. 변경 종류별
+`deploy`는 두 스택을 `up -d --build` 하고 realtime을 재시작합니다. just가 없으면
+레시피 안의 docker compose 명령을 그대로 실행합니다. 변경 종류별
 반영 방식은 다음과 같습니다.
 
 - `airflow/dags`·`modules` 등 bind-mount 코드 — dag-processor가 재파싱하고 태스크는

@@ -46,8 +46,9 @@ def test_the_dag_runs_after_the_daily_flow_dag():
     """전일종가를 `stock_investor_trade_daily`에서 읽으므로 그 DAG 뒤에 돌아야 한다."""
     dag = kis_stock_minute_bars_daily.kis_stock_minute_bars_daily
 
-    # KST 평일 20:40 = UTC 평일 11:40. 확정 일별 수급은 18:10 이고 NXT 애프터마켓이 20:00에 끝난다.
-    assert dag.schedule == "40 20 * * 1-5"
+    # KST 평일 20:05 = UTC 평일 11:05. 확정 일별 수급은 18:10, NXT 애프터마켓은 20:00에
+    # 끝나고, 20:15 최종 브리핑보다 먼저 돌아 확정 봉을 넘긴다.
+    assert dag.schedule == "5 20 * * 1-5"
     assert dag.max_active_runs == 1
     assert set(dag.task_dict) == {"collect"}
 

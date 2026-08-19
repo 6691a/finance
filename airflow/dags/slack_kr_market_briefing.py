@@ -3,6 +3,11 @@
 `docs/slack-report-design.md` 1부의 한국장 절반이다. 표는 SQL 집계가 만든다.
 LLM 요약은 없다 — 2026-08-19까지 붙였지만 표가 이미 말하는 것 이상을 쓰지 못해 뺐다.
 
+한국 주식의 실제 끝은 KRX 15:30이 아니라 NXT 애프터마켓 20:00이다. 그래서 발송이
+20:15까지 이어지고, 종목(005930·000660) 행은 15:30까지 KRX, 이후 NXT 봉을 보인다
+(라벨에 `(NXT)`가 붙는다). NXT 장중 봉은 realtime WebSocket 수집기가 채운다
+(`KIS_ENABLE_NXT_WEBSOCKET`).
+
 ## 왜 미국장과 나뉘어 있나
 
 미국 정규장은 KST로 밤이라 장중에 알릴 것이 없다. 그쪽은 `slack_us_market_briefing`이
@@ -54,14 +59,14 @@ from modules.utility import CONNECTION_ID, KST_TIMEZONE
 
 logger = logging.getLogger(__name__)
 
-# 장중 10:00·12:30, 마감 구간 15:00부터 15:30까지 10분 간격, 그리고 확정 수급
-# (KST 18:10 수집)까지 실은 19:30 마감 확정 리포트다.
+# 매시 정각 10:00~19:00(정규장과 NXT 애프터마켓), 15:30 KRX 마감, 20:15 최종 마감이다.
+# 확정 수급은 KST 18:10 수집이라 19:00부터 실린다. NXT 애프터마켓이 20:00에 끝나고
+# REST 확정 배치(kis_stock_minute_bars_daily)가 20:05에 돌아 20:15 리포트가 하루 완결이다.
 # 분이 제각각이라 cron 하나로 못 적는다. 시각을 바꾸려면 이 목록만 고친다.
 SCHEDULE = MultipleCronTriggerTimetable(
-    "0 10 * * 1-5",  # KST 평일 10:00 = UTC 01:00
-    "30 12 * * 1-5",  # KST 평일 12:30 = UTC 03:30
-    "0,10,20,30 15 * * 1-5",  # KST 평일 15:00~15:30 10분 간격 = UTC 06:00~06:30
-    "30 19 * * 1-5",  # KST 평일 19:30 = UTC 10:30
+    "0 10-19 * * 1-5",  # KST 평일 매시 정각 10:00~19:00 = UTC 01:00~10:00
+    "30 15 * * 1-5",  # KST 평일 15:30 KRX 마감 = UTC 06:30
+    "15 20 * * 1-5",  # KST 평일 20:15 NXT 마감 최종 = UTC 11:15
     timezone=KST_TIMEZONE,
 )
 

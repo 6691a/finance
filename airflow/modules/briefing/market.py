@@ -29,6 +29,9 @@ from modules.sql import read_sql
 from modules.utility import KST_TIMEZONE
 
 LATEST_QUOTES = read_sql("postgres", "quote_bar", "select_latest_briefing_bars.sql")
+# 국내 종목은 quote_bar 뷰가 아니라 물리 테이블을 읽는다. 뷰는 NXT를 태우지 않아서
+# 15:30 이후 애프터마켓 값이 안 보인다. 최신 봉 우선·동률 KRX 규칙은 SQL 주석 참고.
+LATEST_DOMESTIC_STOCKS = read_sql("postgres", "stock_bar", "select_latest_briefing_bars.sql")
 LATEST_RATES = read_sql("postgres", "indicator_observation", "select_latest_pair.sql")
 LATEST_FLOWS = read_sql("postgres", "market_investor_flow_snapshot", "select_latest.sql")
 LATEST_MOVEMENTS = read_sql("postgres", "market_movement_snapshot", "select_latest.sql")
@@ -39,6 +42,7 @@ LATEST_SHORT_POSITIONS = read_sql("postgres", "krx_stock_short_sale_daily", "sel
 SPREAD_PAIRS = read_sql("postgres", "indicator_observation", "select_spread_pairs.sql")
 
 INTRADAY_SERIES = read_sql("postgres", "quote_bar", "select_intraday_series.sql")
+DOMESTIC_STOCK_SERIES = read_sql("postgres", "stock_bar", "select_intraday_series.sql")
 
 US_EASTERN = timezone("America/New_York")
 
@@ -75,7 +79,8 @@ OVERSEAS_COUNTRY_ORDER = ("US", "JP", "CN", "HK", "TW")
 US_KIND_ORDER = ("index", "index_future", "bond_future", "commodity", "crypto", "equity")
 
 # 장중 차트에 그리는 심볼. 이 순서가 이미지 순서다. 해외를 붙일 때도 이 목록만 늘린다.
-# quote_bar 뷰를 읽으므로 종목(stock_bar)·지수(index_bar)·환율(fx_bar)이 한 쿼리로 나온다.
+# 지수·환율은 quote_bar 뷰로, DOMESTIC_STOCK_CHART_SYMBOLS에 있는 국내 종목은 NXT까지
+# 보이도록 stock_bar 직접 조회로 나눠 읽는다(collect_chart_series).
 CHART_SYMBOLS = (
     ("kis", "KOSPI"),
     ("kis", "KOSDAQ"),
@@ -83,6 +88,9 @@ CHART_SYMBOLS = (
     ("kis", "000660"),
     ("yahoo", "USDKRW"),
 )
+
+# CHART_SYMBOLS 중 stock_bar를 직접 읽어야 하는 국내 종목.
+DOMESTIC_STOCK_CHART_SYMBOLS = frozenset({("kis", "005930"), ("kis", "000660")})
 
 # 실시간 환율 표의 줄 순서. 목록에 없는 fx 심볼(USDJPY 등)은 뒤로 밀린다.
 FX_SYMBOL_ORDER = ("USDKRW", "JPYKRW", "DXY")
@@ -135,6 +143,9 @@ class QuoteChange(BaseModel):
     close: Decimal
     previous_close: Decimal
     bar_at: AwareDatetime
+    # 봉이 체결된 거래소. 국내 종목(stock_bar 직접 조회)만 채우고 뷰에서 온 행은 None이다.
+    # NXT 값이면 표 라벨에 밝힌다 — KRX 마감값과 애프터마켓 값이 구분돼야 한다.
+    exchange: str | None = None
 
     @property
     def change_percent(self) -> float:
@@ -326,6 +337,27 @@ def collect_summary(connection: Connection, now: datetime) -> MarketSummary:
             bar_at=row[7],
         ),
     )
+    domestic_stocks = _fetch(
+        connection,
+        LATEST_DOMESTIC_STOCKS,
+        (now - QUOTE_LOOKBACK,),
+        lambda row: QuoteChange(
+            provider=row[0],
+            symbol=row[1],
+            label=row[2],
+            kind=row[3],
+            country=row[4],
+            close=row[5],
+            previous_close=row[6],
+            bar_at=row[7],
+            exchange=row[8],
+        ),
+    )
+    # 뷰가 준 국내 종목 행(KRX만)을 버리고 stock_bar 직접 조회(NXT 포함)로 바꾼다.
+    quotes = (
+        tuple(quote for quote in quotes if not (quote.provider == "kis" and quote.kind == "equity"))
+        + domestic_stocks
+    )
     rates = _fetch(
         connection,
         LATEST_RATES,
@@ -441,11 +473,18 @@ def collect_chart_series(connection: Connection, now: datetime) -> tuple[ChartSe
     """
     local = now.astimezone(KST_TIMEZONE)
     session_open = local.replace(hour=SESSION_OPEN_HOUR_KST, minute=0, second=0, microsecond=0)
-    providers = sorted({provider for provider, _ in CHART_SYMBOLS})
-    symbols = [symbol for _, symbol in CHART_SYMBOLS]
+    # 국내 종목은 NXT 봉까지 보이도록 stock_bar를 직접 읽고 나머지는 뷰로 읽는다.
+    view_symbols = [pair for pair in CHART_SYMBOLS if pair not in DOMESTIC_STOCK_CHART_SYMBOLS]
+    stock_symbols = [pair for pair in CHART_SYMBOLS if pair in DOMESTIC_STOCK_CHART_SYMBOLS]
+    rows = []
     with connection.cursor() as cursor:
-        cursor.execute(INTRADAY_SERIES, (providers, symbols, session_open))
-        rows = cursor.fetchall()
+        for statement, pairs in ((INTRADAY_SERIES, view_symbols), (DOMESTIC_STOCK_SERIES, stock_symbols)):
+            if not pairs:
+                continue
+            providers = sorted({provider for provider, _ in pairs})
+            symbols = [symbol for _, symbol in pairs]
+            cursor.execute(statement, (providers, symbols, session_open))
+            rows.extend(cursor.fetchall())
 
     grouped: dict[tuple[str, str], list[tuple[datetime, Decimal]]] = {}
     labels: dict[tuple[str, str], str] = {}
@@ -659,10 +698,17 @@ def _quote_section(title: str, quotes: Sequence[QuoteChange]) -> list[dict[str, 
     if not quotes:
         return []
     rows = [
-        (quote.label, _number(quote.close), _percent(quote.change_percent), _day_stamp(quote.bar_at))
+        (_quote_label(quote), _number(quote.close), _percent(quote.change_percent), _day_stamp(quote.bar_at))
         for quote in quotes
     ]
     return blocks.table_section(title, ("구분", "종가", "등락", "기준"), rows)
+
+
+def _quote_label(quote: QuoteChange) -> str:
+    """행 라벨. NXT 봉이면 밝힌다 — KRX 마감값처럼 읽히면 안 된다. KRX는 기본이라 안 적는다."""
+    if quote.exchange and quote.exchange != "KRX":
+        return f"{quote.label}({quote.exchange})"
+    return quote.label
 
 
 def _chart_section(files: Sequence[tuple[str, str]] | None, error: str | None) -> list[dict[str, Any]]:

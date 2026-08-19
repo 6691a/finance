@@ -152,9 +152,10 @@ def previous_close(connection: Any, stock_code: str, business_date: date) -> Dec
     dag_id="kis_stock_minute_bars_daily",
     dag_display_name="📊 삼성전자·SK하이닉스 1분봉 확정 (KIS)",
     description="장 마감 뒤 삼성전자·SK하이닉스의 1분봉을 KRX·NXT 각각 받아 stock_bar에 저장한다.",
-    # KST 평일 20:40 = UTC 평일 11:40. 확정 일별 수급(18:10)이 전일종가를 채운 뒤이고,
-    # NXT 애프터마켓(~20:00)까지 끝난 뒤라 하루치가 완결이다.
-    schedule="40 20 * * 1-5",
+    # KST 평일 20:05 = UTC 평일 11:05. 확정 일별 수급(18:10)이 전일종가를 채운 뒤이고,
+    # NXT 애프터마켓(~20:00)까지 끝난 직후다. 20:15 최종 브리핑(slack_kr_market_briefing)이
+    # WebSocket 잠정이 아니라 REST 확정(is_final) 봉을 읽도록 그보다 먼저 돈다.
+    schedule="5 20 * * 1-5",
     start_date=pendulum.datetime(2026, 8, 15, tz=KST_TIMEZONE),  # KST 2026-08-15 00:00 = UTC 2026-08-14 15:00
     catchup=False,
     max_active_runs=1,

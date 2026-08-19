@@ -606,13 +606,14 @@ ORDER BY ts
 | Airflow | `compose/prod/airflow/docker-compose.yaml` | `airflow/{dags,logs,plugins,modules,utility,sql,airflow.cfg}` |
 | KIS 실시간 수집기 | `compose/prod/docker-compose.yaml` | `apps/`, clone 루트의 `config.yaml` |
 
-배포 순서: `main`에 push → NAS clone에서 `git pull` (직접 실행) → 개발 머신에서:
+배포 순서: `main`에 push → NAS clone에서:
 
 ```bash
-just deploy          # ssh 별칭 nas 기준. 다른 별칭이면 `just deploy <host>`
+git pull
+just deploy   # just가 없으면 레시피 안의 docker compose 세 줄을 그대로 실행
 ```
 
-레시피가 NAS에서 두 스택을 `up -d --build` 하고 realtime을 재시작합니다. 변경 종류별
+레시피가 두 스택을 `up -d --build` 하고 realtime을 재시작합니다. 변경 종류별
 반영 방식은 다음과 같습니다.
 
 - `airflow/dags`·`modules` 등 bind-mount 코드 — dag-processor가 재파싱하고 태스크는

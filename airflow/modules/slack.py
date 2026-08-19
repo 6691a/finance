@@ -78,6 +78,33 @@ def post_message(
     return str(timestamp)
 
 
+def upload_file(token: SecretStr, *, filename: str, title: str, content: bytes) -> str:
+    """파일 하나를 채널 공유 없이 올리고 file ID를 돌려준다. `files:write` 스코프가 필요하다.
+
+    메시지 블록이 `slack_file`로 이 ID를 참조한다. 업로드 뒤 발송이 실패해 태스크가
+    재시도되면 파일이 한 번 더 올라가지만, 메시지에 실리는 것은 마지막 ID뿐이라
+    중복 발송은 아니다.
+    """
+    client = WebClient(
+        token=token.get_secret_value(),
+        timeout=REQUEST_TIMEOUT_SECONDS,
+        # 재시도는 Airflow가 한다. 위 모듈 docstring 참고.
+        retry_handlers=[],
+    )
+    try:
+        response = client.files_upload_v2(file=content, filename=filename, title=title)
+    except SlackApiError as error:
+        raise classify(error) from error
+    except SlackClientError as error:
+        raise ConnectionError(f"slack upload failed: {error}") from error
+
+    files = response.get("files") or []
+    file_id = files[0].get("id") if files else None
+    if not file_id:
+        raise SlackError(f"slack accepted the upload but returned no file id: {filename}")
+    return str(file_id)
+
+
 def classify(error: SlackApiError) -> Exception:
     """Slack 예외를 DAG가 아는 종류로 바꾼다. 토큰은 여기 실리지 않는다."""
     response = error.response

@@ -40,7 +40,7 @@
 - 외부 입력은 Pydantic으로 검증하고, 시각은 timezone-aware UTC이며, 주석은 한국어로 쓴다.
 - `dags/`에는 스케줄, 재시도, 태스크 매핑, Hook 사용, 실패 분류만 둔다. 파싱·검증·저장 규칙은 `modules/`에 둔다.
 - **모든 DAG는 화면용 메타데이터를 채운다.** `dag_display_name`(이모지 + 한글 이름 + 제공처. 예: `📈 국내 지수·선물 1분봉 (KIS)`), 한 문장 `description`, `doc_md=__doc__`(모듈 docstring에 설계 배경)이 필수다. `Param`에도 `title`과 `description`을 단다. 빈 문자열로 두지 않는다.
-- 의존성은 Airflow 환경에 있는 것만 쓴다. 표준 라이브러리, Pydantic, PEP 249 연결이다. SQLAlchemy 모델과 `core.config`는 import하지 않는다.
+- 의존성은 Airflow 환경에 있는 것만 쓴다. 표준 라이브러리, Pydantic, PEP 249 연결, HTML 수집용 `scrapling[fetchers]`, 브리핑 차트용 matplotlib(+한글 폰트 `fonts-nanum`)이다. SQLAlchemy 모델과 `core.config`는 import하지 않는다. matplotlib은 없어도 브리핑이 죽지 않도록 함수 안에서 import한다(`modules/briefing/chart.py`).
 - 테이블 정의의 원본은 백엔드의 `apps/models`다. 수집기는 문자열 SQL을 쓰므로 `tests/collectors/test_fred.py`, `test_ecos.py`, `test_mof.py`, `test_boe.py`, `test_ecb.py`가 INSERT 컬럼과 `ON CONFLICT` 키를 모델 metadata와 대조한다.
 
 ## 수집기 작성 규칙

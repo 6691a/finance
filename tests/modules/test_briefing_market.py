@@ -349,10 +349,58 @@ def test_rows_are_ordered_for_reading_not_alphabetically():
 
     fx = next(
         block
-        for block in market.render_blocks(result, MarketScope.KOREA, None)
+        for block in market.render_blocks(result, MarketScope.US, None)
         if block["type"] == "table" and block["rows"][0][0]["text"] == "통화"
     )
     assert [row[0]["text"] for row in fx["rows"][1:]] == ["USD", "JPY"]
+
+
+def test_the_korea_report_drops_the_stale_fx_table():
+    """하나은행 고시는 하루 한 번 수집이라 장중에는 늘 전일 최종 회차다. 장중 브리핑에서 뺀다."""
+    korea = _block_text(market.render_blocks(summary(), MarketScope.KOREA, None))
+
+    assert "환율" not in korea
+    # 미리보기 한 줄과 LLM 입력에서도 함께 뺀다. 화면에 없는 숫자를 모델이 쓰면 안 된다.
+    assert "USD" not in market.render_text(summary(), MarketScope.KOREA)
+    assert json.loads(market.comment_input(summary(), MarketScope.KOREA))["exchange_rates"] == []
+
+
+def test_the_us_report_labels_the_fx_table_as_previous_day():
+    """아침 리포트에는 남긴다. 대신 전일 값임을 제목이 밝힌다."""
+    text = _block_text(market.render_blocks(summary(MORNING), MarketScope.US, None))
+
+    assert "전일 환율(하나은행 고시)" in text
+
+
+def test_chart_series_keep_the_symbol_order_and_skip_empty_ones():
+    """봉이 없는 심볼은 계열이 없다. 개장 전이나 새 심볼로 리포트가 죽으면 안 된다."""
+    rows = [
+        ("kis", "005930", "삼성전자", MIDDAY, Decimal(268000)),
+        ("kis", "KOSPI", "코스피", MIDDAY - timedelta(minutes=1), Decimal("2685.10")),
+        ("kis", "KOSPI", "코스피", MIDDAY, Decimal("2687.45")),
+    ]
+    series = market.collect_chart_series(FakeConnection(rows), MIDDAY)
+
+    assert [one.symbol for one in series] == ["KOSPI", "005930"]  # CHART_SYMBOLS 순서
+    assert len(series[0].points) == 2
+    assert series[0].label == "코스피"
+
+
+def test_the_chart_block_sits_after_the_domestic_table():
+    with_chart = market.render_blocks(summary(), MarketScope.KOREA, None, chart_file_id="F0AAA")
+
+    image = next(block for block in with_chart if block["type"] == "image")
+    assert image["slack_file"] == {"id": "F0AAA"}
+    assert with_chart[with_chart.index(image) - 1]["type"] == "table"
+
+
+def test_chart_failure_is_visible_and_absence_is_silent():
+    """실패는 채널에 남고, 그릴 봉이 없는 것은 정상 흐름이라 아무 것도 남지 않는다."""
+    failed = market.render_blocks(summary(), MarketScope.KOREA, None, chart_error="boom")
+    silent = market.render_blocks(summary(), MarketScope.KOREA, None)
+
+    assert "차트 생성 실패" in _block_text(failed)
+    assert "차트" not in _block_text(silent)
 
 
 def test_stock_estimates_are_counted_in_shares_not_won():
@@ -401,6 +449,8 @@ def test_stock_estimates_are_counted_in_shares_not_won():
             StockInvestorTradeDaily.__table__,
             ("stock_code", "business_date", "close_price", "institution_net_buy_qty", "pension_fund_net_buy_qty"),
         ),
+        (market.INTRADAY_SERIES, IndexBar.__table__, ("provider", "symbol", "bar_at", "close")),
+        (market.INTRADAY_SERIES, QuoteSymbol.__table__, ("label",)),
         (market.QUOTE_TREND, IndexBar.__table__, ("provider", "symbol", "bar_at", "close")),
         (market.QUOTE_TREND, IndexDaily.__table__, ("business_date",)),
         (market.RATE_TREND, IndicatorObservation.__table__, ("observation_date", "value")),

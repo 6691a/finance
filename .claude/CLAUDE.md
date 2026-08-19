@@ -162,8 +162,10 @@ DAG가 쓰는 코드는 **위치는 Airflow를, 규칙은 백엔드를** 따른�
   `doc_md=__doc__`(모듈 docstring에 설계 배경)이 필수다. `Param`에도 `title`과
   `description`을 단다. 빈 문자열로 두지 않는다.
 - 의존성은 Airflow 환경에 있는 것만 쓴다. 표준 라이브러리, Pydantic, PEP 249 연결,
-  그리고 HTML 수집용 `scrapling[fetchers]`다. SQLAlchemy 모델과 `core.config`는 import하지 않는다.
-  여기에 더 넣으려면 운영 Airflow 이미지에 먼저 들어가야 한다.
+  HTML 수집용 `scrapling[fetchers]`, 그리고 브리핑 차트용 matplotlib(+한글 폰트
+  `fonts-nanum`)이다. SQLAlchemy 모델과 `core.config`는 import하지 않는다.
+  여기에 더 넣으려면 운영 Airflow 이미지에 먼저 들어가야 한다. matplotlib은 없어도
+  브리핑이 죽지 않도록 함수 안에서 import한다(`modules/briefing/chart.py`).
 - 테이블 정의의 원본은 백엔드의 `apps/models`다. 수집기는 문자열 SQL을 쓰므로
   `tests/collectors/`의 `test_fred.py`, `test_ecos.py`, `test_mof.py`, `test_boe.py`,
   `test_ecb.py`가 INSERT 컬럼과 `ON CONFLICT` 키를 모델 metadata와 대조한다.

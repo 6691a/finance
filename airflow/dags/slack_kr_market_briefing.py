@@ -16,6 +16,9 @@
 
 - 요약(LLM)이 실패해도 **리포트는 나간다.** 표가 본체이고 요약은 덧붙임이다. 대신 실패했다는
   사실을 메시지에 남긴다. 조용히 빠지면 요약이 원래 없는 리포트와 구분되지 않는다.
+- 당일 분봉 차트(matplotlib PNG → Slack 파일 업로드)도 같은 원칙이다. 그리거나 올리다
+  실패하면 표만 보내고 실패를 메시지에 남긴다. 개장 전처럼 그릴 봉이 없으면 오류가 아니라
+  생략이다.
 - Slack이 거절하면(`SlackError`) 재시도해도 같은 결과라 태스크를 실패시킨다.
 - Slack이 잠깐 죽었으면(`ConnectionError`) 올려서 Airflow가 재시도한다. 발송이 마지막
   단계라 재시도가 중복 발송을 만들지 않는다.
@@ -24,7 +27,9 @@
 
 - `SLACK_BOT_TOKEN`. 봇 토큰이고 `chat:write` 스코프가 필요하다. 공개 채널은
   `chat:write.public`이 있으면 초대 없이도 보내지지만, 비공개 채널은 봇을 초대해 두지
-  않으면 Slack이 `not_in_channel`로 거절한다.
+  않으면 Slack이 `not_in_channel`로 거절한다. 차트 업로드에는 `files:write`도 필요하다.
+- 차트는 운영 Airflow 이미지에 matplotlib과 한글 폰트(`fonts-nanum`)가 있어야 그려진다.
+  없으면 차트만 빠지고 표는 나간다.
 - `SLACK_CHANNEL_MARKET`. 채널 ID다. 워크스페이스마다 다른 배포 설정이라 코드에 두지 않는다.
 - `XAI_API_KEY`. 요약 모델은 `modules/llm.py`의 `briefing_model()`이 코드로 정하고 키는 그
   LangChain 클래스가 자기 이름으로 읽는다.
@@ -42,12 +47,12 @@ from airflow.providers.postgres.hooks.postgres import PostgresHook
 from airflow.sdk import dag, task
 from pydantic import SecretStr
 
-from modules.briefing import market
+from modules.briefing import chart, market
 from modules.briefing.comment import BriefingCommentator, CommentError
 from modules.briefing.market import MarketScope
 from modules.llm import LlmError, briefing_model
 from modules.market_session import krx_open_day
-from modules.slack import SlackError, post_message
+from modules.slack import SlackError, post_message, upload_file
 from modules.utility import CONNECTION_ID, KST_TIMEZONE
 
 logger = logging.getLogger(__name__)
@@ -108,11 +113,20 @@ def slack_kr_market_briefing():
         try:
             _skip_when_closed(connection, now.astimezone(KST_TIMEZONE).date())
             summary = market.collect_summary(connection, now)
+            chart_series = market.collect_chart_series(connection, now)
         finally:
             connection.close()
 
         comment, comment_error = _comment(summary)
-        blocks = market.render_blocks(summary, MarketScope.KOREA, comment, comment_error)
+        chart_file_id, chart_error = _chart(token, chart_series, now)
+        blocks = market.render_blocks(
+            summary,
+            MarketScope.KOREA,
+            comment,
+            comment_error,
+            chart_file_id=chart_file_id,
+            chart_error=chart_error,
+        )
         text = market.render_text(summary, MarketScope.KOREA)
 
         try:
@@ -120,6 +134,33 @@ def slack_kr_market_briefing():
         except SlackError as error:
             # 토큰·채널·블록이 틀렸다. 다시 보내도 같은 결과다.
             raise AirflowFailException(str(error)) from error
+
+    def _chart(
+        token: SecretStr, series: tuple[market.ChartSeries, ...], now: datetime
+    ) -> tuple[str | None, str | None]:
+        """당일 분봉 차트를 그려 올린다. **실패해도 리포트를 막지 않는다.**
+
+        표가 본체다. 개장 전처럼 그릴 봉이 없으면 실패가 아니라 생략이라 오류도 남기지
+        않는다. 실패 원인은 요약과 같은 방식으로 메시지에 남긴다.
+        """
+        if not series:
+            return None, None
+        try:
+            png = chart.render_chart_png(series, now)
+            local = now.astimezone(KST_TIMEZONE)
+            return upload_file(
+                token,
+                filename=f"kr-market-{local:%Y%m%d-%H%M}.png",
+                title=f"한국장 당일 흐름 {local:%m/%d %H:%M} KST",
+                content=png,
+            ), None
+        except ImportError as error:
+            # matplotlib이 운영 이미지에 없다. 재시도해도 같으므로 표만 보낸다.
+            logger.warning("chart backend unavailable; sending the tables without it: %s", error)
+            return None, "차트 백엔드 없음(matplotlib)"
+        except (ConnectionError, SlackError, chart.ChartError) as error:
+            logger.warning("chart failed; sending the tables without it: %s", error)
+            return None, str(error)
 
     def _comment(summary: market.MarketSummary) -> tuple[str | None, str | None]:
         """요약을 만든다. **실패해도 리포트를 막지 않는다.**

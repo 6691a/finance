@@ -4,6 +4,12 @@
 # 설정은 FastAPI와 같은 config.yaml 하나다(KIS 키·DB·Sentry). 서비스 전용 노브만 .env다.
 # 사용 전 `cp .env.sample .env` 후 경로를 채우고, config.yaml을 CONFIG_FILE 위치에 둔다.
 # config.yaml의 대상 alias는 read_only: false여야 한다 — 아니면 시작 시 거부된다.
+# config.yaml의 DB·Redis 주소가 database 스택의 컨테이너 이름(database-postgres-1,
+# database-redis-1)이라 같은 external 네트워크에 붙어야 이름이 풀린다. airflow 스택과 같다.
+networks:
+  database:
+    external: true
+
 services:
   kis-realtime:
     build: .
@@ -11,6 +17,8 @@ services:
     env_file:
       - .env
     restart: unless-stopped
+    networks:
+      - database
     # SIGTERM 뒤 세션 레코드를 닫을 시간. 열린 분은 저장하지 않으므로 길 필요가 없다.
     stop_grace_period: 30s
     volumes:

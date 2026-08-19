@@ -14,7 +14,7 @@ services:
     # SIGTERM 뒤 세션 레코드를 닫을 시간. 열린 분은 저장하지 않으므로 길 필요가 없다.
     stop_grace_period: 30s
     volumes:
-      # CODE_DIR = 저장소 루트. 운영 NAS도 clone(/volume1/docker/news) 안에서 실행하므로
+      # CODE_DIR = 저장소 루트. 운영 NAS도 clone(/volume1/docker/finance) 안에서 실행하므로
       # 기본값을 쓴다. clone 밖에서 돌릴 때만 .env에 경로를 넣는다.
       - ${CODE_DIR:-../..}/apps:/app/apps:ro
       - ${CONFIG_FILE:-../../config.yaml}:/app/config.yaml:ro

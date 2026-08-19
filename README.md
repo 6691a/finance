@@ -597,7 +597,7 @@ ORDER BY ts
 
 ## 배포
 
-운영은 Synology NAS 한 대이고 저장소 clone 하나(`/volume1/docker/news`)에서 두 compose
+운영은 Synology NAS 한 대이고 저장소 clone 하나(`/volume1/docker/finance`)에서 두 compose
 스택을 실행합니다. 두 스택 모두 코드를 이미지에 굽지 않고 clone 안의 트리를 bind-mount
 하므로, 배포는 clone을 `git pull` 하는 것이 전부입니다.
 
@@ -631,7 +631,7 @@ NAS에만 두는 파일은 셋이고 전부 gitignore 대상입니다: `compose/
 `AIRFLOW__SENTRY__*`로 켭니다 — cfg는 저장소 파일을 마운트하므로 DSN을 넣으면 커밋됩니다.
 
 최초 세팅(1회): NAS에 deploy key를 등록해 `git clone git@github.com:6691a/finance.git
-/volume1/docker/news`, 세 파일을 `.env.sample`과 대조해 채우고, 각 compose를
+/volume1/docker/finance`, 세 파일을 `.env.sample`과 대조해 채우고, 각 compose를
 `up -d --build` 합니다. Airflow 과거 태스크 로그를 유지하려면 이전 `logs/` 내용을
 `airflow/logs/`로 복사합니다(생략해도 동작에는 지장 없음).
 

@@ -35,13 +35,13 @@ realtime-prod:
 realtime-prod-down:
     docker compose -f {{realtime_prod_compose}} down
 
-# 운영 배포. NAS clone(/volume1/docker/news)에서 pull 후 두 스택 up.
+# 운영 배포. NAS clone(/volume1/docker/finance)에서 pull 후 두 스택 up.
 # compose·Dockerfile·requirements 변경은 up -d --build가 스스로 재생성하고,
 # bind-mount 코드(apps/)만 감지 못 하므로 그 경우에만 realtime을 재시작한다.
 # airflow는 재시작 불필요 — dags/modules는 dag-processor가 재파싱한다.
 # airflow/airflow.cfg 변경만 수동 스택 재시작이 필요하다(README 배포 절).
 deploy host="nas":
-    ssh {{host}} 'set -e; cd /volume1/docker/news; \
+    ssh {{host}} 'set -e; cd /volume1/docker/finance; \
         before=$(git rev-parse HEAD); \
         git pull --ff-only; \
         docker compose -f compose/prod/airflow/docker-compose.yaml up -d --build; \

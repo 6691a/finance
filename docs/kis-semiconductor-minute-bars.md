@@ -558,7 +558,7 @@ commit한다. 연결 전체를 감싸는 장기 DB 트랜잭션은 만들지 않
 ## 11. 배포와 운영
 
 > **2026-08-19 갱신 — 이 절의 배포 서술은 대체됐다.** 실서비스는 `compose/prod/`의 별도
-> 스택으로 돌고, 배포는 NAS clone(`/volume1/docker/news`)에 `just deploy`가 pull·up 한다.
+> 스택으로 돌고, 배포는 NAS clone(`/volume1/docker/finance`)에 `just deploy`가 pull·up 한다.
 > 현행 절차는 README의 `배포` 절이 기준이다. 아래 11.1은 대체 전 설계 기록이다.
 
 ### 11.1 compose 서비스

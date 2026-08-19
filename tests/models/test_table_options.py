@@ -76,7 +76,6 @@ def test_every_model_declares_the_database_it_migrates_with():
 
 
 def test_models_route_to_the_alias_they_declare():
-    from apps.models.finance import ExchangeRate
     from apps.models.market import IndicatorObservation
     from apps.models.raw import SourceRecord
     from apps.models.reference import Instrument
@@ -84,4 +83,3 @@ def test_models_route_to_the_alias_they_declare():
     assert table_database(SourceRecord.__table__) == "default"
     assert table_database(IndicatorObservation.__table__) == "default"
     assert table_database(Instrument.__table__) == "default"
-    assert table_database(ExchangeRate.__table__) == "default"

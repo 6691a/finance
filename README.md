@@ -126,10 +126,10 @@ market_read:
 
 ### 이미 존재하는 외부 테이블 편입 (fake-initial)
 
-다른 시스템이 이미 만들어 운영 데이터가 들어 있는 테이블을, DDL은 건드리지 않으면서 migration 이력에만 올리는 방법입니다. Django의 `migrate --fake-initial`과 같습니다. `finance` alias의 `exchange_rate`가 이 방식입니다.
+다른 시스템이 이미 만들어 운영 데이터가 들어 있는 테이블을, DDL은 건드리지 않으면서 migration 이력에만 올리는 방법입니다. Django의 `migrate --fake-initial`과 같습니다. 하나은행 환율 `exchange_rate`가 이 방식이었습니다(2026-08-19 수집 종료와 함께 삭제).
 
 1. 모델을 실제 DDL 그대로 미러링합니다. 컬럼 타입, nullable, 기본값, 제약·인덱스 **이름**까지 같아야 합니다. 한 글자라도 다르면 다음 autogenerate가 그 차이를 `ALTER`로 뱉습니다.
-2. 프로젝트 기본 규칙을 여기서는 적용하지 않습니다. BIGSERIAL 기본키, timezone-aware UTC 시각, 테이블·컬럼 주석 모두 실제 DB를 따릅니다. 주석이 없는 테이블이면 `table_options(comment=None)`으로 둡니다. 모델에만 주석을 달면 `COMMENT ON` 차이가 영구히 남습니다. 편입한 테이블을 이 프로젝트가 이어받아 직접 채우기로 했다면 주석은 나중에 붙일 수 있습니다. 주석은 데이터를 옮기는 데 영향을 주지 않으므로 `COMMENT ON` 리비전 하나로 정리하면 그 뒤 autogenerate는 다시 조용해집니다. `exchange_rate`가 그 경우입니다.
+2. 프로젝트 기본 규칙을 여기서는 적용하지 않습니다. BIGSERIAL 기본키, timezone-aware UTC 시각, 테이블·컬럼 주석 모두 실제 DB를 따릅니다. 주석이 없는 테이블이면 `table_options(comment=None)`으로 둡니다. 모델에만 주석을 달면 `COMMENT ON` 차이가 영구히 남습니다. 편입한 테이블을 이 프로젝트가 이어받아 직접 채우기로 했다면 주석은 나중에 붙일 수 있습니다. 주석은 데이터를 옮기는 데 영향을 주지 않으므로 `COMMENT ON` 리비전 하나로 정리하면 그 뒤 autogenerate는 다시 조용해집니다.
 3. `managed=True`로 둡니다. `managed=False`는 autogenerate에서 완전히 빼는 설정이라 이후 스키마 변경을 추적하지 못합니다.
 4. revision은 손으로 씁니다. 해당 alias 함수 맨 앞에서 테이블 존재 여부를 확인하고, 있으면 그대로 반환합니다.
 
@@ -270,7 +270,6 @@ DAG마다 절을 두지 않습니다. 상세는 각 DAG 파일의 `doc_md`에 �
 | `boe_gilt_daily` | 화~토 08:40 | `indicator_observation` | 잉글랜드은행 |
 | `ecb_yield_curve_daily` | 화~토 08:50 | `indicator_observation` | ECB |
 | `ecb_convergence_monthly` | 수 08:30 | `indicator_observation` | ECB |
-| `exchange_rate_daily` | 매일 08:00 | `exchange_rate` | 하나은행 |
 | `market_calendar_daily` | 매일 07:00 | `market_session` | KIS·NYSE |
 | `kis_quote_intraday` | 평일 08~16시 5분마다 | `quote_bar`, `market_movement_snapshot` | KIS |
 | `kis_investor_flow_intraday` | 평일 09~15시 5분마다 | `market_investor_flow_snapshot`, `stock_investor_estimate_snapshot` | KIS |
@@ -283,7 +282,7 @@ DAG마다 절을 두지 않습니다. 상세는 각 DAG 파일의 `doc_md`에 �
 | `document_ingestion_hourly` | 매시 05분 | `document`, `document_source` | 공식기관·언론 피드 |
 | `document_assessment_hourly` | 매시 25분 | `document`, `document_instrument`, `document_indicator` | xAI Grok |
 
-수집하는 DAG는 전부 `source_record`도 함께 남깁니다. 관측값이 0건이어도 남겨서, 조회했지만 값이 없는 구간과 아직 조회하지 않은 구간을 구분합니다. 예외는 두 개입니다. `exchange_rate_daily`는 외부 DB에서 형태를 그대로 가져온 테이블이라 계보 컬럼이 없고, `document_assessment_hourly`는 새로 수집하지 않고 이미 저장된 문서를 읽습니다.
+수집하는 DAG는 전부 `source_record`도 함께 남깁니다. 관측값이 0건이어도 남겨서, 조회했지만 값이 없는 구간과 아직 조회하지 않은 구간을 구분합니다. 예외는 하나입니다. `document_assessment_hourly`는 새로 수집하지 않고 이미 저장된 문서를 읽습니다.
 
 `yahoo_quote_intraday`에만 시간 창이 없습니다. 한국 장중의 미국 선물 변동을 보는 것이 이 수집의 목적이라 미국 장 시간에만 도는 스케줄로는 목적을 못 이룹니다.
 
@@ -449,7 +448,6 @@ docker compose -f compose/local/docker-compose.yaml logs -f grafana
 
 | 대시보드 | 파일 | 보는 것 |
 | --- | --- | --- |
-| 환율 고시 | `exchange-rate.json` | 하나은행 통화별 고시 환율과 회차 |
 | 지수·선물 통합 장중 | `quote-intraday.json` | 국내외 지수·선물 1분봉을 한 화면에 |
 | 지수 장중 | `quote-index.json` | 지수 1분봉 |
 | 지수선물 장중 | `quote-index-future.json` | 지수선물 1분봉 |
@@ -571,29 +569,9 @@ ORDER BY ts
 
 캔들 차트는 Grafana 코어의 Candlestick 패널을 사용하며, `open`, `high`, `low`, `close`, `volume` 이름의 컬럼을 자동으로 매핑합니다.
 
-### finance datasource와 환율 대시보드
+### finance datasource
 
 `finance` datasource는 Docker Compose가 실행하는 로컬 PostgreSQL의 `finance` DB를 바라봅니다. 모든 대시보드가 이 datasource 하나를 직접 사용합니다.
-
-[compose/local/grafana/dashboards/exchange-rate.json](compose/local/grafana/dashboards/exchange-rate.json)은 이 datasource의 `exchange_rate` 테이블을 그립니다. 통화별 최신 매매기준율 stat, 통화별 매매기준율·살 때·팔 때 시계열, 선택 구간 변화율 비교, 최신 고시 테이블로 구성되고 `통화` 변수로 패널이 반복됩니다.
-
-쿼리를 고칠 때 지켜야 할 제약이 세 가지 있습니다.
-
-- **날짜 범위 조건을 반드시 함께 겁니다.** `$__timeFilter((date + time) AT TIME ZONE '${tz}')`만으로는 `idx_exchange_rate_date`를 타지 못해 전체 스캔이 됩니다. 약 1.9 GB, 700만 행이고 원격 서버에 손상된 블록이 있어 전체 스캔은 `could not read block ...` 오류로 끝납니다. `date BETWEEN ($__timeFrom()::timestamptz AT TIME ZONE '${tz}')::date AND ($__timeTo()::timestamptz AT TIME ZONE '${tz}')::date`를 함께 둡니다.
-- **`date`와 `time`은 분리된 컬럼이고 시간대 정보가 없습니다.** `(date + time) AT TIME ZONE '${tz}'`로 timestamptz를 만들어 씁니다. `tz` 변수 기본값은 `Asia/Seoul`이며, 원본이 UTC 벽시계로 밝혀지면 대시보드에서 `UTC`로 바꿉니다.
-- **Grafana 매크로 인자에는 괄호를 넣을 수 없습니다.** 매크로 파서의 정규식이 `\$__(\w+)\(([^)]*)\)`라 첫 `)`에서 인자가 잘립니다. `$__timeGroupAlias((date + time) AT TIME ZONE '${tz}', $__interval)`은 인자가 `(date + time` 하나로 잘려 `macro __timeGroup needs time column and interval and optional fill value`로 실패합니다. 서브쿼리나 CTE에서 timestamptz 컬럼을 먼저 만들고 매크로에는 그 컬럼 이름만 넘깁니다.
-
-  ```sql
-  SELECT $__timeGroupAlias(quoted_at, $__interval), avg(rate) AS "매매기준율"
-  FROM (
-    SELECT (date + time) AT TIME ZONE '${tz}' AS quoted_at, ... FROM exchange_rate WHERE ...
-  ) AS quotes
-  WHERE $__timeFilter(quoted_at)
-  GROUP BY 1 ORDER BY 1
-  ```
-- **`exchange_standard_rate`가 0인 통화가 있습니다.** 최근 구간의 CNY·RUB·TWD가 그렇습니다(2024년 데이터는 정상). 패널은 `CASE WHEN exchange_standard_rate > 0 THEN exchange_standard_rate ELSE (buy + sell) / 2 END`로 대체값을 씁니다.
-
-1분 간격 고시라 구간이 길면 행이 많아집니다. 시계열 패널은 `$__timeGroupAlias(..., $__interval)`로 다운샘플링합니다.
 
 ## 배포
 

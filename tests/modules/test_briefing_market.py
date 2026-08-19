@@ -6,7 +6,6 @@ from typing import Self
 import pytest
 from sqlalchemy import Table
 
-from apps.models.finance import ExchangeRate
 from apps.models.market import (
     IndexBar,
     IndexDaily,
@@ -36,11 +35,6 @@ QUOTE_ROWS = [
     ("yahoo", "NIKKEI225", "닛케이225", "index", "JP", Decimal(38000), Decimal(38100), MIDDAY),
     ("yahoo", "BTCUSD", "비트코인", "crypto", "XX", Decimal(118000), Decimal(115000), MIDDAY),
     ("yahoo", "USDKRW", "원/달러(장외)", "fx", "KR", Decimal("1391.20"), Decimal("1388.60"), MIDDAY),
-]
-
-FX_ROWS = [
-    ("USD", date(2026, 8, 18), 12, Decimal("1388.60"), Decimal("1392.90")),
-    ("JPY", date(2026, 8, 18), 12, Decimal("941.20"), None),
 ]
 
 RATE_ROWS = [
@@ -132,17 +126,12 @@ RATE_TREND_ROWS = [("fred", "DGS10", date(2026, 8, 1 + day), Decimal("4.18")) fo
     ("fred", "DGS10", date(2026, 8, 18), Decimal("4.21"))
 ]
 
-FX_TREND_ROWS = [("USD", date(2026, 8, 1 + day), Decimal(1390 + day)) for day in range(14)] + [
-    ("USD", date(2026, 8, 18), Decimal("1388.60"))
-]
-
 FLOW_TREND_ROWS = [("KOSPI", date(2026, 8, 14 + day), Decimal(-100_000_000_000 - day)) for day in range(5)]
 
 
 def summary(now: datetime = MIDDAY):
     connection = FakeConnection(
         QUOTE_ROWS,
-        FX_ROWS,
         RATE_ROWS,
         FLOW_ROWS,
         STOCK_FLOW_ROWS,
@@ -153,7 +142,6 @@ def summary(now: datetime = MIDDAY):
         SPREAD_ROWS,
         QUOTE_TREND_ROWS,
         RATE_TREND_ROWS,
-        FX_TREND_ROWS,
         FLOW_TREND_ROWS,
     )
     return market.collect_summary(connection, now)
@@ -273,7 +261,6 @@ def test_the_comment_input_says_whether_todays_move_is_unusual():
 def test_a_thin_sample_is_marked_so_the_prompt_can_discount_it():
     connection = FakeConnection(
         QUOTE_ROWS,
-        FX_ROWS,
         RATE_ROWS,
         FLOW_ROWS,
         STOCK_FLOW_ROWS,
@@ -283,7 +270,6 @@ def test_a_thin_sample_is_marked_so_the_prompt_can_discount_it():
         SHORT_POSITION_ROWS,
         SPREAD_ROWS,
         [("kis", "KOSPI", date(2026, 8, 17), Decimal(2600)), ("kis", "KOSPI", date(2026, 8, 18), Decimal(2687))],
-        [],
         [],
         [],
     )
@@ -358,7 +344,7 @@ def test_fallback_text_is_one_line():
 
 
 def test_rows_are_ordered_for_reading_not_alphabetically():
-    """가나다·알파벳 순서는 코스닥을 코스피 위로 올리고 통화를 CNY부터 시작하게 만든다."""
+    """가나다·알파벳 순서는 코스닥을 코스피 위로 올린다."""
     result = summary()
 
     assert [quote.symbol for quote in market._korea_quotes(result)] == ["KOSPI", "KOSPI200_FUT"]
@@ -368,28 +354,17 @@ def test_rows_are_ordered_for_reading_not_alphabetically():
     table = next(block for block in market.render_blocks(result, MarketScope.KOREA, None) if block["type"] == "table")
     assert [row[0]["text"] for row in table["rows"]] == ["구분", "코스피", "코스피200 선물"]
 
-    fx = next(
-        block
-        for block in market.render_blocks(result, MarketScope.US, None)
-        if block["type"] == "table" and block["rows"][0][0]["text"] == "통화"
-    )
-    assert [row[0]["text"] for row in fx["rows"][1:]] == ["USD", "JPY"]
 
-
-def test_the_korea_report_swaps_the_stale_fx_table_for_the_realtime_one():
-    """하나은행 고시는 하루 한 번 수집이라 장중에는 늘 전일 최종 회차다. 장중 브리핑은
-    장외 실시간 환율(fx_bar)을 그리고 고시 표는 아침 리포트로 보낸다."""
+def test_the_korea_report_draws_the_realtime_fx_table():
+    """환율은 장외 실시간(fx_bar)만 그린다. 하나은행 고시 수집은 2026-08에 끝났다."""
     korea = _block_text(market.render_blocks(summary(), MarketScope.KOREA, None))
 
-    assert "하나은행" not in korea
     assert "환율(실시간·장외)" in korea
     assert "원/달러(장외)" in korea
-    # 미리보기 한 줄과 LLM 입력에서도 고시 값을 뺀다. 화면에 없는 숫자를 모델이 쓰면 안 된다.
-    assert "USD" not in market.render_text(summary(), MarketScope.KOREA)
+    # 실시간 환율은 LLM 입력에도 quotes로 들어간다.
     payload = json.loads(market.comment_input(summary(), MarketScope.KOREA))
-    assert payload["exchange_rates"] == []
-    # 대신 실시간 환율은 quotes로 들어간다.
     assert any(quote["label"] == "원/달러(장외)" for quote in payload["quotes"])
+    assert "exchange_rates" not in payload
 
 
 def test_us_rows_are_grouped_by_kind():
@@ -446,13 +421,6 @@ def test_rate_spreads_are_measured_in_bp_and_show_inversion_as_negative():
     assert "-116bp" in us
     # 스프레드는 미국장(아침) 리포트 소관이다. 금리와 같은 이유다.
     assert "금리 스프레드" not in _block_text(market.render_blocks(summary(), MarketScope.KOREA, None))
-
-
-def test_the_us_report_labels_the_fx_table_as_previous_day():
-    """아침 리포트에는 남긴다. 대신 전일 값임을 제목이 밝힌다."""
-    text = _block_text(market.render_blocks(summary(MORNING), MarketScope.US, None))
-
-    assert "전일 환율(하나은행 고시)" in text
 
 
 def test_chart_series_keep_the_symbol_order_and_skip_empty_ones():
@@ -512,7 +480,6 @@ def test_stock_estimates_are_counted_in_shares_not_won():
         # kind 테이블과 같으므로 대표로 IndexBar/IndexDaily 모델과 대조한다.
         (market.LATEST_QUOTES, IndexBar.__table__, ("provider", "symbol", "close", "previous_close", "bar_at")),
         (market.LATEST_QUOTES, QuoteSymbol.__table__, ("label", "kind", "country")),
-        (market.LATEST_EXCHANGE_RATES, ExchangeRate.__table__, ("currency", "round", "exchange_standard_rate")),
         (
             market.LATEST_RATES,
             IndicatorObservation.__table__,
@@ -556,7 +523,6 @@ def test_stock_estimates_are_counted_in_shares_not_won():
         (market.QUOTE_TREND, IndexBar.__table__, ("provider", "symbol", "bar_at", "close")),
         (market.QUOTE_TREND, IndexDaily.__table__, ("business_date",)),
         (market.RATE_TREND, IndicatorObservation.__table__, ("observation_date", "value")),
-        (market.EXCHANGE_RATE_TREND, ExchangeRate.__table__, ("currency", "exchange_standard_rate")),
         (market.FLOW_TREND, MarketInvestorFlowSnapshot.__table__, ("market_code", "foreign_net_buy_amount")),
     ],
 )

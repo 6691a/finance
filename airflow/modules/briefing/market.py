@@ -28,7 +28,6 @@ from modules.sql import read_sql
 from modules.utility import KST_TIMEZONE
 
 LATEST_QUOTES = read_sql("postgres", "quote_bar", "select_latest_briefing_bars.sql")
-LATEST_EXCHANGE_RATES = read_sql("postgres", "exchange_rate", "select_latest_with_previous.sql")
 LATEST_RATES = read_sql("postgres", "indicator_observation", "select_latest_pair.sql")
 LATEST_FLOWS = read_sql("postgres", "market_investor_flow_snapshot", "select_latest.sql")
 LATEST_MOVEMENTS = read_sql("postgres", "market_movement_snapshot", "select_latest.sql")
@@ -42,7 +41,6 @@ INTRADAY_SERIES = read_sql("postgres", "quote_bar", "select_intraday_series.sql"
 
 QUOTE_TREND = read_sql("postgres", "quote_bar", "select_daily_trend.sql")
 RATE_TREND = read_sql("postgres", "indicator_observation", "select_trend.sql")
-EXCHANGE_RATE_TREND = read_sql("postgres", "exchange_rate", "select_trend.sql")
 FLOW_TREND = read_sql("postgres", "market_investor_flow_snapshot", "select_daily_trend.sql")
 
 US_EASTERN = timezone("America/New_York")
@@ -59,12 +57,7 @@ SESSION_CLOSE_MINUTE_KST = 15 * 60 + 45
 # 값이 오래됐다는 사실은 창을 좁혀 숨기는 것이 아니라 context 블록의 기준 시각이 알린다.
 QUOTE_LOOKBACK = timedelta(days=10)
 FLOW_LOOKBACK = timedelta(days=10)
-EXCHANGE_RATE_LOOKBACK = timedelta(days=14)
 RATE_LOOKBACK = timedelta(days=45)
-
-# 브리핑에 그릴 통화. 하나은행이 고시하는 전부를 넣으면 표가 화면을 넘는다.
-# 이 순서가 그대로 표의 줄 순서다.
-BRIEFING_CURRENCIES = ("USD", "JPY", "EUR", "CNY")
 
 # 국가 비교의 기준 만기. 나라마다 고시 만기가 달라 10년물만 두 나라 이상이 항상 갖는다.
 TEN_YEAR_MONTHS = 120
@@ -109,7 +102,7 @@ SPREAD_LEGS = (
 #
 # **`rate`를 넣지 않는다.** 금리를 퍼센트 변화로 그리면 4.65 → 4.70이 `+1.08%`가 되어
 # 5bp 움직임이 1% 넘게 뛴 것처럼 보인다. 금리는 `indicator_observation` 쪽 표가 bp로 그린다.
-# `fx`도 넣지 않는다. 환율은 하나은행 고시 표가 따로 있어 같은 값이 두 표에 다르게 나온다.
+# `fx`도 넣지 않는다. 환율은 실시간 환율 표(`_fx_quotes`)가 따로 그린다.
 QUOTED_KINDS = frozenset({"index", "index_future", "equity", "commodity", "bond_future", "crypto"})
 
 # 추세를 재는 구간. 거래일 20일을 담으려면 주말·공휴일을 감안해 달력으로 이만큼 봐야 한다.
@@ -155,22 +148,6 @@ class QuoteChange(BaseModel):
         if not self.previous_close:
             return 0.0
         return float((self.close - self.previous_close) / self.previous_close * 100)
-
-
-class FxChange(BaseModel):
-    model_config = ConfigDict(frozen=True)
-
-    currency: str
-    posted_on: date
-    round: int
-    rate: Decimal
-    previous_rate: Decimal | None = None
-
-    @property
-    def change_percent(self) -> float | None:
-        if not self.previous_rate:
-            return None
-        return float((self.rate - self.previous_rate) / self.previous_rate * 100)
 
 
 class RateChange(BaseModel):
@@ -322,7 +299,6 @@ class MarketSummary(BaseModel):
 
     generated_at: AwareDatetime
     quotes: tuple[QuoteChange, ...] = ()
-    exchange_rates: tuple[FxChange, ...] = ()
     rates: tuple[RateChange, ...] = ()
     flows: tuple[FlowSnapshot, ...] = ()
     stock_flows: tuple[StockFlowSnapshot, ...] = ()
@@ -336,9 +312,6 @@ class MarketSummary(BaseModel):
 
     rate_trends: dict[str, Trend] = {}
     """`provider:series_id` → 추세. 변화는 bp다."""
-
-    exchange_rate_trends: dict[str, Trend] = {}
-    """통화 → 추세."""
 
     foreign_streaks: dict[str, int] = {}
     """시장 코드 → 외국인 순매수가 며칠째 같은 편인가. 부호가 방향이다(`-5`는 5일 연속 순매도)."""
@@ -370,18 +343,6 @@ def collect_summary(connection: Connection, now: datetime) -> MarketSummary:
             close=row[5],
             previous_close=row[6],
             bar_at=row[7],
-        ),
-    )
-    exchange_rates = _fetch(
-        connection,
-        LATEST_EXCHANGE_RATES,
-        (list(BRIEFING_CURRENCIES), (now - EXCHANGE_RATE_LOOKBACK).date()),
-        lambda row: FxChange(
-            currency=row[0],
-            posted_on=row[1],
-            round=row[2],
-            rate=row[3],
-            previous_rate=row[4],
         ),
     )
     rates = _fetch(
@@ -487,19 +448,11 @@ def collect_summary(connection: Connection, now: datetime) -> MarketSummary:
         ChangeKind.ABSOLUTE,
         2,
     )
-    exchange_rate_trends = _trends(
-        connection,
-        EXCHANGE_RATE_TREND,
-        (list(BRIEFING_CURRENCIES), trend_since),
-        ChangeKind.RELATIVE,
-        1,
-    )
     foreign_streaks = _sign_streaks(connection, FLOW_TREND, (now - TREND_LOOKBACK,), 1)
 
     return MarketSummary(
         generated_at=now,
         quotes=quotes,
-        exchange_rates=exchange_rates,
         rates=rates,
         flows=flows,
         stock_flows=stock_flows,
@@ -510,7 +463,6 @@ def collect_summary(connection: Connection, now: datetime) -> MarketSummary:
         spreads=spreads,
         quote_trends=quote_trends,
         rate_trends=rate_trends,
-        exchange_rate_trends=exchange_rate_trends,
         foreign_streaks=foreign_streaks,
     )
 
@@ -642,7 +594,6 @@ def render_blocks(
             *_rate_section(summary),
             *_rate_spread_section(summary),
             *_quote_section("전일 국내", _korea_quotes(summary)),
-            *_exchange_rate_section(summary),
             *_flow_section(summary),
             *_stock_flow_section(summary),
         ]
@@ -684,19 +635,6 @@ def comment_input(summary: MarketSummary, scope: MarketScope) -> str:
                 "trend": _trend_payload(summary.quote_trends.get(f"{quote.provider}:{quote.symbol}")),
             }
             for quote in quotes
-        ],
-        # 한국장 브리핑에는 환율 표가 없다. 블록에 없는 값을 입력에 주면 모델이
-        # 화면에 없는 숫자를 쓴다. 미국장(아침) 리포트만 전일 고시를 싣는다.
-        "exchange_rates": []
-        if scope is MarketScope.KOREA
-        else [
-            {
-                "currency": fx.currency,
-                "rate": float(fx.rate),
-                "change_percent": round(fx.change_percent, 2) if fx.change_percent is not None else None,
-                "trend": _trend_payload(summary.exchange_rate_trends.get(fx.currency)),
-            }
-            for fx in summary.exchange_rates
         ],
         "investor_flows": [
             {
@@ -913,7 +851,7 @@ def _intraday_overseas(summary: MarketSummary) -> tuple[QuoteChange, ...]:
 
 
 def _fx_quotes(summary: MarketSummary) -> tuple[QuoteChange, ...]:
-    """장외 실시간 환율. 하나은행 고시(전일)와 달리 장중에 움직이는 값이다."""
+    """장외 실시간 환율. 은행 고시가 아니라 장중에 움직이는 시장 값이다."""
     return _ordered(
         (quote for quote in summary.quotes if quote.kind == "fx"),
         lambda quote: quote.symbol,
@@ -948,20 +886,6 @@ def _chart_section(files: Sequence[tuple[str, str]] | None, error: str | None) -
     if error:
         return [blocks.context([f"⚠️ 차트 생성 실패: {error}"])]
     return []
-
-
-def _exchange_rate_section(summary: MarketSummary) -> list[dict[str, Any]]:
-    """미국장(아침) 리포트 전용. 하나은행 고시는 하루 한 번 수집이라 늘 전일 최종 회차다.
-
-    그래서 한국장(장중) 브리핑에는 넣지 않고 제목에도 전일임을 밝힌다.
-    """
-    if not summary.exchange_rates:
-        return []
-    rows = [
-        (fx.currency, _number(fx.rate), _percent(fx.change_percent), f"{fx.posted_on:%m/%d} {fx.round}회차")
-        for fx in _ordered(summary.exchange_rates, lambda fx: fx.currency, BRIEFING_CURRENCIES)
-    ]
-    return blocks.table_section("전일 환율(하나은행 고시)", ("통화", "매매기준율", "전일 대비", "기준"), rows)
 
 
 def _rate_section(summary: MarketSummary) -> list[dict[str, Any]]:

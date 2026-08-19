@@ -9,7 +9,7 @@
 - 배치 조회 기간과 날짜 경계는 KST 기준으로 계산한다. `data_interval_end`를 `astimezone(KST_TIMEZONE)`으로 변환한 뒤 날짜를 뽑는다.
 - 시간대는 트리거 시점과 날짜 경계 계산에만 쓴다. DB에 저장하는 시각과 로그, 컨테이너 시계는 UTC다.
 - 외부 데이터의 원본 시각과 시간대는 보존하되, 비교·저장용 시각은 UTC로 정규화한다.
-- 제공처가 날짜의 기준 시간대를 정하는 값(하나은행 고시일자와 ECOS 고시 기준일은 KST, FRED 관측일은 미국 영업일)은 그 제공처 기준을 따르고 주석에 남긴다.
+- 제공처가 날짜의 기준 시간대를 정하는 값(ECOS 고시 기준일은 KST, FRED 관측일은 미국 영업일)은 그 제공처 기준을 따르고 주석에 남긴다.
 
 ## 백엔드 시간 처리 규칙
 
@@ -65,7 +65,7 @@
 - 응답이 페이지 단위로 잘릴 수 있으면 제공처가 알려 준 전체 건수와 받은 행 수를 대조해 잘림을 실패로 만든다. 조용히 잘린 응답은 조회 구간에 구멍을 남긴다.
 - HTML 수집은 scrapling을 쓴다. 요청은 `Fetcher`(curl_cffi), 파싱은 `Selector`다. `impersonate`로 실제 브라우저 지문을 흉내 내므로 앞단 WAF에 막히지 않는다. 페이지가 JavaScript로 표를 그릴 때만 `DynamicFetcher`나 `StealthyFetcher`를 쓴다. 이건 브라우저를 띄우므로 기본값이 아니다.
 - 표를 위치(index)로 읽으면 칸 수를 상수로 두고 응답마다 검증한다. 사이트가 열을 추가하면 값이 조용히 옆 칸으로 밀린다. 칸 수 검사가 먼저 실패해야 그걸 알 수 있다. CSV도 같고, 저장하지 않는 열까지 헤더 전체를 대조한다(`mof.EXPECTED_HEADER`).
-- 기준 예시는 `airflow/modules/collectors/fred.py`와 `airflow/dags/fred_treasury_daily.py`, HTML 쪽은 `airflow/modules/collectors/hana.py`와 `airflow/dags/exchange_rate_daily.py`다. 본문으로 실패를 알리는 API는 `airflow/modules/collectors/ecos.py`와 `airflow/dags/ecos_market_rate_daily.py`, 인증 없는 CSV 파일은 `airflow/modules/collectors/mof.py`와 `airflow/dags/mof_jgb_daily.py`, `boe.py`, `ecb.py`를 본다.
+- 기준 예시는 `airflow/modules/collectors/fred.py`와 `airflow/dags/fred_treasury_daily.py`다. 본문으로 실패를 알리는 API는 `airflow/modules/collectors/ecos.py`와 `airflow/dags/ecos_market_rate_daily.py`, 인증 없는 CSV 파일은 `airflow/modules/collectors/mof.py`와 `airflow/dags/mof_jgb_daily.py`, `boe.py`, `ecb.py`를 본다.
 
 ## 마이그레이션 라우팅 규칙
 
@@ -88,24 +88,13 @@
 
 ## 이미 존재하는 외부 테이블 편입
 
-다른 시스템이 이미 만들어 데이터가 들어 있는 테이블은 Django `migrate --fake-initial`처럼 편입한다. `apps/models/finance.py`의 `ExchangeRate`가 그 예다.
+다른 시스템이 이미 만들어 데이터가 들어 있는 테이블은 Django `migrate --fake-initial`처럼 편입한다. 하나은행 환율 `exchange_rate`가 이 방식이었다(2026-08-19 수집 종료와 함께 삭제).
 
 - 모델은 실제 DDL을 글자 그대로 미러링한다. 컬럼 타입, nullable, 기본값, 제약·인덱스 이름까지 같아야 한다. 다르면 다음 autogenerate가 그 차이를 ALTER로 뱉는다.
 - BIGSERIAL 기본키, timezone-aware 시각, 테이블·컬럼 주석 같은 프로젝트 기본 규칙은 적용하지 않고 실제 DB를 따른다. 주석이 없으면 `table_options(comment=None)`으로 둔다.
 - `managed=True`를 유지한다. `managed=False`는 이후 스키마 변경을 추적하지 못한다.
 - 리비전은 손으로 쓴다. 해당 별칭 함수 맨 앞에서 `sa.inspect(op.get_bind()).has_table(...)`로 존재를 확인하고 있으면 반환한다. offline(`--sql`)은 연결이 없으므로 항상 전체 DDL을 찍는다.
 - `downgrade_<alias>()`는 `pass`다. 소유자가 이 프로젝트가 아니므로 `DROP TABLE`을 내지 않는다.
-
-### `exchange_rate`
-
-- 통화별·회차별 환율 고시다. `default` 별칭에 있고 `exchange_rate_daily` DAG가 채운다. 2026-08-06에 `finance` 별칭에서 옮겼고 이전 데이터는 가져오지 않았다.
-- 컬럼 형태는 외부 finance DB의 같은 이름 테이블을 글자 그대로 복사한 것이다. serial `id`, naive `timestamp`, `date`/`time` 분리를 그대로 둔다. 나중에 외부 DB의 과거 행을 옮기거나 Grafana를 우리 DB로 돌릴 때 컬럼이 1:1로 맞아야 하기 때문이다. 우리 DB 이름도 `finance`라 원본을 가리킬 때는 `외부 finance DB`라고 쓴다.
-- 프로젝트 기본 규칙 중 BIGSERIAL과 timezone-aware 시각을 적용하지 않는 유일한 테이블이다. 타입이나 컬럼 구성을 바꾸려면 그 이관 계획을 먼저 접는다. 지금 상태는 `tests/models/test_finance_models.py`가 컬럼 단위로 고정한다.
-- 주석은 예외로 단다. 주석은 데이터 이관에 영향을 주지 않으므로 테이블·컬럼 주석을 기본 규칙대로 채운다.
-- `currency`는 `apps/models/finance.py`의 `Currency` StrEnum이고 저장 타입은 `VARCHAR(10)` 그대로다. CHECK 제약은 걸지 않는다. 원본에 없는 제약이 생기고 통화를 추가할 때마다 다시 만들어야 하기 때문이다. 값은 `modules.collectors.hana.HanaCurrency`와 같아야 하며 테스트가 둘을 대조한다.
-- 모델은 `apps/models/finance.py`에 있다. 파일 이름은 스키마도 별칭도 아니고 형태를 가져온 원본 DB 이름이다.
-- 멱등 키는 `(currency, date, time, round)`, 제약 이름은 `unique_currency_date_time_round`다. 수집기 upsert가 이 이름을 그대로 쓴다.
-- `finance` 별칭은 매핑된 모델이 없어 `migration.enabled: false`다. 런타임 읽기 전용 연결만 남아 있다. 여기에 테이블을 편입하려면 `enabled: true`와 `model_modules`를 함께 켠다.
 
 ## 데이터베이스 테이블 주석
 
@@ -145,8 +134,7 @@
   `document_ingestion_hourly`는 전부 실패했을 때, `kis_*`와 `yahoo_*`는 하나라도 실패했을 때
   태스크를 죽인다. 어느 쪽을 고르든 실패를 세고 이름을 메시지에 싣는다.
 - **태스크 매핑** — 항목마다 태스크를 매핑한다(`.expand`). 실패가 곧 그 태스크의 실패라
-  따로 판정할 것이 없고 재시도도 실패한 항목만 다시 돈다. `fred_*`, `ecos_*`,
-  `exchange_rate_daily`가 그렇다.
+  따로 판정할 것이 없고 재시도도 실패한 항목만 다시 돈다. `fred_*`, `ecos_*`가 그렇다.
 - **단일 요청** — 응답 하나가 결과 전부다. 수집기 예외를 그대로 올린다. `bbk`, `boe`,
   `ecb_*`, `mof`, `market_calendar`가 그렇다.
 

@@ -1,5 +1,4 @@
 from apps.models.content import Document, DocumentIndicator, DocumentInstrument, DocumentSource
-from apps.models.finance import ExchangeRate
 from apps.models.market import (
     BondFutureBar,
     BondFutureDaily,
@@ -48,7 +47,6 @@ __all__ = [
     "DocumentInstrument",
     "DocumentSource",
     "EarningsFact",
-    "ExchangeRate",
     "FxBar",
     "FxDaily",
     "IndexBar",

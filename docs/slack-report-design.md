@@ -245,7 +245,7 @@ SCHEDULE = "30 12,16 * * 1-5"  # KST 평일 12:30·16:30 = UTC 월~금 03:30, 07
 | 헤더 | — | KST 시각(요일 포함) + 장 상태(개장 전/장중/마감 후) |
 | 국내 지수·선물 | `country = 'KR'` | 코스피·코스닥·선물. 등락은 `(close - previous_close) / previous_close` — `quote_bar.previous_close`가 이미 있어 전일 세션 서브쿼리가 필요 없다 |
 | 장중 해외 | 미국 `index_future` + 아시아(`JP`·`TW`·`HK`·`CN`) | **한국장 시간에도 값이 움직이는 것만 넣는다.** 미국 현물 지수는 이 시간에 닫혀 있어 어제 종가를 오늘 값처럼 보이게 하므로 뺀다 |
-| 환율 | `BRIEFING_CURRENCIES` | USD·JPY·EUR·CNY의 매매기준율과 직전 고시일 대비 |
+| 환율(실시간·장외) | `kind = 'fx'` | USDKRW·JPYKRW·DXY의 마지막 1분봉. 하나은행 고시 수집은 2026-08에 끝났다 |
 | 수급 | — | 시장별 외국인·기관·개인 순매수(억원) |
 | 등락 종목 수 | — | 상승·보합·하락 |
 | 💬 요약 | — | LLM 요약(§2.2). 입력에 국내와 장중 해외가 함께 들어가 요약이 자연스럽게 양쪽을 엮는다 |
@@ -268,7 +268,6 @@ FRED·yahoo 일봉)이 끝난 뒤가 08:00이다. 미국 휴장일은 `us_equity
 | 미국 지수·선물 | `country = 'US'` | 밤사이 마감 값과 등락. 여기서는 현물도 넣는다. 방금 닫힌 값이라 최신이다 |
 | 주요국 10년 금리 | `kind = 'government_bond' AND maturity_months = 120` | 계열별 최근 2건을 pivot해 bp 델타. 미국 중심이지만 밤사이 갱신된 다른 나라도 함께 나온다. **제공처가 늘어도 마스터가 흡수하므로 쿼리를 안 고친다** |
 | 전일 국내 | `country = 'KR'` | 전일 코스피·선물 마감. 조합 요약의 입력이자 같은 화면에서 대조할 값이다 |
-| 환율 | `BRIEFING_CURRENCIES` | 마지막 고시 |
 | 수급 | — | 전일 마지막 스냅샷 |
 | 💬 조합 요약 | — | LLM 요약(§2.2). 입력에 밤사이 미국 값·금리와 전일 한국 값을 **함께** 넣는다. 이것이 이 리포트를 따로 두는 이유다 |
 | context | — | 미국 세션 날짜와 각 값의 기준 시각(KST 병기) |
@@ -280,12 +279,11 @@ FRED·yahoo 일봉)이 끝난 뒤가 08:00이다. 미국 휴장일은 `us_equity
 계열이 십여 개라 좁혀서 아낄 것이 없기 때문이고, 그 덕에 미국장 리포트의 요약이 밤사이
 미국 값과 전일 한국 값을 **한 입력에서** 본다.
 
-쿼리 다섯 개가 파일로 있다.
+쿼리 네 개가 파일로 있다.
 
 | SQL 파일 | 하는 일 |
 | --- | --- |
 | `quote_bar/select_latest_briefing_bars.sql` | 심볼마다 마지막 봉 하나(`DISTINCT ON`), `quote_symbol` 조인으로 이름·종류·나라. 나라로 거르지 않고 전부 받아 파이썬이 나눈다. 2026-08-18부터 `quote_bar`는 kind별 테이블(`index_bar`, `fx_bar`, …)을 합쳐 보여 주는 **뷰**라 이 쿼리는 그대로 돈다 |
-| `exchange_rate/select_latest_with_previous.sql` | 통화마다 마지막 고시와 직전 **고시일**의 마지막 회차. 하루에 여러 회차가 있어 "전일 대비"는 회차가 아니라 날짜로 갈라야 한다 |
 | `indicator_observation/select_latest_pair.sql` | 계열마다 최신·직전 값. `kind`·`maturity_months`로 좁히는 것이 핵심이다. 한 테이블에 물가지수와 소매판매가 함께 있어 안 걸면 단위가 다른 값이 한 표에 섞인다 |
 | `market_investor_flow_snapshot/select_latest.sql` | 시장별 마지막 수급 스냅샷 |
 | `market_movement_snapshot/select_latest.sql` | 시장별 마지막 등락 종목 수 |
@@ -399,7 +397,7 @@ SCHEDULE = "0 8 * * *"  # KST 매일 08:00 = UTC -1일 23:00
 | --- | --- | --- |
 | 소스별 현황 | `source_record/select_briefing_window.sql` | `GROUP BY source`: 실행 수, 성공, 실패, `record_count` 합, 마지막 `completed_at`. `(source, started_at)` 인덱스를 탄다 |
 | 무소식 소스 | — (모듈 판정) | `EXPECTED_SOURCES` 상수와 대조 |
-| 예외 둘 | `exchange_rate/select_freshness.sql` + 2부의 집계 쿼리 | 아래 참고 |
+| 예외 하나 | 2부의 집계 쿼리 | 아래 참고 |
 | 최근 실패 상세 | `source_record/select_recent_failures.sql` | 최근 5건: source, `source_key`, `started_at`, `metadata`의 오류 요지(300자로 자름) |
 
 **기대 소스 목록에 문서 피드를 넣지 않는다.** 피드 목록은 `document_source` 테이블이 정하고
@@ -410,10 +408,8 @@ SCHEDULE = "0 8 * * *"  # KST 매일 08:00 = UTC -1일 23:00
 `ExpectedSource(name, label, weekdays_only)`의 `weekdays_only`는 주말에 조용해도 정상인
 곳이다. 국내 시장과 공시는 주말에 열지 않아 이 표시가 없으면 매주 토·일 거짓 경보가 뜬다.
 
-`source_record`에 안 잡히는 둘은 각자 다른 신호로 본다.
+`source_record`에 안 잡히는 하나는 다른 신호로 본다.
 
-- **환율**: `max(date)`가 `EXCHANGE_RATE_STALE_DAYS`(4일)보다 오래되면 멈춘 것으로 본다.
-  주말·공휴일 연휴를 건널 만큼은 둔다.
 - **문서 평가**: 대기 건수가 `ASSESSMENT_BACKLOG_LIMIT`(200)를 넘으면 밀린 것으로 본다.
   매시 배치가 처리하는 중이면 몇십 건은 항상 밀려 있어, 0을 기준으로 잡으면 매일 경보가 뜬다.
 
@@ -440,7 +436,7 @@ SCHEDULE = "0 8 * * *"  # KST 매일 08:00 = UTC -1일 23:00
 | `tests/modules/test_briefing_trend.py` | 연속 일수, 이상 움직임 백분위, 금리 bp vs 가격 퍼센트, 마이너스 금리, 표본 부족 표시, 수급의 부호 연속 |
 | `tests/modules/test_briefing_market.py` | 나라·종류 분할(한국장에서 미국 현물 제외), 미국장 요약 입력에 한국 값 포함, 뉴욕 기준 세션 날짜, 요일 표기, 요약 입력의 추세 필드, 줄마다 붙는 기준 시각 |
 | `tests/modules/test_briefing_documents.py` | 창이 `assessed_at` 기준, 0건 짧은 형태, 고른 것만 그리기, 주의 섹션 분리, 빈 선별과 선별 실패의 구분 |
-| `tests/modules/test_briefing_ops.py` | 무소식 판정(주말 예외 포함), 환율 신선도, 백로그 임계, 올그린 하트비트, 피드 접기 |
+| `tests/modules/test_briefing_ops.py` | 무소식 판정(주말 예외 포함), 백로그 임계, 올그린 하트비트, 피드 접기 |
 | `tests/dags/test_slack_market_briefing.py` | 네 DAG의 스케줄, 태스크 하나, 채널 분리, 설정 누락 시 즉시 실패 |
 
 SQL은 수집기 테스트 컨벤션대로 **SELECT가 부르는 컬럼이 모델 metadata에 실제로 있는지**

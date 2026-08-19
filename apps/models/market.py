@@ -221,6 +221,7 @@ class StockExchange(StrEnum):
     KRX = "KRX"
     NXT = "NXT"
     NYSE = "NYSE"
+    NASDAQ = "NASDAQ"
 
 
 # ---------------------------------------------------------------------------
@@ -493,7 +494,7 @@ class StockBar(EntityBase):
     __table_args__ = (
         UniqueConstraint("provider", "stock_code", "exchange", "bar_at", name="uq_stock_bar_natural_key"),
         Index("ix_stock_bar_source_record_id", "source_record_id"),
-        CheckConstraint("exchange IN ('KRX', 'NXT', 'NYSE')", name="ck_stock_bar_exchange"),
+        CheckConstraint("exchange IN ('KRX', 'NXT', 'NYSE', 'NASDAQ')", name="ck_stock_bar_exchange"),
         CheckConstraint("ingest_method IN ('websocket', 'rest')", name="ck_stock_bar_ingest_method"),
         table_options(
             comment="개별 종목의 1분봉을 거래소 단위로 누적하는 테이블",
@@ -522,7 +523,7 @@ class StockBar(EntityBase):
             values_callable=lambda enum: [member.value for member in enum],
         ),
         nullable=False,
-        comment="체결이 일어난 거래소(KRX, NXT, NYSE). 통합(UN) 시세는 받지 않는다",
+        comment="체결이 일어난 거래소(KRX, NXT, NYSE, NASDAQ). 통합(UN) 시세는 받지 않는다",
     )
     bar_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
@@ -576,7 +577,7 @@ class StockDaily(EntityBase):
         UniqueConstraint("provider", "stock_code", "exchange", "business_date", name="uq_stock_daily_natural_key"),
         Index("ix_stock_daily_business_date", "business_date"),
         Index("ix_stock_daily_source_record_id", "source_record_id"),
-        CheckConstraint("exchange IN ('KRX', 'NXT', 'NYSE')", name="ck_stock_daily_exchange"),
+        CheckConstraint("exchange IN ('KRX', 'NXT', 'NYSE', 'NASDAQ')", name="ck_stock_daily_exchange"),
         table_options(
             comment="개별 종목의 일봉을 거래소 단위로 누적하는 테이블",
             database="default",
@@ -601,7 +602,7 @@ class StockDaily(EntityBase):
             values_callable=lambda enum: [member.value for member in enum],
         ),
         nullable=False,
-        comment="체결이 일어난 거래소(KRX, NXT, NYSE). 통합(UN) 시세는 받지 않는다",
+        comment="체결이 일어난 거래소(KRX, NXT, NYSE, NASDAQ). 통합(UN) 시세는 받지 않는다",
     )
     business_date: Mapped[date] = mapped_column(
         Date,

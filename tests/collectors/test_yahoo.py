@@ -24,6 +24,7 @@ from apps.models.market import (
     RateDaily,
     StockBar,
     StockDaily,
+    StockExchange,
 )
 from apps.models.raw import SourceRecord
 from modules.collectors.yahoo import (
@@ -36,6 +37,7 @@ from modules.collectors.yahoo import (
     SOURCE_RECORD_INSERT,
     STOCK_BAR_UPSERT,
     STOCK_DAILY_UPSERT,
+    STOCK_EXCHANGES,
     QuoteSymbol,
     SymbolOutcome,
     YahooPayloadError,
@@ -687,6 +689,15 @@ def test_stock_daily_upsert_matches_the_model_and_its_natural_key():
     assert required_columns(table) <= set(columns)
     assert placeholder_count(STOCK_DAILY_UPSERT) == len(columns)
     assert "ON CONFLICT (provider, stock_code, exchange, business_date) DO UPDATE" in STOCK_DAILY_UPSERT
+
+
+def test_every_equity_symbol_maps_to_a_model_exchange():
+    # 거래소가 stock_bar/stock_daily 자연키의 한 축이라, equity 심볼을 늘리면서 매핑을
+    # 빠뜨리면 KeyError로 죽는다. 값이 모델 Enum 밖이면 DB CHECK가 INSERT를 거부한다.
+    equities = {symbol.value for symbol in QuoteSymbol if symbol.kind == "equity"}
+
+    assert equities == set(STOCK_EXCHANGES)
+    assert set(STOCK_EXCHANGES.values()) <= {member.value for member in StockExchange}
 
 
 def test_build_daily_url_requests_daily_bars_and_escapes_the_symbol():

@@ -33,8 +33,8 @@ EXPECTED_RATES = {"US10Y"}
 EXPECTED_BOND_FUTURES = {"US10Y_FUT"}
 EXPECTED_COMMODITIES = {"GOLD", "SILVER", "COPPER", "WTI"}
 # 개별 종목은 심볼이 6자리 종목코드다. 공시·수급·포지션이 전부 그 코드를 키로 써서,
-# 봉만 이름을 쓰면 한 화면에서 조인이 안 된다. TSMC ADR 만 Yahoo 티커 쪽 이름을 쓴다.
-EXPECTED_EQUITIES = {"TSMC_ADR", "005930", "000660"}
+# 봉만 이름을 쓰면 한 화면에서 조인이 안 된다. 미국 ADR 만 Yahoo 티커 쪽 이름을 쓴다.
+EXPECTED_EQUITIES = {"TSMC_ADR", "SK_HYNIX_ADR", "005930", "000660"}
 # 주말 48시간에 움직이는 유일한 값이다. 나머지가 전부 멈춰 있어 축을 공유할 수 없다.
 EXPECTED_CRYPTO = {"BTC", "ETH"}
 

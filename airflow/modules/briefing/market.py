@@ -50,6 +50,9 @@ US_EASTERN = timezone("America/New_York")
 SESSION_OPEN_HOUR_KST = 9
 SESSION_CLOSE_MINUTE_KST = 15 * 60 + 45
 
+# NXT 프리마켓 시작. 개장 발송의 차트 창이 여기서 시작해야 08:00~08:50 프리마켓 봉이 잡힌다.
+NXT_PREMARKET_OPEN_HOUR_KST = 8
+
 # 조회 구간. 봉은 휴일 연휴를 건너 마지막 값을 찾아야 하고, 금리는 월간 계열이 섞여 있어 넉넉히 본다.
 #
 # **연휴를 건너려면 10일이 필요하다.** 4일로 두었다가 2026-08-18(화) 실측에서 국내 시세가
@@ -112,9 +115,15 @@ QUOTED_KINDS = frozenset({"index", "index_future", "equity", "commodity", "bond_
 
 
 class MarketScope(StrEnum):
-    """어느 리포트인가. 조회는 같고 무엇을 그릴지가 다르다."""
+    """어느 리포트인가. 조회는 같고 무엇을 그릴지가 다르다.
+
+    `KOREA_PREOPEN`은 개장 전 발송(08:10·09:00)이다. 08:00 미국장 리포트가 이미 보낸 것
+    (미국 지수·선물, 금리·스프레드, 전일 국내 지수·선물, 수급)은 빼고, NXT 프리마켓
+    (08:00~08:50)이 만든 종목 시세와 전일 확정치(증시자금·공매도·등락 종목 수)만 그린다.
+    """
 
     KOREA = "korea"
+    KOREA_PREOPEN = "korea_preopen"
     US = "us"
 
 
@@ -465,17 +474,23 @@ def collect_summary(connection: Connection, now: datetime) -> MarketSummary:
     )
 
 
-def collect_chart_series(connection: Connection, now: datetime) -> tuple[ChartSeries, ...]:
+def collect_chart_series(
+    connection: Connection, now: datetime, open_hour: int = SESSION_OPEN_HOUR_KST
+) -> tuple[ChartSeries, ...]:
     """장중 차트에 그릴 당일 분봉. `CHART_SYMBOLS` 순서를 지킨다.
 
     봉이 없는 심볼은 계열 자체를 만들지 않는다. 개장 전이나 갓 붙인 심볼 때문에
     리포트가 죽으면 안 된다(`*_trends`와 같은 원칙). 전부 비면 차트를 생략한다.
+
+    `open_hour`는 창의 시작 시각(KST)이다. 개장 발송은 `NXT_PREMARKET_OPEN_HOUR_KST`를
+    넘겨 프리마켓 봉을 잡는다. 그 시각에 봉이 없는 지수는 위 규칙대로 빠진다.
     """
     local = now.astimezone(KST_TIMEZONE)
-    session_open = local.replace(hour=SESSION_OPEN_HOUR_KST, minute=0, second=0, microsecond=0)
+    session_open = local.replace(hour=open_hour, minute=0, second=0, microsecond=0)
     # 국내 종목은 NXT 봉까지 보이도록 stock_bar를 직접 읽고 나머지는 뷰로 읽는다.
     view_symbols = [pair for pair in CHART_SYMBOLS if pair not in DOMESTIC_STOCK_CHART_SYMBOLS]
     stock_symbols = [pair for pair in CHART_SYMBOLS if pair in DOMESTIC_STOCK_CHART_SYMBOLS]
+    # 국내 종목 행만 거래소 열이 하나 더 있다. 뷰 행은 None으로 맞춰 한 모양으로 다룬다.
     rows = []
     with connection.cursor() as cursor:
         for statement, pairs in ((INTRADAY_SERIES, view_symbols), (DOMESTIC_STOCK_SERIES, stock_symbols)):
@@ -484,22 +499,32 @@ def collect_chart_series(connection: Connection, now: datetime) -> tuple[ChartSe
             providers = sorted({provider for provider, _ in pairs})
             symbols = [symbol for _, symbol in pairs]
             cursor.execute(statement, (providers, symbols, session_open))
-            rows.extend(cursor.fetchall())
+            fetched = cursor.fetchall()
+            if statement is INTRADAY_SERIES:
+                fetched = [(*row, None) for row in fetched]
+            rows.extend(fetched)
 
     grouped: dict[tuple[str, str], list[tuple[datetime, Decimal]]] = {}
     labels: dict[tuple[str, str], str] = {}
-    for provider, symbol, label, bar_at, close in rows:
+    exchanges: dict[tuple[str, str], set[str]] = {}
+    for provider, symbol, label, bar_at, close, exchange in rows:
         grouped.setdefault((provider, symbol), []).append((bar_at, close))
         labels[(provider, symbol)] = label
+        if exchange:
+            exchanges.setdefault((provider, symbol), set()).add(exchange)
 
     series = []
     for provider, symbol in CHART_SYMBOLS:
         points = grouped.get((provider, symbol))
         if not points:
             continue
-        series.append(
-            ChartSeries(provider=provider, symbol=symbol, label=labels[(provider, symbol)], points=tuple(points))
-        )
+        # 어느 거래소 봉인지 라벨에 밝힌다. 프리마켓·야간은 (NXT), 정규장은 (KRX),
+        # 하루가 섞이면 (KRX·NXT)다. 거래소 개념이 없는 지수·환율은 그대로 둔다.
+        label = labels[(provider, symbol)]
+        marks = exchanges.get((provider, symbol))
+        if marks:
+            label = f"{label}({'·'.join(sorted(marks))})"
+        series.append(ChartSeries(provider=provider, symbol=symbol, label=label, points=tuple(points)))
     return tuple(series)
 
 
@@ -575,7 +600,17 @@ def render_blocks(
 ):
     """Slack 블록. 값은 Slack 기본 `table` 블록에 넣는다(`blocks` 모듈 docstring 참고)."""
     local = summary.generated_at.astimezone(KST_TIMEZONE)
-    if scope is MarketScope.KOREA:
+    if scope is MarketScope.KOREA_PREOPEN:
+        rendered = [
+            blocks.header(f"🌅 한국장 프리마켓 브리핑 · {blocks.timestamp(local)}"),
+            *_quote_section("국내 종목(프리마켓)", _domestic_stocks(summary)),
+            *_chart_section(chart_files, chart_error),
+            *_quote_section("환율(실시간·장외)", _fx_quotes(summary)),
+            *_market_funds_section(summary),
+            *_short_position_section(summary),
+            *_movement_section(summary),
+        ]
+    elif scope is MarketScope.KOREA:
         rendered = [
             blocks.header(f"📈 한국장 브리핑 · {blocks.timestamp(local)} · {session_state(summary.generated_at)}"),
             *_quote_section("국내 지수·선물", _korea_quotes(summary)),
@@ -606,12 +641,26 @@ def render_blocks(
 
 def render_text(summary: MarketSummary, scope: MarketScope) -> str:
     """블록을 못 그리는 자리에 뜨는 한 줄. 알림 미리보기가 이걸 읽는다."""
-    quotes = _korea_quotes(summary) if scope is MarketScope.KOREA else _us_quotes(summary)
+    quotes = _scope_quotes(summary, scope)
     parts = [f"{quote.label} {_number(quote.close)} {_percent(quote.change_percent)}" for quote in quotes[:2]]
-    if scope is not MarketScope.KOREA:
+    if scope is MarketScope.US:
         parts += [f"{rate.label} {_rate(rate.value)}" for rate in summary.rates if rate.country == "US"][:1]
-    title = "한국장 브리핑" if scope is MarketScope.KOREA else "미국장 마감"
+    titles = {
+        MarketScope.KOREA: "한국장 브리핑",
+        MarketScope.KOREA_PREOPEN: "한국장 프리마켓 브리핑",
+        MarketScope.US: "미국장 마감",
+    }
+    title = titles[scope]
     return f"{title} · " + " · ".join(parts) if parts else f"{title} · 값 없음"
+
+
+def _scope_quotes(summary: MarketSummary, scope: MarketScope) -> tuple[QuoteChange, ...]:
+    """리포트 첫 표에 실리는 시세. 미리보기 한 줄과 footer의 '가장 오래된 값'이 같은 것을 본다."""
+    if scope is MarketScope.US:
+        return _us_quotes(summary)
+    if scope is MarketScope.KOREA_PREOPEN:
+        return _domestic_stocks(summary)
+    return _korea_quotes(summary)
 
 
 def _fetch(connection: Connection, statement: str, parameters: tuple, build: Callable[[Any], Any]) -> tuple:
@@ -679,6 +728,11 @@ def _intraday_overseas(summary: MarketSummary) -> tuple[QuoteChange, ...]:
     )
 
 
+def _domestic_stocks(summary: MarketSummary) -> tuple[QuoteChange, ...]:
+    """국내 개별 종목만. `collect_summary`가 stock_bar 직접 조회로 바꿔 둔 행이라 NXT 봉을 담는다."""
+    return tuple(quote for quote in summary.quotes if quote.provider == "kis" and quote.kind == "equity")
+
+
 def _fx_quotes(summary: MarketSummary) -> tuple[QuoteChange, ...]:
     """장외 실시간 환율. 은행 고시가 아니라 장중에 움직이는 시장 값이다."""
     return _ordered(
@@ -694,21 +748,30 @@ def _quote_section(title: str, quotes: Sequence[QuoteChange]) -> list[dict[str, 
     **기준 시각을 행마다 적는다.** 심볼마다 마지막 봉 시각이 다르다. 국내는 KRX 마감,
     해외 선물은 몇 분 전 값이라 한 표 안에서 며칠 차이가 나기도 한다. 표 밖에 대표 시각
     하나만 두면 묵은 줄이 최신처럼 보인다.
+
+    **거래소를 아는 행이 하나라도 있으면 거래소 열을 넣는다.** 국내 종목은 같은 분에도
+    KRX·NXT 값이 다르므로 어느 거래소 봉인지 행에 보여야 한다(차트 라벨과 같은 이유).
+    거래소 개념이 없는 지수·환율·해외 표는 열 자체가 없다.
     """
     if not quotes:
         return []
+    if any(quote.exchange for quote in quotes):
+        rows = [
+            (
+                quote.label,
+                _number(quote.close),
+                _percent(quote.change_percent),
+                quote.exchange or "-",
+                _day_stamp(quote.bar_at),
+            )
+            for quote in quotes
+        ]
+        return blocks.table_section(title, ("구분", "종가", "등락", "거래소", "기준"), rows)
     rows = [
-        (_quote_label(quote), _number(quote.close), _percent(quote.change_percent), _day_stamp(quote.bar_at))
+        (quote.label, _number(quote.close), _percent(quote.change_percent), _day_stamp(quote.bar_at))
         for quote in quotes
     ]
     return blocks.table_section(title, ("구분", "종가", "등락", "기준"), rows)
-
-
-def _quote_label(quote: QuoteChange) -> str:
-    """행 라벨. NXT 봉이면 밝힌다 — KRX 마감값처럼 읽히면 안 된다. KRX는 기본이라 안 적는다."""
-    if quote.exchange and quote.exchange != "KRX":
-        return f"{quote.label}({quote.exchange})"
-    return quote.label
 
 
 def _chart_section(files: Sequence[tuple[str, str]] | None, error: str | None) -> list[dict[str, Any]]:
@@ -922,7 +985,7 @@ def _as_of(summary: MarketSummary, scope: MarketScope) -> list[str]:
     이 리포트에서 제일 오래된 값이 언제 것인가. 그게 최신이면 전체가 최신이다.
     """
     lines = [f"작성 {blocks.timestamp(summary.generated_at.astimezone(KST_TIMEZONE))}"]
-    quotes = _korea_quotes(summary) if scope is MarketScope.KOREA else _us_quotes(summary)
+    quotes = _scope_quotes(summary, scope)
     observed = [quote.bar_at for quote in quotes]
     observed += [flow.observed_at for flow in summary.flows]
     observed += [movement.observed_at for movement in summary.movements]

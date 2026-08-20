@@ -12,6 +12,7 @@ docs/*
 !docs/us-macro-indicators.md
 !docs/slack-report-design.md
 !docs/llm-briefing-roadmap.md
+!docs/market-thesis-design.md
 !docs/collection-map.html
 
 # 실행하면 앱키와 시세 응답이 출력에 남는다. 커밋하지 않는다.

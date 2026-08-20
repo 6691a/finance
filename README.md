@@ -69,7 +69,6 @@ class Instrument(EntityBase):
     __table_args__ = (
         UniqueConstraint("ticker", "market", name="uq_instrument_ticker_market"),
         table_options(
-            schema="reference",
             comment="시세·뉴스·시그널이 참조하는 추적 종목 마스터",
             database="default",
         ),
@@ -78,12 +77,13 @@ class Instrument(EntityBase):
 
 | 인자 | 기본값 | 의미 |
 | --- | --- | --- |
-| `schema` | 없음(필수) | PostgreSQL 스키마 이름 |
 | `comment` | 없음(필수) | 테이블 목적을 적는 한국어 주석 |
 | `database` | `"default"` | 이 테이블의 migration을 담당하는 alias |
 | `managed` | `True` | 이 프로젝트가 테이블 스키마를 소유하는지 |
 
-선언한 값은 `Table.info`에 들어가고 `migrations/env.py`가 읽습니다. 판단 함수는 [migrations/routing.py](migrations/routing.py)에 따로 있습니다.
+스키마는 지정하지 않습니다. 연결의 `search_path`(PostgreSQL 기본 `public`)를 그대로 따르므로 모든
+테이블이 `public` 스키마에 있습니다. 선언한 값은 `Table.info`에 들어가고 `migrations/env.py`가
+읽습니다. 판단 함수는 [migrations/routing.py](migrations/routing.py)에 따로 있습니다.
 
 ### 동작 방식
 
@@ -93,7 +93,7 @@ Alembic 공식 multidb 템플릿과 같은 구조입니다. `migrations/env.py`�
 - `env.py`는 migration이 켜진 **모든** alias의 `model_modules`를 import합니다. 현재 alias가 소유하지 않는 테이블도 metadata에 있어야 autogenerate에서 제외할 수 있기 때문입니다.
 - alias들이 같은 PostgreSQL 인스턴스를 보므로, 제외하지 않으면 각 alias가 서로의 테이블에 `DROP TABLE`을 만들어 냅니다.
 - alias마다 revision 포인터 테이블이 다릅니다. `default`는 `alembic_version`, 나머지는 `alembic_version_<alias>`입니다. 공식 템플릿은 DB가 물리적으로 다르다고 보고 이름을 나누지 않지만, 여기서는 한 인스턴스를 공유하므로 나눠야 합니다.
-- MetaData는 **하나만** 씁니다. 공식 템플릿처럼 alias별 MetaData로 쪼개면 `market.indicator_observation` → `raw.source_record.id` 같은 스키마 간 ForeignKey가 resolve되지 않습니다. 대신 Alembic 훅에서 `table.info["database"]`로 걸러냅니다.
+- MetaData는 **하나만** 씁니다. 공식 템플릿처럼 alias별 MetaData로 쪼개면 `indicator_observation` → `source_record.id` 같은 alias 간 ForeignKey가 resolve되지 않습니다. 대신 Alembic 훅에서 `table.info["database"]`로 걸러냅니다.
 - 훅은 `include_name`과 `include_object` **둘 다** 필요합니다. `include_name`은 DB에서 reflection된 이름만 보므로 다른 alias의 테이블이 "사라진 테이블"로 잡히는 것만 막습니다. 모델 metadata까지 보는 `include_object`가 있어야 다른 alias 소유 테이블에 `CREATE TABLE`을 내지 않습니다. 판정은 둘 다 `migrations.routing.include_table` 하나에 위임합니다.
 - 테이블을 다른 alias로 옮기려면 모델의 `database=` 값을 바꾸고 `makemigrations`를 한 번 실행합니다. 한 revision 파일 안에서 한쪽 섹션에 `CREATE TABLE`, 다른 쪽에 `DROP TABLE`이 생깁니다. 데이터는 자동으로 옮겨가지 않으므로 필요하면 revision에 직접 씁니다.
 
@@ -105,7 +105,6 @@ Alembic 공식 multidb 템플릿과 같은 구조입니다. `migrations/env.py`�
 
 ```python
 table_options(
-    schema="market",
     comment="외부 시스템이 만들고 관리하는 테이블",
     managed=False,
 )
@@ -179,7 +178,7 @@ def upgrade(engine_name: str) -> None:
 
 
 def upgrade_default() -> None:
-    op.create_table("instrument", ..., schema="reference")
+    op.create_table("instrument", ...)
 
 
 def upgrade_market_migration() -> None:
@@ -522,7 +521,7 @@ docker compose -f compose/local/docker-compose.yaml logs -f grafana
 
 ### 통합 국채 대시보드
 
-[compose/local/grafana/dashboards/global-treasury.json](compose/local/grafana/dashboards/global-treasury.json)은 나라를 가리지 않고 국채 금리를 비교합니다. 국가·만기·기준국이 전부 변수이고, 그 목록을 `reference.indicator_series` 마스터에서 읽습니다.
+[compose/local/grafana/dashboards/global-treasury.json](compose/local/grafana/dashboards/global-treasury.json)은 나라를 가리지 않고 국채 금리를 비교합니다. 국가·만기·기준국이 전부 변수이고, 그 목록을 `indicator_series` 마스터에서 읽습니다.
 
 - 국가별 같은 만기 비교 시계열. 만기는 `비교 만기` 변수로 고릅니다.
 - 최신 수익률 곡선 막대. 나라마다 마지막 고시값을 만기 순으로 세웁니다.

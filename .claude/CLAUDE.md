@@ -11,20 +11,17 @@ Codex용 규칙 원본은 [.codex/AGENTS.md](../.codex/AGENTS.md)이며 두 문�
 | `../apps/core/database.py` | `Base`, `EntityBase`, 다중 DB 별칭을 관리하는 `Database` |
 | `../apps/core/redis.py` | Redis 연결 관리 |
 | `../apps/core/container.py` | dependency-injector 컨테이너 |
-| `apps/models/` | SQLAlchemy 모델. 파일 이름 = PostgreSQL 스키마 이름 |
+| `apps/models/` | SQLAlchemy 모델. 파일은 도메인 단위로만 나눈다(스키마와 무관) |
 | `apps/realtime/` | KIS 실시간 WebSocket 수집 서비스. `python -m apps.realtime.main`, `compose/prod/` 배포 |
 | `migrations/` | Alembic. 리비전 파일은 `migrations/versions` 하나를 모든 별칭이 공유한다 |
 | `migrations/routing.py` | 어떤 테이블이 어떤 DB 별칭에 속하는지 판단하는 순수 함수 |
 | `../airflow/dags/` | Airflow DAG |
 | `tests/` | pytest |
 
-`apps/models/`의 모듈은 스키마 단위로 나눈다. `raw.py` → `raw`, `market.py` → `market`,
-`reference.py` → `reference`. 새 모델을 추가하면 `apps/models/__init__.py`의 `__all__`에도 넣는다.
-그러지 않으면 Alembic autogenerate가 모델을 보지 못한다.
-
-관리 대상 스키마는 `migrations/env.py`의 `MANAGED_SCHEMAS`에 있다:
-`raw`, `market`, `reference`, `ops`, `report`, `analysis`. 이 밖의 스키마(Airflow 메타데이터 등)는
-autogenerate 결과에 절대 나오면 안 된다.
+`apps/models/`의 모듈은 도메인 단위로 나눈다(`raw.py`, `market.py`, `reference.py`, `content.py`).
+테이블은 스키마를 지정하지 않고 연결의 `search_path`(PostgreSQL 기본 `public`)를 그대로 따르므로
+파일 이름이 PostgreSQL 스키마와 대응하지 않는다. 새 모델을 추가하면 `apps/models/__init__.py`의
+`__all__`에도 넣는다. 그러지 않으면 Alembic autogenerate가 모델을 보지 못한다.
 
 ## 명령어
 
@@ -61,15 +58,15 @@ uv run ruff check apps core dags migrations tests
 __table_args__ = (
     UniqueConstraint(...),
     table_options(
-        schema="reference",
         comment="시세·뉴스·시그널이 참조하는 추적 종목 마스터",
         database="default",
     ),
 )
 ```
 
-인자는 `schema`, `comment`(둘 다 필수), `database`(기본 `"default"`),
-`managed`(기본 `True`)다. 값은 `Table.info`에 들어가고 `migrations/env.py`가 읽는다.
+인자는 `comment`(필수), `database`(기본 `"default"`), `managed`(기본 `True`)다.
+스키마는 지정하지 않는다 — 연결의 `search_path`(PostgreSQL 기본 `public`)를 따른다.
+값은 `Table.info`에 들어가고 `migrations/env.py`가 읽는다.
 
 `managed=False`는 이 프로젝트가 스키마를 소유하지 않는 테이블이다. ORM 매핑은 유지돼서
 읽고 쓸 수 있지만 어떤 별칭의 autogenerate에도 나오지 않는다. Django `Meta.managed = False`와 같다.
@@ -89,11 +86,13 @@ __table_args__ = (
 - 훅은 `include_name`과 `include_object` **둘 다** 건다. `include_name`은 reflection된 이름만 보므로
   DROP만 막고, 모델 metadata까지 보는 `include_object`가 있어야 남의 테이블에 CREATE를 내지 않는다.
   둘 다 `include_table` 하나에 위임해서 판정이 어긋나지 않게 한다.
+- 라우팅 판단은 `migrations/routing.py`의 순수 함수에 둔다. `env.py`는 Alembic 실행 컨텍스트
+  밖에서 import할 수 없어 직접 테스트하지 못한다.
 - 별칭마다 리비전 포인터 테이블이 다르다(`migrations.routing.version_table`).
   `default`만 `alembic_version`이고 나머지는 `alembic_version_<alias>`다.
   공식 템플릿은 DB가 물리적으로 다르다고 보고 나누지 않지만 여기서는 인스턴스를 공유한다.
 - MetaData는 **하나만** 쓴다. 공식 템플릿처럼 별칭별 MetaData로 쪼개면
-  `market.indicator_observation` → `raw.source_record.id` 스키마 간 ForeignKey가 resolve되지 않는다.
+  `indicator_observation` → `source_record.id` 같은 별칭 간 ForeignKey가 resolve되지 않는다.
 - 테이블을 다른 별칭으로 옮기려면 모델의 `database=` 값을 바꾸고 `makemigrations`를 한 번 돌린다.
   한 리비전 파일 안에서 한쪽 섹션에 CREATE, 다른 쪽에 DROP이 생긴다. 데이터는 자동으로 옮겨가지 않는다.
 
@@ -391,7 +390,7 @@ LLM을 부르는 코드는 **Pydantic, LangChain, LangGraph 위에서만 쓴다.
 
 ## 테이블 규칙
 
-### `raw.source_record`
+### `source_record`
 
 API, 크롤링, 웹소켓 수집 결과의 출처와 상태를 가볍게 보존한다. API는 응답 1회, 크롤링은 문서 버전 1개,
 웹소켓은 메시지가 아닌 배치 또는 연결 세션 1개를 레코드 단위로 사용한다.
@@ -403,7 +402,7 @@ API, 크롤링, 웹소켓 수집 결과의 출처와 상태를 가볍게 보존�
 - 정규화 테이블은 `source_record_id` 외래키와 `ON DELETE RESTRICT`로 출처를 연결한다.
 - 웹소켓 메시지별로 `SourceRecord`를 생성하지 않는다.
 
-### `market.indicator_observation`
+### `indicator_observation`
 
 여러 제공처에서 추출한 지표 관측값을 날짜와 단위와 함께 조회 가능한 형태로 누적 저장한다.
 `(provider, series_id, observation_date)`를 고유키로 사용하고 `source_record_id`로 근거 수집
@@ -421,7 +420,7 @@ API, 크롤링, 웹소켓 수집 결과의 출처와 상태를 가볍게 보존�
   수집기 Enum이 들고 있다가 요청에 쓰고 `source_record.metadata`에 남긴다.
 - **조회하는 쪽도 `provider`를 함께 건다.** `series_id` 하나로 거는 쿼리는 제공처가 늘어나면
   조용히 틀린다. Grafana 대시보드의 패널 쿼리도 마찬가지다.
-- 국가·만기 같은 시계열의 성격은 여기 두지 않고 `reference.indicator_series`에 둔다.
+- 국가·만기 같은 시계열의 성격은 여기 두지 않고 `indicator_series`에 둔다.
 - `unit`은 제공처 표기가 아니라 정규화한 표기다. 연이율 퍼센트는 제공처가 `Percent`든 `연%`든
   `Percent`로 저장한다. 그래야 두 나라 금리를 한 쿼리로 비교할 수 있다. **단위는 계열마다
   다르다.** 금리만 있던 때의 모듈 상수 하나로는 물가지수(`Index 1982-1984=100`)와
@@ -429,7 +428,7 @@ API, 크롤링, 웹소켓 수집 결과의 출처와 상태를 가볍게 보존�
 - 관측값이 0건이어도 `source_record`는 남긴다. 조회했지만 값이 없는 구간과 아직 조회하지 않은
   구간이 구분돼야 한다.
 
-### `reference.indicator_series`
+### `indicator_series`
 
 `indicator_observation`에 쌓이는 시계열이 어느 나라 무슨 값인지 설명하는 마스터다.
 `(provider, series_id)`가 자연키이고 대시보드가 이 키로 관측값을 조인한다.
@@ -480,7 +479,7 @@ API, 크롤링, 웹소켓 수집 결과의 출처와 상태를 가볍게 보존�
 - 국내 종목 일봉은 `stock_daily`가 아니라 `stock_investor_trade_daily`가 갖는다(수급과 함께).
   `stock_daily`는 해외 상장 종목(TSMC ADR)용이다.
 
-### `reference.instrument`
+### `instrument`
 
 시세·뉴스·시그널이 참조하는 추적 종목 마스터다. 관측값이 아니라 기준 정보이므로
 `source_record_id`로 수집 계보를 연결하지 않는다.
@@ -490,9 +489,9 @@ API, 크롤링, 웹소켓 수집 결과의 출처와 상태를 가볍게 보존�
 - `is_watched`는 수집·분석 대상 여부만 나타낸다. 상장폐지·거래정지 같은 종목 생애주기 상태가
   필요해지면 별도 `status` enum 컬럼으로 분리한다.
 - 한 종목을 여러 소스에서 수집하게 되면 `source_symbol` 한 칸으로 못 버틴다.
-  그때는 `reference.instrument_source(instrument_id, source, symbol)` 자식 테이블로 옮긴다.
+  그때는 `instrument_source(instrument_id, source, symbol)` 자식 테이블로 옮긴다.
 
-### `content.document` 계열
+### `document` 계열
 
 수집한 문서 한 건과 그 문서에 붙은 태그다. `document_ingestion_hourly`가 문서를 넣고
 `document_assessment_hourly`가 평가를 채운다.

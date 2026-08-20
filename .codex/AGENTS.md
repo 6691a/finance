@@ -35,6 +35,40 @@
 
 # 개발 규칙
 
+## 프로젝트 구조
+
+| 경로 | 역할 |
+| --- | --- |
+| `apps/core/config.py` | `config.yaml`을 읽는 Pydantic 설정. `settings` 싱글턴 제공 |
+| `apps/core/database.py` | `Base`, `EntityBase`, 다중 DB 별칭을 관리하는 `Database` |
+| `apps/core/redis.py` | Redis 연결 관리 |
+| `apps/core/container.py` | dependency-injector 컨테이너 |
+| `apps/models/` | SQLAlchemy 모델. 파일은 도메인 단위로만 나눈다(스키마와 무관) |
+| `apps/realtime/` | KIS 실시간 WebSocket 수집 서비스. `python -m apps.realtime.main`, `compose/prod/` 배포 |
+| `migrations/` | Alembic. 리비전 파일은 `migrations/versions` 하나를 모든 별칭이 공유한다 |
+| `migrations/routing.py` | 어떤 테이블이 어떤 DB 별칭에 속하는지 판단하는 순수 함수 |
+| `airflow/dags/` | Airflow DAG |
+| `tests/` | pytest |
+
+`apps/models/`의 모듈은 도메인 단위로 나눈다(`raw.py`, `market.py`, `reference.py`, `content.py`).
+테이블은 스키마를 지정하지 않고 연결의 `search_path`(PostgreSQL 기본 `public`)를 그대로 따르므로
+파일 이름이 PostgreSQL 스키마와 대응하지 않는다. 새 모델을 추가하면 `apps/models/__init__.py`의
+`__all__`에도 넣는다. 그러지 않으면 Alembic autogenerate가 모델을 보지 못한다.
+
+## 명령어
+
+```bash
+just dev
+just makemigrations "create instrument table"
+just migrate upgrade head
+uv run pytest tests -q
+uv run ruff check apps core dags migrations tests
+```
+
+한 번의 명령이 마이그레이션이 켜진 모든 별칭을 순서대로 처리한다. 별칭을 인자로 주지 않는다.
+`just migrate <alembic args>`는 임의의 Alembic 명령을 전달하고,
+`just makemigrations "<메시지>"`는 `revision --autogenerate`만 실행한다.
+
 ## Airflow와 공유하는 코드
 
 - 저장소의 `airflow/`가 컨테이너의 `/opt/airflow`다. 운영 Airflow가 마운트하는 경로와 1:1로 맞춘다: `dags`, `modules`, `utility`, `sql`, `plugins`, `config`.
@@ -77,7 +111,7 @@
 ## 마이그레이션 라우팅 규칙
 
 - 테이블이 어느 마이그레이션 DB 별칭에 속하는지는 모델에서 선언한다. `core.database.table_options`를 `__table_args__`의 마지막 요소로 쓴다.
-- `table_options(schema=..., comment=..., database="default", managed=True)` 형태다. `database`를 생략하면 `default`다.
+- `table_options(comment=..., database="default", managed=True)` 형태다. `database`를 생략하면 `default`다. 스키마는 지정하지 않는다 — 연결의 `search_path`(PostgreSQL 기본 `public`)를 따른다.
 - `managed=False`는 이 프로젝트가 스키마를 소유하지 않는 테이블이다. ORM 매핑은 유지되지만 어떤 별칭의 autogenerate에도 나오지 않는다. Django `Meta.managed = False`와 같다.
 - 별칭 단위 `read_only: true`는 연결을 읽기 전용 트랜잭션으로 설정하는 별개 층이다. 테이블 하나만 골라 쓰기를 막는 설정이 아니다.
 - 실행 구조는 Alembic 공식 multidb 템플릿과 같다. `env.py`가 별칭을 순회하며 `run_migrations(engine_name=alias)`를 부른다. 별칭 목록만 `alembic.ini`가 아니라 `config.yaml`에서 오고 `migrations/cli.py`가 Alembic `databases` 옵션으로 넘긴다.
@@ -187,7 +221,7 @@ LLM을 부르는 코드는 **Pydantic, LangChain, LangGraph 위에서만 쓴다.
 
 ## 수집 계보 테이블 규칙
 
-### `raw.source_record`
+### `source_record`
 
 API, 크롤링, 웹소켓 수집 결과의 출처와 상태를 가볍게 보존한다. API는 응답 1회, 크롤링은 문서 버전 1개, 웹소켓은 메시지가 아닌 배치 또는 연결 세션 1개를 레코드 단위로 사용한다.
 
@@ -200,7 +234,7 @@ API, 크롤링, 웹소켓 수집 결과의 출처와 상태를 가볍게 보존�
 
 ## 지표 관측값 테이블 목적
 
-### `market.indicator_observation`
+### `indicator_observation`
 
 여러 제공처에서 추출한 지표 관측값을 날짜와 단위와 함께 조회 가능한 형태로 누적 저장한다. `(provider, series_id, observation_date)`를 고유키로 사용하고 `source_record_id`로 근거 수집 레코드와 연결한다.
 
@@ -208,9 +242,9 @@ API, 크롤링, 웹소켓 수집 결과의 출처와 상태를 가볍게 보존�
 - `series_id`는 **제공처 안에서만 고유하다.** 그래서 자연키에 `provider`가 함께 들어간다.
 - `series_id`는 사람이 읽을 수 있어야 한다. FRED의 `DGS10`처럼 제공처 ID가 이미 읽히면 그대로 쓰고, ECOS 항목코드(`010210000`)처럼 숫자뿐이면 `KTB10Y` 같은 ID를 만들어 저장한다. 제공처의 원본 좌표는 수집기 Enum이 들고 있다가 요청에 쓰고 `source_record.metadata`에 남긴다.
 - 조회하는 쪽도 `provider`를 함께 건다. `series_id` 하나로 거는 쿼리는 제공처가 늘어나면 조용히 틀린다.
-- 국가·만기 같은 시계열의 성격은 여기 두지 않고 `reference.indicator_series`에 둔다.
+- 국가·만기 같은 시계열의 성격은 여기 두지 않고 `indicator_series`에 둔다.
 
-### `reference.indicator_series`
+### `indicator_series`
 
 `indicator_observation`의 시계열이 어느 나라 무슨 값인지 설명하는 마스터다. `(provider, series_id)`가 자연키이고 대시보드가 이 키로 관측값을 조인한다.
 
@@ -245,18 +279,18 @@ API, 크롤링, 웹소켓 수집 결과의 출처와 상태를 가볍게 보존�
 - 국내 종목 일봉은 `stock_daily`가 아니라 `stock_investor_trade_daily`가 갖는다(수급과 함께).
   `stock_daily`는 해외 상장 종목(TSMC ADR)용이다.
 
-### `reference.instrument`
+### `instrument`
 
 시세·뉴스·시그널이 참조하는 추적 종목 마스터다. 관측값이 아니라 기준 정보이므로 `source_record_id`로 수집 계보를 연결하지 않는다.
 
 - `(ticker, market)`을 자연키로 사용한다. `id`는 다른 테이블이 참조할 대리키다.
 - `source_symbol`은 수집 소스 심볼이 티커와 다를 때만 채운다. 같으면 `NULL`로 둔다.
 - `is_watched`는 수집·분석 대상 여부만 나타낸다. 상장폐지·거래정지 같은 종목 생애주기 상태가 필요해지면 별도 `status` enum 컬럼으로 분리한다.
-- 한 종목을 여러 소스에서 수집하게 되면 `source_symbol` 한 칸으로 못 버틴다. 그때는 `reference.instrument_source(instrument_id, source, symbol)` 자식 테이블로 옮긴다.
+- 한 종목을 여러 소스에서 수집하게 되면 `source_symbol` 한 칸으로 못 버틴다. 그때는 `instrument_source(instrument_id, source, symbol)` 자식 테이블로 옮긴다.
 
 ## 문서 테이블 목적
 
-### `content.document` 계열
+### `document` 계열
 
 수집한 문서 한 건과 그 문서에 붙은 태그다. `document_ingestion_hourly`가 문서를 넣고 `document_assessment_hourly`가 평가를 채운다.
 

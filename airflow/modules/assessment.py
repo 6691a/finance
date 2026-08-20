@@ -280,6 +280,8 @@ INSTRUCTION = """\
 - `instruments`에는 **티커만** 쓴다. 이름을 붙이지 마라. 후보 `000660: SK하이닉스`는
   `"000660"`이다. `indicators`는 provider와 series_id를 나눠 쓴다. 후보
   `kis:000660 (SK하이닉스)`는 `{"provider": "kis", "series_id": "000660"}`이다.
+- 지수·환율·금리·원자재는 `instruments`가 아니라 `indicators`다. `provider`는 후보에
+  적힌 값을 그대로 쓴다. 후보 `kis:KOSPI (코스피)`를 yahoo로 바꿔 쓰지 마라.
 - `direction`은 태그한 종목·지표의 가격 관점에서 positive, negative, neutral 중 하나다.
 - `scores`의 네 항목은 각각 0~2 정수다.
   - relevance: 관심 시장에 닿는 경로가 있는가. **직접 언급을 요구하지 않는다.**
@@ -534,37 +536,63 @@ def filter_tags(
 ) -> tuple[tuple[str, ...], tuple[IndicatorTag, ...]]:
     """마스터에 없는 태그를 버린다. 문서는 그대로 저장한다.
 
-    버리기 전에 한 번 복원을 시도한다. 모델이 후보 표시 줄을 그대로 복사해 답하는 일이
-    있어서다 — gpt-5.6-luna(2026-08-20 실측)가 `000660: SK하이닉스`를 instruments에,
-    `kis:000660`을 series_id에 넣었다. 표시 형식에서 원래 값이 유일하게 복원되는 두 경우
-    (티커 뒤 콜론, series_id 앞 provider 접두사)만 복원하고, 그래도 목록 밖이면 버린다.
-    같은 값으로 복원된 중복은 하나만 남긴다 — 저장 upsert가 한 배치에서 같은 키를 두 번
-    만나면 죽는다.
+    버리기 전에 한 번 복원을 시도한다. 모델이 후보 목록을 대충 읽고 답하는 일이 있어서다.
+    gpt-5.6-luna 실측(2026-08-20) 네 가지: `000660: SK하이닉스`를 instruments에,
+    `kis:000660`을 series_id에, 지수 `KOSPI`를 instruments 칸에, provider를 `yahoo`로
+    지어내서. **후보 목록에서 원래 값이 유일하게 복원되는 경우만** 복원한다 — 콜론 앞
+    티커, series_id 앞 provider 접두사, 후보에서 provider가 하나뿐인 series_id의
+    provider 교정, instruments 칸에 온 값이 지표 후보의 유일한 series_id일 때의 칸 이동.
+    그래도 목록 밖이면 버린다. 같은 값으로 복원된 중복은 하나만 남긴다 — 저장 upsert가
+    한 배치에서 같은 키를 두 번 만나면 죽는다.
     """
     allowed_instruments = {ticker for ticker, _ in candidates.instruments}
     allowed_indicators = {(provider, series_id) for provider, series_id, _ in candidates.indicators}
+    # series_id마다 후보에 있는 provider들. 하나뿐이면 provider가 틀려도 유일하게 복원된다.
+    series_providers: dict[str, set[str]] = {}
+    for provider, series_id, _ in candidates.indicators:
+        series_providers.setdefault(series_id, set()).add(provider)
+
+    def _unique_indicator(series_id: str) -> IndicatorTag | None:
+        providers = series_providers.get(series_id)
+        if providers is not None and len(providers) == 1:
+            return IndicatorTag(provider=next(iter(providers)), series_id=series_id)
+        return None
 
     instruments: list[str] = []
+    indicators: list[IndicatorTag] = []
     dropped_instruments: list[str] = []
+    dropped_indicators: list[tuple[str, str]] = []
+
+    def _keep_indicator(tag: IndicatorTag) -> None:
+        if tag not in indicators:
+            indicators.append(tag)
+
     for value in assessment.instruments:
         ticker = value if value in allowed_instruments else value.split(":", 1)[0].strip()
-        if ticker not in allowed_instruments:
+        if ticker in allowed_instruments:
+            if ticker not in instruments:
+                instruments.append(ticker)
+            continue
+        # 지수·환율을 종목 칸에 넣는 실수. 지표 후보에서 유일하면 그쪽으로 옮긴다.
+        moved = _unique_indicator(ticker)
+        if moved is not None:
+            _keep_indicator(moved)
+        else:
             dropped_instruments.append(value)
-        elif ticker not in instruments:
-            instruments.append(ticker)
 
-    indicators: list[IndicatorTag] = []
-    dropped_indicators: list[tuple[str, str]] = []
     for tag in assessment.indicators:
         series_id = tag.series_id
         if (tag.provider, series_id) not in allowed_indicators:
             series_id = series_id.removeprefix(f"{tag.provider}:")
-        if (tag.provider, series_id) not in allowed_indicators:
-            dropped_indicators.append((tag.provider, tag.series_id))
+        if (tag.provider, series_id) in allowed_indicators:
+            _keep_indicator(tag.model_copy(update={"series_id": series_id}))
             continue
-        canonical = tag.model_copy(update={"series_id": series_id})
-        if canonical not in indicators:
-            indicators.append(canonical)
+        # provider를 지어내는 실수. series_id의 후보 provider가 하나뿐이면 교정한다.
+        corrected = _unique_indicator(series_id)
+        if corrected is not None:
+            _keep_indicator(corrected)
+        else:
+            dropped_indicators.append((tag.provider, tag.series_id))
 
     if dropped_instruments or dropped_indicators:
         # 마스터를 늘릴 근거다. 조용히 버리면 무엇을 놓치고 있는지 알 수 없다.

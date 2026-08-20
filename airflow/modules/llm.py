@@ -28,7 +28,7 @@
 ## 오류는 여기서만 분류한다
 
 `ChatXAI`는 `BaseChatOpenAI` 서브클래스라 제공처 오류가 `openai` 예외로 그대로 올라온다.
-그걸 재시도할 값어치가 있는 것(`ConnectionError`)과 없는 것(`LlmError`)으로 가르는 곳이
+그걸 재시도할 값어치가 있는 것(`RetryableLlmError`)과 없는 것(`LlmError`)으로 가르는 곳이
 `classify` 하나다. 실제 재시도 여부는 DAG가 정한다.
 
 **재시도는 Airflow가 한다.** 모델은 `max_retries=0`으로 만든다. SDK가 먼저 재시도하면 태스크
@@ -61,6 +61,10 @@ class LlmError(RuntimeError):
     """모델 호출이 실패했다."""
 
 
+class RetryableLlmError(LlmError):
+    """네트워크·429·5xx처럼 잠시 뒤 다시 부르면 성공할 수 있는 모델 호출 실패다."""
+
+
 class UnsupportedResponseFormat(LlmError):
     """제공처가 `response_format` 스키마를 받지 않는다. 스키마 없이 다시 부른다."""
 
@@ -84,7 +88,7 @@ def document_model() -> BaseChatModel:
 
 
 def briefing_model() -> BaseChatModel:
-    """Slack 브리핑 요약(`modules/briefing/comment.py`)이 쓰는 모델.
+    """Slack 브리핑 선별(`modules/briefing/picks.py`)이 쓰는 모델.
 
     지금은 `document_model`과 같은 모델이지만 함수를 나눠 둔다. 태깅은 문서 한 건을 읽고
     JSON을 내는 일이고 브리핑은 집계 표를 읽고 글을 쓰는 일이라, 한쪽만 다른 모델로 옮기고
@@ -126,16 +130,22 @@ def classify(error: openai.OpenAIError, *, had_schema: bool = False) -> Exceptio
     """제공처 예외를 DAG가 아는 종류로 바꾼다. 재시도 여부 판단이 여기 달려 있다."""
     if isinstance(error, openai.APIConnectionError | openai.APITimeoutError):
         # 네트워크 실패는 재시도할 값어치가 있다. DAG이 판단한다.
-        return ConnectionError(f"chat request failed: {error}")
+        return RetryableLlmError(f"chat request failed: {error}")
     if isinstance(error, openai.RateLimitError):
         # 429는 설정 문제가 아니라 지금 너무 빨리 부른 것이다. 잠시 뒤면 풀리므로 재시도할
         # 값어치가 있는 쪽에 넣는다. `LlmError`로 올리면 동시 호출 수를 올린 순간부터
         # 배치 전체가 즉시 실패로 끝난다. `RateLimitError`는 `APIStatusError`의 하위
         # 타입이라 아래 분기보다 먼저 봐야 한다.
-        return ConnectionError(f"rate limited: HTTP {error.status_code}")
+        return RetryableLlmError(f"rate limited: HTTP {error.status_code}")
     if isinstance(error, openai.APIStatusError):
         detail = str(error.response.text)[:500] if error.response is not None else str(error)
-        if had_schema and any(marker in detail.lower() for marker in UNSUPPORTED_MARKERS):
+        if (
+            error.status_code in {400, 422}
+            and had_schema
+            and any(marker in detail.lower() for marker in UNSUPPORTED_MARKERS)
+        ):
             return UnsupportedResponseFormat(f"HTTP {error.status_code}: {detail}")
+        if error.status_code in {408, 429} or error.status_code >= 500:
+            return RetryableLlmError(f"HTTP {error.status_code}: {detail}")
         return LlmError(f"HTTP {error.status_code}: {detail}")
     return LlmError(str(error))

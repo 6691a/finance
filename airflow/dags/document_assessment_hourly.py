@@ -24,15 +24,13 @@
 집는다. 실패를 "보류" 같은 상태로 바꾸지 않는다. 응답 형식이 깨지면 한 번만 교정을 요청하고,
 두 번째도 실패하면 넘어간다.
 
-**넘어가는 것은 그 문서만의 문제일 때다.** 모델에 닿지 못한 실패는 삼키지 않는다. 키가
-틀렸거나 네트워크가 끊긴 것은 남은 문서 전부가 똑같이 실패할 문제라, 예외를 결과로 바꾸지
-않고 그대로 올려 태스크를 죽인다. 원인이 로그에 스택과 함께 남는 편이 "0건 처리" 성공보다
-낫다. 재시도할 값어치가 없는 것(`LlmError`)만 `AirflowFailException`으로 바꾸고,
-`ConnectionError`는 그대로 두어 Airflow가 재시도하게 한다.
+**넘어가는 것은 그 문서만의 문제일 때다.** 모델에 닿지 못한 실패도 문서별 결과로 모은다.
+성공 결과를 먼저 문서별로 커밋한 뒤, 재시도 가능한 오류는 일반 예외로 올려 Airflow가
+재시도하게 하고, 인증·잘못된 요청 같은 오류만 `AirflowFailException`으로 즉시 실패시킨다.
+이미 커밋한 문서는 다음 실행의 pending 조회에서 제외된다.
 
-팬아웃은 중간에 끊기지 않는다. `Send`로 갈라진 노드가 한 superstep에서 다 돌고 나서 예외가
-올라오므로, 키가 틀린 실행은 배치 전체를 한 번씩 부르고 죽는다. 그 낭비의 상한이
-`batch_size`다.
+팬아웃은 중간에 끊기지 않는다. `Send`로 갈라진 노드가 한 superstep에서 결과를 모두 모으고,
+그 뒤 성공 결과를 저장한다. 요청 낭비의 상한은 `batch_size`다.
 
 ## 필요한 환경
 
@@ -78,7 +76,7 @@ from modules.assessment import (
     store_assessment,
 )
 from modules.dedup import link_duplicates
-from modules.llm import LlmError, document_model, model_name
+from modules.llm import RetryableLlmError, document_model, model_name
 from modules.utility import CONNECTION_ID, KST_TIMEZONE
 
 logger = logging.getLogger(__name__)
@@ -132,7 +130,14 @@ def document_assessment_hourly():
 
     # 중복 연결이 실패해도 평가는 돈다. 못 걸러진 문서는 평가되더라도 다음 실행이
     # 연결하고 브리핑 필터가 가린다. 손해는 LLM 호출 몇 건이다.
-    @task(task_display_name="문서 태깅·점수", trigger_rule="all_done")
+    @task(
+        task_display_name="문서 태깅·점수",
+        trigger_rule="all_done",
+        retries=3,
+        retry_delay=timedelta(minutes=1),
+        retry_exponential_backoff=True,
+        max_retry_delay=timedelta(minutes=5),
+    )
     def evaluate() -> int:
         context = get_current_context()
         params = dict(context.get("params") or {})
@@ -161,15 +166,9 @@ def document_assessment_hourly():
         # 어떤 모델을 부를지는 `modules/llm.py`가 정한다. 키는 그쪽 LangChain 클래스가 읽는다.
         model = document_model()
         batch = AssessmentBatch(DocumentAssessor(model, settings), settings.max_concurrency)
-        # 평가는 그래프가 한 번에 돌린다. 응답 형식이 깨진 문서만 결과 한 건으로 돌아오고,
-        # 모델에 닿지 못한 실패는 예외 그대로 여기까지 올라온다.
-        try:
-            results = batch.run(documents, candidates)
-        except LlmError as error:
-            # 키·요청 형식·권한 문제라 10분 뒤에 다시 불러도 같은 답이다.
-            raise AirflowFailException(str(error)) from error
-        # `ConnectionError`는 잡지 않는다. 네트워크·타임아웃은 재시도할 값어치가 있어
-        # Airflow가 그대로 재시도한다.
+        # 평가는 그래프가 한 번에 돌린다. 문서별 성공·형식 오류·제공처 오류를 모두 결과로
+        # 모은 뒤 성공 결과를 먼저 저장하고, 마지막에 Airflow 재시도 여부를 결정한다.
+        results = batch.run(documents, candidates)
         by_id = {document.id: document for document in documents}
         assessed_at = datetime.now(UTC)
 
@@ -205,6 +204,16 @@ def document_assessment_hourly():
             finally:
                 connection.close()
             assessed += 1
+
+        non_retryable = [result for result in results if result.assessment is None and result.retryable is False]
+        if non_retryable:
+            reason = next((result.error for result in non_retryable if result.error), "unknown")
+            raise AirflowFailException(f"Non-retryable LLM failure ({len(non_retryable)} documents): {reason}")
+
+        retryable = [result for result in results if result.assessment is None and result.retryable is True]
+        if retryable:
+            reason = next((result.error for result in retryable if result.error), "unknown")
+            raise RetryableLlmError(f"Retryable LLM failure ({len(retryable)} documents): {reason}")
 
         if assessed == 0 and failures:
             # 여기까지 왔다는 것은 모델에 닿긴 했는데 응답 형식이 전부 깨졌다는 뜻이다.

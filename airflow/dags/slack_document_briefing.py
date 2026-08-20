@@ -4,7 +4,7 @@
 `value_score`를 여기서 처음으로 읽는다. 저장 단계는 점수로 문서를 버리지 않고, 무엇을
 보여 줄지는 이 리포트가 정한다.
 
-하루 다섯 번(KST 08:00·12:00·15:30·17:00·20:00) 보내고, 창은 직전 발송 이후만 본다.
+하루 네 번(KST 08:00·12:00·15:30·20:00) 보내고, 창은 직전 발송 이후만 본다.
 원래 아침 한 번에 24시간이었는데, 시장에 바로 반영되는 기사(자사주 매입 공시 등)가
 다음날 아침에야 실려 늦었다. 슬롯 사이 창이 이어지므로 한 문서는 한 번만 실린다.
 
@@ -52,14 +52,13 @@ from modules.utility import CONNECTION_ID, KST_TIMEZONE
 
 logger = logging.getLogger(__name__)
 
-# 하루 다섯 번, 창은 직전 발송 이후만(`documents.window_hours_at`). 자사주 매입 공시처럼
+# 하루 네 번, 창은 직전 발송 이후만(`documents.window_hours_at`). 자사주 매입 공시처럼
 # 시장에 바로 반영되는 기사가 다음날 아침에야 실리면 늦다(2026-08-19 SK하이닉스 실측).
 # **`documents.SEND_SLOTS_KST`와 같은 목록이어야 한다** — 창 계산이 이 슬롯을 기준으로 잇는다.
 SCHEDULE = MultipleCronTriggerTimetable(
     "0 8 * * *",  # KST 08:00 장 전 = UTC 전일 23:00
     "0 12 * * *",  # KST 12:00 점심 = UTC 03:00
     "30 15 * * *",  # KST 15:30 KRX 마감 = UTC 06:30
-    "0 17 * * *",  # KST 17:00 저녁 = UTC 08:00
     "0 20 * * *",  # KST 20:00 NXT 마감 = UTC 11:00
     timezone=KST_TIMEZONE,
 )

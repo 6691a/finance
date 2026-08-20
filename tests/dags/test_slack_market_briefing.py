@@ -55,14 +55,14 @@ def test_us_briefing_runs_the_morning_after():
     assert slack_us_market_briefing.slack_us_market_briefing.schedule == "0 8 * * 2-6"
 
 
-def test_document_briefing_runs_five_times_a_day():
-    """장 전·점심·KRX 마감·저녁·NXT 마감. `documents.SEND_SLOTS_KST`와 같은 목록이어야
+def test_document_briefing_runs_four_times_a_day():
+    """장 전·점심·KRX 마감·NXT 마감. `documents.SEND_SLOTS_KST`와 같은 목록이어야
     직전 발송 이후 창 계산이 슬롯을 이어서 덮는다."""
     from modules.briefing import documents
 
     timetable = slack_document_briefing.slack_document_briefing.schedule
 
-    assert timetable.summary == "0 8 * * *, 0 12 * * *, 30 15 * * *, 0 17 * * *, 0 20 * * *"
+    assert timetable.summary == "0 8 * * *, 0 12 * * *, 30 15 * * *, 0 20 * * *"
     crons = [part.strip().split(" ", 2)[:2] for part in timetable.summary.split(",")]
     assert [(int(hour), int(minute)) for minute, hour in crons] == list(documents.SEND_SLOTS_KST)
 

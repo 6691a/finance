@@ -107,10 +107,9 @@ def test_the_window_is_measured_from_assessment_not_publication():
         (datetime(2026, 8, 17, 23, 0, tzinfo=UTC), 12.0),  # KST 08:00 ← 전날 20:00
         (datetime(2026, 8, 18, 3, 0, tzinfo=UTC), 4.0),  # KST 12:00 ← 08:00
         (datetime(2026, 8, 18, 6, 30, tzinfo=UTC), 3.5),  # KST 15:30 ← 12:00
-        (datetime(2026, 8, 18, 8, 0, tzinfo=UTC), 1.5),  # KST 17:00 ← 15:30
-        (datetime(2026, 8, 18, 11, 0, tzinfo=UTC), 3.0),  # KST 20:00 ← 17:00
+        (datetime(2026, 8, 18, 11, 0, tzinfo=UTC), 4.5),  # KST 20:00 ← 15:30
         (datetime(2026, 8, 18, 3, 7, tzinfo=UTC), 4.1),  # 실행이 밀려도 직전 슬롯부터 잰다
-        (datetime(2026, 8, 17, 22, 0, tzinfo=UTC), 14.0),  # KST 07:00 수동 실행 ← 전날 17:00
+        (datetime(2026, 8, 17, 22, 0, tzinfo=UTC), 15.5),  # KST 07:00 수동 실행 ← 전날 15:30
     ],
 )
 def test_the_window_reaches_back_to_the_previous_send_slot(now_utc, expected_hours):

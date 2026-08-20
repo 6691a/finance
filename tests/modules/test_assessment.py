@@ -395,6 +395,46 @@ def test_unknown_tags_are_dropped_and_the_document_survives():
     assert indicators == (IndicatorTag(provider="yahoo", series_id="USDKRW"),)
 
 
+def test_tags_copied_from_the_candidate_display_are_recovered():
+    """모델이 후보 표시 줄을 그대로 복사해도 태그를 잃지 않는다.
+
+    gpt-5.6-luna 실측(2026-08-20): `000660: SK하이닉스`를 instruments에,
+    `yahoo:USDKRW`를 series_id에 그대로 넣었다. 유일하게 복원되는 두 모양만 복원한다.
+    """
+    assessment = Assessment.model_validate_json(VALID).model_copy(
+        update={
+            "instruments": ("000660: SK하이닉스", "005930: 삼성전자"),
+            "indicators": (IndicatorTag(provider="yahoo", series_id="yahoo:USDKRW"),),
+        }
+    )
+
+    instruments, indicators = filter_tags(assessment, CANDIDATES, DOCUMENT.id)
+
+    assert instruments == ("000660", "005930")
+    assert indicators == (IndicatorTag(provider="yahoo", series_id="USDKRW"),)
+
+
+def test_recovered_duplicates_collapse_to_one_tag():
+    """`005930`과 `005930: 삼성전자`가 함께 오면 하나만 남는다.
+
+    같은 키가 한 배치에 두 번 들어가면 upsert가 죽는다.
+    """
+    assessment = Assessment.model_validate_json(VALID).model_copy(
+        update={
+            "instruments": ("005930", "005930: 삼성전자", "999999: 없는것"),
+            "indicators": (
+                IndicatorTag(provider="yahoo", series_id="USDKRW"),
+                IndicatorTag(provider="yahoo", series_id="yahoo:USDKRW"),
+            ),
+        }
+    )
+
+    instruments, indicators = filter_tags(assessment, CANDIDATES, DOCUMENT.id)
+
+    assert instruments == ("005930",)
+    assert indicators == (IndicatorTag(provider="yahoo", series_id="USDKRW"),)
+
+
 def test_pending_query_covers_the_three_reasons_to_assess():
     # 한 번도 평가하지 않은 문서, 본문이 바뀐 문서, 프롬프트 버전이 오른 문서.
     assert "assessed_at IS NULL" in PENDING_DOCUMENTS

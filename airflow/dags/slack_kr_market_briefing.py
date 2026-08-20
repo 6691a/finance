@@ -5,8 +5,13 @@ LLM 요약은 없다 — 2026-08-19까지 붙였지만 표가 이미 말하는 �
 
 한국 주식의 실제 끝은 KRX 15:30이 아니라 NXT 애프터마켓 20:00이다. 그래서 발송이
 20:15까지 이어지고, 종목(005930·000660) 행은 15:30까지 KRX, 이후 NXT 봉을 보인다
-(라벨에 `(NXT)`가 붙는다). NXT 장중 봉은 realtime WebSocket 수집기가 채운다
-(`KIS_ENABLE_NXT_WEBSOCKET`).
+(표의 거래소 열과 차트 라벨이 KRX·NXT를 밝힌다). NXT 장중 봉은 realtime WebSocket
+수집기가 채운다(`KIS_ENABLE_NXT_WEBSOCKET`).
+
+시작도 KRX 09:00이 아니라 NXT 프리마켓 08:00이다. 08:10(시작 10분 뒤)과 09:00(개장) 발송
+(`MarketScope.KOREA_PREOPEN`)이 프리마켓(08:00~08:50) 종목 시세·차트와 전일 확정치
+(증시자금·공매도·등락 종목 수)를 담는다. 08:00 미국장 리포트(`slack_us_market_briefing`)가
+이미 보낸 섹션은 겹쳐서 뺀다. NXT에는 지수가 없어 프리마켓 값은 개별 종목뿐이다.
 
 ## 왜 미국장과 나뉘어 있나
 
@@ -47,7 +52,7 @@ from typing import Any
 import pendulum
 from airflow.exceptions import AirflowFailException, AirflowSkipException
 from airflow.providers.postgres.hooks.postgres import PostgresHook
-from airflow.sdk import dag, task
+from airflow.sdk import dag, get_current_context, task
 from airflow.timetables.trigger import MultipleCronTriggerTimetable
 from pydantic import SecretStr
 
@@ -59,11 +64,14 @@ from modules.utility import CONNECTION_ID, KST_TIMEZONE
 
 logger = logging.getLogger(__name__)
 
-# 매시 정각 10:00~19:00(정규장과 NXT 애프터마켓), 15:30 KRX 마감, 20:15 최종 마감이다.
+# 08:10 프리마켓(시작 10분 뒤), 09:00 개장(프리마켓 마감 요약), 매시 정각 10:00~19:00
+# (정규장과 NXT 애프터마켓), 15:30 KRX 마감, 20:15 최종 마감이다.
 # 확정 수급은 KST 18:10 수집이라 19:00부터 실린다. NXT 애프터마켓이 20:00에 끝나고
 # REST 확정 배치(kis_stock_minute_bars_daily)가 20:05에 돌아 20:15 리포트가 하루 완결이다.
 # 분이 제각각이라 cron 하나로 못 적는다. 시각을 바꾸려면 이 목록만 고친다.
 SCHEDULE = MultipleCronTriggerTimetable(
+    "10 8 * * 1-5",  # KST 평일 08:10 프리마켓 = UTC 일~목 23:10
+    "0 9 * * 1-5",  # KST 평일 09:00 개장 = UTC 00:00
     "0 10-19 * * 1-5",  # KST 평일 매시 정각 10:00~19:00 = UTC 01:00~10:00
     "30 15 * * 1-5",  # KST 평일 15:30 KRX 마감 = UTC 06:30
     "15 20 * * 1-5",  # KST 평일 20:15 NXT 마감 최종 = UTC 11:15
@@ -82,6 +90,17 @@ def _slack_settings() -> tuple[SecretStr, str]:
         # 설정 누락이라 재시도해도 같다. 값 자체는 메시지에 넣지 않는다.
         raise AirflowFailException("SLACK_BOT_TOKEN and SLACK_CHANNEL_MARKET are required")
     return SecretStr(token), channel
+
+
+def _scope(now: datetime) -> MarketScope:
+    """트리거 시각으로 리포트 종류를 고른다. 10시 이전 발송(08:10·09:00)은 프리마켓 구성이다.
+
+    재실행이 늦어져도 scope가 안 바뀌게 벽시계가 아니라 스케줄된 logical time을 본다.
+    수동 실행은 logical_date가 없을 수 있어 지금 시각으로 대신한다.
+    """
+    logical = get_current_context().get("logical_date") or now
+    hour = logical.astimezone(KST_TIMEZONE).hour
+    return MarketScope.KOREA_PREOPEN if hour < 10 else MarketScope.KOREA
 
 
 def _skip_when_closed(connection: Any, today_kst: pendulum.Date) -> None:
@@ -112,18 +131,24 @@ def slack_kr_market_briefing():
     def send_briefing() -> str:
         token, channel = _slack_settings()
         now = datetime.now(UTC)
+        scope = _scope(now)
 
         connection = _connection()
         try:
             _skip_when_closed(connection, now.astimezone(KST_TIMEZONE).date())
             summary = market.collect_summary(connection, now)
-            chart_series = market.collect_chart_series(connection, now)
+            open_hour = (
+                market.NXT_PREMARKET_OPEN_HOUR_KST
+                if scope is MarketScope.KOREA_PREOPEN
+                else market.SESSION_OPEN_HOUR_KST
+            )
+            chart_series = market.collect_chart_series(connection, now, open_hour=open_hour)
         finally:
             connection.close()
 
         chart_files, chart_error = _chart(token, chart_series, now)
-        blocks = market.render_blocks(summary, MarketScope.KOREA, chart_files=chart_files, chart_error=chart_error)
-        text = market.render_text(summary, MarketScope.KOREA)
+        blocks = market.render_blocks(summary, scope, chart_files=chart_files, chart_error=chart_error)
+        text = market.render_text(summary, scope)
 
         try:
             return post_message(token, channel, text=text, blocks=blocks)

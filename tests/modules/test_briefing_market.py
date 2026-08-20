@@ -186,13 +186,13 @@ def test_every_row_carries_its_own_as_of_time():
 
 
 def test_nxt_bars_are_labeled_so_they_do_not_read_as_krx_closes():
-    """15:30 이후 국내 종목 행은 NXT 봉이다. KRX 마감값처럼 읽히면 안 되니 라벨에 밝힌다.
+    """국내 종목 행은 거래소 열이 KRX·NXT를 밝힌다. NXT 봉이 KRX 마감값처럼 읽히면 안 된다.
 
-    KRX는 기본이라 접미사가 없다. 라벨만 다르고 값·시각 렌더링은 같다.
+    거래소를 아는 행이 하나라도 있으면 열이 생기고, 지수처럼 모르는 행은 `-`다.
     """
     after_hours = datetime(2026, 8, 18, 9, 59, tzinfo=UTC)  # KST 18:59 NXT 애프터마켓
     connection = FakeConnection(
-        [],
+        [("kis", "KOSPI", "코스피", "index", "KR", Decimal("2687.45"), Decimal("2665.60"), after_hours)],
         [
             ("kis", "005930", "삼성전자", "equity", "KR", Decimal(268500), Decimal(266000), after_hours, "NXT"),
             ("kis", "000660", "SK하이닉스", "equity", "KR", Decimal(298000), Decimal(295500), after_hours, "KRX"),
@@ -201,10 +201,26 @@ def test_nxt_bars_are_labeled_so_they_do_not_read_as_krx_closes():
     )
     result = market.collect_summary(connection, after_hours)
     table = next(block for block in market.render_blocks(result, MarketScope.KOREA) if block["type"] == "table")
-    labels = [row[0]["text"] for row in table["rows"]]
+    rows = [[cell["text"] for cell in row] for row in table["rows"]]
+    by_label = {row[0]: row for row in rows[1:]}
 
-    assert "삼성전자(NXT)" in labels
-    assert "SK하이닉스" in labels
+    assert rows[0] == ["구분", "종가", "등락", "거래소", "기준"]
+    assert by_label["삼성전자"][3] == "NXT"
+    assert by_label["SK하이닉스"][3] == "KRX"
+    assert by_label["코스피"][3] == "-"
+
+
+def test_tables_without_exchange_rows_do_not_grow_an_exchange_column():
+    """해외·환율처럼 거래소를 모르는 표는 거래소 열 자체가 없어야 한다."""
+    blocks_out = market.render_blocks(summary(), MarketScope.KOREA)
+    tables = [block for block in blocks_out if block["type"] == "table"]
+    overseas = next(
+        table
+        for table in tables
+        if any(cell["text"] == "S&P500 선물" for row in table["rows"] for cell in row)
+    )
+
+    assert [cell["text"] for cell in overseas["rows"][0]] == ["구분", "종가", "등락", "기준"]
 
 
 def test_the_context_flags_the_oldest_value():
@@ -255,6 +271,70 @@ def test_us_report_shows_overseas_rates_and_the_korean_recap():
 
 
 
+
+
+def test_preopen_report_shows_premarket_stocks_and_skips_us_briefing_sections():
+    """프리마켓 발송(08:10·09:00). NXT 프리마켓 종목·환율·전일 확정치만 그린다.
+
+    08:00 미국장 리포트가 이미 보낸 것(미국 지수·선물, 금리, 전일 국내 지수, 수급)은 뺀다.
+    """
+    preopen = datetime(2026, 8, 18, 0, 0, tzinfo=UTC)  # KST 09:00 개장
+    premarket_bar = datetime(2026, 8, 17, 23, 50, tzinfo=UTC)  # KST 08:50 프리마켓 마지막 봉
+    connection = FakeConnection(
+        QUOTE_ROWS,
+        [
+            ("kis", "005930", "삼성전자", "equity", "KR", Decimal(268500), Decimal(266000), premarket_bar, "NXT"),
+            ("kis", "000660", "SK하이닉스", "equity", "KR", Decimal(298000), Decimal(295500), premarket_bar, "NXT"),
+        ],
+        RATE_ROWS,
+        FLOW_ROWS,
+        STOCK_FLOW_ROWS,
+        STOCK_TRADE_ROWS,
+        MOVEMENT_ROWS,
+        FUNDS_ROWS,
+        SHORT_POSITION_ROWS,
+        SPREAD_ROWS,
+    )
+    result = market.collect_summary(connection, preopen)
+    rendered = market.render_blocks(result, MarketScope.KOREA_PREOPEN)
+    text = _block_text(rendered)
+
+    assert "삼성전자" in text
+    # 프리마켓 봉은 거래소 열이 NXT를 밝힌다.
+    stock_table = next(block for block in rendered if block["type"] == "table")
+    rows = [[cell["text"] for cell in row] for row in stock_table["rows"]]
+    assert rows[0] == ["구분", "종가", "등락", "거래소", "기준"]
+    assert {row[3] for row in rows[1:]} == {"NXT"}
+    assert "원/달러(장외)" in text
+    # 전일 확정치는 08:00 미국장 리포트에 없어서 실린다.
+    assert "고객예탁금" in text
+    assert "공매도" in text
+    assert "등락 종목 수" in text
+    # 08:00 미국장 리포트와 겹치는 섹션들.
+    assert "코스피" not in text
+    assert "S&P500 선물" not in text
+    assert "미국 10년물" not in text
+    assert "투자자 순매수" not in text
+    assert "종목 추정 순매수" not in text
+    assert "마감 확정" not in text
+
+
+def test_preopen_fallback_text_leads_with_premarket_stocks():
+    result = summary()
+    text = market.render_text(result, MarketScope.KOREA_PREOPEN)
+
+    assert text.startswith("한국장 프리마켓 브리핑 · ")
+    assert "삼성전자" in text
+    assert "코스피" not in text
+
+
+def test_preopen_chart_window_opens_with_the_nxt_premarket():
+    """프리마켓 발송의 차트 창은 09:00이 아니라 NXT 프리마켓 08:00에서 시작한다."""
+    connection = FakeConnection([], [])
+    market.collect_chart_series(connection, MIDDAY, open_hour=market.NXT_PREMARKET_OPEN_HOUR_KST)
+
+    since = connection.cursors[0].calls[0][1][2]
+    assert (since.hour, since.minute) == (8, 0)
 
 
 def test_us_session_date_follows_new_york_not_seoul():
@@ -399,13 +479,32 @@ def test_chart_series_keep_the_symbol_order_and_skip_empty_ones():
         ("kis", "KOSPI", "코스피", MIDDAY, Decimal("2687.45")),
     ]
     stock_rows = [
-        ("kis", "005930", "삼성전자", MIDDAY, Decimal(268000)),
+        ("kis", "005930", "삼성전자", MIDDAY, Decimal(268000), "KRX"),
     ]
     series = market.collect_chart_series(FakeConnection(view_rows, stock_rows), MIDDAY)
 
     assert [one.symbol for one in series] == ["KOSPI", "005930"]  # CHART_SYMBOLS 순서
     assert len(series[0].points) == 2
     assert series[0].label == "코스피"
+    assert series[1].label == "삼성전자(KRX)"
+
+
+def test_chart_labels_name_the_exchange_of_their_bars():
+    """종목 차트 라벨은 어느 거래소 봉인지 밝힌다. 프리마켓은 (NXT), 하루가 섞이면 (KRX·NXT).
+
+    거래소 개념이 없는 지수·환율 라벨은 그대로다.
+    """
+    premarket = [("kis", "005930", "삼성전자", MIDDAY, Decimal(268000), "NXT")]
+    mixed = [
+        ("kis", "005930", "삼성전자", MIDDAY - timedelta(minutes=1), Decimal(267500), "KRX"),
+        ("kis", "005930", "삼성전자", MIDDAY, Decimal(268000), "NXT"),
+    ]
+
+    nxt_series = market.collect_chart_series(FakeConnection([], premarket), MIDDAY)
+    mixed_series = market.collect_chart_series(FakeConnection([], mixed), MIDDAY)
+
+    assert nxt_series[0].label == "삼성전자(NXT)"
+    assert mixed_series[0].label == "삼성전자(KRX·NXT)"
 
 
 def test_each_chart_file_gets_its_own_image_block_after_the_domestic_table():

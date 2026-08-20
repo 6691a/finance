@@ -4,6 +4,10 @@
 `value_score`를 여기서 처음으로 읽는다. 저장 단계는 점수로 문서를 버리지 않고, 무엇을
 보여 줄지는 이 리포트가 정한다.
 
+하루 다섯 번(KST 08:00·12:00·15:30·17:00·20:00) 보내고, 창은 직전 발송 이후만 본다.
+원래 아침 한 번에 24시간이었는데, 시장에 바로 반영되는 기사(자사주 매입 공시 등)가
+다음날 아침에야 실려 늦었다. 슬롯 사이 창이 이어지므로 한 문서는 한 번만 실린다.
+
 ## 고르기는 모델이 한다
 
 점수로는 후보 몇십 건을 자르고, 그 안에서 읽을 것과 주의할 것을 고르는 일은
@@ -36,6 +40,7 @@ import pendulum
 from airflow.exceptions import AirflowFailException
 from airflow.providers.postgres.hooks.postgres import PostgresHook
 from airflow.sdk import dag, task
+from airflow.timetables.trigger import MultipleCronTriggerTimetable
 from pydantic import SecretStr
 
 from modules.briefing import documents
@@ -47,8 +52,17 @@ from modules.utility import CONNECTION_ID, KST_TIMEZONE
 
 logger = logging.getLogger(__name__)
 
-# KST 매일 08:00 = UTC 전일 23:00. 하루 한 번 아침에 지난 24시간을 본다.
-SCHEDULE = "0 8 * * *"
+# 하루 다섯 번, 창은 직전 발송 이후만(`documents.window_hours_at`). 자사주 매입 공시처럼
+# 시장에 바로 반영되는 기사가 다음날 아침에야 실리면 늦다(2026-08-19 SK하이닉스 실측).
+# **`documents.SEND_SLOTS_KST`와 같은 목록이어야 한다** — 창 계산이 이 슬롯을 기준으로 잇는다.
+SCHEDULE = MultipleCronTriggerTimetable(
+    "0 8 * * *",  # KST 08:00 장 전 = UTC 전일 23:00
+    "0 12 * * *",  # KST 12:00 점심 = UTC 03:00
+    "30 15 * * *",  # KST 15:30 KRX 마감 = UTC 06:30
+    "0 17 * * *",  # KST 17:00 저녁 = UTC 08:00
+    "0 20 * * *",  # KST 20:00 NXT 마감 = UTC 11:00
+    timezone=KST_TIMEZONE,
+)
 
 
 def _connection() -> Any:
@@ -83,7 +97,9 @@ def slack_document_briefing():
 
         connection = _connection()
         try:
-            summary = documents.collect_summary(connection, now)
+            summary = documents.collect_summary(
+                connection, now, window_hours=documents.window_hours_at(now)
+            )
         finally:
             connection.close()
 

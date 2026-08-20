@@ -31,6 +31,7 @@ from collections.abc import Sequence
 from datetime import UTC, datetime
 from email.utils import parsedate_to_datetime
 from typing import Any, Protocol, Self
+from urllib.parse import urljoin
 from xml.etree import ElementTree
 from zoneinfo import ZoneInfo
 
@@ -58,6 +59,17 @@ ATOM = "{http://www.w3.org/2005/Atom}"
 # `2026-08-19 17:01:32` 형태의 naive KST를 준다. 제공처가 시간대 기준을 정하면 그
 # 기준을 따른다는 수집기 규칙 그대로다. 여기 없는 출처의 naive 시각은 계속 버린다.
 NAIVE_FEED_TIMEZONES: dict[str, ZoneInfo] = {"einfomax": ZoneInfo("Asia/Seoul")}
+
+# guid가 발표 한 건이 아니라 시계열을 가리키는 피드. Census 경제지표 브리핑룸은 매달 같은
+# guid(`housing_starts`)로 새 발표를 싣는다. 그대로 두면 `(source_slug, external_id)` 자연키가
+# 매달 같은 행을 덮어써 과거 발표가 사라진다. 발표일을 붙여 발표마다 문서를 만든다.
+SERIES_GUID_SOURCES: frozenset[str] = frozenset({"census"})
+
+# guid 끝에 개정 카운터를 fragment로 붙이는 피드. BBC는 기사가 수정될 때마다 같은 기사를
+# `...#0` → `...#1`로 다시 싣는다. 그대로 두면 수정 한 번이 새 문서 행이 되고 LLM 평가도
+# 다시 돈다(실측 2026-08-20: bbc_business 142행 중 고유 기사 99개). fragment를 떼면 같은
+# 행이 갱신되고, 재평가 여부는 본문 해시 비교가 정한다 — 설계가 의도한 경로다.
+FRAGMENT_GUID_SOURCES: frozenset[str] = frozenset({"bbc_business"})
 
 # 한 피드에서 한 번에 받아들일 최대 항목 수. 피드가 갑자기 수천 건을 실어 보내면 그건
 # 우리가 기대한 발견 채널이 아니다. 조용히 다 삼키지 않고 잘렸다는 사실을 남긴다.
@@ -262,7 +274,9 @@ def _published_at(raw: str | None, naive_timezone: ZoneInfo | None = None) -> da
     return None
 
 
-def parse_feed(body: bytes, source_slug: str | None = None) -> tuple[tuple[FeedItem, ...], bool]:
+def parse_feed(
+    body: bytes, source_slug: str | None = None, base_url: str | None = None
+) -> tuple[tuple[FeedItem, ...], bool]:
     """RSS 2.0과 Atom에서 항목을 뽑는다. (항목, 잘렸는지)를 돌려준다.
 
     **응답이 XML이 아니면 실패시킨다.** 주소가 바뀐 사이트는 404 대신 HTML 안내 페이지를
@@ -270,6 +284,10 @@ def parse_feed(body: bytes, source_slug: str | None = None) -> tuple[tuple[FeedI
     `boe.py`가 HTML 오류 페이지를 실패로 만드는 것과 같은 취지다.
 
     항목이 0건인 것은 실패가 아니다. 새 문서가 없는 시간대가 정상이다.
+
+    `base_url`은 상대 링크를 절대 URL로 푸는 기준이다. EIA 보도자료 피드가 링크를
+    `/pressroom/releases/press591.php`처럼 준다. 절대 링크는 `urljoin`이 그대로 두므로
+    모든 출처에 안전하다.
     """
     try:
         root = ElementTree.fromstring(body)
@@ -292,8 +310,10 @@ def parse_feed(body: bytes, source_slug: str | None = None) -> tuple[tuple[FeedI
             # 링크나 제목이 없으면 문서로 가리킬 수도, 사람이 읽을 수도 없다.
             continue
 
-        url = canonical_url(link)
+        url = canonical_url(urljoin(base_url, link) if base_url else link)
         identifier = (_text(entry.find("guid")) or _text(entry.find(f"{ATOM}id")) or url).strip()
+        if source_slug in FRAGMENT_GUID_SOURCES:
+            identifier = identifier.split("#", 1)[0]
         summary = normalize_text(
             _text(entry.find("description"))
             or _text(entry.find(f"{ATOM}summary"))
@@ -303,6 +323,10 @@ def parse_feed(body: bytes, source_slug: str | None = None) -> tuple[tuple[FeedI
             _text(entry.find("pubDate")) or _text(entry.find(f"{ATOM}published")) or _text(entry.find(f"{ATOM}updated")),
             naive_timezone,
         )
+        if source_slug in SERIES_GUID_SOURCES and published is not None:
+            # 발표일은 UTC 기준 날짜로 붙인다. 발행 시각이 없는 항목은 guid만 남는데,
+            # 그 항목은 어차피 발표를 구분할 근거가 없다.
+            identifier = f"{identifier}:{published.astimezone(UTC).date().isoformat()}"
         items.append(
             FeedItem(
                 external_id=identifier,

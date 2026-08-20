@@ -271,6 +271,93 @@ def test_parse_still_drops_naive_times_from_undeclared_sources():
     assert items[0].published_at is None
 
 
+EIA_RSS = """<?xml version="1.0" encoding="ISO-8859-1" ?>
+<rss version="2.0"><channel>
+  <title>EIA: Press Releases</title>
+  <item>
+    <title>EIA expects highest natural gas inventories in a decade</title>
+    <link>/pressroom/releases/press591.php</link>
+    <guid isPermaLink="true">/pressroom/releases/press591.php</guid>
+    <pubDate>Tue, 11 Aug 2026 12:00:00 EST</pubDate>
+  </item>
+</channel></rss>
+"""
+
+
+def test_parse_resolves_relative_links_against_the_feed_url():
+    # EIA는 링크와 guid를 상대 경로로 준다. canonical_url은 절대 URL이어야 문서를
+    # 가리킬 수 있다. external_id는 guid 그대로라 출처 안에서 고유하면 충분하다.
+    items, _ = parse_feed(EIA_RSS.encode("utf-8"), "eia", "https://www.eia.gov/rss/press_rss.xml")
+
+    assert len(items) == 1
+    item = items[0]
+    assert item.canonical_url == "https://www.eia.gov/pressroom/releases/press591.php"
+    assert item.external_id == "/pressroom/releases/press591.php"
+    # RFC 822 시간대 이름(EST = -0500)을 읽는다.
+    assert item.published_at == datetime(2026, 8, 11, 17, 0, tzinfo=UTC)
+
+
+def test_parse_leaves_absolute_links_alone_when_a_base_url_is_given():
+    items, _ = parse_feed(RSS.encode("utf-8"), "example", "https://example.com/rss")
+
+    assert items[0].canonical_url == "https://example.com/a"
+
+
+CENSUS_RSS = """<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0"><channel>
+  <title>U.S. Census Bureau Economic Briefing Room</title>
+  <item>
+    <title>New Residential Construction</title>
+    <link>https://www.census.gov/construction/nrc/index.html</link>
+    <description>Privately-owned housing starts in July</description>
+    <pubDate>Wed, 19 Aug 2026 16:01:24 -0400</pubDate>
+    <guid isPermaLink="false">housing_starts</guid>
+  </item>
+</channel></rss>
+"""
+
+
+def test_parse_appends_the_release_date_to_series_guids():
+    # Census 브리핑룸은 매달 같은 guid(housing_starts)로 새 발표를 싣는다. 그대로 두면
+    # (source_slug, external_id) 자연키가 같은 행을 덮어써 과거 발표가 사라진다.
+    items, _ = parse_feed(CENSUS_RSS.encode("utf-8"), "census")
+
+    assert items[0].external_id == "housing_starts:2026-08-19"
+
+
+def test_parse_keeps_series_guids_untouched_for_other_sources():
+    items, _ = parse_feed(CENSUS_RSS.encode("utf-8"), "example")
+
+    assert items[0].external_id == "housing_starts"
+
+
+BBC_RSS = """<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0"><channel>
+  <title>BBC News</title>
+  <item>
+    <title>UK inflation rises</title>
+    <link>https://www.bbc.co.uk/news/articles/c70gp8252ejo</link>
+    <guid isPermaLink="true">https://www.bbc.co.uk/news/articles/c70gp8252ejo#1</guid>
+    <pubDate>Wed, 19 Aug 2026 22:31:46 GMT</pubDate>
+  </item>
+</channel></rss>
+"""
+
+
+def test_parse_strips_the_bbc_revision_fragment_from_guids():
+    # BBC guid의 #N은 개정 카운터다. 남기면 기사 수정마다 새 문서 행이 생기고 LLM 평가가
+    # 다시 돈다(실측: 142행 중 고유 기사 99개).
+    items, _ = parse_feed(BBC_RSS.encode("utf-8"), "bbc_business")
+
+    assert items[0].external_id == "https://www.bbc.co.uk/news/articles/c70gp8252ejo"
+
+
+def test_parse_keeps_guid_fragments_for_other_sources():
+    items, _ = parse_feed(BBC_RSS.encode("utf-8"), "example")
+
+    assert items[0].external_id == "https://www.bbc.co.uk/news/articles/c70gp8252ejo#1"
+
+
 def test_parse_rejects_a_page_that_is_not_a_feed():
     # 주소가 바뀐 사이트는 404 대신 HTML 안내를 200으로 준다. 0건으로 넘기면 몇 달째 비어
     # 있어도 알 수 없다.

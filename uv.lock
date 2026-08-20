@@ -2345,6 +2345,7 @@ dependencies = [
 dev = [
     { name = "apache-airflow" },
     { name = "apache-airflow-providers-postgres" },
+    { name = "langchain-openai" },
     { name = "langchain-xai" },
     { name = "langgraph" },
     { name = "matplotlib" },
@@ -2375,6 +2376,7 @@ requires-dist = [
 dev = [
     { name = "apache-airflow", specifier = "==3.3.0" },
     { name = "apache-airflow-providers-postgres", specifier = ">=7.0.0" },
+    { name = "langchain-openai", specifier = ">=1.5.1" },
     { name = "langchain-xai", specifier = ">=1.3.0" },
     { name = "langgraph", specifier = ">=0.6" },
     { name = "matplotlib", specifier = ">=3.9" },

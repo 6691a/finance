@@ -1,7 +1,7 @@
 # 경제 문서 LLM 평가 워크플로우
 
 `document_assessment_hourly`는 Airflow 태스크 안에서 두 개의 LangGraph를 실행하고,
-LangChain의 `ChatXAI`로 Grok-4를 호출한다.
+LangChain의 `ChatOpenAI`로 gpt-5.6-luna를 호출한다.
 
 ```mermaid
 flowchart TD
@@ -13,7 +13,7 @@ flowchart TD
         HAS_DOCUMENTS -- "없음" --> EMPTY(["0건 정상 종료"])
         HAS_DOCUMENTS -- "있음" --> HAS_CANDIDATES{"종목·지표 후보가 있는가?"}
         HAS_CANDIDATES -- "없음" --> CONFIG_FAIL(["즉시 실패<br/>마스터 데이터 필요"])
-        HAS_CANDIDATES -- "있음" --> MODEL["ChatXAI 생성<br/>Grok-4 · SDK 재시도 없음"]
+        HAS_CANDIDATES -- "있음" --> MODEL["ChatOpenAI 생성<br/>gpt-5.6-luna · SDK 재시도 없음"]
     end
 
     subgraph BATCH["LangGraph 1 · AssessmentBatch"]

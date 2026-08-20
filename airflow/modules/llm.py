@@ -48,6 +48,7 @@ from typing import Any
 import openai
 from langchain_core.language_models import BaseChatModel
 from langchain_core.messages import AIMessage, BaseMessage
+from langchain_openai import ChatOpenAI
 from langchain_xai import ChatXAI
 
 logger = logging.getLogger(__name__)
@@ -77,11 +78,11 @@ UNSUPPORTED_MARKERS = ("response_format", "json_schema", "structured output")
 def document_model() -> BaseChatModel:
     """문서 태깅(`modules/assessment.py`)이 쓰는 모델.
 
-    키는 `XAI_API_KEY`에서 온다. 모델을 바꾸려면 이 함수를 고친다. 제공처를 바꾸려면 여기서
+    키는 `OPENAI_API_KEY`에서 온다. 모델을 바꾸려면 이 함수를 고친다. 제공처를 바꾸려면 여기서
     다른 LangChain 클래스를 만들어 돌려주면 되고, 부르는 쪽은 `BaseChatModel`만 안다.
     """
-    return ChatXAI(
-        model="grok-4.3",
+    return ChatOpenAI(
+        model="gpt-5.6-luna",
         timeout=REQUEST_TIMEOUT_SECONDS,
         max_retries=0,
     )

@@ -54,7 +54,7 @@ LangGraph 그래프 둘이다. 흐름 제어를 손으로 짜지 않는 대신 �
 
 ## 필요한 환경
 
-`XAI_API_KEY` 하나가 필수다. **우리가 읽지 않는다.** 어떤 모델을 부를지는 `modules/llm.py`가
+`OPENAI_API_KEY` 하나가 필수다. **우리가 읽지 않는다.** 어떤 모델을 부를지는 `modules/llm.py`가
 코드로 정하고, 키는 그 LangChain 클래스가 자기 이름으로 읽는다. 제공처를 바꾸면 환경변수
 이름도 그 제공처 것으로 바뀐다.
 
@@ -149,7 +149,7 @@ class LlmSettings(BaseModel):
     """평가 설정.
 
     **접속 정보는 여기 없다.** 어떤 모델을 부를지는 `modules/llm.py`가 코드로 정하고 키는
-    LangChain이 자기 환경변수(`XAI_API_KEY`)에서 읽는다. 여기 남은 것은 제공처와 무관하게
+    LangChain이 자기 환경변수(`OPENAI_API_KEY`)에서 읽는다. 여기 남은 것은 제공처와 무관하게
     이 DAG의 판단을 바꾸는 값뿐이다.
     """
 

@@ -30,9 +30,14 @@ from modules.utility import KST_TIMEZONE
 BRIEFING_SUMMARY = read_sql("postgres", "document", "select_briefing_summary.sql")
 BRIEFING_CANDIDATES = read_sql("postgres", "document", "select_briefing_candidates.sql")
 
-# 조회 창. 발송 주기(하루 한 번)와 같은 길이라 실행이 밀리면 그만큼이 어느 쪽에도 안 잡힌다.
-# `ops.WINDOW_HOURS`와 같은 값이고 이유도 같다.
+# 기본 조회 창. 실제 발송은 `window_hours_at`이 직전 발송 슬롯부터 지금까지로 계산한다.
+# 시장에 바로 반영되는 기사(예: 자사주 매입 공시)가 다음날 아침에야 실리면 늦기 때문에
+# 하루 한 번이 아니라 여러 번, 겹치지 않는 창으로 보낸다.
 WINDOW_HOURS = 24
+
+# 발송 시각(KST). 장 전 08:00, 점심 12:00, KRX 마감 15:30, 저녁 17:00, NXT 마감 20:00.
+# **DAG 스케줄과 같은 목록이어야 한다** — 창이 이 슬롯 사이를 이어서 덮는다.
+SEND_SLOTS_KST = ((8, 0), (12, 0), (15, 30), (17, 0), (20, 0))
 
 # 선별에 올릴 후보 수. 모델에 실리는 토큰의 상한이기도 하다. 하루 평가량이 이보다 적으면
 # 전부 올라간다.
@@ -79,7 +84,8 @@ class DocumentSummary(BaseModel):
     model_config = ConfigDict(frozen=True)
 
     generated_at: AwareDatetime
-    window_hours: int
+    # 시간 단위. 슬롯 간격이 3.5시간 같은 반시간이라 정수가 아니다.
+    window_hours: float
     detected: int
     assessed: int
     positive: int
@@ -102,10 +108,28 @@ class DocumentSummary(BaseModel):
         return frozenset(document.document_id for document in self.candidates)
 
 
+def window_hours_at(now: datetime) -> float:
+    """직전 발송 슬롯부터 지금까지의 시간.
+
+    24시간 고정 창은 발송이 하루 여러 번이 되면 같은 문서를 매번 다시 싣는다. 지난 발송
+    이후 평가된 것만 실어야 한 문서가 한 번 나온다. 벽시계 차이가 아니라 슬롯 기준이라
+    실행이 몇 분 밀려도 창이 이어진다(빈틈은 겹침 쪽으로 흡수된다).
+    """
+    local = now.astimezone(KST_TIMEZONE)
+    slots = [local.replace(hour=hour, minute=minute, second=0, microsecond=0) for hour, minute in SEND_SLOTS_KST]
+    passed = [slot for slot in slots if slot <= local]
+    if len(passed) >= 2:
+        previous = passed[-2]
+    else:
+        # 오늘 첫 슬롯이거나 그 전이다. 직전 발송은 어제 마지막(또는 그 앞) 슬롯이다.
+        previous = slots[len(passed) - 2] - timedelta(days=1)
+    return round((local - previous).total_seconds() / 3600, 1)
+
+
 def collect_summary(
     connection: Connection,
     now: datetime,
-    window_hours: int = WINDOW_HOURS,
+    window_hours: float = WINDOW_HOURS,
     candidate_documents: int = CANDIDATE_DOCUMENTS,
 ) -> DocumentSummary:
     since = now - timedelta(hours=window_hours)
@@ -151,13 +175,13 @@ def render_blocks(
 
     if summary.is_empty:
         rendered.append(
-            blocks.section(f"최근 {summary.window_hours}시간 신규 평가 문서 없음 · 대기 {summary.backlog}건")
+            blocks.section(f"최근 {summary.window_hours:g}시간 신규 평가 문서 없음 · 대기 {summary.backlog}건")
         )
         rendered.append(blocks.context(_as_of(summary)))
         return rendered
 
     rendered += blocks.table_section(
-        f"최근 {summary.window_hours}시간",
+        f"최근 {summary.window_hours:g}시간",
         ("구분", "건수"),
         (
             ("신규 수집", f"{summary.detected:,}"),

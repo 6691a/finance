@@ -90,7 +90,7 @@ SYSTEM_PROMPT = f"""너는 하루치 문서 목록에서 사람이 읽을 것을
 {{"picks": [{{"document_id": 0, "why": "", "watch": false}}]}}"""
 
 INSTRUCTION = (
-    "아래는 최근 {window_hours}시간에 평가한 문서 목록이다.\n"
+    "아래는 최근 {window_hours:g}시간에 평가한 문서 목록이다.\n"
     "이 안에서 읽을 것과 주의할 것을 골라라.\n\n```json\n{candidates}\n```"
 )
 
@@ -143,7 +143,7 @@ class DocumentPicker:
         self._graph = self._build_graph()
 
     @staticmethod
-    def build_messages(window_hours: int, candidates_json: str) -> list[BaseMessage]:
+    def build_messages(window_hours: float, candidates_json: str) -> list[BaseMessage]:
         return [
             SystemMessage(SYSTEM_PROMPT),
             HumanMessage(INSTRUCTION.format(window_hours=window_hours, candidates=candidates_json)),
@@ -173,7 +173,7 @@ class DocumentPicker:
 
         return _limit([_shorten(pick) for pick in kept])
 
-    def pick(self, window_hours: int, candidates_json: str, allowed_ids: frozenset[int]) -> tuple[Pick, ...]:
+    def pick(self, window_hours: float, candidates_json: str, allowed_ids: frozenset[int]) -> tuple[Pick, ...]:
         """고른 문서들. 두 번째도 실패하면 `PickError`를 올린다.
 
         부르는 쪽(DAG)은 이 실패를 잡아 점수 정렬로 떨어진다. 선별이 없다고 리포트를

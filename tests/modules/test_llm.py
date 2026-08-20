@@ -58,11 +58,11 @@ def status_error(kind: type[openai.APIStatusError], code: int, body: str) -> ope
 
 def test_the_document_model_is_defined_in_code_not_in_settings(monkeypatch):
     """제공처를 환경변수로 갈아 끼우지 않는다. 모델을 바꾸는 곳은 이 함수 하나다."""
-    monkeypatch.setenv("XAI_API_KEY", "secret-key")
+    monkeypatch.setenv("OPENAI_API_KEY", "secret-key")
 
     model = document_model()
 
-    assert model_name(model) == "grok-4.6"
+    assert model_name(model) == "gpt-5.6-luna"
     # 재시도는 Airflow가 한다. SDK가 먼저 재시도하면 태스크 타임아웃 안에서 몇 번 불렀는지
     # 로그와 트레이스가 어긋난다.
     assert model.max_retries == 0

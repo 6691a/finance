@@ -34,7 +34,7 @@
 
 ## 필요한 환경
 
-- `XAI_API_KEY`. 어떤 모델을 부를지는 `modules/llm.py`의 `document_model()`이 코드로 정하고
+- `OPENAI_API_KEY`. 어떤 모델을 부를지는 `modules/llm.py`의 `document_model()`이 코드로 정하고
   키는 그 LangChain 클래스가 자기 이름으로 읽는다. 키가 없으면 모델을 만들 때 실패한다.
   DAG은 `config.yaml`을 읽지 못하므로 환경변수로 준다.
 - `LLM_PERSPECTIVE`는 선택이고 기본이 `global`이다. 세계에서 일어난 일이 한국 시장에 닿는

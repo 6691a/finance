@@ -321,6 +321,8 @@ class AssessmentResult(BaseModel):
     document_id: int
     assessment: Assessment | None = None
     error: str | None = None
+    # None은 응답 형식 오류, False는 재시도해도 해결되지 않는 제공처 오류, True는 일시 오류다.
+    retryable: bool | None = None
 
 
 class BatchState(TypedDict):
@@ -490,15 +492,13 @@ class AssessmentBatch:
         ]
 
     def _assess_one(self, task: dict[str, Any]) -> dict[str, Any]:
-        """문서 하나를 평가한다. **모델에 닿지 못한 실패는 잡지 않는다.**
+        """문서 하나를 평가한다.
 
-        `AssessmentError`만 결과로 바꾼다. 그건 이 문서의 응답 형식이 두 번 깨졌다는 뜻이고,
-        문서 하나의 문제라 나머지를 저장하는 것이 설계다.
+        문서별 모델 오류를 결과로 바꾼다. 성공 결과를 먼저 저장한 뒤 DAG가 재시도 여부를
+        판단해야 하므로, 한 문서의 제공처 오류가 배치 전체 결과를 버리면 안 된다.
 
-        제공처 예외(`ConnectionError`, `LlmError`)는 그대로 위로 올린다. 키가 틀렸거나
-        네트워크가 끊긴 것은 이 문서의 문제가 아니라 남은 문서 전부가 똑같이 실패할 문제다.
-        잡아서 결과로 담으면 원인이 문자열로 뭉개져 DAG가 재시도 여부를 가를 수 없고,
-        태스크는 "0건 처리" 성공으로 끝난다. 재시도 여부 판단은 DAG가 한다.
+        `retryable=True`는 네트워크·429·5xx처럼 Airflow 재시도가 필요한 오류다. `False`는
+        인증·잘못된 요청처럼 즉시 실패시킬 오류고, None은 이 문서의 응답 형식 오류다.
         """
         document: PendingDocument = task["document"]
         try:
@@ -507,6 +507,12 @@ class AssessmentBatch:
             # 문서는 태그 없이 남는다. 다음 실행이 다시 집는다.
             logger.warning("document %s could not be assessed: %s", document.id, error)
             return {"results": [AssessmentResult(document_id=document.id, error=str(error))]}
+        except (llm.RetryableLlmError, ConnectionError) as error:
+            logger.warning("document %s hit a retryable LLM error: %s", document.id, error)
+            return {"results": [AssessmentResult(document_id=document.id, error=str(error), retryable=True)]}
+        except llm.LlmError as error:
+            logger.error("document %s hit a non-retryable LLM error: %s", document.id, error)
+            return {"results": [AssessmentResult(document_id=document.id, error=str(error), retryable=False)]}
         return {"results": [AssessmentResult(document_id=document.id, assessment=assessment)]}
 
 

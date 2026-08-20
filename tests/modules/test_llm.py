@@ -10,6 +10,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from modules.assessment import Assessment
 from modules.llm import (
     LlmError,
+    RetryableLlmError,
     UnsupportedResponseFormat,
     briefing_model,
     classify,
@@ -103,6 +104,7 @@ def test_other_http_errors_stay_separate():
     with pytest.raises(LlmError) as failure:
         invoke(scripted, [], schema={"type": "json_schema"})
     assert not isinstance(failure.value, UnsupportedResponseFormat)
+    assert not isinstance(failure.value, RetryableLlmError)
 
 
 def test_the_schema_is_not_blamed_when_none_was_sent():
@@ -117,14 +119,21 @@ def test_the_schema_is_not_blamed_when_none_was_sent():
 def test_network_failure_is_reported_as_retryable():
     request = httpx.Request("POST", "https://api.x.ai/v1/chat/completions")
 
-    assert isinstance(classify(openai.APIConnectionError(request=request)), ConnectionError)
+    assert isinstance(classify(openai.APIConnectionError(request=request)), RetryableLlmError)
 
 
 def test_rate_limiting_is_reported_as_retryable():
     """429를 재시도 못 할 오류로 올리면 동시 호출 수를 올린 순간부터 배치 전체가 즉시 죽는다."""
     error = status_error(openai.RateLimitError, 429, '{"error":"rate limit exceeded"}')
 
-    assert isinstance(classify(error), ConnectionError)
+    assert isinstance(classify(error), RetryableLlmError)
+
+
+@pytest.mark.parametrize("status", [500, 502, 503, 504, 520, 522, 524])
+def test_origin_server_errors_are_reported_as_retryable(status):
+    error = status_error(openai.APIStatusError, status, '{"retryable":true}')
+
+    assert isinstance(classify(error), RetryableLlmError)
 
 
 class Nested(BaseModel):

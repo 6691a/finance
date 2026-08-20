@@ -414,6 +414,56 @@ def test_tags_copied_from_the_candidate_display_are_recovered():
     assert indicators == (IndicatorTag(provider="yahoo", series_id="USDKRW"),)
 
 
+INDEX_CANDIDATES = Candidates(
+    instruments=(("005930", "삼성전자"),),
+    indicators=(("kis", "KOSPI", "코스피"), ("yahoo", "USDKRW", "원/달러")),
+)
+
+
+def test_an_index_in_the_instruments_slot_moves_to_indicators():
+    """지수를 종목 칸에 넣는 실수(gpt-5.6-luna 실측 2026-08-20). 지표 후보에서
+    provider가 하나뿐이면 그쪽으로 옮긴다."""
+    assessment = Assessment.model_validate_json(VALID).model_copy(
+        update={"instruments": ("KOSPI",), "indicators": ()}
+    )
+
+    instruments, indicators = filter_tags(assessment, INDEX_CANDIDATES, DOCUMENT.id)
+
+    assert instruments == ()
+    assert indicators == (IndicatorTag(provider="kis", series_id="KOSPI"),)
+
+
+def test_a_made_up_provider_is_corrected_when_the_series_is_unique():
+    """provider를 지어내는 실수(yahoo:KOSPI). series_id의 후보 provider가 하나뿐이면 교정한다."""
+    assessment = Assessment.model_validate_json(VALID).model_copy(
+        update={"instruments": (), "indicators": (IndicatorTag(provider="yahoo", series_id="KOSPI"),)}
+    )
+
+    instruments, indicators = filter_tags(assessment, INDEX_CANDIDATES, DOCUMENT.id)
+
+    assert instruments == ()
+    assert indicators == (IndicatorTag(provider="kis", series_id="KOSPI"),)
+
+
+def test_an_ambiguous_series_is_not_guessed():
+    """같은 series_id가 두 제공처에 있으면 복원이 유일하지 않다. 지어내지 않고 버린다."""
+    ambiguous = Candidates(
+        instruments=(("005930", "삼성전자"),),
+        indicators=(("kis", "USDKRW", "실시간"), ("yahoo", "USDKRW", "장외")),
+    )
+    assessment = Assessment.model_validate_json(VALID).model_copy(
+        update={
+            "instruments": ("USDKRW",),
+            "indicators": (IndicatorTag(provider="fred", series_id="USDKRW"),),
+        }
+    )
+
+    instruments, indicators = filter_tags(assessment, ambiguous, DOCUMENT.id)
+
+    assert instruments == ()
+    assert indicators == ()
+
+
 def test_recovered_duplicates_collapse_to_one_tag():
     """`005930`과 `005930: 삼성전자`가 함께 오면 하나만 남는다.
 

@@ -277,6 +277,9 @@ INSTRUCTION = """\
 규칙:
 - `instruments`와 `indicators`는 **후보 목록에 있는 값만** 쓴다. 없으면 빈 배열로 둔다.
   문서가 다른 나라 이야기여도, 그 일이 후보의 가격에 닿는 경로가 뚜렷하면 태그한다.
+- `instruments`에는 **티커만** 쓴다. 이름을 붙이지 마라. 후보 `000660: SK하이닉스`는
+  `"000660"`이다. `indicators`는 provider와 series_id를 나눠 쓴다. 후보
+  `kis:000660 (SK하이닉스)`는 `{"provider": "kis", "series_id": "000660"}`이다.
 - `direction`은 태그한 종목·지표의 가격 관점에서 positive, negative, neutral 중 하나다.
 - `scores`의 네 항목은 각각 0~2 정수다.
   - relevance: 관심 시장에 닿는 경로가 있는가. **직접 언급을 요구하지 않는다.**
@@ -529,24 +532,49 @@ def filter_tags(
     candidates: Candidates,
     document_id: int,
 ) -> tuple[tuple[str, ...], tuple[IndicatorTag, ...]]:
-    """마스터에 없는 태그를 버린다. 문서는 그대로 저장한다."""
+    """마스터에 없는 태그를 버린다. 문서는 그대로 저장한다.
+
+    버리기 전에 한 번 복원을 시도한다. 모델이 후보 표시 줄을 그대로 복사해 답하는 일이
+    있어서다 — gpt-5.6-luna(2026-08-20 실측)가 `000660: SK하이닉스`를 instruments에,
+    `kis:000660`을 series_id에 넣었다. 표시 형식에서 원래 값이 유일하게 복원되는 두 경우
+    (티커 뒤 콜론, series_id 앞 provider 접두사)만 복원하고, 그래도 목록 밖이면 버린다.
+    같은 값으로 복원된 중복은 하나만 남긴다 — 저장 upsert가 한 배치에서 같은 키를 두 번
+    만나면 죽는다.
+    """
     allowed_instruments = {ticker for ticker, _ in candidates.instruments}
     allowed_indicators = {(provider, series_id) for provider, series_id, _ in candidates.indicators}
 
-    instruments = tuple(ticker for ticker in assessment.instruments if ticker in allowed_instruments)
-    indicators = tuple(tag for tag in assessment.indicators if (tag.provider, tag.series_id) in allowed_indicators)
+    instruments: list[str] = []
+    dropped_instruments: list[str] = []
+    for value in assessment.instruments:
+        ticker = value if value in allowed_instruments else value.split(":", 1)[0].strip()
+        if ticker not in allowed_instruments:
+            dropped_instruments.append(value)
+        elif ticker not in instruments:
+            instruments.append(ticker)
 
-    dropped_instruments = set(assessment.instruments) - allowed_instruments
-    dropped_indicators = {(tag.provider, tag.series_id) for tag in assessment.indicators} - allowed_indicators
+    indicators: list[IndicatorTag] = []
+    dropped_indicators: list[tuple[str, str]] = []
+    for tag in assessment.indicators:
+        series_id = tag.series_id
+        if (tag.provider, series_id) not in allowed_indicators:
+            series_id = series_id.removeprefix(f"{tag.provider}:")
+        if (tag.provider, series_id) not in allowed_indicators:
+            dropped_indicators.append((tag.provider, tag.series_id))
+            continue
+        canonical = tag.model_copy(update={"series_id": series_id})
+        if canonical not in indicators:
+            indicators.append(canonical)
+
     if dropped_instruments or dropped_indicators:
         # 마스터를 늘릴 근거다. 조용히 버리면 무엇을 놓치고 있는지 알 수 없다.
         logger.warning(
             "document %s: dropped unknown tags instruments=%s indicators=%s",
             document_id,
-            sorted(dropped_instruments),
-            sorted(dropped_indicators),
+            sorted(set(dropped_instruments)),
+            sorted(set(dropped_indicators)),
         )
-    return instruments, indicators
+    return tuple(instruments), tuple(indicators)
 
 
 PENDING_DOCUMENTS = read_sql("postgres", "document", "select_pending_assessment.sql")

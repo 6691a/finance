@@ -12,7 +12,9 @@ Enum으로 들고 있는 것과 반대인데, **이용조건은 출처마다 다
 `collection_mode`를 낮추면 다음 실행부터 반영된다.
 
 지금 켜져 있는 출처는 마이그레이션 시드가 넣은 것이고, **전부 실제로 요청해 응답을 확인한
-피드다**(2026-08-15). 설계 초안의 Reuters와 AP는 피드 도메인이 DNS에 없어 뺐다.
+채널이다**(2026-08-15~20). 설계 초안의 Reuters와 AP는 피드 도메인이 DNS에 없어 뺐다.
+대부분 RSS·Atom이지만 피드가 없는 곳(KRX·금감원)은 게시판 목록을 직접 읽는다 —
+`modules.collectors.document_listings.LISTING_SOURCES`가 그 목록이다.
 
 ## 왜 매시간인가
 
@@ -45,6 +47,7 @@ from airflow.exceptions import AirflowFailException
 from airflow.providers.postgres.hooks.postgres import PostgresHook
 from airflow.sdk import dag, task
 
+from modules.collectors.document_listings import LISTING_SOURCES
 from modules.collectors.documents import (
     DocumentHTTPError,
     DocumentPayloadError,
@@ -71,8 +74,14 @@ def _connection() -> Any:
 
 def collect_source(source: FeedSource, detected_at: datetime) -> tuple[int, SourceOutcome]:
     """출처 하나를 받아 저장한다. 이 함수 하나가 트랜잭션 하나다."""
-    response = fetch_feed(source)
-    items, truncated = parse_feed(response.body, source.slug)
+    listing = LISTING_SOURCES.get(source.slug)
+    if listing is not None:
+        # 피드가 없는 출처(KRX·금감원)는 게시판 목록을 직접 읽는다.
+        response = listing.fetch(source)
+        items, truncated = listing.parse(response.body)
+    else:
+        response = fetch_feed(source)
+        items, truncated = parse_feed(response.body, source.slug, source.feed_url)
 
     connection = _connection()
     try:

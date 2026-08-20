@@ -105,8 +105,8 @@ backfill의 dag_run을 running으로 올리지 않는다. 태스크를 clear해�
 """
 
 import logging
+from contextlib import closing
 from datetime import timedelta
-from typing import Any
 
 import pendulum
 from airflow.exceptions import AirflowFailException
@@ -128,13 +128,9 @@ from modules.period import (
     PeriodError,
     resolve_observation_period,
 )
-from modules.utility import CONNECTION_ID, KST_TIMEZONE
+from modules.utility import CONNECTION_ID, KST_TIMEZONE, UNRECOVERABLE_STATUSES, atomic
 
 logger = logging.getLogger(__name__)
-
-# 설정 오류라 재시도해도 같은 결과인 HTTP 상태. 404는 "그런 시계열 키가 없다"는 뜻이고,
-# 값이 없는 구간은 HTTP 200에 빈 본문으로 오므로 여기 걸리지 않는다.
-UNRECOVERABLE_STATUSES = frozenset({400, 401, 403, 404})
 
 
 @dag(
@@ -192,20 +188,12 @@ def ecb_yield_curve_daily():
                 logger.warning("ECB asked to retry after %s seconds", error.retry_after)
             raise
 
-        # 반환 타입은 provider 버전에 따라 psycopg2/psycopg3 래퍼로 갈린다. 런타임 객체는
-        # 어느 쪽이든 PEP 249 연결이라 commit·rollback을 갖는다.
-        connection: Any = PostgresHook(postgres_conn_id=CONNECTION_ID).get_conn()
-        try:
-            count = store_observations(connection, response)
-            connection.commit()
-        except EcbPayloadError as error:
-            connection.rollback()
-            raise AirflowFailException(str(error)) from error
-        except Exception:
-            connection.rollback()
-            raise
-        finally:
-            connection.close()
+        with closing(PostgresHook(postgres_conn_id=CONNECTION_ID).get_conn()) as connection:
+            try:
+                with atomic(connection):
+                    count = store_observations(connection, response)
+            except EcbPayloadError as error:
+                raise AirflowFailException(str(error)) from error
 
         logger.info(
             "Stored %s euro area yield curve observations for %s..%s",

@@ -79,7 +79,7 @@ from modules.collectors.kis import (
     store_stock_bars,
 )
 from modules.sql import read_sql
-from modules.utility import CONNECTION_ID, KST_TIMEZONE
+from modules.utility import CONNECTION_ID, KIS_UNRECOVERABLE_STATUSES, KST_TIMEZONE
 
 logger = logging.getLogger(__name__)
 
@@ -90,9 +90,6 @@ BUSINESS_DATE_PARAM = "business_date"
 DAYS_PARAM = "days"
 
 PREVIOUS_CLOSE_SELECT = read_sql("postgres", "stock_investor_trade_daily", "select_previous_close.sql")
-
-# 설정 오류라 재시도해도 같은 결과인 HTTP 상태.
-UNRECOVERABLE_STATUSES = frozenset({400, 403, 404})
 
 
 def _credentials() -> tuple[SecretStr, SecretStr]:
@@ -214,7 +211,7 @@ def kis_stock_minute_bars_daily():
                     try:
                         fetch = fetch_stock_bars(token, app_key, app_secret, stock, target, base, exchange)
                     except KisHTTPError as error:
-                        if error.status in UNRECOVERABLE_STATUSES:
+                        if error.status in KIS_UNRECOVERABLE_STATUSES:
                             raise AirflowFailException(f"{name}: {error}") from error
                         logger.warning("%s failed with HTTP %s", name, error.status)
                         failures.append(name)

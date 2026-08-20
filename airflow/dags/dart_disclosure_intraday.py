@@ -59,6 +59,7 @@ WebSocket이 없다. 화면에 보이는 신선도는 **폴링 주기 + DART 반
 
 import logging
 import os
+from contextlib import closing
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
@@ -84,15 +85,12 @@ from modules.collectors.dart import (
     store_disclosures,
     store_earnings,
 )
-from modules.utility import CONNECTION_ID, KST_TIMEZONE
+from modules.utility import CONNECTION_ID, KST_TIMEZONE, UNRECOVERABLE_STATUSES, atomic
 
 logger = logging.getLogger(__name__)
 
 LOOKBACK_DAYS = 7
 LOOKBACK_DAYS_PARAM = "lookback_days"
-
-# 설정 오류라 재시도해도 같은 결과인 HTTP 상태.
-UNRECOVERABLE_STATUSES = frozenset({400, 401, 403, 404})
 
 
 def _api_key() -> SecretStr:
@@ -111,8 +109,6 @@ def _lookback_days() -> int:
 
 
 def _connection() -> Any:
-    # 반환 타입은 provider 버전에 따라 psycopg2/psycopg3 래퍼로 갈린다. 런타임 객체는
-    # 어느 쪽이든 PEP 249 연결이라 commit·rollback을 갖는다.
     return PostgresHook(postgres_conn_id=CONNECTION_ID).get_conn()
 
 
@@ -174,18 +170,12 @@ def dart_disclosure_intraday():
                 failures.append(company.value)
                 continue
 
-            connection = _connection()
-            try:
-                stored += store_disclosures(connection, fetch)
-                connection.commit()
-            except DartPayloadError as error:
-                connection.rollback()
-                raise AirflowFailException(str(error)) from error
-            except Exception:
-                connection.rollback()
-                raise
-            finally:
-                connection.close()
+            with closing(_connection()) as connection:
+                try:
+                    with atomic(connection):
+                        stored += store_disclosures(connection, fetch)
+                except DartPayloadError as error:
+                    raise AirflowFailException(str(error)) from error
 
             logger.info("Stored %s disclosures for %s", len(fetch.disclosures), company.label)
 
@@ -210,15 +200,8 @@ def dart_disclosure_intraday():
             if fetch is None:
                 continue
 
-            connection = _connection()
-            try:
+            with closing(_connection()) as connection, atomic(connection):
                 stored += store_earnings(connection, fetch)
-                connection.commit()
-            except Exception:
-                connection.rollback()
-                raise
-            finally:
-                connection.close()
 
             logger.info(
                 "Stored %s %s metrics from %s (%s)",

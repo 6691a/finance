@@ -46,6 +46,7 @@
 import logging
 import os
 import re
+from contextlib import closing
 from datetime import UTC, date, datetime, timedelta
 from typing import Any
 
@@ -67,7 +68,7 @@ from modules.collectors.kis_investor_flow import (
     store_stock_trade_daily,
 )
 from modules.market_session import krx_open_day
-from modules.utility import CONNECTION_ID, KST_TIMEZONE
+from modules.utility import CONNECTION_ID, KIS_UNRECOVERABLE_STATUSES, KST_TIMEZONE, atomic
 
 logger = logging.getLogger(__name__)
 
@@ -76,9 +77,6 @@ CALENDAR_DAY_PATTERN = re.compile(r"\d{4}-\d{2}-\d{2}")
 
 END_DATE_PARAM = "end_date"
 PAGES_PARAM = "pages"
-
-# 설정 오류라 재시도해도 같은 결과인 HTTP 상태.
-UNRECOVERABLE_STATUSES = frozenset({400, 403, 404})
 
 
 def _credentials() -> tuple[SecretStr, SecretStr]:
@@ -90,8 +88,6 @@ def _credentials() -> tuple[SecretStr, SecretStr]:
 
 
 def _connection() -> Any:
-    # 반환 타입은 provider 버전에 따라 psycopg2/psycopg3 래퍼로 갈린다. 런타임 객체는
-    # 어느 쪽이든 PEP 249 연결이라 commit·rollback을 갖는다.
     return PostgresHook(postgres_conn_id=CONNECTION_ID).get_conn()
 
 
@@ -180,49 +176,43 @@ def kis_investor_trade_daily():
 
         stored = 0
         failures: list[str] = []
-        for stock in InvestorFlowStock:
-            cursor_date = end_date
-            for page in range(pages):
-                name = f"{stock.value}:{cursor_date.isoformat()}"
-                try:
-                    fetch = fetch_stock_trade_daily(token, app_key, app_secret, stock, cursor_date)
-                except KisHTTPError as error:
-                    if error.status in UNRECOVERABLE_STATUSES:
-                        raise AirflowFailException(f"{name}: {error}") from error
-                    logger.warning("%s failed with HTTP %s", name, error.status)
-                    failures.append(name)
-                    break
-                except (KisResultError, KisPayloadError) as error:
-                    logger.warning("%s failed: %s", name, error)
-                    failures.append(name)
-                    break
-                except ConnectionError as error:
-                    logger.warning("%s failed to connect: %s", name, error)
-                    failures.append(name)
-                    break
+        with closing(_connection()) as connection:
+            for stock in InvestorFlowStock:
+                cursor_date = end_date
+                for page in range(pages):
+                    name = f"{stock.value}:{cursor_date.isoformat()}"
+                    try:
+                        fetch = fetch_stock_trade_daily(token, app_key, app_secret, stock, cursor_date)
+                    except KisHTTPError as error:
+                        if error.status in KIS_UNRECOVERABLE_STATUSES:
+                            raise AirflowFailException(f"{name}: {error}") from error
+                        logger.warning("%s failed with HTTP %s", name, error.status)
+                        failures.append(name)
+                        break
+                    except (KisResultError, KisPayloadError) as error:
+                        logger.warning("%s failed: %s", name, error)
+                        failures.append(name)
+                        break
+                    except ConnectionError as error:
+                        logger.warning("%s failed to connect: %s", name, error)
+                        failures.append(name)
+                        break
 
-                if not fetch.rows:
-                    logger.info("%s returned no rows; stopping this stock", name)
-                    break
+                    if not fetch.rows:
+                        logger.info("%s returned no rows; stopping this stock", name)
+                        break
 
-                connection = _connection()
-                try:
-                    rows = store_stock_trade_daily(connection, fetch)
-                    connection.commit()
-                except Exception:
-                    connection.rollback()
-                    raise
-                finally:
-                    connection.close()
+                    with atomic(connection):
+                        rows = store_stock_trade_daily(connection, fetch)
 
-                stored += rows
-                logger.info("Stored %s rows for %s", rows, name)
+                    stored += rows
+                    logger.info("Stored %s rows for %s", rows, name)
 
-                # 다음 구간의 끝은 이번 응답의 가장 이른 거래일 하루 전이다. 우리가 거래일을
-                # 세면 휴장일에서 어긋난다.
-                cursor_date = min(row.business_date for row in fetch.rows) - timedelta(days=1)
-                if page + 1 < pages:
-                    logger.info("Walking back to %s for %s", cursor_date, stock.value)
+                    # 다음 구간의 끝은 이번 응답의 가장 이른 거래일 하루 전이다. 우리가 거래일을
+                    # 세면 휴장일에서 어긋난다.
+                    cursor_date = min(row.business_date for row in fetch.rows) - timedelta(days=1)
+                    if page + 1 < pages:
+                        logger.info("Walking back to %s for %s", cursor_date, stock.value)
 
         if failures:
             raise AirflowFailException(f"{len(failures)} KIS calls failed: {', '.join(failures)}")

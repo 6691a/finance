@@ -54,6 +54,7 @@
 
 import logging
 import os
+from contextlib import closing
 from datetime import UTC, datetime, time, timedelta
 from typing import Any
 
@@ -78,7 +79,7 @@ from modules.collectors.kis_investor_flow import (
     store_stock_estimates,
 )
 from modules.market_session import krx_open_day
-from modules.utility import CONNECTION_ID, KST_TIMEZONE
+from modules.utility import CONNECTION_ID, KIS_UNRECOVERABLE_STATUSES, KST_TIMEZONE, atomic
 
 logger = logging.getLogger(__name__)
 
@@ -96,9 +97,6 @@ ESTIMATE_CALL_TIMES: tuple[time, ...] = (
     time(14, 35),
 )
 
-# 설정 오류라 재시도해도 같은 결과인 HTTP 상태.
-UNRECOVERABLE_STATUSES = frozenset({400, 403, 404})
-
 # KIS가 이 조회의 첫 집계를 내는 시각. 실측으로 09:05 run 은 값이 있었고 09:00 정각과
 # 09:02 재시도는 전부 0이었다(2026-08-19).
 FIRST_AGGREGATION_TIME = time(9, 5)
@@ -113,8 +111,6 @@ def _credentials() -> tuple[SecretStr, SecretStr]:
 
 
 def _connection() -> Any:
-    # 반환 타입은 provider 버전에 따라 psycopg2/psycopg3 래퍼로 갈린다. 런타임 객체는
-    # 어느 쪽이든 PEP 249 연결이라 commit·rollback을 갖는다.
     return PostgresHook(postgres_conn_id=CONNECTION_ID).get_conn()
 
 
@@ -209,36 +205,30 @@ def kis_investor_flow_intraday():
 
         stored = 0
         failures: list[str] = []
-        for name, call, store in jobs:
-            try:
-                fetch = call()
-            except KisHTTPError as error:
-                if error.status in UNRECOVERABLE_STATUSES:
-                    raise AirflowFailException(f"{name}: {error}") from error
-                logger.warning("%s failed with HTTP %s", name, error.status)
-                failures.append(name)
-                continue
-            except (KisResultError, KisPayloadError) as error:
-                logger.warning("%s failed: %s", name, error)
-                failures.append(name)
-                continue
-            except ConnectionError as error:
-                logger.warning("%s failed to connect: %s", name, error)
-                failures.append(name)
-                continue
+        with closing(_connection()) as connection:
+            for name, call, store in jobs:
+                try:
+                    fetch = call()
+                except KisHTTPError as error:
+                    if error.status in KIS_UNRECOVERABLE_STATUSES:
+                        raise AirflowFailException(f"{name}: {error}") from error
+                    logger.warning("%s failed with HTTP %s", name, error.status)
+                    failures.append(name)
+                    continue
+                except (KisResultError, KisPayloadError) as error:
+                    logger.warning("%s failed: %s", name, error)
+                    failures.append(name)
+                    continue
+                except ConnectionError as error:
+                    logger.warning("%s failed to connect: %s", name, error)
+                    failures.append(name)
+                    continue
 
-            connection = _connection()
-            try:
-                rows = store(connection, fetch)
-                connection.commit()
-            except Exception:
-                connection.rollback()
-                raise
-            finally:
-                connection.close()
+                with atomic(connection):
+                    rows = store(connection, fetch)
 
-            stored += rows
-            logger.info("Stored %s rows for %s", rows, name)
+                stored += rows
+                logger.info("Stored %s rows for %s", rows, name)
 
         if failures:
             raise AirflowFailException(f"{len(failures)} of {len(jobs)} KIS calls failed: {', '.join(failures)}")

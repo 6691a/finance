@@ -39,6 +39,7 @@ RSS는 최근 항목만 준다. **수집을 시작하기 전 기간은 영영 �
 """
 
 import logging
+from contextlib import closing
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
@@ -58,17 +59,12 @@ from modules.collectors.documents import (
     parse_feed,
     store_documents,
 )
-from modules.utility import CONNECTION_ID, KST_TIMEZONE
+from modules.utility import CONNECTION_ID, KST_TIMEZONE, UNRECOVERABLE_STATUSES, atomic
 
 logger = logging.getLogger(__name__)
 
-# 주소나 정책이 바뀐 것이라 재시도해도 같은 결과인 HTTP 상태.
-UNRECOVERABLE_STATUSES = frozenset({400, 401, 403, 404})
-
 
 def _connection() -> Any:
-    # 반환 타입은 provider 버전에 따라 psycopg2/psycopg3 래퍼로 갈린다. 런타임 객체는
-    # 어느 쪽이든 PEP 249 연결이라 commit·rollback을 갖는다.
     return PostgresHook(postgres_conn_id=CONNECTION_ID).get_conn()
 
 
@@ -83,15 +79,8 @@ def collect_source(source: FeedSource, detected_at: datetime) -> tuple[int, Sour
         response = fetch_feed(source)
         items, truncated = parse_feed(response.body, source.slug, source.feed_url)
 
-    connection = _connection()
-    try:
+    with closing(_connection()) as connection, atomic(connection):
         stored, outcome = store_documents(connection, source, response, items, truncated, detected_at)
-        connection.commit()
-    except Exception:
-        connection.rollback()
-        raise
-    finally:
-        connection.close()
 
     if truncated:
         logger.warning("%s returned more items than we take in one run", source.slug)

@@ -44,8 +44,8 @@ FRED는 월간 값을 그 달 1일로 준다(실측 2026-08-16: 7월 CPI가 `202
 
 import logging
 import os
+from contextlib import closing
 from datetime import timedelta
-from typing import Any
 
 import pendulum
 from airflow.exceptions import AirflowFailException
@@ -68,15 +68,12 @@ from modules.period import (
     PeriodError,
     resolve_observation_period,
 )
-from modules.utility import CONNECTION_ID, KST_TIMEZONE
+from modules.utility import CONNECTION_ID, KST_TIMEZONE, UNRECOVERABLE_STATUSES, atomic
 
 logger = logging.getLogger(__name__)
 
 # 월간 지표는 발표가 한 달 넘게 늦고 정정도 잦다. 190일이면 최근 여섯 달치 정정까지 다시 받는다.
 LOOKBACK_DAYS_MACRO = 190
-
-# 설정 오류라 재시도해도 같은 결과인 HTTP 상태.
-UNRECOVERABLE_STATUSES = frozenset({400, 401, 403, 404})
 
 
 @dag(
@@ -149,21 +146,13 @@ def fred_macro_daily():
                 logger.warning("FRED asked to retry after %s seconds", error.retry_after)
             raise
 
-        # 반환 타입은 provider 버전에 따라 psycopg2/psycopg3 래퍼로 갈린다. 런타임 객체는
-        # 어느 쪽이든 PEP 249 연결이라 commit·rollback을 갖는다.
-        connection: Any = PostgresHook(postgres_conn_id=CONNECTION_ID).get_conn()
-        try:
-            count = store_observations(connection, response)
-            connection.commit()
-        except FredPayloadError as error:
-            # 관측일이 그 달 1일이 아닌 경우도 여기로 온다. 재시도해도 같은 응답이다.
-            connection.rollback()
-            raise AirflowFailException(str(error)) from error
-        except Exception:
-            connection.rollback()
-            raise
-        finally:
-            connection.close()
+        with closing(PostgresHook(postgres_conn_id=CONNECTION_ID).get_conn()) as connection:
+            try:
+                with atomic(connection):
+                    count = store_observations(connection, response)
+            except FredPayloadError as error:
+                # 관측일이 그 달 1일이 아닌 경우도 여기로 온다. 재시도해도 같은 응답이다.
+                raise AirflowFailException(str(error)) from error
 
         logger.info(
             "Stored %s %s observations for %s..%s",

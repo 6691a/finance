@@ -85,6 +85,7 @@ KOSPI200 선물은 분기물(3·6·9·12)이고 만기는 만기월 **두 번째
 
 import logging
 import os
+from contextlib import closing
 from datetime import UTC, date, datetime, timedelta
 from typing import Any
 
@@ -112,15 +113,12 @@ from modules.collectors.kis import (
     store_market_movement,
 )
 from modules.market_session import krx_open_day
-from modules.utility import CONNECTION_ID, KST_TIMEZONE
+from modules.utility import CONNECTION_ID, KIS_UNRECOVERABLE_STATUSES, KST_TIMEZONE, atomic
 
 logger = logging.getLogger(__name__)
 
 LOOKBACK_MINUTES = 15
 LOOKBACK_MINUTES_PARAM = "lookback_minutes"
-
-# 설정 오류라 재시도해도 같은 결과인 HTTP 상태.
-UNRECOVERABLE_STATUSES = frozenset({400, 403, 404})
 
 
 def _credentials() -> tuple[SecretStr, SecretStr]:
@@ -214,7 +212,7 @@ def kis_quote_intraday():
             try:
                 responses.append(_fetch(token, app_key, app_secret, target, contract, now))
             except KisHTTPError as error:
-                if error.status in UNRECOVERABLE_STATUSES:
+                if error.status in KIS_UNRECOVERABLE_STATUSES:
                     raise AirflowFailException(f"{symbol} ({contract or 'index'}): {error}") from error
                 logger.warning("%s failed with HTTP %s", symbol, error.status)
                 failures.append(
@@ -232,18 +230,12 @@ def kis_quote_intraday():
         if not responses:
             raise ConnectionError("Every KIS request failed")
 
-        connection: Any = PostgresHook(postgres_conn_id=CONNECTION_ID).get_conn()
-        try:
-            bar_count, outcomes = store_bars(connection, responses, since, failures)
-            connection.commit()
-        except (KisPayloadError, KisResultError) as error:
-            connection.rollback()
-            raise AirflowFailException(str(error)) from error
-        except Exception:
-            connection.rollback()
-            raise
-        finally:
-            connection.close()
+        with closing(PostgresHook(postgres_conn_id=CONNECTION_ID).get_conn()) as connection:
+            try:
+                with atomic(connection):
+                    bar_count, outcomes = store_bars(connection, responses, since, failures)
+            except (KisPayloadError, KisResultError) as error:
+                raise AirflowFailException(str(error)) from error
 
         succeeded = [outcome for outcome in outcomes if outcome.error is None]
         if not succeeded:
@@ -279,7 +271,7 @@ def kis_quote_intraday():
             try:
                 responses.append(_fetch(token, app_key, app_secret, index, None, now, price=True))
             except KisHTTPError as error:
-                if error.status in UNRECOVERABLE_STATUSES:
+                if error.status in KIS_UNRECOVERABLE_STATUSES:
                     raise AirflowFailException(f"{index.value}: {error}") from error
                 logger.warning("%s movement failed with HTTP %s", index.value, error.status)
                 failures.append(SymbolOutcome(symbol=index.value, status=error.status, error=str(error)))
@@ -293,18 +285,12 @@ def kis_quote_intraday():
         # 이 조회에는 원천 시각이 없다. 응답을 받은 분으로 찍는다.
         observed_at = now.replace(second=0, microsecond=0)
 
-        connection: Any = PostgresHook(postgres_conn_id=CONNECTION_ID).get_conn()
-        try:
-            stored, outcomes = store_market_movement(connection, responses, observed_at, failures)
-            connection.commit()
-        except (KisPayloadError, KisResultError) as error:
-            connection.rollback()
-            raise AirflowFailException(str(error)) from error
-        except Exception:
-            connection.rollback()
-            raise
-        finally:
-            connection.close()
+        with closing(PostgresHook(postgres_conn_id=CONNECTION_ID).get_conn()) as connection:
+            try:
+                with atomic(connection):
+                    stored, outcomes = store_market_movement(connection, responses, observed_at, failures)
+            except (KisPayloadError, KisResultError) as error:
+                raise AirflowFailException(str(error)) from error
 
         if not [outcome for outcome in outcomes if outcome.error is None]:
             raise AirflowFailException("Every index failed to parse; see source_record metadata")

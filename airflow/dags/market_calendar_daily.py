@@ -63,6 +63,7 @@ NYSE 페이지는 3년치를 미리 고시한다.
 
 import logging
 import os
+from contextlib import closing
 from datetime import date, timedelta
 from typing import Any
 
@@ -91,15 +92,12 @@ from modules.collectors.nyse_calendar import (
     parse_calendar,
     store_calendar,
 )
-from modules.utility import CONNECTION_ID, KST_TIMEZONE
+from modules.utility import CONNECTION_ID, KIS_UNRECOVERABLE_STATUSES, KST_TIMEZONE, atomic
 
 logger = logging.getLogger(__name__)
 
 BASE_DATE_PARAM = "base_date"
 TRADE_DATE_PARAM = "trade_date"
-
-# 설정 오류라 재시도해도 같은 결과인 HTTP 상태.
-UNRECOVERABLE_STATUSES = frozenset({400, 403, 404})
 
 
 def _credentials() -> tuple[SecretStr, SecretStr]:
@@ -135,7 +133,7 @@ def _fetch_with_retry(call, app_key: SecretStr, app_secret: SecretStr, token: Se
     try:
         return call(token)
     except KisHTTPError as error:
-        if error.status in UNRECOVERABLE_STATUSES:
+        if error.status in KIS_UNRECOVERABLE_STATUSES:
             raise AirflowFailException(str(error)) from error
         if error.status != 401:
             raise
@@ -145,19 +143,12 @@ def _fetch_with_retry(call, app_key: SecretStr, app_secret: SecretStr, token: Se
 
 def _store(store, *arguments: Any) -> Any:
     """저장 한 번을 한 트랜잭션으로 감싼다."""
-    connection: Any = PostgresHook(postgres_conn_id=CONNECTION_ID).get_conn()
-    try:
-        result = store(connection, *arguments)
-        connection.commit()
-        return result
-    except (KisPayloadError, KisResultError, NyseParseError) as error:
-        connection.rollback()
-        raise AirflowFailException(str(error)) from error
-    except Exception:
-        connection.rollback()
-        raise
-    finally:
-        connection.close()
+    with closing(PostgresHook(postgres_conn_id=CONNECTION_ID).get_conn()) as connection:
+        try:
+            with atomic(connection):
+                return store(connection, *arguments)
+        except (KisPayloadError, KisResultError, NyseParseError) as error:
+            raise AirflowFailException(str(error)) from error
 
 
 @dag(

@@ -43,6 +43,7 @@
 """
 
 import logging
+from contextlib import closing
 from datetime import timedelta
 from typing import Any
 
@@ -60,14 +61,11 @@ from modules.collectors.yahoo import (
     fetch_daily_bars,
     store_daily_bars,
 )
-from modules.utility import CONNECTION_ID, KST_TIMEZONE
+from modules.utility import CONNECTION_ID, KST_TIMEZONE, UNRECOVERABLE_STATUSES, atomic
 
 logger = logging.getLogger(__name__)
 
 RANGE_PARAM = "range"
-
-# 설정 오류라 재시도해도 같은 결과인 HTTP 상태.
-UNRECOVERABLE_STATUSES = frozenset({400, 401, 403, 404})
 
 
 def requested_range(params: dict[str, Any]) -> str:
@@ -152,17 +150,8 @@ def yahoo_quote_daily():
             # 하나도 못 받았으면 Yahoo 쪽 문제이거나 네트워크 문제다. 재시도할 값어치가 있다.
             raise ConnectionError("Every Yahoo request failed")
 
-        # 반환 타입은 provider 버전에 따라 psycopg2/psycopg3 래퍼로 갈린다. 런타임 객체는
-        # 어느 쪽이든 PEP 249 연결이라 commit·rollback을 갖는다.
-        connection: Any = PostgresHook(postgres_conn_id=CONNECTION_ID).get_conn()
-        try:
+        with closing(PostgresHook(postgres_conn_id=CONNECTION_ID).get_conn()) as connection, atomic(connection):
             bar_count, outcomes = store_daily_bars(connection, responses, range_, failures)
-            connection.commit()
-        except Exception:
-            connection.rollback()
-            raise
-        finally:
-            connection.close()
 
         succeeded = [outcome for outcome in outcomes if outcome.error is None]
         if not succeeded:

@@ -104,8 +104,8 @@ backfill의 dag_run을 running으로 올리지 않는다. 태스크를 clear해�
 """
 
 import logging
+from contextlib import closing
 from datetime import timedelta
-from typing import Any
 
 import pendulum
 from airflow.exceptions import AirflowFailException
@@ -128,12 +128,9 @@ from modules.period import (
     PeriodError,
     resolve_observation_period,
 )
-from modules.utility import CONNECTION_ID, KST_TIMEZONE
+from modules.utility import CONNECTION_ID, KST_TIMEZONE, UNRECOVERABLE_STATUSES, atomic
 
 logger = logging.getLogger(__name__)
-
-# 설정 오류라 재시도해도 같은 결과인 HTTP 상태.
-UNRECOVERABLE_STATUSES = frozenset({400, 401, 403, 404})
 
 # 받을 파일을 고정하는 run 파라미터. 기본값은 구간을 보고 수집기가 정하게 두는 것이다.
 SOURCE_FILE_PARAM = "source_file"
@@ -222,21 +219,13 @@ def mof_jgb_daily():
             # 커버리지 부족도 여기 걸린다. 둘 다 파라미터나 제공처 형식 문제라 재시도해도 같다.
             raise AirflowFailException(str(error)) from error
 
-        # 반환 타입은 provider 버전에 따라 psycopg2/psycopg3 래퍼로 갈린다. 런타임 객체는
-        # 어느 쪽이든 PEP 249 연결이라 commit·rollback을 갖는다.
-        connection: Any = PostgresHook(postgres_conn_id=CONNECTION_ID).get_conn()
-        try:
-            # 파일이 여럿이면 한 트랜잭션에 함께 넣는다. 한쪽만 커밋되면 구간에 구멍이 남는다.
-            count = sum(store_observations(connection, response) for response in responses)
-            connection.commit()
-        except MofPayloadError as error:
-            connection.rollback()
-            raise AirflowFailException(str(error)) from error
-        except Exception:
-            connection.rollback()
-            raise
-        finally:
-            connection.close()
+        with closing(PostgresHook(postgres_conn_id=CONNECTION_ID).get_conn()) as connection:
+            try:
+                with atomic(connection):
+                    # 파일이 여럿이면 한 트랜잭션에 함께 넣는다. 한쪽만 커밋되면 구간에 구멍이 남는다.
+                    count = sum(store_observations(connection, response) for response in responses)
+            except MofPayloadError as error:
+                raise AirflowFailException(str(error)) from error
 
         logger.info(
             "Stored %s JGB observations for %s..%s from %s",

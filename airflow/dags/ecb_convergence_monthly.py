@@ -89,8 +89,8 @@ DAG와 다른 것은 기본 되돌아보기 길이뿐이다.
 """
 
 import logging
+from contextlib import closing
 from datetime import timedelta
-from typing import Any
 
 import pendulum
 from airflow.exceptions import AirflowFailException
@@ -111,12 +111,9 @@ from modules.period import (
     PeriodError,
     resolve_observation_period,
 )
-from modules.utility import CONNECTION_ID, KST_TIMEZONE
+from modules.utility import CONNECTION_ID, KST_TIMEZONE, UNRECOVERABLE_STATUSES, atomic
 
 logger = logging.getLogger(__name__)
-
-# 설정 오류라 재시도해도 같은 결과인 HTTP 상태.
-UNRECOVERABLE_STATUSES = frozenset({400, 401, 403, 404})
 
 # 대략 6개월. 다른 수집 DAG의 7일과 다르다. 월별 값이 다음 달 중순께 공표되고 사후 개정도
 # 있어서, 7일이면 아직 공표 전인 이번 달 하나만 물어보게 되어 매번 0건이 된다.
@@ -181,20 +178,12 @@ def ecb_convergence_monthly():
                 logger.warning("ECB asked to retry after %s seconds", error.retry_after)
             raise
 
-        # 반환 타입은 provider 버전에 따라 psycopg2/psycopg3 래퍼로 갈린다. 런타임 객체는
-        # 어느 쪽이든 PEP 249 연결이라 commit·rollback을 갖는다.
-        connection: Any = PostgresHook(postgres_conn_id=CONNECTION_ID).get_conn()
-        try:
-            count = store_observations(connection, response)
-            connection.commit()
-        except EcbIrsPayloadError as error:
-            connection.rollback()
-            raise AirflowFailException(str(error)) from error
-        except Exception:
-            connection.rollback()
-            raise
-        finally:
-            connection.close()
+        with closing(PostgresHook(postgres_conn_id=CONNECTION_ID).get_conn()) as connection:
+            try:
+                with atomic(connection):
+                    count = store_observations(connection, response)
+            except EcbIrsPayloadError as error:
+                raise AirflowFailException(str(error)) from error
 
         logger.info(
             "Stored %s euro member state observations for %s..%s",

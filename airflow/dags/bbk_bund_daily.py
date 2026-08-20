@@ -102,8 +102,8 @@ backfill의 dag_run을 running으로 올리지 않는다.
 """
 
 import logging
+from contextlib import closing
 from datetime import timedelta
-from typing import Any
 
 import pendulum
 from airflow.exceptions import AirflowFailException
@@ -125,12 +125,9 @@ from modules.period import (
     PeriodError,
     resolve_observation_period,
 )
-from modules.utility import CONNECTION_ID, KST_TIMEZONE
+from modules.utility import CONNECTION_ID, KST_TIMEZONE, UNRECOVERABLE_STATUSES, atomic
 
 logger = logging.getLogger(__name__)
-
-# 설정 오류라 재시도해도 같은 결과인 HTTP 상태.
-UNRECOVERABLE_STATUSES = frozenset({400, 401, 403, 404})
 
 
 @dag(
@@ -188,20 +185,12 @@ def bbk_bund_daily():
                 logger.warning("Bundesbank asked to retry after %s seconds", error.retry_after)
             raise
 
-        # 반환 타입은 provider 버전에 따라 psycopg2/psycopg3 래퍼로 갈린다. 런타임 객체는
-        # 어느 쪽이든 PEP 249 연결이라 commit·rollback을 갖는다.
-        connection: Any = PostgresHook(postgres_conn_id=CONNECTION_ID).get_conn()
-        try:
-            count = store_observations(connection, response)
-            connection.commit()
-        except BbkPayloadError as error:
-            connection.rollback()
-            raise AirflowFailException(str(error)) from error
-        except Exception:
-            connection.rollback()
-            raise
-        finally:
-            connection.close()
+        with closing(PostgresHook(postgres_conn_id=CONNECTION_ID).get_conn()) as connection:
+            try:
+                with atomic(connection):
+                    count = store_observations(connection, response)
+            except BbkPayloadError as error:
+                raise AirflowFailException(str(error)) from error
 
         logger.info(
             "Stored %s German government bond observations for %s..%s",

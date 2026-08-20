@@ -56,6 +56,7 @@
 """
 
 import logging
+from contextlib import closing
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
@@ -77,7 +78,7 @@ from modules.assessment import (
 )
 from modules.dedup import link_duplicates
 from modules.llm import RetryableLlmError, document_model, model_name
-from modules.utility import CONNECTION_ID, KST_TIMEZONE
+from modules.utility import CONNECTION_ID, KST_TIMEZONE, atomic
 
 logger = logging.getLogger(__name__)
 
@@ -185,8 +186,7 @@ def document_assessment_hourly():
             instruments, indicators = filter_tags(assessment, candidates, document.id)
 
             # 문서 하나가 트랜잭션 하나다. 앞의 성공을 뒤의 실패가 되돌리지 않는다.
-            connection = _connection()
-            try:
+            with closing(_connection()) as connection, atomic(connection):
                 store_assessment(
                     connection,
                     document,
@@ -197,12 +197,6 @@ def document_assessment_hourly():
                     assessed_at,
                     settings.prompt_revision,
                 )
-                connection.commit()
-            except Exception:
-                connection.rollback()
-                raise
-            finally:
-                connection.close()
             assessed += 1
 
         non_retryable = [result for result in results if result.assessment is None and result.retryable is False]

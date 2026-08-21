@@ -95,6 +95,9 @@ CHART_SYMBOLS = (
 # CHART_SYMBOLS 중 stock_bar를 직접 읽어야 하는 국내 종목.
 DOMESTIC_STOCK_CHART_SYMBOLS = frozenset({("kis", "005930"), ("kis", "000660")})
 
+# 선을 그리는 데 필요한 최소 봉 수. 하나뿐이면 점만 찍혀 빈 차트나 다름없다.
+MIN_CHART_POINTS = 2
+
 # 실시간 환율 표의 줄 순서. 목록에 없는 fx 심볼(USDJPY 등)은 뒤로 밀린다.
 FX_SYMBOL_ORDER = ("USDKRW", "JPYKRW", "DXY")
 
@@ -485,6 +488,10 @@ def collect_chart_series(
     봉이 없는 심볼은 계열 자체를 만들지 않는다. 개장 전이나 갓 붙인 심볼 때문에
     리포트가 죽으면 안 된다(`*_trends`와 같은 원칙). 전부 비면 차트를 생략한다.
 
+    **봉이 하나뿐이어도 뺀다.** 점 하나로는 선을 그릴 수 없어 빈 것과 다름없다.
+    09:00 개장 발송 직후의 코스피·코스닥이 그 경우다 — 장이 막 열려 분봉이 하나뿐이고,
+    나머지 시세(종가·등락)는 위의 시세 표가 이미 보여 준다.
+
     `open_hour`는 창의 시작 시각(KST)이다. 개장 발송은 `NXT_PREMARKET_OPEN_HOUR_KST`를
     넘겨 프리마켓 봉을 잡는다. 그 시각에 봉이 없는 지수는 위 규칙대로 빠진다.
     """
@@ -519,7 +526,7 @@ def collect_chart_series(
     series = []
     for provider, symbol in CHART_SYMBOLS:
         points = grouped.get((provider, symbol))
-        if not points:
+        if not points or len(points) < MIN_CHART_POINTS:
             continue
         # 어느 거래소 봉인지 라벨에 밝힌다. 프리마켓·야간은 (NXT), 정규장은 (KRX),
         # 하루가 섞이면 (KRX·NXT)다. 거래소 개념이 없는 지수·환율은 그대로 둔다.

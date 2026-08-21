@@ -479,6 +479,7 @@ def test_chart_series_keep_the_symbol_order_and_skip_empty_ones():
         ("kis", "KOSPI", "코스피", MIDDAY, Decimal("2687.45")),
     ]
     stock_rows = [
+        ("kis", "005930", "삼성전자", MIDDAY - timedelta(minutes=1), Decimal(267500), "KRX"),
         ("kis", "005930", "삼성전자", MIDDAY, Decimal(268000), "KRX"),
     ]
     series = market.collect_chart_series(FakeConnection(view_rows, stock_rows), MIDDAY)
@@ -489,12 +490,27 @@ def test_chart_series_keep_the_symbol_order_and_skip_empty_ones():
     assert series[1].label == "삼성전자(KRX)"
 
 
+def test_a_single_bar_is_also_skipped_as_an_empty_chart():
+    """점 하나로는 선이 안 그려진다. 09:00 개장 직후 코스피·코스닥의 실제 상태다."""
+    view_rows = [("kis", "KOSPI", "코스피", MIDDAY, Decimal("2687.45"))]
+    stock_rows = [
+        ("kis", "005930", "삼성전자", MIDDAY - timedelta(minutes=1), Decimal(267500), "KRX"),
+        ("kis", "005930", "삼성전자", MIDDAY, Decimal(268000), "KRX"),
+    ]
+    series = market.collect_chart_series(FakeConnection(view_rows, stock_rows), MIDDAY)
+
+    assert [one.symbol for one in series] == ["005930"]
+
+
 def test_chart_labels_name_the_exchange_of_their_bars():
     """종목 차트 라벨은 어느 거래소 봉인지 밝힌다. 프리마켓은 (NXT), 하루가 섞이면 (KRX·NXT).
 
     거래소 개념이 없는 지수·환율 라벨은 그대로다.
     """
-    premarket = [("kis", "005930", "삼성전자", MIDDAY, Decimal(268000), "NXT")]
+    premarket = [
+        ("kis", "005930", "삼성전자", MIDDAY - timedelta(minutes=1), Decimal(267500), "NXT"),
+        ("kis", "005930", "삼성전자", MIDDAY, Decimal(268000), "NXT"),
+    ]
     mixed = [
         ("kis", "005930", "삼성전자", MIDDAY - timedelta(minutes=1), Decimal(267500), "KRX"),
         ("kis", "005930", "삼성전자", MIDDAY, Decimal(268000), "NXT"),

@@ -146,3 +146,14 @@ def test_thesis_precedent_links_a_thesis_to_the_past_theses_it_saw(capsys):
     assert "FOREIGN KEY(precedent_id) REFERENCES thesis (id) ON DELETE RESTRICT" in statement
     # thesis_evidence가 아니다 — 인용이 아니라 보여 준 것이라 rank가 없다.
     assert "rank" not in statement
+
+
+def test_thesis_evidence_records_how_the_thesis_used_each_citation(capsys):
+    sql = head_sql(capsys)
+
+    # 이유 문장은 산문이라 엣지에 못 싣는다. 근거마다 방향과 경로가 칸으로 있어야 그래프가 된다.
+    assert "ALTER TABLE thesis_evidence ADD COLUMN direction VARCHAR(20)" in sql
+    assert "ALTER TABLE thesis_evidence ADD COLUMN mechanism TEXT" in sql
+    assert "direction IS NULL OR direction IN ('up', 'down', 'flat')" in sql
+    # 방향만 있고 경로가 없는 행은 "왜"를 잃는다. 쌍으로만 들어간다.
+    assert "(direction IS NULL AND mechanism IS NULL) OR (direction IS NOT NULL AND mechanism IS NOT NULL)" in sql

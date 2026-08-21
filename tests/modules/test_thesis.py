@@ -15,6 +15,7 @@ from modules.thesis import (
     FLAT_THRESHOLD_PCT,
     HORIZON_DAYS,
     MAX_ITEM_DETAIL_CHARS,
+    MAX_MECHANISM_CHARS,
     MAX_NARRATIVE_CHARS,
     MAX_REASONING_CHARS,
     MAX_TOOL_CALLS,
@@ -882,7 +883,12 @@ def answer_message(*theses: dict[str, Any]) -> AIMessage:
     return AIMessage(json.dumps({"theses": list(theses)}))
 
 
+def claim_payload(ref: str, direction: str = "up", mechanism: str = "수급 경로") -> dict[str, Any]:
+    return {"ref": ref, "direction": direction, "mechanism": mechanism}
+
+
 def thesis_payload(code: str = "KOSPI", refs: list[str] | None = None, **overrides: Any) -> dict[str, Any]:
+    """`refs`는 같은 방향·경로의 인용으로 편다. 방향을 가르는 테스트는 `claims=`로 직접 준다."""
     payload = {
         "subject_code": code,
         "prob_up": 0.62,
@@ -891,7 +897,7 @@ def thesis_payload(code: str = "KOSPI", refs: list[str] | None = None, **overrid
         "up_reasoning": "밤사이 미국 지수가 올랐다",
         "down_reasoning": "공시가 수급을 눌렀다",
         "flat_reasoning": "재료가 상쇄됐다",
-        "evidence_refs": refs if refs is not None else [],
+        "claims": [claim_payload(ref) for ref in refs] if refs is not None else [],
     }
     payload.update(overrides)
     return payload
@@ -2053,3 +2059,139 @@ def test_a_thesis_that_already_existed_gets_no_new_edges():
 
     # 첫 성공본 불변. 행이 이미 있으면 근거도 엣지도 덧붙이지 않는다.
     assert all(_statement_key(statement) != "precedent_insert" for statement, _ in connection.calls)
+
+
+# --- 인용의 방향과 경로(claims) -------------------------------------------------
+
+
+def test_each_claim_keeps_its_direction_and_mechanism():
+    connection = FakeConnection({"documents": [document_row(7), document_row(9)]})
+    model = ScriptedModel(
+        tool_call_message(),
+        AIMessage(DONE_INVESTIGATING),
+        answer_message(
+            thesis_payload(
+                claims=[
+                    claim_payload("document:9", "down", "외국인 매도 압력"),
+                    claim_payload("document:7", "up", "실적 기대"),
+                ]
+            )
+        ),
+    )
+    builder = build(model, connection)
+
+    drafts, _ = run_builder(builder)
+
+    # 산문 이유와 별개로 근거마다 "어느 쪽으로, 왜"가 남는다. 이것이 그래프 엣지 속성이다.
+    assert [(c.ref, c.direction, c.mechanism) for c in drafts[0].claims] == [
+        ("document:9", ThesisDirection.DOWN, "외국인 매도 압력"),
+        ("document:7", ThesisDirection.UP, "실적 기대"),
+    ]
+    assert drafts[0].evidence_refs == ("document:9", "document:7")
+
+
+def test_a_repeated_ref_keeps_its_first_claim():
+    connection = FakeConnection({"documents": [document_row(7)]})
+    model = ScriptedModel(
+        tool_call_message(),
+        AIMessage(DONE_INVESTIGATING),
+        answer_message(
+            thesis_payload(
+                claims=[claim_payload("document:7", "up", "첫 번째"), claim_payload("document:7", "down", "두 번째")]
+            )
+        ),
+    )
+    builder = build(model, connection)
+
+    drafts, _ = run_builder(builder)
+
+    # 행이 ref당 하나라 방향 둘을 담을 수 없다. 첫 것이 남고 rank도 하나다.
+    assert [(c.direction, c.mechanism) for c in drafts[0].claims] == [(ThesisDirection.UP, "첫 번째")]
+
+
+def test_a_long_mechanism_is_trimmed_on_its_own():
+    connection = FakeConnection({"documents": [document_row(7)]})
+    model = ScriptedModel(
+        tool_call_message(),
+        AIMessage(DONE_INVESTIGATING),
+        answer_message(thesis_payload(claims=[claim_payload("document:7", "up", "가" * (MAX_MECHANISM_CHARS + 50))])),
+    )
+    builder = build(model, connection)
+
+    drafts, _ = run_builder(builder)
+
+    # 경로 한 문장 때문에 인용을 버리지 않는다. 그 칸만 자른다.
+    assert len(drafts[0].claims[0].mechanism) == MAX_MECHANISM_CHARS
+    assert drafts[0].claims[0].mechanism.endswith("…")
+
+
+def test_a_claim_with_an_unknown_direction_fails_the_whole_answer():
+    connection = FakeConnection({"documents": [document_row(7)]})
+    model = ScriptedModel(
+        tool_call_message(),
+        AIMessage(DONE_INVESTIGATING),
+        answer_message(thesis_payload(claims=[claim_payload("document:7", "sideways")])),
+        answer_message(thesis_payload(claims=[claim_payload("document:7", "sideways")])),
+    )
+    builder = build(model, connection)
+
+    # 방향은 닫힌 집합이다. 스키마가 막고, 교정 한 번 뒤에도 틀리면 ThesisError다.
+    with pytest.raises(ThesisError):
+        run_builder(builder)
+
+
+def test_stored_evidence_carries_the_claim_and_narrative_citations_do_not():
+    drafts, registry = draft_for(FakeConnection())
+    connection = FakeConnection({"thesis_insert": [(11,)], "select_by_run": [stored_row(11)]})
+
+    store_theses(
+        connection,
+        run_date=date(2026, 8, 21),
+        run_slot=RunSlot.PRE_OPEN,
+        as_of_at=AS_OF,
+        dag_run_id="manual__run",
+        drafts=drafts,
+        registry=registry,
+        observed_state=OBSERVED,
+        llm_model="grok-4.6",
+        tool_rounds=1,
+        precedents={},
+    )
+
+    rows = [parameters for statement, parameters in connection.calls if _statement_key(statement) == "evidence_insert"]
+    assert len(rows) == 1
+    # 마지막 두 칸이 direction·mechanism이다. 원 추론의 인용이라 둘 다 채워진다.
+    assert rows[0][-2:] == ("up", "수급 경로")
+
+
+def test_narrative_citations_leave_direction_and_mechanism_empty():
+    connection = FakeConnection()
+    registry = {
+        "document:7": Evidence(
+            kind=ThesisEvidenceKind.DOCUMENT, ref=evidence_ref(ThesisEvidenceKind.DOCUMENT, "7"), title="t"
+        )
+    }
+
+    store_narratives(
+        connection,
+        horizon_days=1,
+        as_of_at=AS_OF,
+        dag_run_id="manual__run",
+        drafts=(
+            NarrativeDraft(
+                thesis_id=11,
+                subject_code="KOSPI",
+                narrative="해설",
+                verdict=ThesisVerdict.SUPPORTED,
+                evidence_refs=("document:7",),
+            ),
+        ),
+        registry=registry,
+        llm_model="grok-4.6",
+        prompt_revision="1/informed",
+    )
+
+    rows = [parameters for statement, parameters in connection.calls if _statement_key(statement) == "evidence_insert"]
+    # 해설의 인용은 "어느 쪽으로 썼나"가 없다. CHECK가 쌍을 강제하므로 둘 다 NULL이어야 들어간다.
+    assert rows[0][-2:] == (None, None)
+    assert rows[0][1] == 1

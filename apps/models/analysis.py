@@ -431,6 +431,15 @@ class ThesisEvidence(EntityBase):
             "outcome_horizon_days IS NULL OR outcome_horizon_days IN (1, 3, 5)",
             name="ck_thesis_evidence_outcome_horizon_days",
         ),
+        CheckConstraint(
+            "direction IS NULL OR direction IN ('up', 'down', 'flat')",
+            name="ck_thesis_evidence_direction",
+        ),
+        # 방향과 경로는 한 쌍이다. 방향만 있고 경로가 없으면 그래프 엣지가 "왜"를 잃는다.
+        CheckConstraint(
+            "(direction IS NULL AND mechanism IS NULL) OR (direction IS NOT NULL AND mechanism IS NOT NULL)",
+            name="ck_thesis_evidence_claim_all_or_none",
+        ),
         table_options(
             comment="추론과 사후 해설이 인용한 근거를 순위와 함께 보존하는 테이블",
             database="default",
@@ -474,6 +483,22 @@ class ThesisEvidence(EntityBase):
         Text,
         nullable=True,
         comment="문서면 canonical_url, 공시면 DART 뷰어 URL. 매크로 변화처럼 링크할 곳이 없으면 NULL이다",
+    )
+    # 아래 둘은 **이 추론이 이 근거를 어떻게 썼나**다. detail의 direction은 문서 평가 때 붙은
+    # 문서 자체의 방향이라 다른 값이다. 그래프 엣지 `(:Thesis)-[:CITES {direction, mechanism}]`의
+    # 속성이고, 사후 해설이 인용한 근거(outcome_horizon_days NOT NULL)에는 없다.
+    direction: Mapped[ThesisDirection | None] = mapped_column(
+        _enum_column(ThesisDirection),
+        nullable=True,
+        comment=(
+            "이 근거가 대상을 어느 쪽으로 미는지(up/down/flat). 원 추론이 인용한 근거에만 있고 "
+            "사후 해설의 인용에는 NULL이다"
+        ),
+    )
+    mechanism: Mapped[str | None] = mapped_column(
+        Text,
+        nullable=True,
+        comment="그 방향으로 작용하는 경로를 적은 한 문장. direction과 함께 채워지거나 함께 비어 있다",
     )
     detail: Mapped[dict[str, object]] = mapped_column(
         JSONB,

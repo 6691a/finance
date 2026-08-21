@@ -107,8 +107,8 @@ ToolNode(toolbox.tools, handle_tool_errors=(ToolLimitExceeded,))
   **`handle_tool_errors`에 타입을 주는 이유가 이것이다.** 기본값(`True`)은 모든 예외를
   `ToolMessage`로 바꿔 연결 끊김을 "결과 없음"으로 위장한다. 회귀를 잡는 테스트는
   `test_database_failures_survive_the_tool_node`다.
-- `evidence_refs`는 순서를 보존한 채 중복을 제거한다(첫 등장 rank). 레지스트리에 없는 ref는
-  버리고 건수를 로그로 남긴다.
+- `claims`는 ref 순서를 보존한 채 중복을 제거한다(첫 등장 rank, 첫 인용의 방향·경로). 레지스트리에
+  없는 ref는 버리고 건수를 로그로 남긴다.
 - 답변에 같은 `subject_code`가 두 번 오면 그 subject를 거절한다(어느 쪽이 진짜인지 알 수 없다).
   요청 목록에 있는데 답변에 없는 subject는 그 슬롯에 없던 것으로 남긴다 — 재요청하지 않는다.
 - 문서 툴이 제목·점수만 주면 이유 문장을 쓸 재료가 없다. `document_assessment`가 이미 만든
@@ -141,7 +141,8 @@ investigate → (tool_calls 있으면) tools → investigate → … → answer 
 {"theses": [{"subject_code": "KOSPI",
              "prob_up": 0.62, "prob_down": 0.23, "prob_flat": 0.15,
              "up_reasoning": "…", "down_reasoning": "…", "flat_reasoning": "…",
-             "evidence_refs": ["macro_change:SP500_FUT", "document:123"]}]}
+             "claims": [{"ref": "macro_change:SP500_FUT", "direction": "up", "mechanism": "위험선호 회복"},
+                        {"ref": "document:123", "direction": "down", "mechanism": "외국인 매도 압력"}]}]}
 ```
 
 - subject_code가 요청 목록 밖이면 그 항목만 버린다. 전부 버려지면 repair 1회.
@@ -149,9 +150,14 @@ investigate → (tool_calls 있으면) tools → investigate → … → answer 
   ±0.02 안이면(반올림·형식 오차) 비율을 유지한 채 정규화해 정확히 1로 맞춰 저장한다.
   ±0.02를 넘으면(셋 다 낮게 부르는 등 모델이 규칙을 안 지킨 경우) 그 subject만 버린다.
   전부 버려지면 repair 1회, 두 번째도 벗어나면 `ThesisError`.
-- evidence_refs는 레지스트리로 검증. 근거 0건 thesis는 허용한다(관측 상태만으로 쓴
-  추론) — 억지 인용이 더 나쁘다. 버린 건수는 로그로 남긴다. 세 방향이 같은 근거 목록을
-  공유한다 — 방향별로 evidence_refs를 나누지 않는다(요청 범위 최소화).
+- `claims`의 `ref`는 레지스트리로 검증. 근거 0건 thesis는 허용한다(관측 상태만으로 쓴
+  추론) — 억지 인용이 더 나쁘다. 버린 건수는 로그로 남긴다.
+- **인용마다 `direction`(`up`/`down`/`flat`)과 `mechanism`(200자)을 받는다**(2026-08-21).
+  처음엔 `evidence_refs` 목록 하나를 세 방향이 공유했는데, 그러면 "이 근거가 어느 쪽으로
+  왜 작용했나"가 산문 이유 안에만 있어 그래프 엣지에 실을 수 없었다. 이제
+  `thesis_evidence.direction`·`mechanism`이 그 엣지 속성이다. 같은 ref를 두 번 인용하면
+  첫 것이 남는다(행이 ref당 하나). `detail.direction`은 문서 평가 때의 문서 자체 방향이라
+  다른 값이다.
 - `up_reasoning`·`down_reasoning`·`flat_reasoning` 각각 상한 500자. 넘으면 그 필드만 자른다.
 - 프롬프트 규칙: 입력·툴 결과에 없는 사실·숫자 금지, 투자 조언·매수 매도 권유 금지,
   "예측이 아니라 가설이며 채점은 시스템이 한다"를 명시. 세 확률이 1에 가깝게 합쳐지도록

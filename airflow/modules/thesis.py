@@ -64,7 +64,8 @@ from modules.utility import KST_TIMEZONE, atomic
 logger = logging.getLogger(__name__)
 
 # 프롬프트를 고치면 올린다. `thesis.prompt_version`에 저장돼 채점 결과를 가르는 기준이 된다.
-# 2: 과거 추론과 결과를 프롬프트에 미리 싣는 절이 생겼다(2026-08-21).
+# 2: 과거 추론과 결과를 프롬프트에 미리 싣는 절이 생겼고, 인용이 `evidence_refs`에서 근거별
+#    방향·경로를 담는 `claims`로 바뀌었다(2026-08-21, 둘 다 운영에 나가기 전이라 한 판이다).
 PROMPT_VERSION = "2"
 
 # 채점 지평. KRX 영업일 수이고 달력일이 아니다. 0은 예측일 세션 하나다.
@@ -124,6 +125,9 @@ PREFETCHED_PAST_THESES = 5
 
 # 이유 문장 하나의 상한. 넘으면 그 필드만 자른다.
 MAX_REASONING_CHARS = 500
+
+# 근거 하나의 경로(mechanism) 문장 상한. 엣지 속성이라 이유 문장보다 짧게 둔다.
+MAX_MECHANISM_CHARS = 200
 
 # 확률 합이 1에서 이만큼 안이면 비율을 유지한 채 정규화한다. 넘으면 그 subject를 버린다.
 PROB_SUM_TOLERANCE = Decimal("0.02")
@@ -1151,6 +1155,20 @@ class Subject(BaseModel):
     label: str
 
 
+class ClaimAnswer(BaseModel):
+    """모델이 근거 하나를 어떻게 썼는지. 검증 전 원본이다.
+
+    이유 문장은 산문이라 그래프 엣지에 실을 수 없다. 근거마다 **방향과 경로**를 따로 받아야
+    `(:Thesis)-[:CITES {direction, mechanism}]->(:Evidence)`가 된다.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    ref: str
+    direction: Literal["up", "down", "flat"]
+    mechanism: str = ""
+
+
 class ThesisAnswer(BaseModel):
     """모델이 subject 하나에 대해 낸 답. 검증 전 원본이다."""
 
@@ -1163,7 +1181,7 @@ class ThesisAnswer(BaseModel):
     up_reasoning: str = ""
     down_reasoning: str = ""
     flat_reasoning: str = ""
-    evidence_refs: tuple[str, ...] = ()
+    claims: tuple[ClaimAnswer, ...] = ()
 
 
 class Answers(BaseModel):
@@ -1172,6 +1190,16 @@ class Answers(BaseModel):
     model_config = ConfigDict(frozen=True)
 
     theses: tuple[ThesisAnswer, ...] = ()
+
+
+class Claim(BaseModel):
+    """레지스트리로 검증을 마친 인용 하나. `thesis_evidence` 행의 direction·mechanism이 된다."""
+
+    model_config = ConfigDict(frozen=True)
+
+    ref: str
+    direction: ThesisDirection
+    mechanism: str
 
 
 class ThesisDraft(BaseModel):
@@ -1186,8 +1214,12 @@ class ThesisDraft(BaseModel):
     up_reasoning: str
     down_reasoning: str
     flat_reasoning: str
-    # 레지스트리로 검증하고 첫 등장 순서로 중복을 없앤 ref. rank는 이 순서다.
-    evidence_refs: tuple[str, ...] = ()
+    # 레지스트리로 검증하고 ref 첫 등장 순서로 중복을 없앤 인용. rank는 이 순서다.
+    claims: tuple[Claim, ...] = ()
+
+    @property
+    def evidence_refs(self) -> tuple[str, ...]:
+        return tuple(claim.ref for claim in self.claims)
 
 
 def normalize_probabilities(
@@ -1234,7 +1266,9 @@ SYSTEM_PROMPT = f"""너는 시장 추론 기록기다. 주어진 관측 상태�
 ## 규칙
 
 - **툴 결과와 관측 상태에 없는 사실·숫자를 쓰지 마라.** 지어낸 근거는 기록을 망친다.
-- `evidence_refs`에는 툴이 준 `ref` 값만 쓴다. 목록 밖의 ref는 버려진다.
+- `claims`에는 인용하는 근거마다 툴이 준 `ref`, 그 근거가 대상을 미는 방향 `direction`
+  (`up`/`down`/`flat`), 그 방향으로 작용하는 경로 `mechanism` 한 문장({MAX_MECHANISM_CHARS}자
+  이내)을 쓴다. 목록 밖의 ref는 버려진다. 같은 ref는 한 번만 쓴다.
   인용할 것이 없으면 빈 배열로 둔다. **억지 인용이 근거 없음보다 나쁘다.**
 - 세 확률 `prob_up`, `prob_down`, `prob_flat`은 각각 0~1이고 **합이 정확히 1이어야 한다.**
 - 세 방향의 이유를 **모두** 쓴다. 오를 이유, 내릴 이유, 횡보할 이유가 각각 있다.
@@ -1245,7 +1279,8 @@ SYSTEM_PROMPT = f"""너는 시장 추론 기록기다. 주어진 관측 상태�
 
 출력 형식:
 {{"theses": [{{"subject_code": "", "prob_up": 0.0, "prob_down": 0.0, "prob_flat": 0.0,
- "up_reasoning": "", "down_reasoning": "", "flat_reasoning": "", "evidence_refs": []}}]}}"""
+ "up_reasoning": "", "down_reasoning": "", "flat_reasoning": "",
+ "claims": [{{"ref": "", "direction": "up", "mechanism": ""}}]}}]}}"""
 
 SLOT_INSTRUCTION = {
     RunSlot.PRE_OPEN: (
@@ -1440,7 +1475,7 @@ class ThesisBuilder:
                     up_reasoning=_shorten(answer.up_reasoning),
                     down_reasoning=_shorten(answer.down_reasoning),
                     flat_reasoning=_shorten(answer.flat_reasoning),
-                    evidence_refs=self._known_refs(answer),
+                    claims=self._known_claims(answer),
                 )
             )
 
@@ -1451,24 +1486,28 @@ class ThesisBuilder:
             raise ThesisError(f"Model returned {len(parsed.theses)} theses, none of them usable")
         return kept
 
-    def _known_refs(self, answer: ThesisAnswer) -> tuple[str, ...]:
-        """레지스트리에 있는 ref만, 첫 등장 순서로 중복 없이.
+    def _known_claims(self, answer: ThesisAnswer) -> tuple[Claim, ...]:
+        """레지스트리에 있는 ref의 인용만, ref 첫 등장 순서로 중복 없이.
 
-        순서가 곧 `thesis_evidence.rank`다. 목록 밖 ref는 버리고 건수를 로그로 남긴다 —
+        순서가 곧 `thesis_evidence.rank`다. 같은 ref를 두 번 인용하면 **첫 것이 남는다** — 행이
+        ref당 하나라 방향 둘을 담을 수 없다. 목록 밖 ref는 버리고 건수를 로그로 남긴다 —
         조용히 버리면 모델이 무엇을 지어내는지 알 수 없다.
         """
         registry = self._toolbox.registry
-        kept: list[str] = []
+        kept: dict[str, Claim] = {}
         unknown: list[str] = []
-        for ref in answer.evidence_refs:
-            if ref in registry:
-                if ref not in kept:
-                    kept.append(ref)
-            else:
-                unknown.append(ref)
+        for claim in answer.claims:
+            if claim.ref not in registry:
+                unknown.append(claim.ref)
+            elif claim.ref not in kept:
+                kept[claim.ref] = Claim(
+                    ref=claim.ref,
+                    direction=ThesisDirection(claim.direction),
+                    mechanism=_shorten_to(claim.mechanism, MAX_MECHANISM_CHARS),
+                )
         if unknown:
             logger.warning("%s cited %s refs that no tool returned: %s", answer.subject_code, len(unknown), unknown)
-        return tuple(kept)
+        return tuple(kept.values())
 
     def _build_graph(self):
         graph = StateGraph(ThesisState)
@@ -1672,7 +1711,7 @@ def store_theses(
             if returned is None:
                 logger.info("thesis for %s %s %s already existed", run_date, run_slot.value, draft.subject.code)
                 continue
-            _store_evidence(cursor, returned[0], draft.evidence_refs, registry)
+            _store_evidence(cursor, returned[0], draft.evidence_refs, registry, claims=draft.claims)
             for precedent_id in precedents.get(draft.subject.code, ()):
                 cursor.execute(PRECEDENT_INSERT, (returned[0], precedent_id))
 
@@ -1685,14 +1724,19 @@ def _store_evidence(
     refs: Iterable[str],
     registry: dict[str, Evidence],
     outcome_horizon_days: int | None = None,
+    claims: Sequence[Claim] = (),
 ) -> None:
     """인용 순서를 `rank`로 굳혀 근거를 넣는다. 1부터 센다.
 
     `outcome_horizon_days`가 `None`이면 원 추론이 인용한 근거이고, 1·3·5면 그 지평의 사후
     해설이 인용한 근거다. 같은 테이블에 들어가고 그 칸이 둘을 가른다.
+
+    `claims`는 원 추론의 인용에만 온다 — ref마다 방향과 경로다. 해설의 인용은 둘 다 NULL이다.
     """
+    by_ref = {claim.ref: claim for claim in claims}
     for rank, ref in enumerate(refs, start=1):
         item = registry[ref]
+        claim = by_ref.get(ref)
         cursor.execute(
             EVIDENCE_INSERT,
             (
@@ -1704,6 +1748,8 @@ def _store_evidence(
                 item.url,
                 json.dumps(item.detail, ensure_ascii=False, default=str),
                 rank,
+                claim.direction.value if claim else None,
+                claim.mechanism if claim else None,
             ),
         )
 

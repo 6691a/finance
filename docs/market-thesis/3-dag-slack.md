@@ -170,4 +170,6 @@ SCHEDULE = MultipleCronTriggerTimetable(
 
 ## 8. 배포 뒤
 
-[README.md](README.md) 5절의 4주 검증 항목을 여기서부터 센다.
+[README.md](README.md) 5절의 4주 검증 항목을 여기서부터 센다. **배포일이 0일이다.**
+무엇을 언제 보고 어느 상수를 당기는지는 [TUNING.md](TUNING.md) 4절 캘린더에 있고,
+자동으로 안 나오는 항목의 쿼리는 같은 문서 2절에 있다.

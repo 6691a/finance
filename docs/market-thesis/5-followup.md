@@ -2,7 +2,7 @@
 
 - 상위: [README.md](README.md)
 - 날짜: 2026-08-21
-- 상태: 구현 중 (스키마·채점·해설 완료, DAG 미착수)
+- 상태: 구현 완료 (2026-08-21). 스키마·다지평 채점·`FollowupNarrator`·`past_theses`·DAG 태스크 둘
 - 의존: [1-storage.md](1-storage.md), [2-agent.md](2-agent.md), [3-dag-slack.md](3-dag-slack.md).
   4단계와는 병렬 가능하나 그래프 반영 절(6절)은 [4-graph.md](4-graph.md)를 전제한다.
 - 산출물: `apps/models/analysis.py`에 `ThesisOutcome` 추가와 `thesis`·`thesis_evidence` 수정,
@@ -400,7 +400,9 @@ T+5가 해설이 가장 굳은 시점이기도 하다. `notify_slack`의 기존 
 ## 11. 남은 확인
 
 - **`flat` 임계값** — 2절의 `{0: 0.3, 1: 0.3, 3: 0.5, 5: 0.7}`은 실측이 아니다. 배포 4주 뒤
-  지평별 `actual_outcome` 분포를 보고 정한다.
+  지평별 `actual_outcome` 분포를 보고 정한다. **조정 조건(한 지평만 5% 아래 또는 60% 위)의
+  원본은 `thesis.py`의 `FLAT_THRESHOLD_PCT` 주석이다** — 값을 고치는 사람이 보는 곳이라
+  거기 둔다. 언제 보는지는 [TUNING.md](TUNING.md) 3·4절.
 - **해설의 근거가 될 문서 소스** — 현재 수집 중인 것은 `einfomax`·`cnbc`·`bbc_business`와
   KRX·FSS 공시, 각국 정부·중앙은행 발표다. **증권사 리서치 리포트 소스는 없다.** 전문가
   해설은 뉴스에 섞여 들어오는 만큼만 잡힌다. 리포트를 근거로 쓰려면 소스 추가가 선행이고

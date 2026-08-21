@@ -45,12 +45,15 @@ from collections.abc import Iterable, Sequence
 from datetime import UTC, date, datetime, timedelta
 from decimal import ROUND_HALF_UP, Decimal
 from enum import StrEnum
-from typing import Any, Literal, Protocol, Self, TypedDict
+from typing import Annotated, Any, Literal, Protocol, Self, TypedDict
 
 from langchain_core.language_models import BaseChatModel
-from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, SystemMessage, ToolMessage
+from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, SystemMessage
+from langchain_core.tools import BaseTool, StructuredTool
 from langgraph.graph import END, START, StateGraph
-from pydantic import BaseModel, ConfigDict, Field, ValidationError
+from langgraph.graph.message import add_messages
+from langgraph.prebuilt import ToolNode
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
 
 from modules import llm
 from modules.llm import UnsupportedResponseFormat
@@ -301,88 +304,109 @@ RECENT_DISCLOSURES = read_sql("postgres", "disclosure_event", "select_recent.sql
 WINDOW_CHANGES = read_sql("postgres", "quote_bar", "select_window_changes.sql")
 PAST_THESES = read_sql("postgres", "thesis", "select_past_with_outcomes.sql")
 
-TOOL_SCHEMAS: tuple[dict[str, Any], ...] = (
-    {
-        "type": "function",
-        "function": {
-            "name": "recent_documents",
-            "description": (
-                "최근 평가된 경제 문서 중 가치 점수가 높은 것들. 제목, 발행 시각, 방향, 점수, "
-                "관련 종목 티커, 그리고 앞선 평가가 남긴 새 사실과 판단 근거를 준다."
-            ),
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "hours": {
-                        "type": "integer",
-                        "description": f"기준 시각에서 거슬러 올라갈 시간. {MIN_WINDOW_HOURS}~{MAX_WINDOW_HOURS}.",
-                    },
-                    "min_score": {
-                        "type": "integer",
-                        "description": "가치 점수 하한(0~8). 낮추면 건수가 늘고 잡음도 는다.",
-                    },
-                },
-                "required": ["hours", "min_score"],
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "recent_disclosures",
-            "description": "추적 종목에 대해 최근 접수된 DART 공시. 회사명, 보고서명, 접수일, 감지 시각을 준다.",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "hours": {
-                        "type": "integer",
-                        "description": f"기준 시각에서 거슬러 올라갈 시간. {MIN_WINDOW_HOURS}~{MAX_WINDOW_HOURS}.",
-                    },
-                },
-                "required": ["hours"],
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "macro_changes",
-            "description": (
-                "분석 창 동안의 지수·선물·환율·금리·원자재 변화. 창의 첫 봉과 마지막 봉을 비교한다. "
-                "창은 슬롯이 정하며 인자가 없다."
-            ),
-            "parameters": {"type": "object", "properties": {}, "required": []},
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "past_theses",
-            "description": (
-                "이 대상에 대해 전에 낸 장전 추론과 그 결과. 그때의 세 확률·세 이유, 지평별 실제 등락률과 "
-                "Brier 점수, 사후 해설과 판정을 준다. 같은 실수를 반복하고 있는지 볼 수 있다."
-            ),
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "subject_code": {
-                        "type": "string",
-                        "description": "이번 실행의 대상 목록 안에 있는 값만. 다른 값은 거절된다.",
-                    },
-                    "n": {
-                        "type": "integer",
-                        "description": f"최근 몇 건을 볼지. {MIN_PAST_THESES}~{MAX_PAST_THESES}.",
-                    },
-                },
-                "required": ["subject_code", "n"],
-            },
-        },
-    },
-)
+# 툴 인자는 **Pydantic 모델로 선언한다.** JSON Schema는 LangChain이 뽑는다 — 손으로 쓴
+# `{"type": "function", ...}` dict는 제공처 wire format이라 이름·타입이 코드와 어긋나도
+# 아무도 못 잡는다(2026-08-21 전환).
+
+
+class ToolArgs(BaseModel):
+    """툴 인자의 공통 규칙.
+
+    **못 읽는 값은 거절하지 않고 기본값으로 되돌린다.** 모델이 `hours`에 `"bad"`나 null을
+    넣어도 왕복 하나를 오타에 쓰지 않는다. 범위를 자르는 것은 각 툴의 `_clamp_int`다
+    (`docs/market-thesis/2-agent.md` 1절 "상한은 코드 상수로 강제한다 — 모델이 인자를
+    넘겨도 잘라서 실행한다").
+
+    거절하는 것은 이 층이 아니라 위다: 모르는 툴 이름과 상한 초과는 `ToolLimitExceeded`가
+    되어 오류 `ToolMessage`로 모델에게 돌아간다.
+    """
+
+    model_config = ConfigDict(extra="ignore")
+
+    @model_validator(mode="before")
+    @classmethod
+    def _drop_unreadable(cls, data: Any) -> Any:
+        if not isinstance(data, dict):
+            return data
+        cleaned = dict(data)
+        for name, field in cls.model_fields.items():
+            if name not in cleaned:
+                continue
+            value = cleaned[name]
+            caster = field.annotation
+            if value is None or not callable(caster):
+                cleaned.pop(name)
+                continue
+            try:
+                cleaned[name] = caster(value)
+            except (TypeError, ValueError):
+                # 키를 빼면 필드 기본값이 들어간다. 그 기본값이 곧 fallback이다.
+                cleaned.pop(name)
+        return cleaned
+
+
+class RecentDocumentsArgs(ToolArgs):
+    hours: int = Field(
+        default=MAX_WINDOW_HOURS,
+        description=f"기준 시각에서 거슬러 올라갈 시간. {MIN_WINDOW_HOURS}~{MAX_WINDOW_HOURS}.",
+    )
+    min_score: int = Field(
+        default=MIN_VALUE_SCORE,
+        description="가치 점수 하한(0~8). 낮추면 건수가 늘고 잡음도 는다.",
+    )
+
+
+class RecentDisclosuresArgs(ToolArgs):
+    hours: int = Field(
+        default=MAX_WINDOW_HOURS,
+        description=f"기준 시각에서 거슬러 올라갈 시간. {MIN_WINDOW_HOURS}~{MAX_WINDOW_HOURS}.",
+    )
+
+
+class MacroChangesArgs(ToolArgs):
+    """인자가 없다. 창은 슬롯이 정한다."""
+
+
+class PastThesesArgs(ToolArgs):
+    subject_code: str = Field(description="이번 실행의 대상 목록 안에 있는 값만. 다른 값은 거절된다.")
+    n: int = Field(
+        default=MIN_PAST_THESES,
+        description=f"최근 몇 건을 볼지. {MIN_PAST_THESES}~{MAX_PAST_THESES}.",
+    )
+
+
+TOOL_DESCRIPTIONS: dict[str, str] = {
+    "recent_documents": (
+        "최근 평가된 경제 문서 중 가치 점수가 높은 것들. 제목, 발행 시각, 방향, 점수, "
+        "관련 종목 티커, 그리고 앞선 평가가 남긴 새 사실과 판단 근거를 준다."
+    ),
+    "recent_disclosures": "추적 종목에 대해 최근 접수된 DART 공시. 회사명, 보고서명, 접수일, 감지 시각을 준다.",
+    "macro_changes": (
+        "분석 창 동안 해외 지수·선물·환율이 얼마나 움직였나. 첫 봉 대비 마지막 봉의 변화를 준다. "
+        "금리 계열은 퍼센트가 아니라 bp 차이로 준다."
+    ),
+    "past_theses": (
+        "이 대상에 대해 전에 낸 장전 추론과 그 결과. 그때의 세 확률·세 이유, 지평별 실제 등락률과 "
+        "Brier 점수, 사후 해설과 판정을 준다. 같은 실수를 반복하고 있는지 볼 수 있다."
+    ),
+}
 
 
 class ToolLimitExceeded(RuntimeError):
     """상한에 걸려 실행하지 않았다. 오류 `ToolMessage`가 되어 모델에게 돌아간다."""
+
+
+def tool_node(toolbox: "ThesisToolbox") -> ToolNode:
+    """툴 실행 노드. 두 그래프(`ThesisBuilder`·`FollowupNarrator`)가 같은 것을 쓴다.
+
+    **`handle_tool_errors`에 타입을 준다.** `ToolLimitExceeded`(상한 초과·모르는 툴·대상
+    목록 밖)만 오류 `ToolMessage`가 되어 모델이 고쳐 부를 기회를 얻고, psycopg 오류 같은
+    나머지는 그대로 올라가 태스크를 죽인다.
+
+    기본값(`True`)을 쓰면 **연결 끊김이 "결과 없음"으로 위장된다.** 빈 결과는 "그 창에
+    문서가 없다"는 뜻이어야 한다는 규칙이 거기서 깨진다.
+    """
+    return ToolNode(toolbox.tools, handle_tool_errors=(ToolLimitExceeded,))
 
 
 class ThesisToolbox:
@@ -414,6 +438,47 @@ class ThesisToolbox:
         self._registry: dict[str, Evidence] = {}
         self._calls = 0
         self._chars = 0
+        self._tools = self._build_tools()
+        self._by_name = {tool.name: tool for tool in self._tools}
+
+    def _build_tools(self) -> list[BaseTool]:
+        """`ToolNode`와 `bind_tools`에 그대로 넘길 툴 목록.
+
+        `StructuredTool.from_function`이 `args_schema`에서 JSON Schema를 뽑으므로 우리가
+        스키마를 손으로 쓰지 않는다. 함수는 **바인드된 메서드**다 — 툴이 연결·`as_of_at`·
+        레지스트리·상한 같은 이 객체의 상태를 봐야 해서 모듈 수준 `@tool`을 쓸 수 없다.
+        """
+        return [
+            StructuredTool.from_function(
+                func=self._tool_recent_documents,
+                name="recent_documents",
+                description=TOOL_DESCRIPTIONS["recent_documents"],
+                args_schema=RecentDocumentsArgs,
+            ),
+            StructuredTool.from_function(
+                func=self._tool_recent_disclosures,
+                name="recent_disclosures",
+                description=TOOL_DESCRIPTIONS["recent_disclosures"],
+                args_schema=RecentDisclosuresArgs,
+            ),
+            StructuredTool.from_function(
+                func=self._tool_macro_changes,
+                name="macro_changes",
+                description=TOOL_DESCRIPTIONS["macro_changes"],
+                args_schema=MacroChangesArgs,
+            ),
+            StructuredTool.from_function(
+                func=self._tool_past_theses,
+                name="past_theses",
+                description=TOOL_DESCRIPTIONS["past_theses"],
+                args_schema=PastThesesArgs,
+            ),
+        ]
+
+    @property
+    def tools(self) -> list[BaseTool]:
+        """`ToolNode(toolbox.tools)`와 `llm.invoke(..., tools=toolbox.tools)`가 쓴다."""
+        return self._tools
 
     @property
     def registry(self) -> dict[str, Evidence]:
@@ -424,12 +489,42 @@ class ThesisToolbox:
     def call_count(self) -> int:
         return self._calls
 
-    def run(self, name: str, arguments: dict[str, Any]) -> str:
-        """툴 하나를 실행하고 모델에게 돌려줄 본문을 만든다.
+    # --- 툴 본체 ---------------------------------------------------------
+    # 시그니처가 곧 스키마다. 반환은 `ToolMessage`에 실릴 본문 문자열이다.
 
-        상한 초과와 모르는 툴은 `ToolLimitExceeded`/`ThesisError`가 아니라 문자열로 돌아간다.
-        모델이 고쳐 부를 기회를 주기 위해서다 — 부르는 쪽이 그것을 `ToolMessage`에 담는다.
-        """
+    def _tool_recent_documents(self, hours: int, min_score: int) -> str:
+        self._charge()
+        return self._as_evidence_body(self._recent_documents({"hours": hours, "min_score": min_score}))
+
+    def _tool_recent_disclosures(self, hours: int) -> str:
+        self._charge()
+        return self._as_evidence_body(self._recent_disclosures({"hours": hours}))
+
+    def _tool_macro_changes(self) -> str:
+        self._charge()
+        return self._as_evidence_body(self._macro_changes({}))
+
+    def _tool_past_theses(self, subject_code: str, n: int) -> str:
+        # **레지스트리에 넣지 않는다.** 자기 과거 추론은 근거가 아니다 — 근거 종류는
+        # document·disclosure·macro_change 셋 그대로 두고, 이 툴은 문맥으로만 쓴다.
+        self._charge()
+        body = json.dumps(
+            self._past_theses({"subject_code": subject_code, "n": n}),
+            ensure_ascii=False,
+            default=str,
+        )
+        self._chars += len(body)
+        return body
+
+    def _as_evidence_body(self, items: list[Evidence]) -> str:
+        for item in items:
+            self._registry[item.ref] = item
+        body = json.dumps([_tool_row(item) for item in items], ensure_ascii=False)
+        self._chars += len(body)
+        return body
+
+    def _charge(self) -> None:
+        """호출 한 번을 상한에 단다. 넘으면 실행하지 않고 `ToolLimitExceeded`다."""
         self._calls += 1
         if self._calls > MAX_TOOL_CALLS:
             raise ToolLimitExceeded(f"상한 초과: 이 실행의 tool call이 {MAX_TOOL_CALLS}회를 넘었다. 조사를 끝내라")
@@ -438,29 +533,20 @@ class ThesisToolbox:
                 f"상한 초과: 툴 결과가 누적 {MAX_TOOL_RESULT_CHARS}자에 이르렀다. 이미 받은 것으로 답하라"
             )
 
-        handlers = {
-            "recent_documents": self._recent_documents,
-            "recent_disclosures": self._recent_disclosures,
-            "macro_changes": self._macro_changes,
-        }
-        if name == "past_theses":
-            # **레지스트리에 넣지 않는다.** 자기 과거 추론은 근거가 아니다 — 근거 종류는
-            # document·disclosure·macro_change 셋 그대로 두고, 이 툴은 문맥으로만 쓴다.
-            body = json.dumps(self._past_theses(arguments), ensure_ascii=False, default=str)
-            self._chars += len(body)
-            return body
+    def run(self, name: str, arguments: dict[str, Any]) -> str:
+        """이름으로 툴 하나를 부른다. `ToolNode`를 거치지 않는 유일한 경로다.
 
-        handler = handlers.get(name)
-        if handler is None:
-            known = sorted([*handlers, "past_theses"])
-            raise ToolLimitExceeded(f"모르는 툴 이름이다: {name!r}. 쓸 수 있는 것은 {known}")
+        운영 흐름은 `ToolNode`가 돌리고 이 메서드는 **툴 하나를 따로 확인할 때** 쓴다
+        (테스트, 노트북). 같은 `StructuredTool`을 지나가므로 인자 검증과 상한 계산이
+        운영 경로와 어긋나지 않는다.
 
-        items = handler(arguments)
-        for item in items:
-            self._registry[item.ref] = item
-        body = json.dumps([_tool_row(item) for item in items], ensure_ascii=False)
-        self._chars += len(body)
-        return body
+        모르는 툴은 `ToolLimitExceeded`다. 부르는 쪽이 그것을 오류 `ToolMessage`에 담아
+        모델이 고쳐 부를 기회를 준다.
+        """
+        tool = self._by_name.get(name)
+        if tool is None:
+            raise ToolLimitExceeded(f"모르는 툴 이름이다: {name!r}. 쓸 수 있는 것은 {sorted(self._by_name)}")
+        return tool.invoke(arguments)
 
     def _past_theses(self, arguments: dict[str, Any]) -> list[dict[str, Any]]:
         """이 대상의 지난 장전 추론과 지평별 결과. 피드백 루프는 이 조회 하나다.
@@ -784,7 +870,9 @@ class ThesisState(TypedDict):
     조사 중에 자라는 값이라 Toolbox가 들고 있고 노드가 그것을 읽는다.
     """
 
-    messages: list[BaseMessage]
+    # `add_messages` 리듀서를 단다. 노드는 **새로 생긴 메시지만** 돌려주고 병합은
+    # 리듀서가 한다 — `ToolNode`가 그 형태로 반환하므로 이게 맞춰야 할 쪽이다.
+    messages: Annotated[list[BaseMessage], add_messages]
     # 요청한 대상. 답변을 거를 때 노드가 읽으므로 상태에 있어야 한다.
     subjects: tuple[Subject, ...]
     tool_rounds: int
@@ -807,6 +895,7 @@ class ThesisBuilder:
         self._model = model
         self._toolbox = toolbox
         self._schema = response_format(Answers, "market_theses")
+        self._tool_node = tool_node(toolbox)
         self._graph = self._build_graph()
 
     @staticmethod
@@ -955,25 +1044,22 @@ class ThesisBuilder:
 
     def _investigate(self, state: ThesisState) -> dict[str, Any]:
         """툴만 바인딩해 부른다. 스키마는 넣지 않는다(`llm.invoke`가 막는다)."""
-        reply = llm.invoke(self._model, state["messages"], tools=TOOL_SCHEMAS)
-        return {"messages": [*state["messages"], reply]}
+        reply = llm.invoke(self._model, state["messages"], tools=self._toolbox.tools)
+        return {"messages": [reply]}
 
     def _tools(self, state: ThesisState) -> dict[str, Any]:
-        """tool_call마다 Toolbox를 돌리고 `ToolMessage`를 붙인다.
+        """`ToolNode`가 tool_call을 돌리고 `ToolMessage`를 만든다. 우리는 왕복만 센다.
 
-        **`tool_call_id`마다 `ToolMessage`가 정확히 하나**여야 한다. 빠지거나 둘이면 제공처가
-        다음 요청을 거절한다. 그래서 상한 초과와 모르는 툴도 예외로 올리지 않고 오류
-        `ToolMessage`로 답한다 — 모델이 고쳐 부를 기회를 준다.
+        **`tool_call_id`마다 `ToolMessage`가 정확히 하나**여야 하는 것도 `ToolNode`가
+        보장한다. 손으로 짜던 때는 그것이 우리 책임이었다.
+
+        `handle_tool_errors`에 타입을 준 것이 이 노드의 핵심이다 — `ToolLimitExceeded`만
+        오류 `ToolMessage`가 되어 모델이 고쳐 부를 기회를 얻고, **DB 오류는 그대로 올라가
+        태스크를 죽인다.** 기본값(`True`)은 둘을 가르지 않아 연결 끊김이 "결과 없음"으로
+        위장된다.
         """
-        reply = state["messages"][-1]
-        results: list[BaseMessage] = []
-        for call in getattr(reply, "tool_calls", ()):
-            try:
-                body = self._toolbox.run(call["name"], call.get("args") or {})
-            except ToolLimitExceeded as error:
-                body = str(error)
-            results.append(ToolMessage(content=body, tool_call_id=call["id"]))
-        return {"messages": [*state["messages"], *results], "tool_rounds": state["tool_rounds"] + 1}
+        update = self._tool_node.invoke(state)
+        return {"messages": update["messages"], "tool_rounds": state["tool_rounds"] + 1}
 
     def _answer(self, state: ThesisState) -> dict[str, Any]:
         """툴을 빼고 스키마를 강제한다. 제공처가 스키마를 안 받으면 그때만 한 번 더."""
@@ -987,13 +1073,13 @@ class ThesisBuilder:
         try:
             drafts = self.parse(_text(reply), state["subjects"])
         except ThesisError as error:
-            return {"messages": [*messages, reply], "drafts": None, "error": str(error)}
-        return {"messages": [*messages, reply], "drafts": drafts, "error": None}
+            return {"messages": [reply], "drafts": None, "error": str(error)}
+        return {"messages": [reply], "drafts": drafts, "error": None}
 
     def _repair(self, state: ThesisState) -> dict[str, Any]:
         logger.warning("retrying the theses once after %s", state["error"])
         return {
-            "messages": [*state["messages"], HumanMessage(REPAIR_INSTRUCTION)],
+            "messages": [HumanMessage(REPAIR_INSTRUCTION)],
             "attempts": state["attempts"] + 1,
         }
 
@@ -1457,7 +1543,9 @@ NARRATIVE_REPAIR_INSTRUCTION = (
 class NarrativeState(TypedDict):
     """해설 한 번의 상태. 연결·설정 객체는 넣지 않는다."""
 
-    messages: list[BaseMessage]
+    # `add_messages` 리듀서를 단다. 노드는 **새로 생긴 메시지만** 돌려주고 병합은
+    # 리듀서가 한다 — `ToolNode`가 그 형태로 반환하므로 이게 맞춰야 할 쪽이다.
+    messages: Annotated[list[BaseMessage], add_messages]
     targets: tuple[NarrativeTarget, ...]
     drafts: tuple[NarrativeDraft, ...] | None
     error: str | None
@@ -1479,6 +1567,7 @@ class FollowupNarrator:
         self._toolbox = toolbox
         self._include_outcome = include_outcome
         self._schema = response_format(Narratives, "thesis_narratives")
+        self._tool_node = tool_node(toolbox)
         self._graph = self._build_graph()
 
     @property
@@ -1636,19 +1725,13 @@ class FollowupNarrator:
         return graph.compile()
 
     def _investigate(self, state: NarrativeState) -> dict[str, Any]:
-        reply = llm.invoke(self._model, state["messages"], tools=TOOL_SCHEMAS)
-        return {"messages": [*state["messages"], reply]}
+        reply = llm.invoke(self._model, state["messages"], tools=self._toolbox.tools)
+        return {"messages": [reply]}
 
     def _tools(self, state: NarrativeState) -> dict[str, Any]:
-        reply = state["messages"][-1]
-        results: list[BaseMessage] = []
-        for call in getattr(reply, "tool_calls", ()):
-            try:
-                body = self._toolbox.run(call["name"], call.get("args") or {})
-            except ToolLimitExceeded as error:
-                body = str(error)
-            results.append(ToolMessage(content=body, tool_call_id=call["id"]))
-        return {"messages": [*state["messages"], *results]}
+        """`ThesisBuilder._tools`와 같은 노드다. 여기는 왕복을 세지 않고 상한은
+        `ThesisToolbox.call_count`가 본다(`_after_investigate`)."""
+        return {"messages": self._tool_node.invoke(state)["messages"]}
 
     def _answer(self, state: NarrativeState) -> dict[str, Any]:
         messages = state["messages"]
@@ -1661,13 +1744,13 @@ class FollowupNarrator:
         try:
             drafts = self.parse(_text(reply), state["targets"])
         except ThesisError as error:
-            return {"messages": [*messages, reply], "drafts": None, "error": str(error)}
-        return {"messages": [*messages, reply], "drafts": drafts, "error": None}
+            return {"messages": [reply], "drafts": None, "error": str(error)}
+        return {"messages": [reply], "drafts": drafts, "error": None}
 
     def _repair(self, state: NarrativeState) -> dict[str, Any]:
         logger.warning("retrying the narratives once after %s", state["error"])
         return {
-            "messages": [*state["messages"], HumanMessage(NARRATIVE_REPAIR_INSTRUCTION)],
+            "messages": [HumanMessage(NARRATIVE_REPAIR_INSTRUCTION)],
             "attempts": state["attempts"] + 1,
         }
 

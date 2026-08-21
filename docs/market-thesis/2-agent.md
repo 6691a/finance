@@ -38,15 +38,40 @@ DB 연결과 **기준 시각 `as_of_at`**을 들고 읽기 전용 툴 3개를 �
   실행당 툴 결과 누적 ≤ 24,000자. 넘는 호출은 빈 결과가 아니라 "상한 초과" `ToolMessage`로
   돌려 모델이 알게 한다.
 
+### 툴은 LangChain이 정의하고 LangGraph가 돌린다
+
+**JSON Schema를 손으로 쓰지 않는다**(2026-08-21 전환). 인자는 Pydantic 모델
+(`RecentDocumentsArgs` 등)이고 `StructuredTool.from_function(args_schema=...)`이 스키마를
+뽑는다. 이전에는 `{"type": "function", "function": {...}}` dict를 직접 썼는데, 그건 제공처
+wire format이라 이름·타입이 코드와 어긋나도 아무도 못 잡았다.
+
+툴 함수는 **바인드된 메서드**다. 모듈 수준 `@tool`을 쓸 수 없는 이유는 툴이 연결·`as_of_at`·
+레지스트리·상한 같은 `ThesisToolbox`의 상태를 봐야 하기 때문이다.
+
+실행은 `langgraph.prebuilt.ToolNode`다. 손으로 짜던 dispatch 루프를 지웠다.
+
+```python
+ToolNode(toolbox.tools, handle_tool_errors=(ToolLimitExceeded,))
+```
+
+`ThesisToolbox.run(name, arguments)`는 남아 있지만 **운영 경로가 아니다.** 툴 하나를 따로
+확인할 때(테스트·노트북) 쓰고, 같은 `StructuredTool`을 지나므로 판정이 어긋나지 않는다.
+
 ### 툴 호출 계약
 
 - tool_call마다 같은 `tool_call_id`의 `ToolMessage`가 **정확히 하나** 대화에 들어간다.
-  빠지거나 둘이면 제공처가 요청을 거절한다.
-- 모르는 툴 이름, 깨진 JSON 인자, 범위 밖 인자, 상한 초과는 전부 **오류 `ToolMessage`**로
-  답한다(예외로 올리지 않는다 — 모델이 고쳐 부를 기회를 준다). 내용은 한 줄: 무엇이 왜
-  거절됐는지.
+  빠지거나 둘이면 제공처가 요청을 거절한다. **이 보장은 `ToolNode`가 한다.**
+- 모르는 툴 이름과 상한 초과는 **오류 `ToolMessage`**로 답한다(예외로 올리지 않는다 —
+  모델이 고쳐 부를 기회를 준다). 모르는 툴의 문구는 `ToolNode`의 것이고 쓸 수 있는 툴
+  이름을 함께 싣는다.
+- **범위 밖 인자와 못 읽는 인자는 거절하지 않고 자른다.** 숫자 범위는 `_clamp_int`가,
+  타입이 안 맞는 값(`"bad"`, null)은 `ToolArgs`의 before-validator가 필드 기본값으로
+  되돌린다. 왕복 상한이 4뿐이라 그중 하나를 오타에 쓰지 않는다.
 - **DB 오류는 위장하지 않는다.** 연결 끊김·SQL 오류는 빈 결과로 바꾸지 않고 그대로 올려
   태스크를 실패시킨다. 빈 결과는 "그 창에 문서가 없다"는 뜻이어야 한다.
+  **`handle_tool_errors`에 타입을 주는 이유가 이것이다.** 기본값(`True`)은 모든 예외를
+  `ToolMessage`로 바꿔 연결 끊김을 "결과 없음"으로 위장한다. 회귀를 잡는 테스트는
+  `test_database_failures_survive_the_tool_node`다.
 - `evidence_refs`는 순서를 보존한 채 중복을 제거한다(첫 등장 rank). 레지스트리에 없는 ref는
   버리고 건수를 로그로 남긴다.
 - 답변에 같은 `subject_code`가 두 번 오면 그 subject를 거절한다(어느 쪽이 진짜인지 알 수 없다).
@@ -64,7 +89,7 @@ DB 연결과 **기준 시각 `as_of_at`**을 들고 읽기 전용 툴 3개를 �
 investigate → (tool_calls 있으면) tools → investigate → … → answer → (형식 실패) repair → answer
 ```
 
-- `investigate`: `llm.invoke(model, messages, tools=TOOL_SCHEMAS)`. 스키마 없음.
+- `investigate`: `llm.invoke(model, messages, tools=toolbox.tools)`. 스키마 없음.
 - `tools`: tool_call마다 Toolbox 실행, `ToolMessage`로 대화에 추가. 왕복 상한
   `MAX_TOOL_ROUNDS = 4` — 넘으면 조사를 끝내고 답변으로 넘어간다.
 - `answer`: 툴을 빼고 `response_format` 강제. 스키마 미지원 제공처는 검증 폴백

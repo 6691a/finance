@@ -20,6 +20,7 @@ from modules.thesis import (
     MAX_TOOL_CALLS,
     MAX_TOOL_RESULT_CHARS,
     MAX_TOOL_ROUNDS,
+    MAX_WINDOW_HOURS,
     NARRATED_HORIZON_DAYS,
     PROMPT_VERSION,
     Evidence,
@@ -899,6 +900,34 @@ def test_the_builder_investigates_with_tools_then_answers_with_a_schema():
     assert any(isinstance(message, ToolMessage) for message in model.calls[-1])
 
 
+def test_the_tool_schema_is_derived_from_the_code_not_hand_written():
+    """`args_schema`에서 뽑는다. 손으로 쓴 wire format dict는 코드와 어긋나도 아무도 못 잡는다."""
+    box = toolbox(FakeConnection())
+
+    by_name = {tool.name: tool for tool in box.tools}
+    assert set(by_name) == {"recent_documents", "recent_disclosures", "macro_changes", "past_theses"}
+
+    schema = by_name["recent_documents"].args_schema.model_json_schema()
+    assert schema["properties"]["hours"]["type"] == "integer"
+    # 상한 상수가 description에 실려 프롬프트가 코드를 따라간다.
+    assert str(MAX_WINDOW_HOURS) in schema["properties"]["hours"]["description"]
+
+
+def test_database_failures_survive_the_tool_node():
+    """**`handle_tool_errors` 기본값(True)이면 여기서 깨진다.**
+
+    연결 끊김이 "결과 없음" `ToolMessage`로 위장되면 모델이 "그 창에 문서가 없었다"로 읽고
+    태스크는 성공으로 끝난다. `ToolLimitExceeded`만 잡도록 타입을 준 이유다.
+    """
+    connection = FakeConnection({"documents": []})
+    connection.raises = ConnectionError("server closed the connection")
+    reply = AIMessage("", tool_calls=[{"name": "recent_documents", "args": {"hours": 6, "min_score": 0}, "id": "a"}])
+    builder = build(ScriptedModel(reply), connection)
+
+    with pytest.raises(ConnectionError):
+        run_builder(builder)
+
+
 def test_every_tool_call_gets_exactly_one_tool_message():
     connection = FakeConnection({"documents": [], "macro": [macro_row()]})
     reply = AIMessage(
@@ -915,10 +944,12 @@ def test_every_tool_call_gets_exactly_one_tool_message():
     run_builder(builder)
 
     tool_messages = [message for message in model.calls[-1] if isinstance(message, ToolMessage)]
-    # 빠지거나 둘이면 제공처가 다음 요청을 거절한다.
+    # 빠지거나 둘이면 제공처가 다음 요청을 거절한다. 이 보장은 이제 `ToolNode`가 한다.
     assert [message.tool_call_id for message in tool_messages] == ["a", "b", "c"]
     # 모르는 툴도 예외가 아니라 오류 ToolMessage다. 모델이 고쳐 부를 기회를 준다.
-    assert "모르는 툴" in tool_messages[2].content
+    # 문구는 `ToolNode`의 것이고 쓸 수 있는 툴 이름을 함께 싣는다.
+    assert tool_messages[2].status == "error"
+    assert "recent_documents" in tool_messages[2].content
 
 
 def test_the_round_cap_forces_the_answer_step():

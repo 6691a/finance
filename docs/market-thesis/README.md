@@ -1,7 +1,7 @@
 # 시장 추론(thesis) 기록 설계 — 개요
 
 - 날짜: 2026-08-20 (2026-08-21 리뷰 반영 후 단계별 문서로 분리)
-- 상태: 제안 (미구현)
+- 상태: 1·2·3·5단계 구현 완료, 4단계(그래프)·6단계(애널리스트) 미착수. 운영 배포 전 선행 조건은 5절
 
 한 문서로 쓰기엔 범위가 커서(모델·리비전, 모듈 둘, DAG, SQL 열 개, 테스트 넷, compose·
 requirements) **배포 단위(worktree/PR 하나)마다 문서를 나눴다.** 이 파일은 공통 원칙과
@@ -56,6 +56,12 @@ requirements) **배포 단위(worktree/PR 하나)마다 문서를 나눴다.** �
 | 2 | [2-agent.md](2-agent.md) | `thesis.py`에 Toolbox·Builder·저장, 툴 SQL 3개, `thesis_model()`, `llm.invoke` tools+schema 가드, `tests/modules/test_thesis.py` | 1 | 있음 |
 | 3 | [3-dag-slack.md](3-dag-slack.md) | `dags/market_thesis_analysis.py`, 스케줄, 채점 호출, Slack 렌더링·발송, DAG 테스트. **여기서 첫 운영 발송** | 1, 2 | 있음 |
 | 4 | [4-graph.md](4-graph.md) | `airflow/modules/graph.py`, `sync_graph` 태스크, `sync_only` Param, compose·requirements, `tests/modules/test_graph.py` | 1 (3과 병렬 가능) | 없음 |
+| 5 | [5-followup.md](5-followup.md) | `thesis_outcome` 테이블, 다지평(T+0·1·3·5) 채점, `FollowupNarrator` 사후 해설과 `verdict`, `past_theses` 툴 | 1, 2, 3 | 있음 |
+| 6 | (문서 미작성) | 애널리스트 투자의견·목표주가 수집기와 해설 툴. **KIS가 이 데이터를 주는지 미확인이라 spike가 선행이다** — 저장소에 관련 코드가 0건이다 | 5 | 없음 |
+
+**5단계는 1단계의 `thesis` 채점 컬럼을 `thesis_outcome`으로 옮긴다.** 채택했으므로
+(2026-08-21) 그 이동을 1·2단계 코드에 먼저 반영한다. 무엇이 바뀌는지는
+[5-followup.md](5-followup.md) 0절의 표에 있다. 테이블이 아직 운영에 없어 데이터 이관은 없다.
 
 - 1→2→3은 순서대로. 4는 1 뒤 언제든 — **구현**은 3과 독립이라 병렬로 진행해도 된다.
   단 `sync_graph` 태스크를 붙이는 자리가 3단계 DAG라 **배포는 3 뒤**다([4-graph.md](4-graph.md)).
@@ -63,6 +69,9 @@ requirements) **배포 단위(worktree/PR 하나)마다 문서를 나눴다.** �
   (NAS 쪽 컨테이너, Airflow 이미지 재빌드). 그 전까지 3까지만 운영에 나가고 `sync_graph`는
   `NEO4J_URI` 미설정으로 skip이다.
 - 한 단계가 끝날 때마다 그 단계 문서의 "테스트" 절이 통과해야 다음으로 간다.
+
+**[TUNING.md](TUNING.md)는 단계가 아니다.** 다 만든 뒤에 쓰는 운영 규칙이라 번호가 없다 —
+손잡이 장부, 판단 캘린더, 그리고 **자동으로 안 나오는 지표를 손으로 읽는 쿼리**를 갖는다.
 
 ## 3. 공통 규칙
 
@@ -104,9 +113,11 @@ requirements) **배포 단위(worktree/PR 하나)마다 문서를 나눴다.** �
 
 ## 5. 남은 확인
 
-- **모델 키** — `compose/prod/airflow/.env`의 `XAI_API_KEY`가 무효였다(2026-08-20 실측,
-  `Incorrect API key provided`). 문서 태깅이 쓰는 `OPENAI_API_KEY`는 운영에서 살아 있으므로
-  `thesis_model()`을 OpenAI로 두면 키 문제가 없다. Grok을 쓰려면 유효한 키 확보가 먼저다.
+- **모델 키 — 3단계 배포의 선행 조건.** `thesis_model()`은 `ChatXAI`(grok-4.6)이고 키는
+  `XAI_API_KEY`다. 그런데 `compose/prod/airflow/.env`의 값이 무효였다(2026-08-20 실측,
+  `Incorrect API key provided`). **유효한 키를 넣기 전에는 DAG가 매 슬롯 실패한다.**
+  키를 못 구하면 `thesis_model()`을 `ChatOpenAI`(gpt-5.6-luna, `OPENAI_API_KEY`는 운영에서
+  살아 있다)로 되돌리는 것이 한 줄 수정이다.
 - **Neo4j prod 인스턴스** — 아직 없다. 상세는 [4-graph.md](4-graph.md).
 - **4주 검증** — 3단계 배포 뒤 한 달간 본다. 두 묶음을 섞지 않는다.
   - **운영 지표**(이걸로 판단한다): 슬롯별 정시 발행률, readiness guard 재시도 횟수, subject
@@ -114,3 +125,7 @@ requirements) **배포 단위(worktree/PR 하나)마다 문서를 나눴다.** �
     `sync_graph` 성공률. 이 숫자로 프롬프트·툴 상한·스케줄·Neo4j 유지 여부를 다시 본다.
   - **예측 품질**(누적만 한다): Brier 추이와 균등확률 0.667 대비. 4주면 subject당 표본이
     20개 안팎이라 모델 예측력을 결론 내리지 못한다. 분기 단위로 다시 본다.
+  - **이 다섯 중 자동으로 나오는 것은 절반뿐이다.** ops 브리핑(`slack_ops_briefing`)이
+    지평별 Brier·`flat`·`verdict`·적체를 내고, 나머지는 손으로 읽는다. 쿼리와
+    "근거 유효율은 왜 못 읽나"는 [TUNING.md](TUNING.md) 2절에 있다.
+    어느 숫자가 어느 상수를 당기는지는 같은 문서 3·4절이다.

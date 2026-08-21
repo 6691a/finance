@@ -1,0 +1,451 @@
+from datetime import date, datetime
+from decimal import Decimal
+from enum import StrEnum
+
+from sqlalchemy import (
+    BigInteger,
+    CheckConstraint,
+    DateTime,
+    ForeignKey,
+    Integer,
+    Numeric,
+    Text,
+    UniqueConstraint,
+)
+from sqlalchemy import Enum as SqlEnum
+from sqlalchemy.dialects.postgresql import JSONB
+from sqlalchemy.orm import Mapped, mapped_column
+
+from apps.core.database import EntityBase, table_options
+
+
+class RunSlot(StrEnum):
+    """추론을 만든 슬롯. 슬롯이 곧 추론의 종류다.
+
+    `pre_open`은 장이 열리기 전의 전망(forecast)이고 `post_close`는 장이 닫힌 뒤의
+    리뷰(review)다. 별도 `kind` 컬럼을 두지 않는 이유는 둘이 항상 같이 움직이기 때문이다 —
+    슬롯 하나에 종류 둘이 오는 경우가 없다.
+    """
+
+    PRE_OPEN = "pre_open"
+    POST_CLOSE = "post_close"
+
+
+class ThesisSubjectKind(StrEnum):
+    """추론 대상의 종류. 지수와 개별 종목은 등락률 원본 테이블이 다르다."""
+
+    INDEX = "index"
+    STOCK = "stock"
+
+
+class ThesisDirection(StrEnum):
+    """방향. 예측 확률과 실제 결과가 같은 세 값을 쓴다.
+
+    그래서 `hit`/`miss` 같은 비교 결과 enum이 따로 필요 없다. 얼마나 확신 있게 맞췄는지는
+    `thesis_outcome.brier_score`가 점수로 답한다.
+    """
+
+    UP = "up"
+    DOWN = "down"
+    FLAT = "flat"
+
+
+class ThesisVerdict(StrEnum):
+    """사후 해설이 내린 판정. 원 추론의 **이유**가 이후 보도로 지지됐는가.
+
+    **`brier_score`와 다른 것을 잰다.** Brier는 "시장이 그 방향으로 움직였나"고 이것은
+    "그 이유가 맞았나"다. 방향만 우연히 맞은 추론과 이유까지 맞은 추론을 가르는 것이 이
+    값이다. 둘을 합친 종합 점수는 만들지 않는다 — 섞으면 둘 다 못 읽는다.
+
+    `UNRESOLVED`가 기본이자 가장 흔한 답이어야 한다. 후속 보도가 원 추론의 이유를 직접
+    다루는 경우는 흔하지 않고, 억지 판정이 무판정보다 나쁘다.
+    """
+
+    SUPPORTED = "supported"
+    CONTRADICTED = "contradicted"
+    UNRESOLVED = "unresolved"
+
+
+class ThesisEvidenceKind(StrEnum):
+    """근거의 출처 종류. `thesis_evidence.evidence_ref`의 `<kind>:<id>` 앞자리와 같다."""
+
+    DOCUMENT = "document"
+    DISCLOSURE = "disclosure"
+    MACRO_CHANGE = "macro_change"
+
+
+# 채점·해설 지평. KRX 영업일 수이고 달력일이 아니다.
+# 0은 예측일 세션 하나이며 해설을 받지 않는다(그날의 보도가 아직 쌓이지 않았다).
+THESIS_HORIZON_DAYS: tuple[int, ...] = (0, 1, 3, 5)
+NARRATED_HORIZON_DAYS: tuple[int, ...] = (1, 3, 5)
+
+
+def _enum_column(enum: type[StrEnum]) -> SqlEnum:
+    """`StrEnum`을 VARCHAR + CHECK로 내리는 공통 형태.
+
+    PostgreSQL native enum은 값 추가·삭제 마이그레이션 비용이 커서 쓰지 않는다(프로젝트 규칙).
+    """
+    return SqlEnum(
+        enum,
+        native_enum=False,
+        length=20,
+        values_callable=lambda members: [member.value for member in members],
+    )
+
+
+class Thesis(EntityBase):
+    """시장 추론 하나. 그래프로 보면 노드다.
+
+    **맞고 틀림이 목적이 아니다.** "어떤 정보를 근거로 어떤 결론을 냈다"가 기록으로 남는 것이
+    목적이고, 채점은 그 기록 위에 나중에 얹힌다.
+
+    **첫 성공본은 불변이다.** 같은 (`run_date`, `run_slot`, subject)에 행이 이미 있으면
+    `INSERT ... ON CONFLICT DO NOTHING`으로 아무 것도 바꾸지 않는다. LLM은 재호출마다 답이
+    달라서 덮어쓰면 최초 판단이 사라진다. 잘못된 판단도 고치지 않는다 — 승인·보류 상태
+    머신도, 사람이 행을 UPDATE하는 경로도 없다.
+
+    **이 행은 어떤 컬럼도 나중에 갱신되지 않는다.** 채점과 사후 해설은 전부 `thesis_outcome`의
+    새 행이다. 채점 칸을 여기 두면 지평이 둘 이상일 때 첫 판단을 덮어써야 하고, 그것이
+    이 기능의 핵심 원칙과 정면으로 충돌한다.
+    """
+
+    __tablename__ = "thesis"
+    __table_args__ = (
+        UniqueConstraint(
+            "run_date",
+            "run_slot",
+            "subject_kind",
+            "subject_code",
+            name="uq_thesis_natural_key",
+        ),
+        CheckConstraint("run_slot IN ('pre_open', 'post_close')", name="ck_thesis_run_slot"),
+        CheckConstraint("subject_kind IN ('index', 'stock')", name="ck_thesis_subject_kind"),
+        CheckConstraint(
+            "prob_up BETWEEN 0 AND 1 AND prob_down BETWEEN 0 AND 1 AND prob_flat BETWEEN 0 AND 1",
+            name="ck_thesis_prob_range",
+        ),
+        # 저장 전에 애플리케이션이 이미 ±0.02 오차를 정규화해 정확히 1로 맞춘다. 이 제약은
+        # 그 뒤의 최종 안전장치라 허용 폭이 훨씬 좁다.
+        CheckConstraint(
+            "abs(prob_up + prob_down + prob_flat - 1) < 0.001",
+            name="ck_thesis_prob_sum",
+        ),
+        table_options(
+            comment="슬롯마다 만든 시장 추론을 불변으로 보존하는 테이블. 채점과 해설은 thesis_outcome이 갖는다",
+            database="default",
+        ),
+    )
+
+    run_slot: Mapped[RunSlot] = mapped_column(
+        _enum_column(RunSlot),
+        nullable=False,
+        comment="추론을 만든 슬롯(pre_open은 장전 전망, post_close는 장후 리뷰). 슬롯이 곧 추론의 종류다",
+    )
+    run_date: Mapped[date] = mapped_column(
+        nullable=False,
+        comment="추론이 대상으로 삼은 세션 날짜(KST). 시각은 담지 않는다",
+    )
+    as_of_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        comment=(
+            "관측 상태와 툴 조회의 기준 시각(UTC). 벽시계가 아니라 슬롯이 정한다"
+            "(장전 = 당일 08:35 KST, 장후 = 당일 15:30 KST). "
+            "event-time cutoff라 이 시각 이후 감지·평가·갱신된 행은 조회에서 뺀다"
+        ),
+    )
+    dag_run_id: Mapped[str] = mapped_column(
+        Text,
+        nullable=False,
+        comment="이 행을 쓴 Airflow dag_run_id. 같은 실행의 재시도인지를 DB가 증명한다",
+    )
+    subject_kind: Mapped[ThesisSubjectKind] = mapped_column(
+        _enum_column(ThesisSubjectKind),
+        nullable=False,
+        comment="추론 대상 종류(index 또는 stock). 실제 등락률을 어느 테이블에서 읽을지가 갈린다",
+    )
+    subject_code: Mapped[str] = mapped_column(
+        Text,
+        nullable=False,
+        comment="추론 대상 식별자(지수는 KOSPI·KOSDAQ, 종목은 6자리 코드). 마스터로 외래키를 걸지 않는다",
+    )
+    label: Mapped[str] = mapped_column(
+        Text,
+        nullable=False,
+        comment="추론 시점의 표시 이름 스냅샷. 마스터에서 이름이 바뀌어도 당시 표기가 남는다",
+    )
+    prob_up: Mapped[Decimal] = mapped_column(Numeric(5, 4), nullable=False, comment="상승 확률 0~1. 셋의 합은 1이다")
+    prob_down: Mapped[Decimal] = mapped_column(Numeric(5, 4), nullable=False, comment="하락 확률 0~1. 셋의 합은 1이다")
+    prob_flat: Mapped[Decimal] = mapped_column(Numeric(5, 4), nullable=False, comment="횡보 확률 0~1. 셋의 합은 1이다")
+    up_reasoning: Mapped[str] = mapped_column(
+        Text, nullable=False, comment="상승 쪽 이유(한국어). 저장 전에 500자로 자른다"
+    )
+    down_reasoning: Mapped[str] = mapped_column(
+        Text, nullable=False, comment="하락 쪽 이유(한국어). 저장 전에 500자로 자른다"
+    )
+    flat_reasoning: Mapped[str] = mapped_column(
+        Text, nullable=False, comment="횡보 쪽 이유(한국어). 저장 전에 500자로 자른다"
+    )
+    input_state: Mapped[dict[str, object]] = mapped_column(
+        JSONB,
+        nullable=False,
+        comment="프롬프트에 준 관측 상태 스냅샷. 모델이 무엇을 보고 추론했는지의 절반이다(나머지 절반은 thesis_evidence)",
+    )
+    tool_rounds: Mapped[int] = mapped_column(
+        Integer,
+        nullable=False,
+        comment="모델이 조사 단계에서 툴을 몇 왕복 불렀는지. 프롬프트·상한을 다시 볼 때의 운영 지표다",
+    )
+    llm_model: Mapped[str] = mapped_column(
+        Text, nullable=False, comment="이 추론을 만든 모델 식별자. 모델을 바꾼 뒤 채점 결과를 가르는 기준이다"
+    )
+    prompt_version: Mapped[str] = mapped_column(
+        Text, nullable=False, comment="프롬프트 판 식별자. 프롬프트를 고친 뒤 채점 결과를 가르는 기준이다"
+    )
+
+
+class ThesisOutcome(EntityBase):
+    """추론 하나의 한 지평 = 채점 + (선택) 사후 해설.
+
+    **원 추론 행을 건드리지 않는다.** 사후에 알게 된 것은 전부 여기 새 행이다. 지평이
+    넷이라 `thesis`의 채점 칸 한 벌로는 담을 수 없고, 담으려 하면 첫 판단을 덮어써야 한다.
+
+    두 종류의 값이 한 행에 있고 **채우는 주체가 다르다.**
+
+    - **채점**(`evaluated_at`·`actual_return_pct`·`actual_outcome`·`brier_score`)은 SQL과
+      순수 함수가 만든다. LLM이 없다. `pre_open` 추론에만 붙는다 — `post_close` 리뷰는
+      이미 일어난 일의 해석이라 예측이 아니고 채점할 대상이 없다.
+    - **해설**(`narrative`·`verdict`·`narrative_at`·`llm_model`·`prompt_version`)은 LLM이
+      만든다. **두 슬롯 모두** 붙는다 — 장후 리뷰는 "오늘 이래서 움직였다"는 인과 주장이라
+      며칠 뒤 보도로 검증할 값어치가 오히려 크다.
+
+    그래서 채점 칸이 nullable이다. 대신 **둘 다 비어 있는 행을 CHECK로 막는다** — 채점도
+    해설도 없으면 그 행은 없는 것과 같다.
+
+    "`post_close` 행에는 채점이 없다"는 `thesis.run_slot`을 봐야 알 수 있어 CHECK로 못 막는다.
+    코드와 테스트가 지킨다(`thesis_evidence`가 마스터로 FK를 걸지 않는 것과 같은 판단).
+    """
+
+    __tablename__ = "thesis_outcome"
+    __table_args__ = (
+        UniqueConstraint("thesis_id", "horizon_days", name="uq_thesis_outcome_natural_key"),
+        CheckConstraint("horizon_days IN (0, 1, 3, 5)", name="ck_thesis_outcome_horizon_days"),
+        CheckConstraint(
+            "actual_outcome IN ('up', 'down', 'flat')",
+            name="ck_thesis_outcome_actual_outcome",
+        ),
+        CheckConstraint(
+            "verdict IN ('supported', 'contradicted', 'unresolved')",
+            name="ck_thesis_outcome_verdict",
+        ),
+        CheckConstraint("brier_score BETWEEN 0 AND 2", name="ck_thesis_outcome_brier_range"),
+        # 채점 넷은 한 번에 채워지거나 전부 비어 있다. 등락률만 있고 점수가 없는 중간
+        # 상태를 두면 "채점했는데 점수가 없는" 행이 조용히 생긴다.
+        CheckConstraint(
+            "(evaluated_at IS NULL AND actual_return_pct IS NULL"
+            " AND actual_outcome IS NULL AND brier_score IS NULL)"
+            " OR (evaluated_at IS NOT NULL AND actual_return_pct IS NOT NULL"
+            " AND actual_outcome IS NOT NULL AND brier_score IS NOT NULL)",
+            name="ck_thesis_outcome_grade_all_or_none",
+        ),
+        # 해설 다섯도 같다. 판정만 있고 근거 문장이 없으면 되짚을 수 없다.
+        CheckConstraint(
+            "(narrative IS NULL AND verdict IS NULL AND narrative_at IS NULL"
+            " AND llm_model IS NULL AND prompt_version IS NULL)"
+            " OR (narrative IS NOT NULL AND verdict IS NOT NULL AND narrative_at IS NOT NULL"
+            " AND llm_model IS NOT NULL AND prompt_version IS NOT NULL)",
+            name="ck_thesis_outcome_narrative_all_or_none",
+        ),
+        # 지평 0은 예측일 세션 하나다. 그날의 후속 보도가 아직 쌓이지 않아 해설을 못 쓴다.
+        CheckConstraint(
+            "horizon_days <> 0 OR (narrative IS NULL AND verdict IS NULL"
+            " AND narrative_at IS NULL AND llm_model IS NULL AND prompt_version IS NULL)",
+            name="ck_thesis_outcome_zero_horizon_has_no_narrative",
+        ),
+        # 채점도 해설도 없는 행은 의미가 없다.
+        CheckConstraint(
+            "evaluated_at IS NOT NULL OR narrative IS NOT NULL",
+            name="ck_thesis_outcome_not_empty",
+        ),
+        table_options(
+            comment="추론 하나의 지평별 채점과 사후 해설을 누적하는 테이블",
+            database="default",
+        ),
+    )
+
+    thesis_id: Mapped[int] = mapped_column(
+        BigInteger,
+        ForeignKey("thesis.id", ondelete="CASCADE"),
+        nullable=False,
+        comment="이 결과가 붙는 thesis 레코드 ID",
+    )
+    horizon_days: Mapped[int] = mapped_column(
+        Integer,
+        nullable=False,
+        comment=(
+            "지평 길이. **KRX 영업일 수이고 달력일이 아니다.** T+N 관용 표기를 따랐다. "
+            "0은 예측일 세션 하나이며 해설을 받지 않는다"
+        ),
+    )
+    as_of_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        comment="이 지평의 기준 시각(UTC). 그 영업일 장후 15:30 KST이며 해설 툴 조회의 창 끝이다",
+    )
+    dag_run_id: Mapped[str] = mapped_column(
+        Text,
+        nullable=False,
+        comment="이 행을 쓴 Airflow dag_run_id",
+    )
+    evaluated_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True,
+        comment="채점한 시각(UTC). NULL은 미채점이다. 채점은 pre_open 추론에만 붙는다",
+    )
+    actual_return_pct: Mapped[Decimal | None] = mapped_column(
+        Numeric(8, 4),
+        nullable=True,
+        comment=(
+            "예측 시점 기준가 대비 이 지평 종가의 누적 등락률(퍼센트). "
+            "**기준가는 지평이 달라도 같다** — 예측일 전 영업일 종가다. 그래야 T+1과 T+5를 비교할 수 있다"
+        ),
+    )
+    actual_outcome: Mapped[ThesisDirection | None] = mapped_column(
+        _enum_column(ThesisDirection),
+        nullable=True,
+        comment=(
+            "누적 등락률의 분류(up/down/flat). 임계는 지평마다 다르다 — 하루 임계를 5영업일 "
+            "누적에 쓰면 flat이 사실상 사라진다. 예측과 비교하지 않는다(비교는 brier_score가 한다)"
+        ),
+    )
+    brier_score: Mapped[Decimal | None] = mapped_column(
+        Numeric(6, 5),
+        nullable=True,
+        comment=(
+            "원 추론의 세 확률을 이 지평 결과로 매긴 3-class Brier 점수. 0이 완벽, 2가 최악이다. "
+            "방향만 맞고 확신이 낮았던 경우와 틀린 방향에 확신을 준 경우를 함께 잡는다"
+        ),
+    )
+    narrative: Mapped[str | None] = mapped_column(
+        Text,
+        nullable=True,
+        comment="이 지평에서 쌓인 보도를 근거로 쓴 사후 해설(한국어). 저장 전에 1000자로 자른다",
+    )
+    verdict: Mapped[ThesisVerdict | None] = mapped_column(
+        _enum_column(ThesisVerdict),
+        nullable=True,
+        comment=(
+            "원 추론의 **이유**가 이후 보도로 지지됐는지(supported/contradicted/unresolved). "
+            "brier_score와 다른 것을 잰다 — 저쪽은 방향, 이쪽은 이유다. 둘을 합치지 않는다. "
+            "근거 인용 없이 supported·contradicted가 오면 저장 전에 unresolved로 내린다"
+        ),
+    )
+    narrative_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True,
+        comment="해설을 쓴 시각(UTC). NULL은 아직 해설이 없다는 뜻이고 다음 실행이 다시 집는다",
+    )
+    llm_model: Mapped[str | None] = mapped_column(
+        Text, nullable=True, comment="해설을 만든 모델 식별자. 원 추론의 모델과 다를 수 있다"
+    )
+    prompt_version: Mapped[str | None] = mapped_column(
+        Text,
+        nullable=True,
+        comment=(
+            "해설 프롬프트 판과 변형(`<판>/<변형>`, 예: 1/informed). 변형은 실제 결과를 "
+            "프롬프트에 주는 informed와 주지 않는 blind다. 어느 쪽이 나은지는 실측으로 가른다"
+        ),
+    )
+
+
+class ThesisEvidence(EntityBase):
+    """추론이 실제로 인용한 근거 하나. 그래프로 보면 추론에서 나가는 엣지다.
+
+    모델이 툴로 가져온 것 전부가 아니라 **답변에서 인용한 것만** 남는다. 툴 결과 레지스트리에
+    없는 `ref`는 저장 전에 버린다.
+
+    `evidence_ref`는 `document`·`instrument` 마스터로 외래키를 걸지 않는다. 원본이 지워져도
+    "그때 이것을 근거로 삼았다"는 사실은 남아야 하고, 마스터에 없는 값 하나가 추론 저장 전체를
+    죽이면 안 된다(`document_instrument` 선례).
+
+    **사후 해설이 인용한 근거도 같은 테이블에 들어간다.** 행 모양이 같아서
+    (`kind`·`ref`·`title`·`url`·`detail`·`rank`) 테이블을 복제하지 않고 `outcome_horizon_days`
+    한 칸으로 가른다. `thesis_outcome`으로 외래키를 걸지 않는 것도 같은 이유다 — nullable FK
+    둘에 XOR CHECK를 얹는 형태보다 조용히 틀릴 여지가 적고, Neo4j에서도 `(kind, ref)` 노드
+    키를 그대로 재사용한다.
+    """
+
+    __tablename__ = "thesis_evidence"
+    __table_args__ = (
+        UniqueConstraint(
+            "thesis_id",
+            "outcome_horizon_days",
+            "evidence_kind",
+            "evidence_ref",
+            name="uq_thesis_evidence_ref",
+        ),
+        UniqueConstraint("thesis_id", "outcome_horizon_days", "rank", name="uq_thesis_evidence_rank"),
+        CheckConstraint(
+            "evidence_kind IN ('document', 'disclosure', 'macro_change')",
+            name="ck_thesis_evidence_kind",
+        ),
+        CheckConstraint("rank > 0", name="ck_thesis_evidence_rank_positive"),
+        # 해설을 받는 지평만 온다. 0은 해설이 없어(thesis_outcome CHECK) 근거도 없다.
+        CheckConstraint(
+            "outcome_horizon_days IS NULL OR outcome_horizon_days IN (1, 3, 5)",
+            name="ck_thesis_evidence_outcome_horizon_days",
+        ),
+        table_options(
+            comment="추론과 사후 해설이 인용한 근거를 순위와 함께 보존하는 테이블",
+            database="default",
+        ),
+    )
+
+    thesis_id: Mapped[int] = mapped_column(
+        BigInteger,
+        ForeignKey("thesis.id", ondelete="CASCADE"),
+        nullable=False,
+        comment="이 근거를 인용한 thesis 레코드 ID",
+    )
+    outcome_horizon_days: Mapped[int | None] = mapped_column(
+        Integer,
+        nullable=True,
+        comment=(
+            "누가 인용했는지. NULL은 원 추론이 인용한 근거, 1·3·5는 그 지평의 사후 해설이 "
+            "인용한 근거다. thesis_outcome으로 외래키를 걸지 않는다"
+        ),
+    )
+    evidence_kind: Mapped[ThesisEvidenceKind] = mapped_column(
+        _enum_column(ThesisEvidenceKind),
+        nullable=False,
+        comment="근거의 출처 종류(document, disclosure, macro_change). evidence_ref 앞자리와 같은 값이다",
+    )
+    evidence_ref: Mapped[str] = mapped_column(
+        Text,
+        nullable=False,
+        comment=(
+            "툴 결과가 준 ref 그대로. `<evidence_kind>:<id>` 2단이며 앞자리는 evidence_kind와 글자 그대로 같다"
+            "(document:123, disclosure:20260821000123, macro_change:SP500_FUT). "
+            "접두를 kind와 같게 두면 파싱이 한 규칙으로 끝나고, 소스 이름을 ref 안에 다시 넣지 않는다"
+        ),
+    )
+    evidence_title: Mapped[str] = mapped_column(
+        Text,
+        nullable=False,
+        comment="인용 시점의 제목 스냅샷. 원본이 지워지거나 바뀌어도 그래프에서 무엇을 인용했는지 읽힌다",
+    )
+    evidence_url: Mapped[str | None] = mapped_column(
+        Text,
+        nullable=True,
+        comment="문서면 canonical_url, 공시면 DART 뷰어 URL. 매크로 변화처럼 링크할 곳이 없으면 NULL이다",
+    )
+    detail: Mapped[dict[str, object]] = mapped_column(
+        JSONB,
+        nullable=False,
+        comment="툴이 준 수치 스냅샷(등락률, 가치 점수 등). 근거가 당시 어떤 값이었는지를 남긴다",
+    )
+    rank: Mapped[int] = mapped_column(
+        Integer,
+        nullable=False,
+        comment="모델이 인용한 순서(1부터). Slack이 상위 몇 개만 보일 때의 기준이다",
+    )

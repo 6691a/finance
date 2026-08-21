@@ -5,6 +5,7 @@ from typing import Self
 import pytest
 from sqlalchemy import Table
 
+from apps.models.analysis import ThesisOutcome
 from apps.models.raw import SourceRecord
 from modules.briefing import ops
 
@@ -18,6 +19,10 @@ HEALTHY_ROWS = [
 ]
 
 NO_BACKLOG = (0, 0, 0, 0, 0, 0, None)
+
+# 추론 지표. (지평, 채점, 평균 Brier, flat, 해설, 지지, 반박, 보류)
+NO_THESIS: list = []
+NO_THESIS_BACKLOG = (0, 0)
 
 
 class FakeCursor:
@@ -52,8 +57,21 @@ class FakeConnection:
         return cursor
 
 
-def summary(rows=None, failures=(), backlog=NO_BACKLOG, now=TUESDAY):
-    connection = FakeConnection(HEALTHY_ROWS if rows is None else rows, list(failures), backlog)
+def summary(
+    rows=None,
+    failures=(),
+    backlog=NO_BACKLOG,
+    now=TUESDAY,
+    thesis_rows=None,
+    thesis_backlog=NO_THESIS_BACKLOG,
+):
+    connection = FakeConnection(
+        HEALTHY_ROWS if rows is None else rows,
+        list(failures),
+        backlog,
+        NO_THESIS if thesis_rows is None else thesis_rows,
+        thesis_backlog,
+    )
     return ops.collect_summary(connection, now)
 
 
@@ -128,14 +146,84 @@ def test_unknown_sources_are_folded_into_one_row():
 
 
 def test_the_window_is_a_full_day():
-    connection = FakeConnection(HEALTHY_ROWS, [], NO_BACKLOG)
+    connection = FakeConnection(HEALTHY_ROWS, [], NO_BACKLOG, NO_THESIS, NO_THESIS_BACKLOG)
     ops.collect_summary(connection, TUESDAY)
 
     assert connection.cursors[0].calls[0][1][0] == TUESDAY - timedelta(hours=ops.WINDOW_HOURS)
 
 
+# --- 추론 품질 ---------------------------------------------------------------
+
+# (지평, 채점, 평균 Brier, flat, 해설, 지지, 반박, 보류)
+THESIS_ROWS = [
+    (0, 12, 0.612, 3, 0, 0, 0, 0),
+    (1, 12, 0.701, 4, 12, 1, 4, 7),
+    (5, 8, 0.588, 2, 8, 2, 1, 5),
+]
+
+
+def test_the_thesis_section_is_absent_until_something_is_graded():
+    # 추론이 정말 없는 날은 조회가 0행을 준다. 그건 정상이라 섹션을 안 그린다.
+    text = _block_text(ops.render_blocks(summary()))
+
+    assert "추론 품질" not in text
+
+
+def test_the_thesis_section_marks_whether_it_beats_the_uniform_baseline():
+    text = _block_text(ops.render_blocks(summary(thesis_rows=THESIS_ROWS)))
+
+    assert "추론 품질" in text
+    # 숫자만 보면 매번 0.667과 비교해야 한다. 기호가 갈라 준다.
+    assert "0.612 ✓" in text
+    assert "0.701 ✗" in text
+    assert "0.588 ✓" in text
+    assert str(ops.UNIFORM_BRIER) in text
+
+
+def test_the_thesis_section_shows_the_verdict_split():
+    text = _block_text(ops.render_blocks(summary(thesis_rows=THESIS_ROWS)))
+
+    # 판정은 Brier와 다른 것을 잰다. 분포가 한눈에 보여야 한쪽으로 쏠린 것을 잡는다.
+    assert "1/4/7" in text
+    assert "2/1/5" in text
+
+
+def test_the_thesis_section_carries_no_narrative_text():
+    """해설 전문은 DB에만 둔다.
+
+    매일 해설 몇 편이 운영 리포트에 쌓이면 정작 봐야 할 실패 목록이 묻힌다.
+    """
+    text = _block_text(ops.render_blocks(summary(thesis_rows=THESIS_ROWS)))
+
+    assert "해설" not in text.replace("미해설", "")
+
+
+def test_an_overdue_grade_breaks_the_all_green():
+    # 목표 영업일이 지났는데도 안 된 것만 센다. 아직 안 지난 것은 정상이다.
+    built = summary(thesis_rows=THESIS_ROWS, thesis_backlog=(3, 2))
+
+    assert built.thesis.has_backlog
+    assert not built.is_healthy
+    assert "추론 적체 5건" in ops.render_text(built)
+
+
+def test_a_horizon_without_grades_shows_a_dash_not_a_zero():
+    text = _block_text(ops.render_blocks(summary(thesis_rows=[(5, 0, None, 0, 0, 0, 0, 0)])))
+
+    # 0.000은 "완벽했다"로 읽힌다. 채점이 없는 것과 완벽한 것을 가른다.
+    assert "0.000" not in text
+
+
 def test_fallback_text_is_one_line():
     assert "\n" not in ops.render_text(summary())
+
+
+def test_the_horizon_list_matches_the_thesis_module():
+    from modules.thesis import HORIZON_DAYS
+
+    # ops는 LLM 층을 import하지 않는다 — 감시하는 쪽이 감시받는 쪽을 부르면 그쪽이 죽은 날
+    # 이 리포트도 같이 흔들린다. 대신 값을 한 벌 더 두고 여기서 대조한다.
+    assert set(ops.THESIS_HORIZONS) == set(HORIZON_DAYS)
 
 
 @pytest.mark.parametrize(
@@ -147,6 +235,12 @@ def test_fallback_text_is_one_line():
             ("source", "started_at", "completed_at", "status", "record_count"),
         ),
         (ops.RECENT_FAILURES, SourceRecord.__table__, ("source_key", "metadata")),
+        (
+            ops.THESIS_CALIBRATION,
+            ThesisOutcome.__table__,
+            ("horizon_days", "brier_score", "actual_outcome", "narrative", "verdict"),
+        ),
+        (ops.THESIS_BACKLOG, ThesisOutcome.__table__, ("horizon_days", "evaluated_at", "narrative")),
     ],
 )
 def test_queries_name_columns_that_exist(statement: str, table: Table, columns: tuple[str, ...]):

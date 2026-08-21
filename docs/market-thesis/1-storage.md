@@ -49,9 +49,10 @@ thesis (                          -- 추론 하나 = 노드
 thesis_evidence (                 -- 추론 → 근거 = 엣지
     thesis_id FK → thesis ON DELETE CASCADE
     evidence_kind   -- CHECK ('document','disclosure','macro_change')
-    evidence_ref    -- 툴 결과의 ref 그대로. kind 무관 `<kind>:<id>` 2단 고정
-                    -- (예: document:123, disclosure:<rcept_no>, macro:SP500_FUT).
-                    -- kind는 evidence_kind 컬럼과 중복되므로 ref 안에 소스를 다시 넣지 않는다
+    evidence_ref    -- 툴 결과의 ref 그대로. `<evidence_kind>:<id>` 2단 고정이고 앞자리는
+                    -- evidence_kind와 글자 그대로 같다(document:123,
+                    -- disclosure:<rcept_no>, macro_change:SP500_FUT). 접두를 kind와 같게 두면
+                    -- 파싱이 한 규칙으로 끝나고, 소스 이름을 ref 안에 다시 넣지 않는다
     evidence_title  -- 그래프 조회용 제목 스냅샷
     evidence_url    -- 문서면 canonical_url, 공시면 DART 뷰어 URL, 매크로면 NULL. Slack 링크용
     detail jsonb    -- 툴이 준 수치 스냅샷(등락률, 점수 등)
@@ -120,14 +121,16 @@ thesis_evidence (                 -- 추론 → 근거 = 엣지
 | `thesis/insert.sql` | `INSERT ... ON CONFLICT DO NOTHING RETURNING id`. 충돌이면 0행 |
 | `thesis/select_by_run.sql` | (run_date, run_slot)의 행 전부, `id`·`dag_run_id` 포함. 재실행 판정·3단계 Slack·4단계 그래프가 쓴다 |
 | `thesis/select_forecasts_to_grade.sql` | `run_slot = 'pre_open' AND evaluated_at IS NULL` 전부(날짜 제한 없음). 종가가 영구 결측(상장폐지 등)이면 영원히 미채점으로 남아 매 장후마다 재조회된다 — `evaluated_at` 인덱스로 대비하고, 누적이 문제가 되면 그때 상한을 둔다 |
-| `thesis/update_outcome.sql` | 채점 4컬럼 채움. `WHERE id = %(id)s AND evaluated_at IS NULL` |
+| `thesis/update_outcome.sql` | 채점 4컬럼 채움. `WHERE id = %s AND evaluated_at IS NULL` |
 | `thesis_evidence/insert.sql` | 근거 INSERT |
 | `thesis_evidence/select_by_thesis_ids.sql` | 4단계 그래프 동기화 조회 |
 | `thesis_evidence/select_top_by_thesis_ids.sql` | 3단계 Slack 상위 근거(rank 상위 N) |
 | `stock_investor_trade_daily/select_session_return.sql` | 종목 세션 등락률(확정 종가 vs 전 영업일 종가) |
-| `index_bar/select_session_return.sql` | 지수 세션 등락률(15:30 봉 close vs previous_close) |
+| `index_bar/select_session_return.sql` | 지수 세션 등락률(15:30 봉 close vs previous_close). 봉 시각은 파라미터로 받는다 — KST 경계 계산은 파이썬이 한다 |
 
-모든 조회 SQL의 시간 창은 `%(as_of_at)s` 파라미터를 끝으로 쓰고 `now()`를 쓰지 않는다.
+파라미터는 저장소의 다른 SQL과 같이 psycopg 위치 인자 `%s`다. 목록은 `= ANY(%s)`로 받는다.
+**모든 조회 SQL의 시간 창은 `as_of_at`(또는 그것에서 계산한 시각)을 파라미터로 받고 `now()`를
+쓰지 않는다.** 조회의 기준 시각은 벽시계가 아니라 슬롯이 정한다.
 
 ## 5. 테스트
 

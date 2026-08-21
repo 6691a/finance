@@ -81,7 +81,7 @@ investigate → (tool_calls 있으면) tools → investigate → … → answer 
 {"theses": [{"subject_code": "KOSPI",
              "prob_up": 0.62, "prob_down": 0.23, "prob_flat": 0.15,
              "up_reasoning": "…", "down_reasoning": "…", "flat_reasoning": "…",
-             "evidence_refs": ["macro:SP500_FUT", "document:123"]}]}
+             "evidence_refs": ["macro_change:SP500_FUT", "document:123"]}]}
 ```
 
 - subject_code가 요청 목록 밖이면 그 항목만 버린다. 전부 버려지면 repair 1회.
@@ -122,10 +122,12 @@ LLM을 부르지 않고 그 행들을 돌려준다(첫 성공본 불변). 행이
 ## 6. 모델
 
 `modules/llm.py`에 `thesis_model()`을 추가한다(`max_retries=0`, 재시도는 Airflow).
-제공처는 구현 시점에 그 함수 안에서 정한다 — 문서 태깅은 `ChatOpenAI`(gpt-5.6-luna,
-2026-08-20 전환), 브리핑 선별은 `ChatXAI`(grok-4.6)를 쓰고 있다. 툴 호출 왕복이
-많은 작업이라 툴 호출 품질로 고른다. 어느 쪽이든 부르는 쪽은 `BaseChatModel`만 안다.
-운영 키 상태는 [README.md](README.md) 5절.
+**`ChatXAI`(grok-4.6)다** — 브리핑 선별과 같은 모델이지만 함수를 나눠 둔다. 선별은 목록을
+읽고 고르는 일이고 추론은 툴을 여러 번 돌며 가설을 세우는 일이라, 한쪽만 옮기고 싶어질 때
+그 함수만 고친다. 부르는 쪽은 `BaseChatModel`만 안다.
+
+**키가 선행 조건이다.** `XAI_API_KEY`는 2026-08-20 실측에서 운영 `.env` 값이 무효였다
+([README.md](README.md) 5절). 유효한 키를 넣기 전에는 이 DAG가 매 슬롯 실패한다.
 
 **코드 할 일 — `llm.invoke` 가드.** 현재 `invoke(model, messages, schema=, tools=)`는 둘을
 동시에 넘겨도 막지 않는다(`bind_tools` 뒤 `bind(response_format=)`를 그냥 한다). "툴과

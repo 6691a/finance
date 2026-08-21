@@ -1,0 +1,50 @@
+-- 한 대상의 지난 장전 추론과 그 지평별 채점·해설. `past_theses` 툴이 읽는다.
+--
+-- 장전 추론이 자기 과거 예측과 결과를 돌아보게 하는 것이 이 조회의 목적이다.
+-- 피드백 루프는 새 테이블이나 새 층이 아니라 이 조회 하나다.
+--
+-- **창의 끝은 여기서도 as_of_at이다.** 이것이 없으면 장전 슬롯을 오후에 재실행할 때
+-- 그날 저녁의 채점 결과가 아침 예측에 섞인다. 술어를 셋 다 건다.
+--   - 추론일이 기준 시각의 KST 날짜보다 앞선 것만(같은 날 아침 것은 아직 결과가 없다)
+--   - 채점은 그 시각 이전에 매긴 것만
+--   - 해설은 그 시각 이전에 쓴 것만
+--
+-- 지평별 결과를 배열로 접어 추론당 한 행을 지킨다. 조인으로 펼치면 지평 수만큼 같은
+-- 추론이 나온다(`select_briefing_candidates.sql`과 같은 이유).
+WITH bounds AS (
+    SELECT %s::timestamptz AS as_of_at
+)
+SELECT thesis.id,
+       thesis.run_date,
+       thesis.prob_up,
+       thesis.prob_down,
+       thesis.prob_flat,
+       thesis.up_reasoning,
+       thesis.down_reasoning,
+       thesis.flat_reasoning,
+       coalesce(
+           jsonb_agg(
+               jsonb_build_object(
+                   'horizon_days', outcome.horizon_days,
+                   'actual_return_pct', outcome.actual_return_pct,
+                   'actual_outcome', outcome.actual_outcome,
+                   'brier_score', outcome.brier_score,
+                   'verdict', outcome.verdict,
+                   'narrative', outcome.narrative
+               )
+               ORDER BY outcome.horizon_days
+           ) FILTER (WHERE outcome.id IS NOT NULL),
+           '[]'::jsonb
+       ) AS outcomes
+FROM thesis
+CROSS JOIN bounds
+LEFT JOIN thesis_outcome AS outcome
+       ON outcome.thesis_id = thesis.id
+      AND (outcome.evaluated_at IS NULL OR outcome.evaluated_at <= bounds.as_of_at)
+      AND (outcome.narrative_at IS NULL OR outcome.narrative_at <= bounds.as_of_at)
+WHERE thesis.run_slot = 'pre_open'
+  AND thesis.subject_code = %s
+  AND thesis.run_date < (bounds.as_of_at AT TIME ZONE 'Asia/Seoul')::date
+GROUP BY thesis.id
+ORDER BY thesis.run_date DESC
+LIMIT %s

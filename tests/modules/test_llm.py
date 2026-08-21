@@ -17,6 +17,7 @@ from modules.llm import (
     document_model,
     invoke,
     model_name,
+    thesis_model,
 )
 from modules.schema import response_format, strict_json_schema
 
@@ -79,6 +80,17 @@ def test_the_briefing_model_is_its_own_function(monkeypatch):
     assert model.max_retries == 0
 
 
+def test_the_thesis_model_is_its_own_function(monkeypatch):
+    """브리핑 선별과 같은 모델이지만 함수를 나눠 둔다. 선별과 추론은 요구가 달라
+    한쪽만 바꾸고 싶어질 때 그 함수만 고치면 된다."""
+    monkeypatch.setenv("XAI_API_KEY", "secret-key")
+
+    model = thesis_model()
+
+    assert model_name(model) == "grok-4.6"
+    assert model.max_retries == 0
+
+
 def test_invoke_binds_the_schema_and_no_tools():
     scripted = ScriptedModel(AIMessage("{}"))
     schema = response_format(Assessment, "assessment")
@@ -88,6 +100,17 @@ def test_invoke_binds_the_schema_and_no_tools():
     assert scripted.bound["response_format"] == schema
     # 툴과 스키마를 같은 요청에 넣지 않는다. 제공처마다 동작이 갈린다.
     assert scripted.tools is None
+
+
+def test_invoke_refuses_tools_and_a_schema_in_one_request():
+    scripted = ScriptedModel(AIMessage("{}"))
+
+    # "조사 → 답변" 두 단계가 원칙이고 이 검사가 그것을 코드 계약으로 만든다.
+    with pytest.raises(ValueError, match="never both"):
+        invoke(scripted, [], schema=response_format(Assessment, "assessment"), tools=[{"type": "function"}])
+
+    # 거절은 제공처에 닿기 전이다. 요청이 나가지 않는다.
+    assert scripted.calls == []
 
 
 def test_a_rejected_schema_becomes_its_own_error():

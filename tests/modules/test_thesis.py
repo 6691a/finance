@@ -28,7 +28,6 @@ from modules.thesis import (
     NarrativeTarget,
     RunSlot,
     StoredEvidence,
-    StoredOutcome,
     StoredThesis,
     Subject,
     ThesisBuilder,
@@ -1593,7 +1592,12 @@ def linked_evidence() -> tuple[StoredEvidence, ...]:
 
 
 def _texts(built: list[dict[str, Any]]) -> list[str]:
-    return [(block.get("text") or {}).get("text", "") for block in built]
+    """블록에 실린 글자 전부. `context`는 `elements` 안에 있어 따로 꺼낸다."""
+    collected = []
+    for block in built:
+        collected.append((block.get("text") or {}).get("text", ""))
+        collected += [element.get("text", "") for element in block.get("elements", [])]
+    return collected
 
 
 def test_the_slack_message_shows_all_three_directions():
@@ -1603,13 +1607,17 @@ def test_the_slack_message_shows_all_three_directions():
     # 사용자가 요청한 "오를 확률/이유, 내릴 확률/이유, 횡보 확률/이유" 그대로다.
     for piece in ("상승 62%", "하락 23%", "횡보 15%", "오를 이유", "내릴 이유", "횡보 이유"):
         assert piece in body
+    # 가장 높은 확률만 굵게 한다. 순서는 ▲▼– 로 고정이라 눈이 매번 다시 읽지 않는다.
+    assert "*▲ 상승 62%*" in body
+    assert "*▼ 하락 23%*" not in body
 
 
 def test_only_evidence_with_a_url_becomes_a_link():
     built = render_blocks(RunSlot.PRE_OPEN, date(2026, 8, 21), [stored_thesis()], {1: linked_evidence()})
 
     body = "\n".join(_texts(built))
-    assert "<https://x.test/1|기사>" in body
+    # 근거는 context 블록으로 내려 본문보다 작게 그려진다.
+    assert "📎 <https://x.test/1|기사>" in body
     assert "· S&P500 선물 +0.8%" in body
 
 
@@ -1617,13 +1625,13 @@ def test_no_evidence_says_so_rather_than_leaving_a_blank():
     built = render_blocks(RunSlot.PRE_OPEN, date(2026, 8, 21), [stored_thesis()], {})
 
     # 억지 인용보다 근거 없음이 낫다는 판단의 결과라 그렇게 적는다.
-    assert "근거: 없음 (관측 상태만으로 추론)" in "\n".join(_texts(built))
+    assert "📎 근거 없음 — 관측 상태만으로 추론" in "\n".join(_texts(built))
 
 
 def test_an_empty_run_says_there_is_nothing():
     built = render_blocks(RunSlot.POST_CLOSE, date(2026, 8, 21), [], {})
 
-    assert "추론 결과 없음" in "\n".join(_texts(built))
+    assert "남은 추론이 없다" in "\n".join(_texts(built))
     assert render_text(RunSlot.POST_CLOSE, date(2026, 8, 21), []).endswith("추론 결과 없음")
 
 
@@ -1635,37 +1643,17 @@ def test_the_header_names_the_slot():
     assert "장후 리뷰" in evening["text"]["text"]
 
 
-def test_the_review_section_is_absent_when_there_is_nothing_to_review():
-    built = render_blocks(RunSlot.PRE_OPEN, date(2026, 8, 21), [stored_thesis()], {}, ())
+def test_the_market_message_carries_no_grading(self_check=None):
+    """채점·해설은 시장 메시지에 없다(2026-08-21 결정).
 
-    # 빈 섹션은 "볼 것이 없다"와 "아직 안 왔다"를 구분하지 못한다.
-    assert "되돌아보기" not in "\n".join(_texts(built))
-
-
-def test_the_review_section_shows_the_verdict_next_to_the_brier():
-    outcome = StoredOutcome(
-        thesis_id=1,
-        horizon_days=5,
-        actual_return_pct=Decimal("-4.0000"),
-        actual_outcome=ThesisDirection.DOWN,
-        brier_score=Decimal("0.14000"),
-        narrative="금리가 원인이었다",
-        verdict=ThesisVerdict.CONTRADICTED,
-    )
-    built = render_blocks(
-        RunSlot.PRE_OPEN,
-        date(2026, 8, 21),
-        [stored_thesis()],
-        {},
-        [(stored_thesis(), outcome, linked_evidence())],
-    )
+    읽는 사람이 다르다 — 오늘 전망은 시장을 보는 사람이 읽고, "우리 추론이 잘 맞고 있나"는
+    운영자가 본다. 지표는 `slack_ops_briefing`이 낸다.
+    """
+    built = render_blocks(RunSlot.PRE_OPEN, date(2026, 8, 21), [stored_thesis()], {1: linked_evidence()})
 
     body = "\n".join(_texts(built))
-    # 판정은 Brier와 다른 것을 잰다. 나란히 보여야 "맞았지만 이유는 틀렸다"가 읽힌다.
-    assert "5영업일 뒤 되돌아보기" in body
-    assert "Brier 0.14000" in body
-    assert "판정: contradicted" in body
-    assert "금리가 원인이었다" in body
+    for piece in ("Brier", "되돌아보기", "판정", "지지됨", "반박됨"):
+        assert piece not in body
 
 
 def test_the_slack_message_stays_inside_the_block_budget():

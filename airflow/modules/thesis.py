@@ -1802,7 +1802,21 @@ SLOT_HEADERS = {
     RunSlot.POST_CLOSE: "🔎 장후 리뷰",
 }
 
+# 되돌아보기 제목에 쓰는 짧은 이름. 헤더의 이모지까지 반복하면 줄이 길어진다.
+SLOT_LABELS = {
+    RunSlot.PRE_OPEN: "장전 전망",
+    RunSlot.POST_CLOSE: "장후 리뷰",
+}
+
 DIRECTION_MARKS = {"up": "▲", "down": "▼", "flat": "–"}
+DIRECTION_NAMES = {"up": "상승", "down": "하락", "flat": "횡보"}
+
+# 판정을 영문 enum 값 그대로 보이면 읽는 사람이 매번 해석해야 한다. 이모지가 앞에서 갈라 준다.
+VERDICT_LABELS = {
+    ThesisVerdict.SUPPORTED: "✅ 이유 지지됨",
+    ThesisVerdict.CONTRADICTED: "❌ 이유 반박됨",
+    ThesisVerdict.UNRESOLVED: "❔ 판단 보류",
+}
 
 
 class StoredOutcome(BaseModel):
@@ -1874,47 +1888,54 @@ def stored_outcomes(connection: Connection, thesis_ids: Sequence[int]) -> dict[i
     return {thesis_id: tuple(items) for thesis_id, items in grouped.items()}
 
 
-def _evidence_line(items: Sequence[StoredEvidence]) -> str:
-    """근거 줄. URL이 있는 것만 링크로 만든다(매크로 변화는 링크할 곳이 없다)."""
+def _evidence_context(items: Sequence[StoredEvidence]) -> str:
+    """근거 줄. `context` 블록에 들어가 본문보다 작게 그려진다.
+
+    URL이 있는 것만 링크로 만든다 — 매크로 변화는 링크할 곳이 없다.
+    """
     if not items:
         # 억지 인용보다 낫다는 판단의 결과라 그렇게 적는다.
-        return "근거: 없음 (관측 상태만으로 추론)"
+        return "📎 근거 없음 — 관측 상태만으로 추론"
     parts = [
         f"<{item.evidence_url}|{item.evidence_title}>" if item.evidence_url else item.evidence_title for item in items
     ]
-    return "근거: " + " · ".join(parts)
+    return "📎 " + " · ".join(parts)
 
 
-def _thesis_section(thesis: StoredThesis, evidence: Sequence[StoredEvidence]) -> str:
-    return "\n".join(
-        [
-            (
-                f"*{thesis.label}*  ▲ 상승 {thesis.prob_up:.0%} · ▼ 하락 {thesis.prob_down:.0%}"
-                f" · – 횡보 {thesis.prob_flat:.0%}"
-            ),
-            f"▲ {thesis.up_reasoning}",
-            f"▼ {thesis.down_reasoning}",
-            f"– {thesis.flat_reasoning}",
-            _evidence_line(evidence),
-        ]
+def _dominant(thesis: StoredThesis) -> tuple[str, Decimal]:
+    """모델이 가장 높은 확률을 준 방향과 그 확률."""
+    return max(
+        (("up", thesis.prob_up), ("down", thesis.prob_down), ("flat", thesis.prob_flat)),
+        key=lambda pair: pair[1],
     )
 
 
-def _review_section(thesis: StoredThesis, outcome: StoredOutcome, evidence: Sequence[StoredEvidence]) -> str:
-    mark = DIRECTION_MARKS.get(outcome.actual_outcome.value, "") if outcome.actual_outcome else ""
-    graded = (
-        f"  예측 ▲{thesis.prob_up:.0%} · 실제 {outcome.actual_return_pct:+.2f}%"
-        f" ({mark}{outcome.actual_outcome.value})  Brier {outcome.brier_score}"
-        if outcome.actual_outcome is not None
-        else "  (채점 없음 — 장후 리뷰는 예측이 아니다)"
-    )
+def _probability_line(thesis: StoredThesis) -> str:
+    """세 확률을 한 줄에. **가장 높은 것만 굵게 한다.**
+
+    순서는 ▲▼– 로 고정한다. 대상마다 순서가 바뀌면 눈이 매번 다시 읽어야 한다.
+    """
+    dominant, _ = _dominant(thesis)
+    cells = []
+    for key, mark, name, value in (
+        ("up", "▲", "상승", thesis.prob_up),
+        ("down", "▼", "하락", thesis.prob_down),
+        ("flat", "–", "횡보", thesis.prob_flat),
+    ):
+        text = f"{mark} {name} {value:.0%}"
+        cells.append(f"*{text}*" if key == dominant else text)
+    return "   ".join(cells)
+
+
+def _thesis_section(thesis: StoredThesis) -> str:
+    """추론 하나. 이유 셋은 인용줄로 내려 확률 줄과 무게를 가른다."""
     return "\n".join(
         [
-            f"*{thesis.label}*{graded}",
-            # 판정은 Brier와 다른 것을 잰다. 방향이 맞아도 이유가 틀렸을 수 있다.
-            f"판정: {outcome.verdict.value if outcome.verdict else '없음'}",
-            outcome.narrative or "",
-            _evidence_line(evidence),
+            f"*{thesis.label}*",
+            _probability_line(thesis),
+            f"> *▲* {thesis.up_reasoning}",
+            f"> *▼* {thesis.down_reasoning}",
+            f"> *–* {thesis.flat_reasoning}",
         ]
     )
 
@@ -1924,31 +1945,27 @@ def render_blocks(
     run_date: date,
     theses: Sequence[StoredThesis],
     evidence: dict[int, tuple[StoredEvidence, ...]],
-    reviews: Sequence[tuple[StoredThesis, StoredOutcome, tuple[StoredEvidence, ...]]] = (),
 ) -> list[dict[str, Any]]:
     """Slack 블록. 추론이 0건이면 그 사실을 한 줄로 알린다.
 
-    되돌아보기(`reviews`)는 T+5 해설만 싣는다. 0건이면 섹션을 아예 넣지 않는다 —
-    빈 섹션은 "볼 것이 없다"와 "아직 안 왔다"를 구분하지 못한다.
+    대상마다 `section`(확률·이유)과 `context`(근거) 둘을 낸다. 근거를 본문에 두면 이유
+    문장과 같은 무게로 읽혀 어느 것이 판단이고 어느 것이 출처인지 흐려진다.
+
+    **채점과 사후 해설은 여기 싣지 않는다**(2026-08-21 결정). 읽는 사람이 다르다 — 이 메시지는
+    오늘 시장을 보는 사람이 읽고, "우리 추론이 잘 맞고 있나"는 운영자가 본다. 지표는
+    `slack_ops_briefing`이 낸다. 한 메시지에 섞으면 매일 아침 자기 감사 보고가 딸려 온다.
     """
     from modules.briefing import blocks as block
 
-    built: list[dict[str, Any]] = [block.header(f"{SLOT_HEADERS[run_slot]} {run_date:%m/%d}")]
+    weekday = block.WEEKDAY_NAMES[run_date.weekday()]
+    built: list[dict[str, Any]] = [block.header(f"{SLOT_HEADERS[run_slot]} · {run_date:%m/%d}({weekday})")]
     if not theses:
-        built.append(block.section("추론 결과 없음"))
-    else:
-        built += [block.section(_thesis_section(thesis, evidence.get(thesis.id, ()))) for thesis in theses]
-
-    if reviews:
-        built.append(block.divider())
-        built.append(block.section(f"*{SLACK_REVIEW_HORIZON}영업일 뒤 되돌아보기*"))
-        built += [_review_block(block, item) for item in reviews]
+        built.append(block.section("_이번 슬롯에 남은 추론이 없다._"))
+        return built
+    for thesis in theses:
+        built.append(block.section(_thesis_section(thesis)))
+        built.append(block.context([_evidence_context(evidence.get(thesis.id, ()))]))
     return built
-
-
-def _review_block(block: Any, item: tuple[StoredThesis, StoredOutcome, tuple[StoredEvidence, ...]]) -> dict[str, Any]:
-    thesis, outcome, evidence = item
-    return block.section(_review_section(thesis, outcome, evidence))
 
 
 def render_text(run_slot: RunSlot, run_date: date, theses: Sequence[StoredThesis]) -> str:

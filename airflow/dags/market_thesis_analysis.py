@@ -31,7 +31,9 @@
 - `build_thesis` — 관측 상태(SQL) → LLM 추론 → 저장. 슬롯 무관하게 돈다.
 - `grade_followups` — 지평 T+0·1·3·5의 미채점 예측을 채점한다. **LLM 없음.** 장후만.
 - `narrate_followups` — T+1·3·5에 사후 해설과 판정을 붙인다. 장후만. 지평마다 호출 하나다.
-- `notify_slack` — 이번 슬롯의 추론과 T+5 되돌아보기를 보낸다. LLM을 다시 부르지 않는다.
+- `notify_slack` — 이번 슬롯의 추론을 보낸다. LLM을 다시 부르지 않는다.
+
+**채점·해설 지표는 이 메시지에 없다.** 읽는 사람이 달라 `slack_ops_briefing`이 OPS 채널로 낸다.
 
 `notify_slack`을 마지막으로 뺀 이유: LangGraph 재추론(비용 큼)과 발송 실패를 분리한다.
 Slack이 잠깐 죽어도 앞의 세 태스크를 다시 돌리지 않는다.
@@ -392,7 +394,12 @@ def market_thesis_analysis():
 
     @task(task_display_name="Slack 발송")
     def notify_slack(built: dict[str, Any]) -> str:
-        """이번 슬롯의 추론과 T+5 되돌아보기를 보낸다. LLM을 다시 부르지 않는다."""
+        """이번 슬롯의 추론을 보낸다. LLM을 다시 부르지 않는다.
+
+        **채점과 해설은 여기 싣지 않는다.** 읽는 사람이 다르다 — 이 메시지는 오늘 시장을
+        보는 사람이 읽고, "우리 추론이 잘 맞고 있나"는 운영자가 본다. 지표는
+        `slack_ops_briefing`이 OPS 채널로 낸다.
+        """
         from modules import thesis as market_thesis
 
         token, channel = _slack_settings()
@@ -403,9 +410,8 @@ def market_thesis_analysis():
             theses = market_thesis.existing_theses(connection, run_date=run_date, run_slot=run_slot)
             ids = [thesis.id for thesis in theses]
             evidence = market_thesis.top_evidence(connection, ids)
-            reviews = _reviews(connection, market_thesis, run_date)
 
-        blocks = market_thesis.render_blocks(run_slot, run_date, theses, evidence, reviews)
+        blocks = market_thesis.render_blocks(run_slot, run_date, theses, evidence)
         text = market_thesis.render_text(run_slot, run_date, theses)
         try:
             return post_message(token, channel, text=text, blocks=blocks)
@@ -506,32 +512,6 @@ def _horizon_returns(connection: Any, market_thesis: Any, item: Any, target_day:
         base_bar_at=_close_at(item.run_date),
         target_bar_at=_close_at(target_day),
     )
-
-
-def _reviews(connection: Any, market_thesis: Any, run_date: date) -> list[tuple]:
-    """T+5 되돌아보기. 오늘이 T+5인 추론의 해설을 싣는다. 0건이면 섹션이 아예 없다."""
-    origin = _origin_day(connection, run_date, market_thesis.SLACK_REVIEW_HORIZON)
-    if origin is None:
-        return []
-    theses = market_thesis.existing_theses(connection, run_date=origin, run_slot=market_thesis.RunSlot.PRE_OPEN)
-    if not theses:
-        return []
-    ids = [thesis.id for thesis in theses]
-    outcomes = market_thesis.stored_outcomes(connection, ids)
-    evidence = market_thesis.top_evidence(connection, ids, outcome_horizon_days=market_thesis.SLACK_REVIEW_HORIZON)
-    reviews = []
-    for thesis in theses:
-        found = next(
-            (
-                outcome
-                for outcome in outcomes.get(thesis.id, ())
-                if outcome.horizon_days == market_thesis.SLACK_REVIEW_HORIZON and outcome.narrative
-            ),
-            None,
-        )
-        if found is not None:
-            reviews.append((thesis, found, evidence.get(thesis.id, ())))
-    return reviews
 
 
 market_thesis_analysis = market_thesis_analysis()

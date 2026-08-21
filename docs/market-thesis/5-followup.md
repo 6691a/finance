@@ -2,7 +2,7 @@
 
 - 상위: [README.md](README.md)
 - 날짜: 2026-08-21
-- 상태: 제안 (미구현)
+- 상태: 구현 중 (스키마·채점·해설 완료, DAG 미착수)
 - 의존: [1-storage.md](1-storage.md), [2-agent.md](2-agent.md), [3-dag-slack.md](3-dag-slack.md).
   4단계와는 병렬 가능하나 그래프 반영 절(6절)은 [4-graph.md](4-graph.md)를 전제한다.
 - 산출물: `apps/models/analysis.py`에 `ThesisOutcome` 추가와 `thesis`·`thesis_evidence` 수정,
@@ -159,7 +159,9 @@ select_pending_grades.sql  →  T+N 등락률 조회  →  classify_outcome / br
 - **종가가 없으면 행을 만들지 않는다.** 미채점으로 남고 다음 실행이 다시 집는다. 0으로
   꾸미지 않는다. 상장폐지 등으로 영구 결측이면 영원히 재조회되므로 `(thesis_id,
   horizon_days)` 인덱스로 대비하고, 누적이 문제가 되면 그때 상한을 둔다.
-- 쓰기는 `INSERT ... ON CONFLICT DO NOTHING`. 재실행 멱등이고 이미 매긴 점수를 덮지 않는다.
+- 쓰기는 조건부 upsert다(`WHERE thesis_outcome.evaluated_at IS NULL`). 재실행 멱등이고 이미
+  매긴 점수를 덮지 않는다. **`DO NOTHING`이 아닌 이유**: 채점이 종가 결측으로 실패한 날
+  해설만 돌면 행이 먼저 생기는데, `DO NOTHING`이면 그 지평이 영영 채점되지 않는다.
 - T+0 채점도 여기서 한다. 기존 `build_thesis` 안의 채점 호출(3단계 2절 1-4)은 이 태스크로
   옮긴다.
 
@@ -176,7 +178,10 @@ select_pending_grades.sql  →  T+N 등락률 조회  →  classify_outcome / br
   지평의 모든 subject를 한 번에** 준다(건별 호출 금지 규칙 그대로).
 - 대상은 그 지평에서 `narrative IS NULL`인 것(`thesis_outcome` 행이 아직 없는 `post_close`
   추론 포함). 해설 LLM이 실패한 날의 것도 다음 실행이 회수한다.
-- **쓰기는 `UPDATE ... WHERE narrative IS NULL`이다.** 첫 성공본 불변. 근거는
+- **쓰기는 조건부 upsert다**(`WHERE thesis_outcome.narrative IS NULL`). 첫 성공본 불변.
+  순수 UPDATE가 아닌 이유는 `post_close`에 채점 행이 없어 해설이 행을 새로 만들기
+  때문이다. `RETURNING`이 0행이면 근거도 넣지 않는다 — 남의 해설과 어긋난 인용이 남는다.
+  근거는
   `thesis_evidence`에 `outcome_horizon_days`를 채워 INSERT하고, UPDATE와 한 트랜잭션에 넣는다.
 
 ### 흐름 — `FollowupNarrator`
@@ -326,11 +331,11 @@ T+5가 해설이 가장 굳은 시점이기도 하다. `notify_slack`의 기존 
 | 파일 | 용도 |
 | --- | --- |
 | `thesis_outcome/select_pending_grades.sql` | 채점할 (thesis_id, horizon_days) 전부. `thesis_outcome` 행이 없고 T+N 영업일이 지난 것 |
-| `thesis_outcome/insert_grade.sql` | 채점 행 INSERT. `ON CONFLICT DO NOTHING` |
-| `thesis_outcome/select_pending_narratives.sql` | 한 지평에서 `narrative IS NULL`인 행 + 원 추론의 확률·이유 |
-| `thesis_outcome/update_narrative.sql` | 해설 4컬럼 채움. `WHERE id = %(id)s AND narrative IS NULL` |
+| `thesis_outcome/insert_grade.sql` | 채점 행 INSERT. **조건부 upsert다** — `DO NOTHING`이면 해설이 먼저 만든 행을 영영 채점하지 못한다. `WHERE thesis_outcome.evaluated_at IS NULL` |
+| `thesis_outcome/select_pending_narratives.sql` | 한 지평에서 `narrative IS NULL`인 대상 + 원 추론의 확률·이유. **`thesis`에서 LEFT JOIN한다** — `post_close`는 채점을 안 받아 행이 아예 없다 |
+| `thesis_outcome/insert_narrative.sql` | 해설 다섯 칸 채움. **UPDATE가 아니라 조건부 upsert다** — `post_close`는 해설이 행을 새로 만든다. `WHERE thesis_outcome.narrative IS NULL` |
 | `thesis_outcome/select_by_thesis_ids.sql` | 4단계 그래프 동기화, Slack T+5 섹션 |
-| `thesis/select_past_with_outcomes.sql` | `past_theses` 툴 |
+| `thesis/select_past_with_outcomes.sql` | `past_theses` 툴. 지평별 결과를 jsonb 배열로 접어 추론당 한 행을 지킨다 |
 | `stock_investor_trade_daily/select_horizon_return.sql` | 종목 T+N 누적 등락률(기준가 = 예측일 전 영업일 종가) |
 | `index_bar/select_horizon_return.sql` | 지수 T+N 누적 등락률 |
 
@@ -343,7 +348,7 @@ T+5가 해설이 가장 굳은 시점이기도 하다. `notify_slack`의 기존 
   `horizon_days` CHECK, Brier 범위 CHECK, `verdict` 값 집합 CHECK, `horizon_days=0`이면
   해설 다섯 칸 NULL CHECK, 해설 all-or-none CHECK, CASCADE, 주석. `thesis`에 채점 컬럼이
   **없는지**. `thesis_evidence`의 UNIQUE 둘에 `outcome_horizon_days`가 들어갔는지.
-- SQL 컬럼 vs 모델 metadata 대조 — `insert_grade.sql`, `update_narrative.sql`,
+- SQL 컬럼 vs 모델 metadata 대조 — `insert_grade.sql`, `insert_narrative.sql`,
   `select_by_thesis_ids.sql`. `insert_grade.sql`에 `ON CONFLICT DO NOTHING`이 있고
   `DO UPDATE`가 없는지. `select_horizon_return.sql`이 `stock_investor_trade_daily`를 보고
   `stock_bar`를 안 보는지.

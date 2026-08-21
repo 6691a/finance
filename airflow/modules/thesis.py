@@ -42,7 +42,7 @@
 import json
 import logging
 from collections.abc import Iterable, Sequence
-from datetime import date, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
 from decimal import ROUND_HALF_UP, Decimal
 from enum import StrEnum
 from typing import Any, Literal, Protocol, Self, TypedDict
@@ -107,6 +107,10 @@ MAX_WINDOW_HOURS = 72
 # `min_score` 인자의 허용 범위. `value_score`는 0~8이지만 상한을 넉넉히 둔다.
 MIN_VALUE_SCORE = 0
 MAX_VALUE_SCORE = 100
+
+# `past_theses`가 한 번에 돌려줄 과거 추론 수의 허용 범위. 문맥을 과거로 다 채우지 않는다.
+MIN_PAST_THESES = 1
+MAX_PAST_THESES = 10
 
 # 이유 문장 하나의 상한. 넘으면 그 필드만 자른다.
 MAX_REASONING_CHARS = 500
@@ -283,6 +287,7 @@ def evidence_ref(kind: ThesisEvidenceKind, identifier: str) -> str:
 RECENT_DOCUMENTS = read_sql("postgres", "document", "select_recent_top.sql")
 RECENT_DISCLOSURES = read_sql("postgres", "disclosure_event", "select_recent.sql")
 WINDOW_CHANGES = read_sql("postgres", "quote_bar", "select_window_changes.sql")
+PAST_THESES = read_sql("postgres", "thesis", "select_past_with_outcomes.sql")
 
 TOOL_SCHEMAS: tuple[dict[str, Any], ...] = (
     {
@@ -337,6 +342,30 @@ TOOL_SCHEMAS: tuple[dict[str, Any], ...] = (
             "parameters": {"type": "object", "properties": {}, "required": []},
         },
     },
+    {
+        "type": "function",
+        "function": {
+            "name": "past_theses",
+            "description": (
+                "이 대상에 대해 전에 낸 장전 추론과 그 결과. 그때의 세 확률·세 이유, 지평별 실제 등락률과 "
+                "Brier 점수, 사후 해설과 판정을 준다. 같은 실수를 반복하고 있는지 볼 수 있다."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "subject_code": {
+                        "type": "string",
+                        "description": "이번 실행의 대상 목록 안에 있는 값만. 다른 값은 거절된다.",
+                    },
+                    "n": {
+                        "type": "integer",
+                        "description": f"최근 몇 건을 볼지. {MIN_PAST_THESES}~{MAX_PAST_THESES}.",
+                    },
+                },
+                "required": ["subject_code", "n"],
+            },
+        },
+    },
 )
 
 
@@ -361,11 +390,15 @@ class ThesisToolbox:
         as_of_at: datetime,
         macro_window_start: datetime,
         watched_codes: Sequence[str],
+        subject_codes: Sequence[str] = (),
     ) -> None:
         self._connection = connection
         self._as_of_at = as_of_at
         self._macro_window_start = macro_window_start
         self._watched_codes = list(watched_codes)
+        # `past_theses`가 볼 수 있는 대상. 이번 실행의 목록 밖은 거절한다 — 모델이 아무
+        # 종목이나 조회하며 문맥을 채우게 두지 않는다.
+        self._subject_codes = frozenset(subject_codes)
         self._registry: dict[str, Evidence] = {}
         self._calls = 0
         self._chars = 0
@@ -398,9 +431,17 @@ class ThesisToolbox:
             "recent_disclosures": self._recent_disclosures,
             "macro_changes": self._macro_changes,
         }
+        if name == "past_theses":
+            # **레지스트리에 넣지 않는다.** 자기 과거 추론은 근거가 아니다 — 근거 종류는
+            # document·disclosure·macro_change 셋 그대로 두고, 이 툴은 문맥으로만 쓴다.
+            body = json.dumps(self._past_theses(arguments), ensure_ascii=False, default=str)
+            self._chars += len(body)
+            return body
+
         handler = handlers.get(name)
         if handler is None:
-            raise ToolLimitExceeded(f"모르는 툴 이름이다: {name!r}. 쓸 수 있는 것은 {sorted(handlers)}")
+            known = sorted([*handlers, "past_theses"])
+            raise ToolLimitExceeded(f"모르는 툴 이름이다: {name!r}. 쓸 수 있는 것은 {known}")
 
         items = handler(arguments)
         for item in items:
@@ -408,6 +449,35 @@ class ThesisToolbox:
         body = json.dumps([_tool_row(item) for item in items], ensure_ascii=False)
         self._chars += len(body)
         return body
+
+    def _past_theses(self, arguments: dict[str, Any]) -> list[dict[str, Any]]:
+        """이 대상의 지난 장전 추론과 지평별 결과. 피드백 루프는 이 조회 하나다.
+
+        **창의 끝은 여기서도 `as_of_at`이다.** 없으면 장전 슬롯을 오후에 재실행할 때 그날
+        저녁의 채점이 아침 예측에 섞인다. SQL이 술어 셋을 건다.
+        """
+        code = str(arguments.get("subject_code") or "").strip()
+        if not self._subject_codes:
+            raise ToolLimitExceeded("이번 실행에는 대상 목록이 없어 past_theses를 쓸 수 없다")
+        if code not in self._subject_codes:
+            raise ToolLimitExceeded(f"대상 목록 밖이다: {code!r}. 쓸 수 있는 것은 {sorted(self._subject_codes)}")
+        count = _clamp_int(arguments.get("n"), MIN_PAST_THESES, MAX_PAST_THESES, MIN_PAST_THESES)
+        with self._connection.cursor() as cursor:
+            cursor.execute(PAST_THESES, (self._as_of_at, code, count))
+            rows = cursor.fetchall()
+        return [
+            {
+                "run_date": row[1].isoformat(),
+                "prob_up": float(row[2]),
+                "prob_down": float(row[3]),
+                "prob_flat": float(row[4]),
+                "up_reasoning": row[5],
+                "down_reasoning": row[6],
+                "flat_reasoning": row[7],
+                "outcomes": row[8],
+            }
+            for row in rows
+        ]
 
     def _recent_documents(self, arguments: dict[str, Any]) -> list[Evidence]:
         hours = _clamp_int(arguments.get("hours"), MIN_WINDOW_HOURS, MAX_WINDOW_HOURS, MAX_WINDOW_HOURS)
@@ -1592,3 +1662,96 @@ def _shorten_to(text: str, limit: int) -> str:
     if len(stripped) > limit:
         return stripped[: limit - 1].rstrip() + "…"
     return stripped
+
+
+# ---------------------------------------------------------------------------
+# 해설 저장
+# ---------------------------------------------------------------------------
+
+PENDING_NARRATIVES = read_sql("postgres", "thesis_outcome", "select_pending_narratives.sql")
+INSERT_NARRATIVE = read_sql("postgres", "thesis_outcome", "insert_narrative.sql")
+
+
+def pending_narratives(
+    connection: Connection,
+    *,
+    run_date: date,
+    horizon_days: int,
+) -> tuple[NarrativeTarget, ...]:
+    """그 지평에서 아직 해설이 없는 대상. **두 슬롯 모두 온다.**
+
+    채점 값이 있으면 함께 담는다. 프롬프트에 실을지는 `FollowupNarrator`의
+    `include_outcome`이 정한다 — 이 함수는 있는 대로 준다.
+
+    `cited_titles`는 여기서 채우지 않는다. 원 추론이 인용한 근거 제목은
+    `thesis_evidence`에 있고, 부르는 쪽이 필요하면 붙인다.
+    """
+    if horizon_days not in NARRATED_HORIZON_DAYS:
+        raise ThesisError(f"horizon {horizon_days} does not take a narrative; known: {NARRATED_HORIZON_DAYS}")
+    with connection.cursor() as cursor:
+        cursor.execute(PENDING_NARRATIVES, (horizon_days, run_date))
+        rows = cursor.fetchall()
+    return tuple(
+        NarrativeTarget(
+            thesis_id=row[0],
+            subject=Subject(kind=row[3], code=row[4], label=row[5]),
+            prob_up=row[6],
+            prob_down=row[7],
+            prob_flat=row[8],
+            up_reasoning=row[9],
+            down_reasoning=row[10],
+            flat_reasoning=row[11],
+            actual_return_pct=row[12],
+            actual_outcome=row[13],
+            brier_score=row[14],
+        )
+        for row in rows
+    )
+
+
+def store_narratives(
+    connection: Connection,
+    *,
+    horizon_days: int,
+    as_of_at: datetime,
+    dag_run_id: str,
+    drafts: Sequence[NarrativeDraft],
+    registry: dict[str, Evidence],
+    llm_model: str,
+    prompt_revision: str,
+) -> int:
+    """해설과 그 근거를 한 트랜잭션에 쓴다. 쓴 건수를 돌려준다.
+
+    **해설 갱신과 근거 INSERT가 한 트랜잭션이다.** 해설만 들어가고 근거가 빠진 상태를
+    남기지 않는다 — 근거 없는 판정은 되짚을 수 없다.
+
+    이미 해설이 있는 행은 SQL의 `WHERE narrative IS NULL`이 막는다. 그때 근거를 다시
+    넣지 않도록 `RETURNING`으로 실제 갱신 여부를 확인한다.
+    """
+    if horizon_days not in NARRATED_HORIZON_DAYS:
+        raise ThesisError(f"horizon {horizon_days} does not take a narrative; known: {NARRATED_HORIZON_DAYS}")
+
+    stored = 0
+    with atomic(connection) as transaction, transaction.cursor() as cursor:
+        for draft in drafts:
+            cursor.execute(
+                INSERT_NARRATIVE,
+                (
+                    draft.thesis_id,
+                    horizon_days,
+                    as_of_at,
+                    dag_run_id,
+                    draft.narrative,
+                    draft.verdict.value,
+                    datetime.now(UTC),
+                    llm_model,
+                    prompt_revision,
+                ),
+            )
+            if cursor.rowcount == 0:
+                # 다른 실행이 먼저 썼다. 근거를 덧붙이면 그 해설과 어긋난 인용이 남는다.
+                logger.info("thesis %s already had a T+%s narrative", draft.thesis_id, horizon_days)
+                continue
+            _store_evidence(cursor, draft.thesis_id, draft.evidence_refs, registry, horizon_days)
+            stored += 1
+    return stored

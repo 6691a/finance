@@ -15,6 +15,7 @@ from modules.thesis import (
     FLAT_THRESHOLD_PCT,
     HORIZON_DAYS,
     MAX_ITEM_DETAIL_CHARS,
+    MAX_NARRATIVE_CHARS,
     MAX_REASONING_CHARS,
     MAX_TOOL_CALLS,
     MAX_TOOL_RESULT_CHARS,
@@ -22,6 +23,9 @@ from modules.thesis import (
     NARRATED_HORIZON_DAYS,
     PROMPT_VERSION,
     Evidence,
+    FollowupNarrator,
+    NarrativeDraft,
+    NarrativeTarget,
     RunSlot,
     Subject,
     ThesisBuilder,
@@ -37,6 +41,7 @@ from modules.thesis import (
     evidence_ref,
     existing_theses,
     normalize_probabilities,
+    store_narratives,
     store_theses,
 )
 
@@ -56,6 +61,9 @@ INDEX_SESSION_RETURN = read_sql("postgres", "index_bar", "select_session_return.
 TOOL_DOCUMENTS = read_sql("postgres", "document", "select_recent_top.sql")
 TOOL_DISCLOSURES = read_sql("postgres", "disclosure_event", "select_recent.sql")
 TOOL_WINDOW_CHANGES = read_sql("postgres", "quote_bar", "select_window_changes.sql")
+PAST_THESES = read_sql("postgres", "thesis", "select_past_with_outcomes.sql")
+PENDING_NARRATIVES = read_sql("postgres", "thesis_outcome", "select_pending_narratives.sql")
+INSERT_NARRATIVE = read_sql("postgres", "thesis_outcome", "insert_narrative.sql")
 
 
 def inserted_columns(statement: str) -> tuple[str, ...]:
@@ -486,6 +494,11 @@ class FakeCursor:
             raise self._connection.raises
         self._rows = list(self._connection.results.get(_statement_key(statement), []))
 
+    @property
+    def rowcount(self) -> int:
+        """UPDATE가 실제로 몇 행을 바꿨는지. 조건부 upsert가 이 값으로 갈린다."""
+        return self._connection.rowcount
+
     def fetchall(self) -> list[tuple]:
         return self._rows
 
@@ -502,6 +515,8 @@ class FakeConnection:
         self.commits = 0
         self.rollbacks = 0
         self.raises: Exception | None = None
+        # 조건부 upsert가 몇 행을 바꿨다고 할지. 테스트가 정한다.
+        self.rowcount = 1
 
     def cursor(self) -> FakeCursor:
         return FakeCursor(self)
@@ -518,8 +533,12 @@ def _statement_key(statement: str) -> str:
     query = body(statement).strip()
     if query.startswith("INSERT INTO thesis_evidence"):
         return "evidence_insert"
+    if query.startswith("INSERT INTO thesis_outcome"):
+        return "narrative_insert" if "narrative" in query else "grade_insert"
     if query.startswith("INSERT INTO thesis"):
         return "thesis_insert"
+    if "FROM thesis\nCROSS JOIN bounds" in query:
+        return "past"
     if "FROM document" in query:
         return "documents"
     if "FROM disclosure_event" in query:
@@ -1164,6 +1183,352 @@ def test_the_airflow_enums_match_the_backend_vocabulary():
         (ThesisEvidenceKind, analysis.ThesisEvidenceKind),
     ):
         assert {member.value for member in airflow_enum} == {member.value for member in backend_enum}
+
+
+# --- 사후 해설 ---------------------------------------------------------------
+
+REVIEW_AS_OF = datetime(2026, 8, 24, 6, 30, tzinfo=UTC)
+
+
+def narrative_target(code: str = "KOSPI", **overrides: Any) -> NarrativeTarget:
+    values: dict[str, Any] = {
+        "thesis_id": 11 if code == "KOSPI" else 12,
+        "subject": next(s for s in SUBJECTS if s.code == code),
+        "prob_up": Decimal("0.6200"),
+        "prob_down": Decimal("0.2300"),
+        "prob_flat": Decimal("0.1500"),
+        "up_reasoning": "밤사이 미국 지수가 올랐다",
+        "down_reasoning": "공시가 수급을 눌렀다",
+        "flat_reasoning": "재료가 상쇄됐다",
+        "actual_return_pct": Decimal("-4.0000"),
+        "actual_outcome": ThesisDirection.DOWN,
+        "brier_score": Decimal("0.14000"),
+    }
+    values.update(overrides)
+    return NarrativeTarget(**values)
+
+
+def narrative_message(*items: dict[str, Any]) -> AIMessage:
+    return AIMessage(json.dumps({"narratives": list(items)}))
+
+
+def narrative_payload(code: str = "KOSPI", **overrides: Any) -> dict[str, Any]:
+    payload = {
+        "subject_code": code,
+        "narrative": "이 기사들은 금리 급등을 원인으로 본다",
+        "verdict": "unresolved",
+        "evidence_refs": [],
+    }
+    payload.update(overrides)
+    return payload
+
+
+def narrator(model: ScriptedModel, connection: FakeConnection, *, include_outcome: bool = True) -> FollowupNarrator:
+    return FollowupNarrator(model, toolbox(connection), include_outcome=include_outcome)
+
+
+def run_narrator(built: FollowupNarrator, targets: tuple[NarrativeTarget, ...] | None = None) -> Any:
+    return built.run(
+        run_date=date(2026, 8, 21),
+        run_slot=RunSlot.PRE_OPEN,
+        horizon_days=1,
+        as_of_at=REVIEW_AS_OF,
+        targets=targets if targets is not None else (narrative_target(),),
+    )
+
+
+def test_the_prompt_variant_decides_whether_the_result_is_shown():
+    connection = FakeConnection()
+    informed = narrator(scripted(), connection, include_outcome=True)
+    blind = narrator(scripted(), connection, include_outcome=False)
+    target = narrative_target()
+
+    shown = informed.build_messages(
+        run_date=date(2026, 8, 21),
+        run_slot=RunSlot.PRE_OPEN,
+        horizon_days=1,
+        as_of_at=REVIEW_AS_OF,
+        targets=(target,),
+    )[1].content
+    hidden = blind.build_messages(
+        run_date=date(2026, 8, 21),
+        run_slot=RunSlot.PRE_OPEN,
+        horizon_days=1,
+        as_of_at=REVIEW_AS_OF,
+        targets=(target,),
+    )[1].content
+
+    assert "실제 결과" in shown
+    assert "-4.00%" in shown
+    # blind는 결과를 못 본다. 다만 후속 기사가 등락을 싣고 있어 완전한 차단은 아니다
+    # (docs/market-thesis/5-followup.md 12절 실측).
+    assert "실제 결과" not in hidden
+    assert "-4.00%" not in hidden
+    # 원 추론의 확률과 이유는 양쪽 다 본다.
+    for body_text in (shown, hidden):
+        assert "밤사이 미국 지수가 올랐다" in body_text
+
+
+def test_the_variant_travels_in_the_prompt_version():
+    connection = FakeConnection()
+
+    assert narrator(scripted(), connection, include_outcome=True).prompt_revision.endswith("/informed")
+    assert narrator(scripted(), connection, include_outcome=False).prompt_revision.endswith("/blind")
+
+
+@pytest.mark.parametrize("verdict", ["supported", "contradicted"])
+def test_a_verdict_without_evidence_is_downgraded(verdict):
+    connection = FakeConnection({"documents": [document_row(7)]})
+    model = scripted(narrative_message(narrative_payload(verdict=verdict, evidence_refs=[])))
+    built = narrator(model, connection)
+
+    drafts = run_narrator(built)
+
+    # 프롬프트 규칙만으로는 역산을 못 막는다. 이 검사가 막는다.
+    assert drafts[0].verdict is ThesisVerdict.UNRESOLVED
+
+
+def test_a_verdict_with_evidence_survives():
+    connection = FakeConnection({"documents": [document_row(7)]})
+    box = toolbox(connection)
+    box.run("recent_documents", {"hours": 6, "min_score": 0})
+    model = scripted(narrative_message(narrative_payload(verdict="contradicted", evidence_refs=["document:7"])))
+    built = FollowupNarrator(model, box)
+
+    drafts = built.run(
+        run_date=date(2026, 8, 21),
+        run_slot=RunSlot.PRE_OPEN,
+        horizon_days=1,
+        as_of_at=REVIEW_AS_OF,
+        targets=(narrative_target(),),
+    )
+
+    assert drafts[0].verdict is ThesisVerdict.CONTRADICTED
+    assert drafts[0].evidence_refs == ("document:7",)
+
+
+def test_unresolved_needs_no_evidence():
+    connection = FakeConnection()
+    model = scripted(narrative_message(narrative_payload(verdict="unresolved")))
+
+    drafts = run_narrator(narrator(model, connection))
+
+    assert drafts[0].verdict is ThesisVerdict.UNRESOLVED
+    assert drafts[0].evidence_refs == ()
+
+
+def test_a_long_narrative_is_trimmed():
+    connection = FakeConnection()
+    model = scripted(narrative_message(narrative_payload(narrative="가" * (MAX_NARRATIVE_CHARS + 200))))
+
+    drafts = run_narrator(narrator(model, connection))
+
+    assert len(drafts[0].narrative) == MAX_NARRATIVE_CHARS
+
+
+def test_narratives_outside_the_target_list_are_dropped():
+    connection = FakeConnection()
+    model = scripted(narrative_message(narrative_payload("KOSPI"), narrative_payload("AAPL")))
+
+    drafts = run_narrator(narrator(model, connection), (narrative_target("KOSPI"),))
+
+    assert [d.subject_code for d in drafts] == ["KOSPI"]
+
+
+def test_every_target_unusable_triggers_one_repair_then_raises():
+    connection = FakeConnection()
+    model = scripted(narrative_message(narrative_payload("AAPL")), narrative_message(narrative_payload("MSFT")))
+
+    with pytest.raises(ThesisError):
+        run_narrator(narrator(model, connection), (narrative_target("KOSPI"),))
+
+
+# --- past_theses 툴 ----------------------------------------------------------
+
+
+def past_thesis_row(run_date: date = date(2026, 8, 20)) -> tuple:
+    return (
+        7,
+        run_date,
+        Decimal("0.6200"),
+        Decimal("0.2300"),
+        Decimal("0.1500"),
+        "오를 이유",
+        "내릴 이유",
+        "횡보 이유",
+        [{"horizon_days": 1, "actual_outcome": "down", "brier_score": "0.14", "verdict": "contradicted"}],
+    )
+
+
+def test_past_theses_refuses_a_subject_outside_this_run():
+    connection = FakeConnection({"past": [past_thesis_row()]})
+    box = ThesisToolbox(
+        connection,
+        as_of_at=AS_OF,
+        macro_window_start=MACRO_WINDOW_START,
+        watched_codes=["005930"],
+        subject_codes=["KOSPI"],
+    )
+
+    # 모델이 아무 종목이나 조회하며 문맥을 채우게 두지 않는다.
+    with pytest.raises(ToolLimitExceeded, match="대상 목록 밖"):
+        box.run("past_theses", {"subject_code": "AAPL", "n": 3})
+
+
+def test_past_theses_is_unavailable_without_a_subject_list():
+    connection = FakeConnection()
+    box = ThesisToolbox(connection, as_of_at=AS_OF, macro_window_start=MACRO_WINDOW_START, watched_codes=["005930"])
+
+    with pytest.raises(ToolLimitExceeded, match="대상 목록이 없어"):
+        box.run("past_theses", {"subject_code": "KOSPI", "n": 3})
+
+
+@pytest.mark.parametrize(("given", "expected"), [(0, 1), (11, 10), (3, 3), ("bad", 1)])
+def test_past_theses_clamps_its_count(given, expected):
+    connection = FakeConnection({"past": []})
+    box = ThesisToolbox(
+        connection,
+        as_of_at=AS_OF,
+        macro_window_start=MACRO_WINDOW_START,
+        watched_codes=["005930"],
+        subject_codes=["KOSPI"],
+    )
+
+    box.run("past_theses", {"subject_code": "KOSPI", "n": given})
+
+    _, parameters = connection.calls[0]
+    assert parameters[0] == AS_OF
+    assert parameters[2] == expected
+
+
+def test_past_theses_results_never_become_evidence():
+    connection = FakeConnection({"past": [past_thesis_row()]})
+    box = ThesisToolbox(
+        connection,
+        as_of_at=AS_OF,
+        macro_window_start=MACRO_WINDOW_START,
+        watched_codes=["005930"],
+        subject_codes=["KOSPI"],
+    )
+
+    body_text = box.run("past_theses", {"subject_code": "KOSPI", "n": 3})
+
+    # 자기 과거 추론은 근거가 아니다. 근거 종류는 셋 그대로 둔다.
+    assert box.registry == {}
+    assert "contradicted" in body_text
+
+
+def test_past_theses_cuts_its_window_at_the_slot_time():
+    query = body(PAST_THESES)
+
+    # 없으면 장전 슬롯을 오후에 재실행할 때 그날 저녁의 채점이 아침 예측에 섞인다.
+    assert "run_slot = 'pre_open'" in query
+    assert "outcome.evaluated_at <= bounds.as_of_at" in query
+    assert "outcome.narrative_at <= bounds.as_of_at" in query
+    assert "thesis.run_date < (bounds.as_of_at AT TIME ZONE 'Asia/Seoul')::date" in query
+
+
+# --- 해설 저장 ---------------------------------------------------------------
+
+
+def test_pending_narratives_covers_both_slots():
+    query = body(PENDING_NARRATIVES)
+
+    # post_close 추론은 채점을 안 받아 thesis_outcome 행이 없다. INNER JOIN이면 영영 빠진다.
+    assert "LEFT JOIN thesis_outcome" in query
+    assert "outcome.narrative IS NULL" in query
+    assert "run_slot = 'pre_open'" not in query
+
+
+def test_the_narrative_write_never_overwrites():
+    statement = body(INSERT_NARRATIVE)
+
+    assert "ON CONFLICT ON CONSTRAINT uq_thesis_outcome_natural_key DO UPDATE" in statement
+    assert "WHERE thesis_outcome.narrative IS NULL" in statement
+    # 채점 칸은 해설이 건드리지 않는다.
+    assert not set(inserted_columns(INSERT_NARRATIVE)) & {"evaluated_at", "actual_outcome", "brier_score"}
+    assert set(inserted_columns(INSERT_NARRATIVE)) <= {c.name for c in ThesisOutcome.__table__.columns}
+
+
+def test_storing_a_narrative_writes_its_evidence_in_the_same_transaction():
+    connection = FakeConnection({"documents": [document_row(7)]})
+    box = toolbox(connection)
+    box.run("recent_documents", {"hours": 6, "min_score": 0})
+    writer = FakeConnection({"narrative_insert": [(1,)]})
+    writer.rowcount = 1
+    draft = NarrativeDraft(
+        thesis_id=11,
+        subject_code="KOSPI",
+        narrative="해설",
+        verdict=ThesisVerdict.CONTRADICTED,
+        evidence_refs=("document:7",),
+    )
+
+    stored = store_narratives(
+        writer,
+        horizon_days=1,
+        as_of_at=REVIEW_AS_OF,
+        dag_run_id="manual__run",
+        drafts=[draft],
+        registry=box.registry,
+        llm_model="grok-4.6",
+        prompt_revision="1/informed",
+    )
+
+    kinds = [_statement_key(statement) for statement, _ in writer.calls]
+    assert stored == 1
+    assert kinds == ["narrative_insert", "evidence_insert"]
+    # 근거는 그 지평의 것으로 표시된다.
+    assert writer.calls[1][1][1] == 1
+    assert writer.commits == 1
+
+
+def test_an_already_written_narrative_gets_no_new_evidence():
+    connection = FakeConnection({"documents": [document_row(7)]})
+    box = toolbox(connection)
+    box.run("recent_documents", {"hours": 6, "min_score": 0})
+    writer = FakeConnection()
+    # SQL의 WHERE가 막아 0행이 갱신된 상황.
+    writer.rowcount = 0
+    draft = NarrativeDraft(
+        thesis_id=11,
+        subject_code="KOSPI",
+        narrative="해설",
+        verdict=ThesisVerdict.CONTRADICTED,
+        evidence_refs=("document:7",),
+    )
+
+    stored = store_narratives(
+        writer,
+        horizon_days=1,
+        as_of_at=REVIEW_AS_OF,
+        dag_run_id="manual__run",
+        drafts=[draft],
+        registry=box.registry,
+        llm_model="grok-4.6",
+        prompt_revision="1/informed",
+    )
+
+    kinds = [_statement_key(statement) for statement, _ in writer.calls]
+    assert stored == 0
+    # 근거를 덧붙이면 그 해설과 어긋난 인용이 남는다.
+    assert "evidence_insert" not in kinds
+
+
+@pytest.mark.parametrize("horizon", [0, 2, 7])
+def test_a_horizon_that_takes_no_narrative_is_refused(horizon):
+    # 지평 0은 그날의 후속 보도가 아직 쌓이지 않아 해설을 쓸 재료가 없다.
+    with pytest.raises(ThesisError, match="does not take a narrative"):
+        store_narratives(
+            FakeConnection(),
+            horizon_days=horizon,
+            as_of_at=REVIEW_AS_OF,
+            dag_run_id="manual__run",
+            drafts=[],
+            registry={},
+            llm_model="grok-4.6",
+            prompt_revision="1/informed",
+        )
 
 
 def test_the_airflow_horizons_match_the_backend_lists():

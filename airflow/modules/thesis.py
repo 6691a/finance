@@ -56,7 +56,7 @@ from modules import llm
 from modules.llm import UnsupportedResponseFormat
 from modules.schema import SchemaError, json_object, response_format
 from modules.sql import read_sql
-from modules.utility import atomic
+from modules.utility import KST_TIMEZONE, atomic
 
 logger = logging.getLogger(__name__)
 
@@ -278,6 +278,18 @@ class Evidence(BaseModel):
 def evidence_ref(kind: ThesisEvidenceKind, identifier: str) -> str:
     """`<evidence_kind>:<id>`. 접두가 kind와 같아 파싱이 한 규칙으로 끝난다."""
     return f"{kind.value}:{identifier}"
+
+
+def kst_label(moment: datetime) -> str:
+    """프롬프트에 쓰는 시각 표기. `2026-08-21 08:35 KST`.
+
+    **연도를 뺀 `briefing/blocks.timestamp`를 재사용하지 않는다.** 모델은 이 값으로
+    "오늘"이 며칠인지를 정하므로 연도가 빠지면 그 판단의 근거가 사라진다.
+
+    저장·조회는 여전히 UTC다(프로젝트 공통 규칙). 이 함수는 표시 층에서만 쓴다 —
+    `briefing/documents.pick_input`의 `as_of_kst`와 같은 자리다.
+    """
+    return f"{moment.astimezone(KST_TIMEZONE):%Y-%m-%d %H:%M} KST"
 
 
 # ---------------------------------------------------------------------------
@@ -741,6 +753,10 @@ INSTRUCTION = """{slot_instruction}
 
 기준 시각(이 시각 이후의 정보는 너에게 주어지지 않는다): {as_of_at}
 
+**툴이 돌려주는 시각(`published_at`, `detected_at`, `window_start`, `window_end`)은 UTC다.**
+한국 시장 시각으로 읽으려면 9시간을 더한다. 날짜 필드(`run_date`, `receipt_date`, `session`)는
+이미 한국 기준 영업일이라 더하지 않는다.
+
 ## 추론 대상
 {subjects}
 
@@ -807,7 +823,7 @@ class ThesisBuilder:
             HumanMessage(
                 INSTRUCTION.format(
                     slot_instruction=SLOT_INSTRUCTION[run_slot],
-                    as_of_at=as_of_at.isoformat(),
+                    as_of_at=kst_label(as_of_at),
                     subjects=subject_lines or "(없음)",
                     observed_state=json.dumps(observed_state, ensure_ascii=False, indent=2, default=str),
                 )
@@ -1423,6 +1439,9 @@ NARRATIVE_INSTRUCTION = """{run_date} 장{slot_label}에 쓴 추론을 {horizon_
 
 기준 시각(이 시각 이후의 정보는 너에게 주어지지 않는다): {as_of_at}
 
+**툴이 돌려주는 시각(`published_at`, `detected_at`, `window_start`, `window_end`)은 UTC다.**
+한국 시장 시각으로 읽으려면 9시간을 더한다. 날짜 필드는 이미 한국 기준 영업일이다.
+
 필요하면 툴로 그동안 쌓인 문서·공시·시세 변화를 직접 가져와라.
 
 ## 되돌아볼 추론
@@ -1491,7 +1510,7 @@ class FollowupNarrator:
                     run_date=run_date.isoformat(),
                     slot_label="전" if run_slot is RunSlot.PRE_OPEN else "후",
                     horizon_days=horizon_days,
-                    as_of_at=as_of_at.isoformat(),
+                    as_of_at=kst_label(as_of_at),
                     targets="\n\n".join(self._render_target(target) for target in targets),
                 )
             ),

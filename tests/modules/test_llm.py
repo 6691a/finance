@@ -9,6 +9,8 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from modules.assessment import Assessment
 from modules.llm import (
+    REQUEST_TIMEOUT_SECONDS,
+    THESIS_TIMEOUT_SECONDS,
     LlmError,
     RetryableLlmError,
     UnsupportedResponseFormat,
@@ -67,6 +69,7 @@ def test_the_document_model_is_defined_in_code_not_in_settings(monkeypatch):
     # 재시도는 Airflow가 한다. SDK가 먼저 재시도하면 태스크 타임아웃 안에서 몇 번 불렀는지
     # 로그와 트레이스가 어긋난다.
     assert model.max_retries == 0
+    assert model.request_timeout == REQUEST_TIMEOUT_SECONDS
 
 
 def test_the_briefing_model_is_its_own_function(monkeypatch):
@@ -78,6 +81,7 @@ def test_the_briefing_model_is_its_own_function(monkeypatch):
 
     assert model_name(model) == "grok-4.6"
     assert model.max_retries == 0
+    assert model.request_timeout == REQUEST_TIMEOUT_SECONDS
 
 
 def test_the_thesis_model_is_its_own_function(monkeypatch):
@@ -89,6 +93,11 @@ def test_the_thesis_model_is_its_own_function(monkeypatch):
 
     assert model_name(model) == "grok-4.6"
     assert model.max_retries == 0
+    # 추론 한 요청은 툴 결과 여러 건을 읽고 대상 전부에 답한다 — 문서 한 건 태깅보다 길다.
+    # 2026-08-21 운영 첫 실행이 300초에서 `APITimeoutError`로 죽었다. 문서 태깅의 값은
+    # 그대로 둔다(한 번에 손잡이 하나).
+    assert model.request_timeout == THESIS_TIMEOUT_SECONDS
+    assert THESIS_TIMEOUT_SECONDS > REQUEST_TIMEOUT_SECONDS
 
 
 def test_invoke_binds_the_schema_and_no_tools():
@@ -201,3 +210,4 @@ def test_response_format_is_shaped_for_the_api(model):
     assert formatted["type"] == "json_schema"
     assert formatted["json_schema"]["name"] == "thing"
     assert formatted["json_schema"]["strict"] is True
+

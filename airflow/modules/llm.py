@@ -57,6 +57,14 @@ logger = logging.getLogger(__name__)
 # 온다. 긴 문서 하나가 이 시간을 넘기면 팬아웃 배치 전체가 되돌아가므로 넉넉히 잡는다.
 REQUEST_TIMEOUT_SECONDS = 300.0
 
+# 시장 추론만 더 오래 기다린다. 한 요청이 툴 결과 여러 건을 읽고 대상 전부에 확률·이유를
+# 쓰는 일이라 문서 한 건을 태깅하는 것보다 길다. 2026-08-21 운영 첫 실행이 300초에서
+# `APITimeoutError`로 죽었다. 노트북(`narrator_ab.ipynb`)은 이미 900을 쓰고 있었다.
+#
+# **문서 태깅의 300초를 같이 올리지 않는다.** 그쪽은 지금 값으로 잘 돌고 있고, 한 번에
+# 손잡이 하나만 당긴다(`docs/market-thesis/TUNING.md` 1절).
+THESIS_TIMEOUT_SECONDS = 900.0
+
 
 class LlmError(RuntimeError):
     """모델 호출이 실패했다."""
@@ -116,7 +124,7 @@ def thesis_model() -> BaseChatModel:
     """
     return ChatXAI(
         model="grok-4.6",
-        timeout=REQUEST_TIMEOUT_SECONDS,
+        timeout=THESIS_TIMEOUT_SECONDS,
         # 재시도는 Airflow가 한다. 위 모듈 docstring 참고.
         max_retries=0,
     )

@@ -149,7 +149,7 @@ GROUP BY run_slot;
 | `SCHEDULE` | 08:35 / 20:30 KST | `market_thesis_analysis.py` | 쿼리 C + readiness 재시도 | 재시도가 잦으면 늦춘다. 08:35는 문서 평가(매시 25분) 뒤, 20:30은 확정 종가(18:10) 뒤라는 제약이 있다 |
 | `ASSESSMENT_LAG` | 20분 | 같은 파일 | 같은 것 | 평가가 정상인데 guard가 막으면 늘린다 |
 | `thesis_model()` | `grok-4.6` | `llm.py` | 분기 Brier | 교체는 `PROMPT_VERSION`과 **함께** 올린다(1절 넷째) |
-| `REQUEST_TIMEOUT_SECONDS` | 300 | `llm.py` | 타임아웃 실패 건수 | grok-4.6이 느려 노트북은 900을 쓴다. DAG에서 걸리면 올린다 |
+| `THESIS_TIMEOUT_SECONDS` | 900 | `llm.py` | 타임아웃 실패 건수 | 2026-08-21 첫 실행이 300초에서 죽어 900으로 올렸다(노트북과 같은 값). 또 걸리면 툴 상한(`MAX_TOOL_ROUNDS`)을 먼저 의심한다 — 왕복이 늘수록 한 요청이 길어진다. 문서 태깅의 `REQUEST_TIMEOUT_SECONDS`(300)는 따로다 |
 | `SLACK_EVIDENCE_LIMIT` | 3 | `thesis.py` | 사람 눈 | 줄이 길어 안 읽히면 줄인다 |
 
 ---
@@ -227,6 +227,8 @@ ops 브리핑의 **추론 적체** 한 줄. **여기서 즉시 대응하는 것�
 | --- | --- | --- | --- | --- |
 | 2026-08-21 | `NarrativeVariant` 기본 | (없음) → `INFORMED` | 독립 사건 2, 툴 호출·레지스트리 동일, 판정만 갈림 | [5-followup.md](5-followup.md) 12절 |
 | 2026-08-21 | 채점·판정의 Slack 위치 | 시장 메시지 → ops 브리핑 | — (읽는 사람이 다르다는 판단) | [3-dag-slack.md](3-dag-slack.md) 4절 |
+| 2026-08-21 | 프롬프트의 기준 시각 표기 | UTC isoformat → `2026-08-21 08:35 KST` | 장전 as_of_at이 UTC로 **전날** 23:35라 "오늘 장이 열리기 전"과 날짜가 어긋났다 | `thesis.kst_label`. 판을 안 올렸다 — 그때 `thesis`가 0행이라 갈릴 판이 없었다 |
+| 2026-08-21 | `THESIS_TIMEOUT_SECONDS` | (`REQUEST_TIMEOUT_SECONDS` 300 공용) → 900 전용 | 운영 첫 실행 `RetryableLlmError: Request timed out` 1건 | 표본 1건이다. 다음 실행들에서 안 걸리는지 확인이 남았다 |
 
 ---
 

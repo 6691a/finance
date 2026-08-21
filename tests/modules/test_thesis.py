@@ -1144,6 +1144,39 @@ def test_storing_never_updates_and_falls_back_to_the_stored_row_on_conflict():
     assert [row.id for row in rows] == [11]
 
 
+def test_the_prompt_states_the_reference_time_in_kst():
+    """UTC 그대로 주면 모델이 "오늘"을 하루 어긋나게 읽는다.
+
+    장전 슬롯의 as_of_at은 KST 08:35이고 UTC로는 **전날** 23:35다. 프롬프트에 UTC만
+    실리면 "오늘 한국 장이 열리기 전이다"와 날짜가 어긋난다.
+    """
+    pre_open_as_of = datetime(2026, 8, 20, 23, 35, tzinfo=UTC)
+    prompt = ThesisBuilder.build_messages(
+        run_slot=RunSlot.PRE_OPEN,
+        as_of_at=pre_open_as_of,
+        subjects=SUBJECTS,
+        observed_state=OBSERVED,
+    )[1].content
+
+    assert "2026-08-21 08:35 KST" in prompt
+    # 툴 결과는 UTC로 남으므로 그 규약을 프롬프트가 직접 알려 준다.
+    assert "UTC다" in prompt
+    assert "9시간" in prompt
+
+
+def test_the_narrative_prompt_states_the_reference_time_in_kst():
+    prompt = narrator(scripted(), FakeConnection()).build_messages(
+        run_date=date(2026, 8, 21),
+        run_slot=RunSlot.PRE_OPEN,
+        horizon_days=1,
+        as_of_at=datetime(2026, 8, 24, 6, 30, tzinfo=UTC),
+        targets=(narrative_target(),),
+    )[1].content
+
+    assert "2026-08-24 15:30 KST" in prompt
+    assert "UTC다" in prompt
+
+
 def test_evidence_ranks_follow_the_citation_order():
     connection = FakeConnection({"documents": [document_row(7), document_row(9)], "macro": [macro_row()]})
     box = toolbox(connection)

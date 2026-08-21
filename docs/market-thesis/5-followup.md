@@ -7,7 +7,7 @@
   4단계와는 병렬 가능하나 그래프 반영 절(6절)은 [4-graph.md](4-graph.md)를 전제한다.
 - 산출물: `apps/models/analysis.py`에 `ThesisOutcome` 추가와 `thesis`·`thesis_evidence` 수정,
   수기 리비전, `thesis_outcome/*.sql`과 T+N 등락률 SQL, `thesis.py`에 `FollowupNarrator`와
-  `past_theses` 툴, `market_thesis_analysis.py`에 태스크 둘, 테스트
+  `past_theses` 툴, `market_thesis_review.py`에 태스크 둘, 테스트
 
 ## 0. 왜 — 하루로는 "왜"를 모른다
 
@@ -297,14 +297,19 @@ Toolbox는 2단계의 것을 그대로 쓴다. `as_of_at`만 그 지평의 장�
 
 ## 7. DAG
 
-3단계 `market_thesis_analysis.py`를 고친다. 새 DAG를 만들지 않는다 — 스케줄과 readiness
-guard를 복제하게 되고, 채점은 어차피 `post_close` 슬롯의 종가가 준비된 뒤라야 한다.
+**두 태스크는 장후 DAG(`market_thesis_review.py`)에만 붙는다.** 채점은 확정 종가가
+준비된 뒤라야 하고, 그것을 기다리는 것이 그 DAG의 readiness guard다. 장전 DAG에는
+이 태스크가 아예 없다.
+
+> 2026-08-21 갱신: 이 문서를 처음 쓸 때는 DAG가 하나(`market_thesis_analysis`)여서
+> "새 DAG를 만들지 않는다"고 적었고, 두 태스크가 `pre_open` 실행에서는 즉시 반환했다.
+> 그 즉시 반환이 UI에서 **빈 성공**으로 보이는 것이 DAG를 나눈 이유 중 하나다
+> (`CLAUDE.md`의 "슬롯·모드로 갈리는 DAG는 나눈다").
 
 ```
 build_thesis >> grade_followups >> narrate_followups >> notify_slack
 ```
 
-- `grade_followups`·`narrate_followups`는 `pre_open` 슬롯이면 즉시 반환한다.
 - 실패 판정은 3단계 3절 그대로. `LlmError`·`ThesisError` → `AirflowFailException`,
   `RetryableLlmError`·`ConnectionError`는 올려 재시도.
 - `narrate_followups`가 실패해도 `grade_followups`의 채점은 이미 커밋돼 있다. 다음 실행이
@@ -372,7 +377,7 @@ T+5가 해설이 가장 굳은 시점이기도 하다. `notify_slack`의 기존 
     SQL에 넘어가는 창의 끝이 `as_of_at`이고 `evaluated_at`·`narrative_at` 술어가 실리는지.
   - 렌더링: T+5 섹션이 예측 확률·실제 등락률·Brier·해설·근거를 담는지, 0건이면 섹션이
     아예 없는지.
-- `tests/dags/test_market_thesis_analysis.py`에 추가 — 태스크 순서
+- `tests/dags/test_market_thesis_review.py`에 추가 — 태스크 순서
   `build_thesis >> grade_followups >> narrate_followups >> notify_slack`,
   `pre_open` 실행에서 뒤 두 태스크가 즉시 반환하는지, XCom 슬롯 목록이 세 태스크의 결과를
   합치는지, `narrate_followups` 실패가 채점을 되돌리지 않는지.

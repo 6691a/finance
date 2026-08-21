@@ -179,6 +179,39 @@ uv run ruff check apps core dags migrations tests
 - **단일 요청** — 응답 하나가 결과 전부다. 수집기 예외를 그대로 올린다. `bbk`, `boe`,
   `ecb_*`, `mof`, `market_calendar`가 그렇다.
 
+### 슬롯·모드로 갈리는 DAG는 나눈다
+
+**실행 시각으로 "지금 어느 모드인가"를 추론하지 않는다.** 한 DAG가 여러 시각에 돌면서
+`logical_date`의 시각으로 모드를 가르면, 모드가 실행자의 의도가 아니라 시계에서 나온다.
+`logical_date`가 없는 수동 실행은 벽시계로 떨어져 **UI의 Trigger 버튼이 조용히 다른 모드를
+돌린다.** 2026-08-21에 `market_thesis_analysis`를 `market_thesis_forecast`(장전)와
+`market_thesis_review`(장후)로 나눈 이유가 이것이다.
+
+나누면 따라오는 것:
+
+- 한쪽 모드에서만 도는 태스크가 다른 쪽 실행에서 **빈 성공으로 보이는 일**이 없어진다.
+  전에는 장전 실행의 `grade_followups`·`narrate_followups`가 즉시 반환하면서 성공 표시였다.
+- 모드마다 재시도·타임아웃을 따로 줄 수 있다. 앞단이 다르면 기다리는 성격도 다르다.
+- 따로 pause 할 수 있고 `max_active_runs`가 서로를 막지 않는다.
+
+**나누는 기준은 "앞단 데이터와 실패 성격이 다른가"다.** 같은 데이터를 같은 이유로
+기다리는데 시각만 여럿이면 `MultipleCronTriggerTimetable` 하나로 둔다
+(`slack_kr_market_briefing`이 그 예다).
+
+### 모드로 갈리는 함수도 나눈다
+
+DAG를 나눈 뒤 공유 모듈에 `if mode == "..."`가 남으면 절반만 나눈 것이다. 읽는 사람이
+함수마다 "지금 어느 쪽 이야기인가"를 따라가야 하고, 한쪽을 고치다 다른 쪽을 깨뜨린다.
+
+- **모드를 모르는 것만 공유 모듈에 둔다.** 연결, 파라미터 검증, 저장, 발송처럼 양쪽이
+  글자 그대로 같은 것이다. 모드는 **값으로 흘러갈 수는 있다**(`run_slot`을 저장 함수에
+  넘기는 것) — 금지하는 것은 그 값으로 **분기**하는 것이다.
+- **모드마다 다른 것은 모드별 모듈이 갖는다.** 기준 시각, readiness guard, 조회 창의 시작,
+  어느 세션을 볼지 같은 것이다. 기준 구현은 `airflow/modules/thesis_common.py`와
+  `thesis_forecast.py`·`thesis_review.py` 셋이다.
+- 공유 함수가 모드별 값을 **인자로 받게** 만들면 분기가 사라진다. `observed_state`가
+  슬롯 대신 세션 날짜를 받는 것이 그 형태다 — 어느 세션을 볼지는 부르는 쪽이 정한다.
+
 어느 형태든 **되돌릴 수 없는 오류는 즉시 `AirflowFailException`으로 바꾼다.** 설정·인증·주소
 문제(HTTP 4xx)는 재시도해도 같은 답이다. 재시도할 값어치가 있는 것(`ConnectionError`)은
 그대로 올려 Airflow가 재시도하게 둔다. **그 판단은 DAG가 한다.** 수집기는 종류만 정확히

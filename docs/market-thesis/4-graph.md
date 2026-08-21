@@ -149,7 +149,7 @@ Neo4j 예외를 분류한다: 인증·제약 위반처럼 다시 불러도 같�
   `neo4j.time.Date`로 바뀌어 실리는지, 드라이버가 `max_transaction_retry_time=0`으로 만들어지는지,
   제약 위반 등 → `GraphError`, 연결 실패 → `ConnectionError`. 실제 Neo4j는 안 띄운다(테스트로
   실서비스 기동 안 한다는 프로젝트 관례).
-- `tests/dags/test_market_thesis_analysis.py`에 추가 — `build_thesis >> [notify_slack,
+- `tests/dags/test_market_thesis_review.py`에 추가 — `build_thesis >> [notify_slack,
   sync_graph]` 구조, `sync_graph.trigger_rule == "none_failed"`, **`NEO4J_URI` 누락 시
   `sync_graph`만 skip**, `sync_only` Param으로 `build_thesis`·`notify_slack`이 skip되고
   `sync_graph`가 Param 범위로 슬롯을 뽑는지, `select_by_run`·`select_by_thesis_ids` SQL

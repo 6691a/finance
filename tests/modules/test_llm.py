@@ -81,12 +81,13 @@ def test_the_briefing_model_is_its_own_function(monkeypatch):
 
 
 def test_the_thesis_model_is_its_own_function(monkeypatch):
-    """툴 왕복이 많은 작업이라 툴 호출 품질로 고른다. 운영에서 살아 있는 키를 쓰는 쪽이기도 하다."""
-    monkeypatch.setenv("OPENAI_API_KEY", "secret-key")
+    """브리핑 선별과 같은 모델이지만 함수를 나눠 둔다. 선별과 추론은 요구가 달라
+    한쪽만 바꾸고 싶어질 때 그 함수만 고치면 된다."""
+    monkeypatch.setenv("XAI_API_KEY", "secret-key")
 
     model = thesis_model()
 
-    assert model_name(model) == "gpt-5.6-luna"
+    assert model_name(model) == "grok-4.6"
     assert model.max_retries == 0
 
 

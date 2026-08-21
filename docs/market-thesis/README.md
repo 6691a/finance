@@ -104,9 +104,11 @@ requirements) **배포 단위(worktree/PR 하나)마다 문서를 나눴다.** �
 
 ## 5. 남은 확인
 
-- **모델 키** — `compose/prod/airflow/.env`의 `XAI_API_KEY`가 무효였다(2026-08-20 실측,
-  `Incorrect API key provided`). 문서 태깅이 쓰는 `OPENAI_API_KEY`는 운영에서 살아 있으므로
-  `thesis_model()`을 OpenAI로 두면 키 문제가 없다. Grok을 쓰려면 유효한 키 확보가 먼저다.
+- **모델 키 — 3단계 배포의 선행 조건.** `thesis_model()`은 `ChatXAI`(grok-4.6)이고 키는
+  `XAI_API_KEY`다. 그런데 `compose/prod/airflow/.env`의 값이 무효였다(2026-08-20 실측,
+  `Incorrect API key provided`). **유효한 키를 넣기 전에는 DAG가 매 슬롯 실패한다.**
+  키를 못 구하면 `thesis_model()`을 `ChatOpenAI`(gpt-5.6-luna, `OPENAI_API_KEY`는 운영에서
+  살아 있다)로 되돌리는 것이 한 줄 수정이다.
 - **Neo4j prod 인스턴스** — 아직 없다. 상세는 [4-graph.md](4-graph.md).
 - **4주 검증** — 3단계 배포 뒤 한 달간 본다. 두 묶음을 섞지 않는다.
   - **운영 지표**(이걸로 판단한다): 슬롯별 정시 발행률, readiness guard 재시도 횟수, subject

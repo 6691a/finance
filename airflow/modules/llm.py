@@ -106,14 +106,16 @@ def briefing_model() -> BaseChatModel:
 def thesis_model() -> BaseChatModel:
     """시장 추론(`modules/thesis.py`)이 쓰는 모델.
 
-    툴 왕복이 많은 작업이라 툴 호출 품질로 고른다. `ChatOpenAI`를 쓰는 이유는 두 가지다 —
-    툴 호출이 안정적이고, 운영에서 `OPENAI_API_KEY`가 살아 있다(2026-08-20 실측에서
-    `XAI_API_KEY`는 `Incorrect API key provided`였다).
+    툴 왕복이 많은 작업이라 툴 호출 품질로 고른다. 브리핑 선별과 같은 `grok-4.6`이지만 함수를
+    나눠 둔다 — 선별은 목록을 읽고 고르는 일이고 추론은 툴을 여러 번 돌며 가설을 세우는
+    일이라, 한쪽만 다른 모델로 옮기고 싶어질 때 그 함수만 고치면 된다.
 
-    키는 이 클래스가 `OPENAI_API_KEY`에서 스스로 읽는다. 우리가 넘기지 않는다.
+    키는 이 클래스가 `XAI_API_KEY`에서 스스로 읽는다. 우리가 넘기지 않는다.
+    **운영 키를 먼저 확인한다** — 2026-08-20 실측에서 `compose/prod/airflow/.env`의
+    `XAI_API_KEY`가 `Incorrect API key provided`였다. 키가 무효면 이 DAG는 매 슬롯 실패한다.
     """
-    return ChatOpenAI(
-        model="gpt-5.6-luna",
+    return ChatXAI(
+        model="grok-4.6",
         timeout=REQUEST_TIMEOUT_SECONDS,
         # 재시도는 Airflow가 한다. 위 모듈 docstring 참고.
         max_retries=0,

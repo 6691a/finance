@@ -54,7 +54,7 @@ requirements) **배포 단위(worktree/PR 하나)마다 문서를 나눴다.** �
 | --- | --- | --- | --- | --- |
 | 1 | [1-storage.md](1-storage.md) | `apps/models/analysis.py`, 수기 리비전, `thesis/*.sql`·`thesis_evidence/*.sql`, 세션 등락률 SQL, `thesis.py`의 채점 순수 함수, 스키마·채점 테스트 | 없음 | 없음 |
 | 2 | [2-agent.md](2-agent.md) | `thesis.py`에 Toolbox·Builder·저장, 툴 SQL 3개, `thesis_model()`, `llm.invoke` tools+schema 가드, `tests/modules/test_thesis.py` | 1 | 있음 |
-| 3 | [3-dag-slack.md](3-dag-slack.md) | `dags/market_thesis_analysis.py`, 스케줄, 채점 호출, Slack 렌더링·발송, DAG 테스트. **여기서 첫 운영 발송** | 1, 2 | 있음 |
+| 3 | [3-dag-slack.md](3-dag-slack.md) | `dags/market_thesis_forecast.py`·`market_thesis_review.py`, 스케줄, 채점 호출, Slack 렌더링·발송, DAG 테스트. **여기서 첫 운영 발송** | 1, 2 | 있음 |
 | 4 | [4-graph.md](4-graph.md) | `airflow/modules/graph.py`, `sync_graph` 태스크, `sync_only` Param, compose·requirements, `tests/modules/test_graph.py` | 1 (3과 병렬 가능) | 없음 |
 | 5 | [5-followup.md](5-followup.md) | `thesis_outcome` 테이블, 다지평(T+0·1·3·5) 채점, `FollowupNarrator` 사후 해설과 `verdict`, `past_theses` 툴 | 1, 2, 3 | 있음 |
 | 6 | (문서 미작성) | 애널리스트 투자의견·목표주가 수집기와 해설 툴. **KIS가 이 데이터를 주는지 미확인이라 spike가 선행이다** — 저장소에 관련 코드가 0건이다 | 5 | 없음 |

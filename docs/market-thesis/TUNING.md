@@ -1,6 +1,6 @@
 # 고도화 — 무엇을 재고, 언제 보고, 어느 손잡이를 당기나
 
-- 대상: 시장 추론 전 단계 (`market_thesis_analysis` DAG와 `modules/thesis.py`)
+- 대상: 시장 추론 전 단계 (`market_thesis_forecast`·`market_thesis_review` DAG와 `modules/thesis*.py`)
 - 성격: 단계 문서가 아니다. 1~6이 "무엇을 만드나"의 순서라면 이 문서는 **만든 뒤에 쓰는
   운영 규칙**이다. [README.md](README.md)와 같은 층이다.
 - 상태: **캘린더의 0일이 아직 안 왔다.** [3-dag-slack.md](3-dag-slack.md) 7절의 선행 조건
@@ -147,7 +147,7 @@ GROUP BY run_slot;
 | `MAX_TOOL_ROUNDS` / `MAX_TOOL_CALLS` / `MAX_TOOL_RESULT_CHARS` | 4 / 12 / 24,000 | `thesis.py` | 쿼리 B의 분포 | 상한에 붙어 있으면 올린다. **값이 인자 모델(`RecentDocumentsArgs` 등)의 `Field(description=...)`에 f-string으로 실려 프롬프트가 자동으로 따라간다** |
 | `PROMPT_VERSION` / `NARRATIVE_PROMPT_VERSION` | `"1"` / `"1"` | `thesis.py` | — | 프롬프트를 고치면 올린다. 올린 뒤 28일은 ops 창이 두 판에 걸친다 |
 | `THESIS_WINDOW_DAYS` | 28 | `ops.py` | — | 판을 올린 직후엔 짧게 줄여 새 판만 본다 |
-| `SCHEDULE` | 08:35 / 20:30 KST | `market_thesis_analysis.py` | 쿼리 C + readiness 재시도 | 재시도가 잦으면 늦춘다. 08:35는 문서 평가(매시 25분) 뒤, 20:30은 확정 종가(18:10) 뒤라는 제약이 있다 |
+| 스케줄 | 08:35 / 20:30 KST | `market_thesis_forecast.py` / `market_thesis_review.py` | 쿼리 C + readiness 재시도 | 재시도가 잦으면 늦춘다. 08:35는 문서 평가(매시 25분) 뒤, 20:30은 확정 종가(18:10) 뒤라는 제약이 있다 |
 | `ASSESSMENT_LAG` | 20분 | 같은 파일 | 같은 것 | 평가가 정상인데 guard가 막으면 늘린다 |
 | `thesis_model()` | `grok-4.6` | `llm.py` | 분기 Brier | 교체는 `PROMPT_VERSION`과 **함께** 올린다(1절 넷째) |
 | `THESIS_TIMEOUT_SECONDS` | 900 | `llm.py` | 타임아웃 실패 건수 | 2026-08-21 첫 실행이 300초에서 죽어 900으로 올렸다(노트북과 같은 값). 또 걸리면 툴 상한(`MAX_TOOL_ROUNDS`)을 먼저 의심한다 — 왕복이 늘수록 한 요청이 길어진다. 문서 태깅의 `REQUEST_TIMEOUT_SECONDS`(300)는 따로다 |
@@ -241,6 +241,7 @@ ops 브리핑의 **추론 적체** 한 줄. **여기서 즉시 대응하는 것�
 | 2026-08-21 | 프롬프트의 기준 시각 표기 | UTC isoformat → `2026-08-21 08:35 KST` | 장전 as_of_at이 UTC로 **전날** 23:35라 "오늘 장이 열리기 전"과 날짜가 어긋났다 | `thesis.kst_label`. 판을 안 올렸다 — 그때 `thesis`가 0행이라 갈릴 판이 없었다 |
 | 2026-08-21 | `THESIS_TIMEOUT_SECONDS` | (`REQUEST_TIMEOUT_SECONDS` 300 공용) → 900 전용 | 운영 첫 실행 `RetryableLlmError: Request timed out` 1건 | 표본 1건이다. 다음 실행들에서 안 걸리는지 확인이 남았다 |
 | 2026-08-21 | 툴 정의·실행 방식 | 손으로 쓴 `TOOL_SCHEMAS` dict → `StructuredTool` + `ToolNode` | — (동작 동일. 회귀 테스트로 `handle_tool_errors` 기본값이 DB 오류를 삼키는 것을 확인) | 저장소 규칙과 어긋나 있던 것을 맞췄다 |
+| 2026-08-21 | DAG 구조 | `market_thesis_analysis` 하나 → `market_thesis_forecast`·`market_thesis_review` 둘 | — (슬롯이 `logical_date`의 시각에서 나와 수동 실행이 벽시계로 떨어졌다) | 모드로 갈리던 함수도 `thesis_common`·`thesis_forecast`·`thesis_review`로 나눴다 |
 | 2026-08-21 | 툴 개수 | 4 → 11 | 국채 349행·수급 490행·시장폭 748행이 모델에게 안 보이고 있었다 | 운영 DB 실행으로 결함 둘을 잡았다(공매도 당일 0행, 국내 지수 일봉 부재) |
 
 ---

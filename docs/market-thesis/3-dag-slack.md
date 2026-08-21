@@ -1,10 +1,11 @@
-# 3단계 — DAG와 Slack: `dags/market_thesis_analysis.py`
+# 3단계 — DAG와 Slack: `dags/market_thesis_forecast.py`·`market_thesis_review.py`
 
 - 상위: [README.md](README.md)
 - 의존: [1-storage.md](1-storage.md), [2-agent.md](2-agent.md), [5-followup.md](5-followup.md)
 - 상태: 구현 완료 (2026-08-21). 운영 배포는 선행 조건 둘이 남아 있다 — 7절
-- 산출물: `airflow/dags/market_thesis_analysis.py`, `thesis.py`의 렌더링 함수,
-  `tests/dags/test_market_thesis_analysis.py`, 렌더링 테스트
+- 산출물: `airflow/dags/market_thesis_forecast.py`·`market_thesis_review.py`,
+  `airflow/modules/thesis_common.py`·`thesis_forecast.py`·`thesis_review.py`,
+  `thesis.py`의 렌더링 함수, 두 DAG 테스트, 렌더링 테스트
 - **여기서 처음 운영에 발송된다.** 테스트 발송은 `slack_channel_test`로만 한다(프로젝트 규칙).
 - `sync_graph` 태스크는 이 단계에 없다. [4-graph.md](4-graph.md)가 `build_thesis` 뒤에 붙인다.
 
@@ -143,7 +144,7 @@ SCHEDULE = MultipleCronTriggerTimetable(
   pre_open/post_close 헤더 분기, 세 확률·세 이유가 전부 나오는지, 확률 퍼센트 반올림,
   근거 줄이 `rank` 순 상위 3개·URL 있는 것만 링크·0건이면 "근거: 없음", subject 0건일 때
   "추론 결과 없음" 짧은 형태.
-- `tests/dags/test_market_thesis_analysis.py` — 스케줄 고정(`35 8`·`30 20`),
+- `tests/dags/test_market_thesis_forecast.py`·`test_market_thesis_review.py` — 스케줄 고정(`35 8`·`30 20`),
   `max_active_runs=1`, 태스크 넷의 한 줄 구조, `as_of_at`이 슬롯으로 고정되는지,
   슬롯이 벽시계가 아니라 logical time으로 갈리는지, `run_date`가 ISO 주 표기를 거절하는지,
   DAG 화면 메타데이터, `tests/dags/test_quote_intraday.py`의

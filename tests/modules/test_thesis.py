@@ -8,16 +8,18 @@ import pytest
 from langchain_core.messages import AIMessage, ToolMessage
 from sqlalchemy import Table
 
-from apps.models.analysis import Thesis, ThesisEvidence
+from apps.models.analysis import Thesis, ThesisEvidence, ThesisOutcome
 from modules.sql import read_sql
 from modules.thesis import (
     DART_VIEWER_URL,
     FLAT_THRESHOLD_PCT,
+    HORIZON_DAYS,
     MAX_ITEM_DETAIL_CHARS,
     MAX_REASONING_CHARS,
     MAX_TOOL_CALLS,
     MAX_TOOL_RESULT_CHARS,
     MAX_TOOL_ROUNDS,
+    NARRATED_HORIZON_DAYS,
     PROMPT_VERSION,
     Evidence,
     RunSlot,
@@ -28,6 +30,7 @@ from modules.thesis import (
     ThesisEvidenceKind,
     ThesisSubjectKind,
     ThesisToolbox,
+    ThesisVerdict,
     ToolLimitExceeded,
     brier_score,
     classify_outcome,
@@ -39,8 +42,12 @@ from modules.thesis import (
 
 THESIS_INSERT = read_sql("postgres", "thesis", "insert.sql")
 THESIS_SELECT_BY_RUN = read_sql("postgres", "thesis", "select_by_run.sql")
-THESIS_SELECT_TO_GRADE = read_sql("postgres", "thesis", "select_forecasts_to_grade.sql")
-THESIS_UPDATE_OUTCOME = read_sql("postgres", "thesis", "update_outcome.sql")
+PENDING_GRADES = read_sql("postgres", "thesis_outcome", "select_pending_grades.sql")
+INSERT_GRADE = read_sql("postgres", "thesis_outcome", "insert_grade.sql")
+OUTCOME_SELECT_BY_IDS = read_sql("postgres", "thesis_outcome", "select_by_thesis_ids.sql")
+NTH_OPEN_DAY = read_sql("postgres", "market_session", "select_nth_open_day.sql")
+STOCK_HORIZON_RETURN = read_sql("postgres", "stock_investor_trade_daily", "select_horizon_return.sql")
+INDEX_HORIZON_RETURN = read_sql("postgres", "index_bar", "select_horizon_return.sql")
 EVIDENCE_INSERT = read_sql("postgres", "thesis_evidence", "insert.sql")
 EVIDENCE_SELECT_ALL = read_sql("postgres", "thesis_evidence", "select_by_thesis_ids.sql")
 EVIDENCE_SELECT_TOP = read_sql("postgres", "thesis_evidence", "select_top_by_thesis_ids.sql")
@@ -81,21 +88,45 @@ def body(statement: str) -> str:
 
 
 @pytest.mark.parametrize(
-    ("return_pct", "expected"),
+    ("horizon_days", "return_pct", "expected"),
     [
-        ("0.29", ThesisDirection.FLAT),
-        ("0.30", ThesisDirection.UP),
-        ("-0.29", ThesisDirection.FLAT),
-        ("-0.30", ThesisDirection.DOWN),
-        ("0", ThesisDirection.FLAT),
-        ("12.5", ThesisDirection.UP),
-        ("-12.5", ThesisDirection.DOWN),
+        # 지평마다 임계가 다르다. 경계값은 방향 쪽이다.
+        (0, "0.29", ThesisDirection.FLAT),
+        (0, "0.30", ThesisDirection.UP),
+        (1, "0.29", ThesisDirection.FLAT),
+        (1, "0.30", ThesisDirection.UP),
+        (1, "-0.29", ThesisDirection.FLAT),
+        (1, "-0.30", ThesisDirection.DOWN),
+        (3, "0.49", ThesisDirection.FLAT),
+        (3, "0.50", ThesisDirection.UP),
+        (3, "-0.49", ThesisDirection.FLAT),
+        (3, "-0.50", ThesisDirection.DOWN),
+        (5, "0.69", ThesisDirection.FLAT),
+        (5, "0.70", ThesisDirection.UP),
+        (5, "-0.69", ThesisDirection.FLAT),
+        (5, "-0.70", ThesisDirection.DOWN),
+        (1, "0", ThesisDirection.FLAT),
+        (5, "12.5", ThesisDirection.UP),
+        (5, "-12.5", ThesisDirection.DOWN),
     ],
 )
-def test_classify_outcome_puts_the_boundary_on_the_moving_side(return_pct, expected):
-    # 경계값 0.30은 flat이 아니라 방향이다. 0.29는 flat이다.
-    assert classify_outcome(Decimal(return_pct)) is expected
-    assert FLAT_THRESHOLD_PCT == Decimal("0.3")
+def test_classify_outcome_uses_a_wider_flat_band_at_longer_horizons(horizon_days, return_pct, expected):
+    assert classify_outcome(Decimal(return_pct), horizon_days) is expected
+
+
+def test_the_flat_band_widens_with_the_horizon():
+    thresholds = [FLAT_THRESHOLD_PCT[horizon] for horizon in (0, 1, 3, 5)]
+
+    # 하루 임계를 5영업일 누적에 쓰면 flat이 사실상 사라져 prob_flat이 항상 틀린 쪽에 붙는다.
+    assert thresholds == sorted(thresholds)
+    assert thresholds[-1] > thresholds[0]
+    assert set(FLAT_THRESHOLD_PCT) == set(HORIZON_DAYS)
+
+
+def test_an_unknown_horizon_is_refused_rather_than_defaulted():
+    # 임계를 안 정한 지평에 기본값을 주면 그 지평만 조용히 다른 기준으로 채점된다.
+    with pytest.raises(ThesisError, match="flat threshold"):
+        classify_outcome(Decimal("1.0"), 2)
 
 
 def test_brier_score_is_zero_for_a_perfect_call():
@@ -224,22 +255,40 @@ SELECT_BY_RUN_COLUMNS = {
     "tool_rounds",
     "llm_model",
     "prompt_version",
+}
+EVIDENCE_SELECT_COLUMNS = {
+    "thesis_id",
+    "outcome_horizon_days",
+    "evidence_kind",
+    "evidence_ref",
+    "evidence_title",
+    "evidence_url",
+    "rank",
+}
+OUTCOME_SELECT_COLUMNS = {
+    "thesis_id",
+    "horizon_days",
+    "as_of_at",
+    "dag_run_id",
     "evaluated_at",
     "actual_return_pct",
     "actual_outcome",
     "brier_score",
+    "narrative",
+    "verdict",
+    "narrative_at",
+    "llm_model",
+    "prompt_version",
 }
-SELECT_TO_GRADE_COLUMNS = {"id", "run_date", "subject_kind", "subject_code", "prob_up", "prob_down", "prob_flat"}
-EVIDENCE_SELECT_COLUMNS = {"thesis_id", "evidence_kind", "evidence_ref", "evidence_title", "evidence_url", "rank"}
 
 
 @pytest.mark.parametrize(
     ("statement", "model", "expected"),
     [
         (THESIS_SELECT_BY_RUN, Thesis, SELECT_BY_RUN_COLUMNS),
-        (THESIS_SELECT_TO_GRADE, Thesis, SELECT_TO_GRADE_COLUMNS),
         (EVIDENCE_SELECT_ALL, ThesisEvidence, EVIDENCE_SELECT_COLUMNS),
         (EVIDENCE_SELECT_TOP, ThesisEvidence, EVIDENCE_SELECT_COLUMNS),
+        (OUTCOME_SELECT_BY_IDS, ThesisOutcome, OUTCOME_SELECT_COLUMNS),
     ],
 )
 def test_selects_name_only_columns_the_model_has(statement, model, expected):
@@ -253,28 +302,63 @@ def test_selects_name_only_columns_the_model_has(statement, model, expected):
         assert re.search(rf"\b{column}\b", projection)
 
 
-def test_forecast_grading_scan_has_no_date_limit():
-    predicate = body(THESIS_SELECT_TO_GRADE)
+def test_the_thesis_row_carries_no_grading_columns():
+    names = {column.name for column in Thesis.__table__.columns}
+
+    # 지평별 결과는 thesis_outcome이 갖는다. 여기 두면 두 번째 지평이 첫 판단을 덮어써야 한다.
+    assert not names & {"evaluated_at", "actual_return_pct", "actual_outcome", "brier_score"}
+    assert not set(body(THESIS_SELECT_BY_RUN).split()) & {"brier_score,", "actual_outcome,"}
+
+
+def test_grading_scan_covers_every_horizon_and_has_no_date_limit():
+    predicate = body(PENDING_GRADES)
 
     assert "run_slot = 'pre_open'" in predicate
-    assert "evaluated_at IS NULL" in predicate
+    # 지평 목록은 파라미터다. 상수를 SQL과 파이썬 두 곳에 두면 한쪽만 고쳐지는 날이 온다.
+    assert "unnest(%s::integer[])" in predicate
+    assert "thesis_outcome.evaluated_at IS NOT NULL" in predicate
     # 장후가 실패한 날의 forecast도 다음 실행이 회수해야 한다.
-    assert "run_date =" not in predicate
-    assert "run_date >" not in predicate
+    assert "thesis.run_date =" not in predicate
+    assert "thesis.run_date >" not in predicate
 
 
-def test_update_outcome_touches_only_the_grading_columns_and_is_idempotent():
-    assignments = THESIS_UPDATE_OUTCOME[THESIS_UPDATE_OUTCOME.index("SET") : THESIS_UPDATE_OUTCOME.index("WHERE")]
+def test_the_grade_write_never_overwrites_a_score():
+    statement = body(INSERT_GRADE)
 
-    assert set(re.findall(r"(\w+) =", assignments)) == {
-        "evaluated_at",
-        "actual_return_pct",
-        "actual_outcome",
-        "brier_score",
-        "updated_at",
-    }
-    # 이미 채점된 행은 0행이 갱신되고 처음 매긴 점수가 그대로 남는다.
-    assert "evaluated_at IS NULL" in THESIS_UPDATE_OUTCOME
+    assert "ON CONFLICT ON CONSTRAINT uq_thesis_outcome_natural_key DO UPDATE" in statement
+    # 이미 매긴 점수는 그대로 남는다. 해설이 먼저 만든 행만 채워진다.
+    assert "WHERE thesis_outcome.evaluated_at IS NULL" in statement
+    assert set(inserted_columns(INSERT_GRADE)) <= {column.name for column in ThesisOutcome.__table__.columns}
+    # 해설 칸은 채점이 건드리지 않는다.
+    assert not set(inserted_columns(INSERT_GRADE)) & {"narrative", "verdict", "narrative_at"}
+
+
+def test_business_days_are_counted_by_the_calendar_not_by_us():
+    query = body(NTH_OPEN_DAY)
+
+    assert "market_session" in query
+    assert "effective_open_day" in query
+    assert "market_code = 'KRX'" in query
+    # 아직 판정 못 한 날(NULL)을 개장일로 세면 나중에 기준일이 틀려 있게 된다.
+    assert "IS NOT FALSE" not in query
+
+
+@pytest.mark.parametrize("statement", [STOCK_HORIZON_RETURN, INDEX_HORIZON_RETURN])
+def test_horizon_returns_keep_one_base_price_across_horizons(statement):
+    query = body(statement)
+
+    # 기준가를 지평마다 옮기면 누적이 연속되지 않아 T+1과 T+5를 비교할 수 없다.
+    assert "base_close" in query
+    assert "target_close" in query
+    assert "return_pct" in query
+
+
+def test_the_stock_horizon_return_reads_the_settled_close_not_the_minute_bars():
+    query = body(STOCK_HORIZON_RETURN)
+
+    # is_final은 REST 응답이라는 뜻이지 세션 완결이 아니다. 마감 동시호가가 빠진 날이 있다.
+    assert "stock_investor_trade_daily" in query
+    assert "stock_bar" not in query
 
 
 def test_session_return_reads_the_settled_close_not_the_minute_bars():
@@ -301,11 +385,14 @@ def test_index_session_return_takes_its_bar_time_as_a_parameter():
     "statement",
     [
         THESIS_SELECT_BY_RUN,
-        THESIS_SELECT_TO_GRADE,
+        PENDING_GRADES,
+        OUTCOME_SELECT_BY_IDS,
         EVIDENCE_SELECT_ALL,
         EVIDENCE_SELECT_TOP,
         STOCK_SESSION_RETURN,
         INDEX_SESSION_RETURN,
+        STOCK_HORIZON_RETURN,
+        INDEX_HORIZON_RETURN,
     ],
 )
 def test_lookups_never_read_the_wall_clock(statement):
@@ -935,10 +1022,6 @@ def stored_row(thesis_id: int = 1, code: str = "KOSPI") -> tuple:
         1,
         "gpt-5.6-luna",
         PROMPT_VERSION,
-        None,
-        None,
-        None,
-        None,
     )
 
 
@@ -964,7 +1047,8 @@ def test_existing_theses_is_what_the_caller_checks_before_paying_for_a_model():
 
     assert [row.subject_code for row in rows] == ["KOSPI"]
     assert rows[0].run_slot is RunSlot.PRE_OPEN
-    assert rows[0].evaluated_at is None
+    # 채점은 이 행에 없다. thesis_outcome이 지평별로 갖는다.
+    assert not hasattr(rows[0], "brier_score")
 
 
 def test_storing_writes_the_thesis_and_its_evidence_in_one_transaction():
@@ -1037,12 +1121,13 @@ def test_evidence_ranks_follow_the_citation_order():
         tool_rounds=2,
     )
 
+    # (outcome_horizon_days, evidence_ref, rank). 원 추론의 근거라 지평 칸은 NULL이다.
     ranks = [
-        (parameters[2], parameters[6])
+        (parameters[1], parameters[3], parameters[7])
         for statement, parameters in writer.calls
         if _statement_key(statement) == "evidence_insert"
     ]
-    assert ranks == [("macro_change:SP500_FUT", 1), ("document:9", 2)]
+    assert ranks == [(None, "macro_change:SP500_FUT", 1), (None, "document:9", 2)]
 
 
 def test_the_airflow_enums_match_the_backend_vocabulary():
@@ -1052,9 +1137,19 @@ def test_the_airflow_enums_match_the_backend_vocabulary():
         (RunSlot, analysis.RunSlot),
         (ThesisSubjectKind, analysis.ThesisSubjectKind),
         (ThesisDirection, analysis.ThesisDirection),
+        (ThesisVerdict, analysis.ThesisVerdict),
         (ThesisEvidenceKind, analysis.ThesisEvidenceKind),
     ):
         assert {member.value for member in airflow_enum} == {member.value for member in backend_enum}
+
+
+def test_the_airflow_horizons_match_the_backend_lists():
+    from apps.models import analysis
+
+    # Airflow는 apps/를 보지 못해 목록을 한 벌 더 든다. 어긋나면 코드가 저장하려는 지평을
+    # DB CHECK가 거절한다.
+    assert set(HORIZON_DAYS) == set(analysis.THESIS_HORIZON_DAYS)
+    assert set(NARRATED_HORIZON_DAYS) == set(analysis.NARRATED_HORIZON_DAYS)
 
 
 def test_evidence_refs_are_built_from_the_kind_itself():

@@ -63,8 +63,26 @@ logger = logging.getLogger(__name__)
 # 프롬프트를 고치면 올린다. `thesis.prompt_version`에 저장돼 채점 결과를 가르는 기준이 된다.
 PROMPT_VERSION = "1"
 
-# |등락률|이 이 값보다 작으면 방향이 없었다고 본다(퍼센트).
-FLAT_THRESHOLD_PCT = Decimal("0.3")
+# 채점 지평. KRX 영업일 수이고 달력일이 아니다. 0은 예측일 세션 하나다.
+HORIZON_DAYS: tuple[int, ...] = (0, 1, 3, 5)
+
+# 해설을 받는 지평. 0은 그날의 후속 보도가 아직 쌓이지 않아 쓸 재료가 없다.
+NARRATED_HORIZON_DAYS: tuple[int, ...] = (1, 3, 5)
+
+# |누적 등락률|이 이 값보다 작으면 방향이 없었다고 본다(퍼센트). **지평마다 다르다.**
+#
+# 하루 임계 0.3을 5영업일 누적에 그대로 쓰면 `flat`이 사실상 사라진다. 그러면 `prob_flat`이
+# 항상 틀린 쪽에 붙어 Brier가 조용히 왜곡된다.
+#
+# **값의 근거는 `0.3 × sqrt(N)`을 반올림한 것뿐이고 실측이 아니다.** 배포 4주 뒤 지평별
+# `actual_outcome` 분포를 보고 조정한다 — 한 지평에서만 `flat` 비율이 5% 아래거나 60% 위면
+# 그 값이 틀린 것이다(`docs/market-thesis/5-followup.md` 2·11절).
+FLAT_THRESHOLD_PCT: dict[int, Decimal] = {
+    0: Decimal("0.3"),
+    1: Decimal("0.3"),
+    3: Decimal("0.5"),
+    5: Decimal("0.7"),
+}
 
 # 조사 왕복 상한. 넘으면 조사를 끝내고 답변 단계로 넘어간다.
 MAX_TOOL_ROUNDS = 4
@@ -170,6 +188,18 @@ class ThesisDirection(StrEnum):
     FLAT = "flat"
 
 
+class ThesisVerdict(StrEnum):
+    """사후 해설이 내린 판정. 원 추론의 **이유**가 이후 보도로 지지됐는가.
+
+    `brier_score`와 다른 것을 잰다 — 저쪽은 방향이고 이쪽은 이유다. 둘을 합치지 않는다.
+    `UNRESOLVED`가 기본이자 가장 흔한 답이어야 한다.
+    """
+
+    SUPPORTED = "supported"
+    CONTRADICTED = "contradicted"
+    UNRESOLVED = "unresolved"
+
+
 class ThesisEvidenceKind(StrEnum):
     """근거의 출처 종류. `evidence_ref`의 앞자리와 글자 그대로 같다."""
 
@@ -183,13 +213,19 @@ class ThesisEvidenceKind(StrEnum):
 # ---------------------------------------------------------------------------
 
 
-def classify_outcome(return_pct: Decimal) -> ThesisDirection:
-    """실제 세션 등락률을 방향으로 분류한다.
+def classify_outcome(return_pct: Decimal, horizon_days: int) -> ThesisDirection:
+    """누적 등락률을 방향으로 분류한다. **임계는 지평마다 다르다.**
 
     예측과 비교하지 않는다. 실제 움직임만 본다 — 얼마나 잘 맞췄는지는 `brier_score`가 답한다.
-    경계값은 `flat` 쪽이다: 0.30은 `up`이고 0.29는 `flat`이다.
+    경계값은 방향 쪽이다: 지평 1에서 0.30은 `up`이고 0.29는 `flat`이다.
+
+    모르는 지평은 실패시킨다. 임계를 정하지 않은 지평에 기본값을 주면 그 지평만 조용히
+    다른 기준으로 채점된다.
     """
-    if abs(return_pct) < FLAT_THRESHOLD_PCT:
+    threshold = FLAT_THRESHOLD_PCT.get(horizon_days)
+    if threshold is None:
+        raise ThesisError(f"No flat threshold for horizon {horizon_days}; known: {sorted(FLAT_THRESHOLD_PCT)}")
+    if abs(return_pct) < threshold:
         return ThesisDirection.FLAT
     return ThesisDirection.UP if return_pct > 0 else ThesisDirection.DOWN
 
@@ -937,10 +973,6 @@ class StoredThesis(BaseModel):
     tool_rounds: int
     llm_model: str
     prompt_version: str
-    evaluated_at: datetime | None = None
-    actual_return_pct: Decimal | None = None
-    actual_outcome: ThesisDirection | None = None
-    brier_score: Decimal | None = None
 
 
 def existing_theses(connection: Connection, *, run_date: date, run_slot: RunSlot) -> tuple[StoredThesis, ...]:
@@ -1014,14 +1046,20 @@ def _store_evidence(
     thesis_id: int,
     refs: Iterable[str],
     registry: dict[str, Evidence],
+    outcome_horizon_days: int | None = None,
 ) -> None:
-    """인용 순서를 `rank`로 굳혀 근거를 넣는다. 1부터 센다."""
+    """인용 순서를 `rank`로 굳혀 근거를 넣는다. 1부터 센다.
+
+    `outcome_horizon_days`가 `None`이면 원 추론이 인용한 근거이고, 1·3·5면 그 지평의 사후
+    해설이 인용한 근거다. 같은 테이블에 들어가고 그 칸이 둘을 가른다.
+    """
     for rank, ref in enumerate(refs, start=1):
         item = registry[ref]
         cursor.execute(
             EVIDENCE_INSERT,
             (
                 thesis_id,
+                outcome_horizon_days,
                 item.kind.value,
                 item.ref,
                 item.title,
@@ -1051,8 +1089,127 @@ def _stored(row: Sequence[Any]) -> StoredThesis:
         tool_rounds=row[14],
         llm_model=row[15],
         prompt_version=row[16],
-        evaluated_at=row[17],
-        actual_return_pct=row[18],
-        actual_outcome=row[19],
-        brier_score=row[20],
     )
+
+
+# ---------------------------------------------------------------------------
+# 다지평 채점 — LLM 없음
+# ---------------------------------------------------------------------------
+
+PENDING_GRADES = read_sql("postgres", "thesis_outcome", "select_pending_grades.sql")
+INSERT_GRADE = read_sql("postgres", "thesis_outcome", "insert_grade.sql")
+NTH_OPEN_DAY = read_sql("postgres", "market_session", "select_nth_open_day.sql")
+STOCK_HORIZON_RETURN = read_sql("postgres", "stock_investor_trade_daily", "select_horizon_return.sql")
+INDEX_HORIZON_RETURN = read_sql("postgres", "index_bar", "select_horizon_return.sql")
+
+
+class PendingGrade(BaseModel):
+    """채점을 기다리는 (추론, 지평) 하나. `select_pending_grades.sql`의 행 계약이다."""
+
+    model_config = ConfigDict(frozen=True)
+
+    thesis_id: int
+    run_date: date
+    as_of_at: datetime
+    subject_kind: ThesisSubjectKind
+    subject_code: str
+    prob_up: Decimal
+    prob_down: Decimal
+    prob_flat: Decimal
+    horizon_days: int
+
+
+def pending_grades(connection: Connection, horizons: Sequence[int] = HORIZON_DAYS) -> tuple[PendingGrade, ...]:
+    """아직 채점하지 않은 (추론, 지평) 전부. `pre_open`만이다."""
+    with connection.cursor() as cursor:
+        cursor.execute(PENDING_GRADES, (list(horizons),))
+        rows = cursor.fetchall()
+    return tuple(
+        PendingGrade(
+            thesis_id=row[0],
+            run_date=row[1],
+            as_of_at=row[2],
+            subject_kind=row[3],
+            subject_code=row[4],
+            prob_up=row[5],
+            prob_down=row[6],
+            prob_flat=row[7],
+            horizon_days=row[8],
+        )
+        for row in rows
+    )
+
+
+def nth_open_day(connection: Connection, base_date: date, horizon_days: int) -> date | None:
+    """`base_date`부터 세어 `horizon_days`번째 KRX 개장일. 달력이 안 채워졌으면 `None`.
+
+    0이면 `base_date` 자신(개장일일 때)이다. **날짜를 우리가 세지 않는다** — 휴장일에서
+    어긋난다. `None`이면 부르는 쪽은 그 조합을 미채점으로 남기고 다음 실행이 다시 집는다.
+    """
+    with connection.cursor() as cursor:
+        cursor.execute(NTH_OPEN_DAY, (base_date, horizon_days))
+        row = cursor.fetchone()
+    return row[0] if row else None
+
+
+def horizon_returns(
+    connection: Connection,
+    *,
+    subject_kind: ThesisSubjectKind,
+    run_date: date,
+    target_date: date,
+    codes: Sequence[str],
+    base_bar_at: datetime | None = None,
+    target_bar_at: datetime | None = None,
+) -> dict[str, Decimal]:
+    """대상별 누적 등락률. 종가·봉이 없으면 그 대상은 결과에 없다.
+
+    기준가는 지평이 달라도 같다 — 예측일 전 영업일 종가다. 지수는 봉 시각 둘을 받는다
+    (KST 경계 계산은 파이썬이 한다).
+    """
+    if not codes:
+        return {}
+    if subject_kind is ThesisSubjectKind.STOCK:
+        statement, parameters = STOCK_HORIZON_RETURN, (run_date, target_date, list(codes))
+    else:
+        if base_bar_at is None or target_bar_at is None:
+            raise ThesisError("index horizon returns need both bar timestamps")
+        statement, parameters = INDEX_HORIZON_RETURN, (base_bar_at, target_bar_at, list(codes))
+
+    with connection.cursor() as cursor:
+        cursor.execute(statement, parameters)
+        rows = cursor.fetchall()
+    return {row[0]: row[4] for row in rows if row[4] is not None}
+
+
+def store_grade(
+    connection: Connection,
+    *,
+    pending: PendingGrade,
+    as_of_at: datetime,
+    dag_run_id: str,
+    return_pct: Decimal,
+    evaluated_at: datetime,
+) -> None:
+    """한 (추론, 지평)의 채점을 쓴다. 이미 매긴 점수는 덮지 않는다(SQL의 WHERE가 막는다)."""
+    outcome = classify_outcome(return_pct, pending.horizon_days)
+    score = brier_score(
+        prob_up=pending.prob_up,
+        prob_down=pending.prob_down,
+        prob_flat=pending.prob_flat,
+        outcome=outcome,
+    )
+    with connection.cursor() as cursor:
+        cursor.execute(
+            INSERT_GRADE,
+            (
+                pending.thesis_id,
+                pending.horizon_days,
+                as_of_at,
+                dag_run_id,
+                evaluated_at,
+                return_pct,
+                outcome.value,
+                score.quantize(Decimal("0.00001")),
+            ),
+        )

@@ -6,15 +6,19 @@
 -- `ON CONFLICT DO NOTHING`은 같은 트랜잭션이 실패해 재시도할 때를 위한 것이다. 자연키가
 -- 둘(ref 중복, rank 중복)이라 제약을 지정하지 않고 둘 다 흡수한다.
 --
+-- `outcome_horizon_days`가 NULL이면 원 추론이 인용한 근거, 1·3·5면 그 지평의 사후 해설이
+-- 인용한 근거다. 행 모양이 같아 테이블을 복제하지 않고 이 한 칸으로 가른다.
+--
 -- 정의의 원본은 `apps/models/analysis.py`의 `ThesisEvidence`이고
 -- `tests/modules/test_thesis.py`가 여기 컬럼을 그 모델 metadata와 대조한다.
 INSERT INTO thesis_evidence (
     thesis_id,
+    outcome_horizon_days,
     evidence_kind,
     evidence_ref,
     evidence_title,
     evidence_url,
     detail,
     rank
-) VALUES (%s, %s, %s, %s, %s, %s, %s)
+) VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
 ON CONFLICT DO NOTHING

@@ -177,25 +177,62 @@ def upgrade_default() -> None:
             nullable=False,
             comment="프롬프트 판 식별자. 프롬프트를 고친 뒤 채점 결과를 가르는 기준이다",
         ),
+        *_entity_columns(),
+        sa.CheckConstraint("run_slot IN ('pre_open', 'post_close')", name="ck_thesis_run_slot"),
+        sa.CheckConstraint("subject_kind IN ('index', 'stock')", name="ck_thesis_subject_kind"),
+        sa.CheckConstraint(
+            "prob_up BETWEEN 0 AND 1 AND prob_down BETWEEN 0 AND 1 AND prob_flat BETWEEN 0 AND 1",
+            name="ck_thesis_prob_range",
+        ),
+        sa.CheckConstraint("abs(prob_up + prob_down + prob_flat - 1) < 0.001", name="ck_thesis_prob_sum"),
+        sa.PrimaryKeyConstraint("id"),
+        sa.UniqueConstraint("run_date", "run_slot", "subject_kind", "subject_code", name="uq_thesis_natural_key"),
+        comment="슬롯마다 만든 시장 추론을 불변으로 보존하는 테이블. 채점과 해설은 thesis_outcome이 갖는다",
+        info={"database": "default", "managed": True},
+    )
+
+    op.create_table(
+        "thesis_outcome",
+        sa.Column("thesis_id", sa.BigInteger(), nullable=False, comment="이 결과가 붙는 thesis 레코드 ID"),
+        sa.Column(
+            "horizon_days",
+            sa.Integer(),
+            nullable=False,
+            comment=(
+                "지평 길이. **KRX 영업일 수이고 달력일이 아니다.** T+N 관용 표기를 따랐다. "
+                "0은 예측일 세션 하나이며 해설을 받지 않는다"
+            ),
+        ),
+        sa.Column(
+            "as_of_at",
+            sa.DateTime(timezone=True),
+            nullable=False,
+            comment="이 지평의 기준 시각(UTC). 그 영업일 장후 15:30 KST이며 해설 툴 조회의 창 끝이다",
+        ),
+        sa.Column("dag_run_id", sa.Text(), nullable=False, comment="이 행을 쓴 Airflow dag_run_id"),
         sa.Column(
             "evaluated_at",
             sa.DateTime(timezone=True),
             nullable=True,
-            comment="채점한 시각(UTC). NULL은 미채점이다. 채점은 pre_open 행에만 붙는다",
+            comment="채점한 시각(UTC). NULL은 미채점이다. 채점은 pre_open 추론에만 붙는다",
         ),
         sa.Column(
             "actual_return_pct",
             sa.Numeric(precision=8, scale=4),
             nullable=True,
-            comment="실제 세션 등락률(퍼센트). 종목은 확정 종가, 지수는 15:30 봉이 원본이다",
+            comment=(
+                "예측 시점 기준가 대비 이 지평 종가의 누적 등락률(퍼센트). "
+                "**기준가는 지평이 달라도 같다** — 예측일 전 영업일 종가다. "
+                "그래야 T+1과 T+5를 비교할 수 있다"
+            ),
         ),
         sa.Column(
             "actual_outcome",
             sa.String(length=20),
             nullable=True,
             comment=(
-                "실제 등락률의 분류(up/down/flat). |등락률| < 0.3이면 flat이고 아니면 부호를 따른다. "
-                "예측과 비교하지 않는다 — 비교는 brier_score가 대신한다"
+                "누적 등락률의 분류(up/down/flat). 임계는 지평마다 다르다 — 하루 임계를 5영업일 "
+                "누적에 쓰면 flat이 사실상 사라진다. 예측과 비교하지 않는다(비교는 brier_score가 한다)"
             ),
         ),
         sa.Column(
@@ -203,39 +240,99 @@ def upgrade_default() -> None:
             sa.Numeric(precision=6, scale=5),
             nullable=True,
             comment=(
-                "3-class Brier 점수. 세 확률과 실제 결과 원-핫 벡터의 차 제곱합이며 0이 완벽, 2가 최악이다. "
+                "원 추론의 세 확률을 이 지평 결과로 매긴 3-class Brier 점수. 0이 완벽, 2가 최악이다. "
                 "방향만 맞고 확신이 낮았던 경우와 틀린 방향에 확신을 준 경우를 함께 잡는다"
             ),
         ),
-        *_entity_columns(),
-        sa.CheckConstraint("run_slot IN ('pre_open', 'post_close')", name="ck_thesis_run_slot"),
-        sa.CheckConstraint("subject_kind IN ('index', 'stock')", name="ck_thesis_subject_kind"),
-        sa.CheckConstraint("actual_outcome IN ('up', 'down', 'flat')", name="ck_thesis_actual_outcome"),
-        sa.CheckConstraint(
-            "prob_up BETWEEN 0 AND 1 AND prob_down BETWEEN 0 AND 1 AND prob_flat BETWEEN 0 AND 1",
-            name="ck_thesis_prob_range",
+        sa.Column(
+            "narrative",
+            sa.Text(),
+            nullable=True,
+            comment="이 지평에서 쌓인 보도를 근거로 쓴 사후 해설(한국어). 저장 전에 1000자로 자른다",
         ),
-        sa.CheckConstraint("abs(prob_up + prob_down + prob_flat - 1) < 0.001", name="ck_thesis_prob_sum"),
+        sa.Column(
+            "verdict",
+            sa.String(length=20),
+            nullable=True,
+            comment=(
+                "원 추론의 **이유**가 이후 보도로 지지됐는지(supported/contradicted/unresolved). "
+                "brier_score와 다른 것을 잰다 — 저쪽은 방향, 이쪽은 이유다. 둘을 합치지 않는다. "
+                "근거 인용 없이 supported·contradicted가 오면 저장 전에 unresolved로 내린다"
+            ),
+        ),
+        sa.Column(
+            "narrative_at",
+            sa.DateTime(timezone=True),
+            nullable=True,
+            comment="해설을 쓴 시각(UTC). NULL은 아직 해설이 없다는 뜻이고 다음 실행이 다시 집는다",
+        ),
+        sa.Column(
+            "llm_model",
+            sa.Text(),
+            nullable=True,
+            comment="해설을 만든 모델 식별자. 원 추론의 모델과 다를 수 있다",
+        ),
+        sa.Column(
+            "prompt_version",
+            sa.Text(),
+            nullable=True,
+            comment=(
+                "해설 프롬프트 판과 변형(`<판>/<변형>`, 예: 1/informed). 변형은 실제 결과를 "
+                "프롬프트에 주는 informed와 주지 않는 blind다. 어느 쪽이 나은지는 실측으로 가른다"
+            ),
+        ),
+        *_entity_columns(),
+        sa.CheckConstraint("horizon_days IN (0, 1, 3, 5)", name="ck_thesis_outcome_horizon_days"),
+        sa.CheckConstraint("actual_outcome IN ('up', 'down', 'flat')", name="ck_thesis_outcome_actual_outcome"),
+        sa.CheckConstraint(
+            "verdict IN ('supported', 'contradicted', 'unresolved')",
+            name="ck_thesis_outcome_verdict",
+        ),
+        sa.CheckConstraint("brier_score BETWEEN 0 AND 2", name="ck_thesis_outcome_brier_range"),
         sa.CheckConstraint(
             "(evaluated_at IS NULL AND actual_return_pct IS NULL"
             " AND actual_outcome IS NULL AND brier_score IS NULL)"
             " OR (evaluated_at IS NOT NULL AND actual_return_pct IS NOT NULL"
             " AND actual_outcome IS NOT NULL AND brier_score IS NOT NULL)",
-            name="ck_thesis_outcome_all_or_none",
+            name="ck_thesis_outcome_grade_all_or_none",
         ),
-        sa.CheckConstraint("brier_score BETWEEN 0 AND 2", name="ck_thesis_brier_range"),
+        sa.CheckConstraint(
+            "(narrative IS NULL AND verdict IS NULL AND narrative_at IS NULL"
+            " AND llm_model IS NULL AND prompt_version IS NULL)"
+            " OR (narrative IS NOT NULL AND verdict IS NOT NULL AND narrative_at IS NOT NULL"
+            " AND llm_model IS NOT NULL AND prompt_version IS NOT NULL)",
+            name="ck_thesis_outcome_narrative_all_or_none",
+        ),
+        sa.CheckConstraint(
+            "horizon_days <> 0 OR (narrative IS NULL AND verdict IS NULL"
+            " AND narrative_at IS NULL AND llm_model IS NULL AND prompt_version IS NULL)",
+            name="ck_thesis_outcome_zero_horizon_has_no_narrative",
+        ),
+        # 채점도 해설도 없는 행은 의미가 없다.
+        sa.CheckConstraint(
+            "evaluated_at IS NOT NULL OR narrative IS NOT NULL",
+            name="ck_thesis_outcome_not_empty",
+        ),
+        # 추론이 지워지면 그 결과도 함께 지운다.
+        sa.ForeignKeyConstraint(["thesis_id"], ["thesis.id"], ondelete="CASCADE"),
         sa.PrimaryKeyConstraint("id"),
-        sa.UniqueConstraint("run_date", "run_slot", "subject_kind", "subject_code", name="uq_thesis_natural_key"),
-        comment="슬롯마다 만든 시장 추론과 그 자동 채점 결과를 불변으로 보존하는 테이블",
+        sa.UniqueConstraint("thesis_id", "horizon_days", name="uq_thesis_outcome_natural_key"),
+        comment="추론 하나의 지평별 채점과 사후 해설을 누적하는 테이블",
         info={"database": "default", "managed": True},
     )
-    # 장후 실행이 미채점 forecast를 날짜 제한 없이 훑는다. 채점이 영영 불가능한 행
-    # (상장폐지로 종가가 사라진 경우 등)이 쌓여도 그 스캔이 커지지 않게 인덱스를 둔다.
-    op.create_index("ix_thesis_run_slot_evaluated_at", "thesis", ["run_slot", "evaluated_at"], unique=False)
 
     op.create_table(
         "thesis_evidence",
         sa.Column("thesis_id", sa.BigInteger(), nullable=False, comment="이 근거를 인용한 thesis 레코드 ID"),
+        sa.Column(
+            "outcome_horizon_days",
+            sa.Integer(),
+            nullable=True,
+            comment=(
+                "누가 인용했는지. NULL은 원 추론이 인용한 근거, 1·3·5는 그 지평의 사후 해설이 "
+                "인용한 근거다. thesis_outcome으로 외래키를 걸지 않는다"
+            ),
+        ),
         sa.Column(
             "evidence_kind",
             sa.String(length=20),
@@ -282,17 +379,28 @@ def upgrade_default() -> None:
             name="ck_thesis_evidence_kind",
         ),
         sa.CheckConstraint("rank > 0", name="ck_thesis_evidence_rank_positive"),
+        # 해설을 받는 지평만 온다. 0은 해설이 없어(thesis_outcome CHECK) 근거도 없다.
+        sa.CheckConstraint(
+            "outcome_horizon_days IS NULL OR outcome_horizon_days IN (1, 3, 5)",
+            name="ck_thesis_evidence_outcome_horizon_days",
+        ),
         # 추론이 지워지면 그 근거도 함께 지운다. 근거는 추론 없이 의미가 없다.
         sa.ForeignKeyConstraint(["thesis_id"], ["thesis.id"], ondelete="CASCADE"),
         sa.PrimaryKeyConstraint("id"),
-        sa.UniqueConstraint("thesis_id", "evidence_kind", "evidence_ref", name="uq_thesis_evidence_ref"),
-        sa.UniqueConstraint("thesis_id", "rank", name="uq_thesis_evidence_rank"),
-        comment="추론이 인용한 근거를 추론별로 순위와 함께 보존하는 테이블",
+        sa.UniqueConstraint(
+            "thesis_id",
+            "outcome_horizon_days",
+            "evidence_kind",
+            "evidence_ref",
+            name="uq_thesis_evidence_ref",
+        ),
+        sa.UniqueConstraint("thesis_id", "outcome_horizon_days", "rank", name="uq_thesis_evidence_rank"),
+        comment="추론과 사후 해설이 인용한 근거를 순위와 함께 보존하는 테이블",
         info={"database": "default", "managed": True},
     )
 
 
 def downgrade_default() -> None:
     op.drop_table("thesis_evidence")
-    op.drop_index("ix_thesis_run_slot_evaluated_at", table_name="thesis")
+    op.drop_table("thesis_outcome")
     op.drop_table("thesis")

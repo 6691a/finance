@@ -27,6 +27,9 @@ from modules.thesis import (
     NarrativeDraft,
     NarrativeTarget,
     RunSlot,
+    StoredEvidence,
+    StoredOutcome,
+    StoredThesis,
     Subject,
     ThesisBuilder,
     ThesisDirection,
@@ -41,6 +44,8 @@ from modules.thesis import (
     evidence_ref,
     existing_theses,
     normalize_probabilities,
+    render_blocks,
+    render_text,
     store_narratives,
     store_theses,
 )
@@ -1552,3 +1557,121 @@ def test_evidence_refs_are_built_from_the_kind_itself():
 def test_the_character_budget_constant_leaves_room_for_the_answer_step():
     # 컨텍스트가 근거로 가득 차면 답변 단계에 쓸 자리가 없다.
     assert MAX_TOOL_RESULT_CHARS < 32_000
+
+
+# --- Slack 렌더링 -------------------------------------------------------------
+
+
+def stored_thesis(thesis_id: int = 1, code: str = "KOSPI", label: str = "코스피") -> StoredThesis:
+    return StoredThesis(
+        id=thesis_id,
+        run_slot=RunSlot.PRE_OPEN,
+        run_date=date(2026, 8, 21),
+        as_of_at=AS_OF,
+        dag_run_id="manual__run",
+        subject_kind=ThesisSubjectKind.INDEX,
+        subject_code=code,
+        label=label,
+        prob_up=Decimal("0.6200"),
+        prob_down=Decimal("0.2300"),
+        prob_flat=Decimal("0.1500"),
+        up_reasoning="오를 이유",
+        down_reasoning="내릴 이유",
+        flat_reasoning="횡보 이유",
+        tool_rounds=2,
+        llm_model="grok-4.6",
+        prompt_version=PROMPT_VERSION,
+    )
+
+
+def linked_evidence() -> tuple[StoredEvidence, ...]:
+    return (
+        StoredEvidence(thesis_id=1, evidence_title="기사", evidence_url="https://x.test/1", rank=1),
+        # 매크로 변화는 링크할 곳이 없다.
+        StoredEvidence(thesis_id=1, evidence_title="S&P500 선물 +0.8%", rank=2),
+    )
+
+
+def _texts(built: list[dict[str, Any]]) -> list[str]:
+    return [(block.get("text") or {}).get("text", "") for block in built]
+
+
+def test_the_slack_message_shows_all_three_directions():
+    built = render_blocks(RunSlot.PRE_OPEN, date(2026, 8, 21), [stored_thesis()], {1: linked_evidence()})
+
+    body = "\n".join(_texts(built))
+    # 사용자가 요청한 "오를 확률/이유, 내릴 확률/이유, 횡보 확률/이유" 그대로다.
+    for piece in ("상승 62%", "하락 23%", "횡보 15%", "오를 이유", "내릴 이유", "횡보 이유"):
+        assert piece in body
+
+
+def test_only_evidence_with_a_url_becomes_a_link():
+    built = render_blocks(RunSlot.PRE_OPEN, date(2026, 8, 21), [stored_thesis()], {1: linked_evidence()})
+
+    body = "\n".join(_texts(built))
+    assert "<https://x.test/1|기사>" in body
+    assert "· S&P500 선물 +0.8%" in body
+
+
+def test_no_evidence_says_so_rather_than_leaving_a_blank():
+    built = render_blocks(RunSlot.PRE_OPEN, date(2026, 8, 21), [stored_thesis()], {})
+
+    # 억지 인용보다 근거 없음이 낫다는 판단의 결과라 그렇게 적는다.
+    assert "근거: 없음 (관측 상태만으로 추론)" in "\n".join(_texts(built))
+
+
+def test_an_empty_run_says_there_is_nothing():
+    built = render_blocks(RunSlot.POST_CLOSE, date(2026, 8, 21), [], {})
+
+    assert "추론 결과 없음" in "\n".join(_texts(built))
+    assert render_text(RunSlot.POST_CLOSE, date(2026, 8, 21), []).endswith("추론 결과 없음")
+
+
+def test_the_header_names_the_slot():
+    morning = render_blocks(RunSlot.PRE_OPEN, date(2026, 8, 21), [], {})[0]
+    evening = render_blocks(RunSlot.POST_CLOSE, date(2026, 8, 21), [], {})[0]
+
+    assert "장전 전망" in morning["text"]["text"]
+    assert "장후 리뷰" in evening["text"]["text"]
+
+
+def test_the_review_section_is_absent_when_there_is_nothing_to_review():
+    built = render_blocks(RunSlot.PRE_OPEN, date(2026, 8, 21), [stored_thesis()], {}, ())
+
+    # 빈 섹션은 "볼 것이 없다"와 "아직 안 왔다"를 구분하지 못한다.
+    assert "되돌아보기" not in "\n".join(_texts(built))
+
+
+def test_the_review_section_shows_the_verdict_next_to_the_brier():
+    outcome = StoredOutcome(
+        thesis_id=1,
+        horizon_days=5,
+        actual_return_pct=Decimal("-4.0000"),
+        actual_outcome=ThesisDirection.DOWN,
+        brier_score=Decimal("0.14000"),
+        narrative="금리가 원인이었다",
+        verdict=ThesisVerdict.CONTRADICTED,
+    )
+    built = render_blocks(
+        RunSlot.PRE_OPEN,
+        date(2026, 8, 21),
+        [stored_thesis()],
+        {},
+        [(stored_thesis(), outcome, linked_evidence())],
+    )
+
+    body = "\n".join(_texts(built))
+    # 판정은 Brier와 다른 것을 잰다. 나란히 보여야 "맞았지만 이유는 틀렸다"가 읽힌다.
+    assert "5영업일 뒤 되돌아보기" in body
+    assert "Brier 0.14000" in body
+    assert "판정: contradicted" in body
+    assert "금리가 원인이었다" in body
+
+
+def test_the_slack_message_stays_inside_the_block_budget():
+    theses = [stored_thesis(index, f"CODE{index}", f"이름{index}") for index in range(1, 11)]
+
+    built = render_blocks(RunSlot.PRE_OPEN, date(2026, 8, 21), theses, {})
+
+    # Slack은 메시지당 블록 50개다. 대상이 늘어 가까워지면 메시지를 나눈다.
+    assert len(built) <= 50

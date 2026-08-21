@@ -1042,6 +1042,29 @@ class StoredThesis(BaseModel):
     prompt_version: str
 
 
+WATCHED_INSTRUMENTS = read_sql("postgres", "instrument", "select_watched.sql")
+
+# 추론 대상 지수. `quote_symbol`이 아니라 여기 두는 이유는 이것이 "무엇을 추론할지"의
+# 목록이지 "어떤 심볼을 수집할지"가 아니기 때문이다. KOSPI200은 코스피와 거의 같이 움직여
+# 대상에서 뺀다 — 같은 판단을 두 번 적는 것이 된다.
+INDEX_SUBJECTS: tuple[tuple[str, str], ...] = (("KOSPI", "코스피"), ("KOSDAQ", "코스닥"))
+
+
+def subjects(connection: Connection) -> tuple[Subject, ...]:
+    """이번 실행의 추론 대상. 지수는 코드가, 종목은 `instrument.is_watched`가 정한다.
+
+    종목을 마스터에서 읽는 이유는 추적 종목이 늘 때 이 모듈을 고치지 않기 위해서다.
+    지수는 마스터에 없어(그쪽은 `quote_symbol`이다) 코드에 둔다.
+    """
+    with connection.cursor() as cursor:
+        cursor.execute(WATCHED_INSTRUMENTS)
+        watched = cursor.fetchall()
+    return (
+        *(Subject(kind=ThesisSubjectKind.INDEX, code=code, label=label) for code, label in INDEX_SUBJECTS),
+        *(Subject(kind=ThesisSubjectKind.STOCK, code=row[0], label=row[1]) for row in watched),
+    )
+
+
 def existing_theses(connection: Connection, *, run_date: date, run_slot: RunSlot) -> tuple[StoredThesis, ...]:
     """이 (날짜, 슬롯)에 이미 저장된 추론.
 
@@ -1755,3 +1778,182 @@ def store_narratives(
             _store_evidence(cursor, draft.thesis_id, draft.evidence_refs, registry, horizon_days)
             stored += 1
     return stored
+
+
+# ---------------------------------------------------------------------------
+# Slack 렌더링
+#
+# `briefing/market.py`가 자기 도메인 렌더링을 갖는 것과 같다. thesis는 정기 리포트
+# 3부작과 다른 도메인이라 `briefing/` 아래 두지 않는다.
+# ---------------------------------------------------------------------------
+
+EVIDENCE_SELECT_TOP = read_sql("postgres", "thesis_evidence", "select_top_by_thesis_ids.sql")
+OUTCOME_SELECT_BY_IDS = read_sql("postgres", "thesis_outcome", "select_by_thesis_ids.sql")
+
+# 근거 줄에 그릴 개수. 세 개를 넘으면 한 줄이 길어져 읽히지 않는다.
+SLACK_EVIDENCE_LIMIT = 3
+
+# 되돌아보기 섹션을 그릴 지평. T+1·T+3까지 매일 보내면 하루 세 덩이가 더 붙어 원래 알림이
+# 묻힌다. T+5가 해설이 가장 굳은 시점이기도 하다.
+SLACK_REVIEW_HORIZON = 5
+
+SLOT_HEADERS = {
+    RunSlot.PRE_OPEN: "🔮 장전 전망",
+    RunSlot.POST_CLOSE: "🔎 장후 리뷰",
+}
+
+DIRECTION_MARKS = {"up": "▲", "down": "▼", "flat": "–"}
+
+
+class StoredOutcome(BaseModel):
+    """저장된 지평 결과 한 행. `thesis_outcome/select_by_thesis_ids.sql`의 행 계약이다."""
+
+    model_config = ConfigDict(frozen=True)
+
+    thesis_id: int
+    horizon_days: int
+    actual_return_pct: Decimal | None = None
+    actual_outcome: ThesisDirection | None = None
+    brier_score: Decimal | None = None
+    narrative: str | None = None
+    verdict: ThesisVerdict | None = None
+
+
+class StoredEvidence(BaseModel):
+    """저장된 근거 한 행. Slack 근거 줄이 쓴다."""
+
+    model_config = ConfigDict(frozen=True)
+
+    thesis_id: int
+    evidence_title: str
+    evidence_url: str | None = None
+    rank: int
+
+
+def top_evidence(
+    connection: Connection,
+    thesis_ids: Sequence[int],
+    *,
+    outcome_horizon_days: int | None = None,
+    limit: int = SLACK_EVIDENCE_LIMIT,
+) -> dict[int, tuple[StoredEvidence, ...]]:
+    """추론별 상위 근거. `outcome_horizon_days`가 `None`이면 원 추론이 인용한 것이다."""
+    if not thesis_ids:
+        return {}
+    with connection.cursor() as cursor:
+        cursor.execute(EVIDENCE_SELECT_TOP, (list(thesis_ids), outcome_horizon_days, limit))
+        rows = cursor.fetchall()
+    grouped: dict[int, list[StoredEvidence]] = {}
+    for row in rows:
+        grouped.setdefault(row[0], []).append(
+            StoredEvidence(thesis_id=row[0], evidence_title=row[4], evidence_url=row[5], rank=row[6])
+        )
+    return {thesis_id: tuple(items) for thesis_id, items in grouped.items()}
+
+
+def stored_outcomes(connection: Connection, thesis_ids: Sequence[int]) -> dict[int, tuple[StoredOutcome, ...]]:
+    """추론별 지평 결과 전부."""
+    if not thesis_ids:
+        return {}
+    with connection.cursor() as cursor:
+        cursor.execute(OUTCOME_SELECT_BY_IDS, (list(thesis_ids),))
+        rows = cursor.fetchall()
+    grouped: dict[int, list[StoredOutcome]] = {}
+    for row in rows:
+        grouped.setdefault(row[0], []).append(
+            StoredOutcome(
+                thesis_id=row[0],
+                horizon_days=row[1],
+                actual_return_pct=row[5],
+                actual_outcome=row[6],
+                brier_score=row[7],
+                narrative=row[8],
+                verdict=row[9],
+            )
+        )
+    return {thesis_id: tuple(items) for thesis_id, items in grouped.items()}
+
+
+def _evidence_line(items: Sequence[StoredEvidence]) -> str:
+    """근거 줄. URL이 있는 것만 링크로 만든다(매크로 변화는 링크할 곳이 없다)."""
+    if not items:
+        # 억지 인용보다 낫다는 판단의 결과라 그렇게 적는다.
+        return "근거: 없음 (관측 상태만으로 추론)"
+    parts = [
+        f"<{item.evidence_url}|{item.evidence_title}>" if item.evidence_url else item.evidence_title for item in items
+    ]
+    return "근거: " + " · ".join(parts)
+
+
+def _thesis_section(thesis: StoredThesis, evidence: Sequence[StoredEvidence]) -> str:
+    return "\n".join(
+        [
+            (
+                f"*{thesis.label}*  ▲ 상승 {thesis.prob_up:.0%} · ▼ 하락 {thesis.prob_down:.0%}"
+                f" · – 횡보 {thesis.prob_flat:.0%}"
+            ),
+            f"▲ {thesis.up_reasoning}",
+            f"▼ {thesis.down_reasoning}",
+            f"– {thesis.flat_reasoning}",
+            _evidence_line(evidence),
+        ]
+    )
+
+
+def _review_section(thesis: StoredThesis, outcome: StoredOutcome, evidence: Sequence[StoredEvidence]) -> str:
+    mark = DIRECTION_MARKS.get(outcome.actual_outcome.value, "") if outcome.actual_outcome else ""
+    graded = (
+        f"  예측 ▲{thesis.prob_up:.0%} · 실제 {outcome.actual_return_pct:+.2f}%"
+        f" ({mark}{outcome.actual_outcome.value})  Brier {outcome.brier_score}"
+        if outcome.actual_outcome is not None
+        else "  (채점 없음 — 장후 리뷰는 예측이 아니다)"
+    )
+    return "\n".join(
+        [
+            f"*{thesis.label}*{graded}",
+            # 판정은 Brier와 다른 것을 잰다. 방향이 맞아도 이유가 틀렸을 수 있다.
+            f"판정: {outcome.verdict.value if outcome.verdict else '없음'}",
+            outcome.narrative or "",
+            _evidence_line(evidence),
+        ]
+    )
+
+
+def render_blocks(
+    run_slot: RunSlot,
+    run_date: date,
+    theses: Sequence[StoredThesis],
+    evidence: dict[int, tuple[StoredEvidence, ...]],
+    reviews: Sequence[tuple[StoredThesis, StoredOutcome, tuple[StoredEvidence, ...]]] = (),
+) -> list[dict[str, Any]]:
+    """Slack 블록. 추론이 0건이면 그 사실을 한 줄로 알린다.
+
+    되돌아보기(`reviews`)는 T+5 해설만 싣는다. 0건이면 섹션을 아예 넣지 않는다 —
+    빈 섹션은 "볼 것이 없다"와 "아직 안 왔다"를 구분하지 못한다.
+    """
+    from modules.briefing import blocks as block
+
+    built: list[dict[str, Any]] = [block.header(f"{SLOT_HEADERS[run_slot]} {run_date:%m/%d}")]
+    if not theses:
+        built.append(block.section("추론 결과 없음"))
+    else:
+        built += [block.section(_thesis_section(thesis, evidence.get(thesis.id, ()))) for thesis in theses]
+
+    if reviews:
+        built.append(block.divider())
+        built.append(block.section(f"*{SLACK_REVIEW_HORIZON}영업일 뒤 되돌아보기*"))
+        built += [_review_block(block, item) for item in reviews]
+    return built
+
+
+def _review_block(block: Any, item: tuple[StoredThesis, StoredOutcome, tuple[StoredEvidence, ...]]) -> dict[str, Any]:
+    thesis, outcome, evidence = item
+    return block.section(_review_section(thesis, outcome, evidence))
+
+
+def render_text(run_slot: RunSlot, run_date: date, theses: Sequence[StoredThesis]) -> str:
+    """블록을 못 그리는 자리(알림, 검색)에 뜨는 대체 문구. 항상 채운다."""
+    if not theses:
+        return f"{SLOT_HEADERS[run_slot]} {run_date:%m/%d} — 추론 결과 없음"
+    names = " · ".join(thesis.label for thesis in theses)
+    return f"{SLOT_HEADERS[run_slot]} {run_date:%m/%d} — {names}"

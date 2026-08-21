@@ -1,7 +1,8 @@
 # 3단계 — DAG와 Slack: `dags/market_thesis_analysis.py`
 
 - 상위: [README.md](README.md)
-- 의존: [1-storage.md](1-storage.md), [2-agent.md](2-agent.md)
+- 의존: [1-storage.md](1-storage.md), [2-agent.md](2-agent.md), [5-followup.md](5-followup.md)
+- 상태: 구현 완료 (2026-08-21). 운영 배포는 선행 조건 셋이 남아 있다 — 7절
 - 산출물: `airflow/dags/market_thesis_analysis.py`, `thesis.py`의 렌더링 함수,
   `tests/dags/test_market_thesis_analysis.py`, 렌더링 테스트
 - **여기서 처음 운영에 발송된다.** 테스트 발송은 `slack_channel_test`로만 한다(프로젝트 규칙).
@@ -36,7 +37,11 @@ SCHEDULE = MultipleCronTriggerTimetable(
 - DAG 인자: `max_active_runs=1`, `default_args={"retries": 3, "retry_delay": timedelta(minutes=10)}`.
   재시도 셋은 readiness guard가 선행 DAG의 지연을 기다리는 수단이다.
 
-## 2. 태스크 — `build_thesis >> notify_slack`
+## 2. 태스크 — `build_thesis >> grade_followups >> narrate_followups >> notify_slack`
+
+**5단계를 함께 구현했다**(2026-08-21). 초판은 `build_thesis >> notify_slack` 둘이고 채점이
+`build_thesis` 안에 있었는데, [5-followup.md](5-followup.md) 7절대로 채점과 해설을 각자
+태스크로 뺐다. 채점 경로가 둘이면 어느 쪽이 그 행을 썼는지 알 수 없다.
 
 1. `build_thesis`:
    1. **readiness guard** — SQL 하나로 선행 데이터가 있는지 본다. 없으면 `ThesisNotReady`
@@ -54,17 +59,23 @@ SCHEDULE = MultipleCronTriggerTimetable(
    2. **기존 행 확인** — `thesis/select_by_run.sql`에 (run_date, run_slot) 행이 있으면 LLM을
       부르지 않고 그 행들로 넘어간다(첫 성공본 불변, [2-agent.md](2-agent.md) 5절).
    3. 관측 상태 계산(SQL) → ThesisBuilder 실행 → `store_theses`(insert, 한 트랜잭션).
-   4. post_close면 `thesis/select_forecasts_to_grade.sql`(미채점 forecast 전부, 날짜 제한
-      없음) → 등락률 조회 → `classify_outcome`·`brier_score` → `update_outcome.sql`.
-      장후가 실패했던 날의 forecast도 여기서 회수된다.
-   XCom으로 **갱신된 (run_date, run_slot) 목록**을 넘긴다 — `pre_open`이면
-   `[(run_date, "pre_open")]`, `post_close`면 채점으로 forecast 행도 바뀌므로
-   `[(run_date, "post_close")] + 채점한 forecast의 (run_date, "pre_open")`. 이 목록은 4단계
-   `sync_graph`가 그대로 쓴다.
-2. `notify_slack`: 이번 실행의 현재 슬롯 하나만 `thesis/select_by_run.sql` +
+   XCom으로 `{run_date, slot, written}`을 넘긴다. 뒤 세 태스크가 슬롯을 그것으로 판정한다.
+   **채점은 여기서 하지 않는다** — `grade_followups`가 한다.
+2. `grade_followups`: **장후에만 돈다. LLM 없음.** `thesis_outcome/select_pending_grades.sql`
+   (미채점 (추론, 지평) 전부, 날짜 제한 없음) → 지평별 목표 영업일
+   (`market_session/select_nth_open_day.sql`) → `select_horizon_return.sql` →
+   `classify_outcome`·`brier_score` → `insert_grade.sql`. 장후가 실패했던 날의 것도 여기서
+   회수된다. 목표일 종가가 없으면 미채점으로 남기고 다음 실행이 다시 집는다.
+3. `narrate_followups`: **장후에만 돈다.** 지평 T+1·3·5마다 원 추론일을 거슬러 찾아
+   `select_pending_narratives.sql`로 대상을 모으고 `FollowupNarrator`를 한 번씩 부른다.
+   **지평 하나가 실패해도 나머지는 돈다** — 그 지평만 없던 것으로 남는다.
+4. `notify_slack`: 이번 실행의 현재 슬롯 하나만 `thesis/select_by_run.sql` +
    `thesis_evidence/select_top_by_thesis_ids.sql`(rank 상위 3)로 다시 조회해 Slack에
-   보낸다(아침 예측을 저녁에 다시 알릴 필요는 없다). LLM을 다시 부르지 않는다 —
-   순수 조회+포맷+발송.
+   보낸다(아침 예측을 저녁에 다시 알릴 필요는 없다). 오늘이 T+5인 추론이 있으면 되돌아보기
+   섹션을 덧붙인다. LLM을 다시 부르지 않는다 — 순수 조회+포맷+발송.
+
+**4단계 `sync_graph`가 쓸 XCom 슬롯 목록은 아직 만들지 않았다.** 그래프 소비자가 없어
+지금 만들면 아무도 안 쓰는 값이 된다. 4단계에서 `build_thesis`의 반환값을 넓힌다.
 
 `notify_slack`을 `build_thesis` 뒤로 뺀 이유: LangGraph 재추론(비용 큼)과 발송 실패를
 분리한다. Slack이 잠깐 죽어도 `build_thesis`를 다시 돌리지 않는다.
@@ -133,9 +144,9 @@ SCHEDULE = MultipleCronTriggerTimetable(
   근거 줄이 `rank` 순 상위 3개·URL 있는 것만 링크·0건이면 "근거: 없음", subject 0건일 때
   "추론 결과 없음" 짧은 형태.
 - `tests/dags/test_market_thesis_analysis.py` — 스케줄 고정(`35 8`·`30 20`),
-  `max_active_runs=1`, `build_thesis >> notify_slack` 구조, `post_close` 실행이 XCom 슬롯
-  목록에 채점한 `pre_open`도 포함하는지, `as_of_at`이 슬롯으로 고정되는지, Slack 설정 누락
-  시 즉시 실패, `tests/dags/test_quote_intraday.py`의
+  `max_active_runs=1`, 태스크 넷의 한 줄 구조, `as_of_at`이 슬롯으로 고정되는지,
+  슬롯이 벽시계가 아니라 logical time으로 갈리는지, `run_date`가 ISO 주 표기를 거절하는지,
+  DAG 화면 메타데이터, `tests/dags/test_quote_intraday.py`의
   `test_the_dags_stay_on_their_intended_schedules` 패턴.
 - readiness guard(FakeConnection): 장후에 종가 행이 하나라도 빠지면 `ThesisNotReady`,
   장전에 `assessed_at` 최댓값이 오래됐고 직전 1시간 문서가 있으면 `ThesisNotReady`,
@@ -143,6 +154,20 @@ SCHEDULE = MultipleCronTriggerTimetable(
 - 기존 행이 있으면 모델이 호출되지 않고 XCom 목록은 같은지.
 - 렌더링 한도: section 3,000자 초과 시 잘림, 블록 수가 50 이하인지.
 
-## 7. 배포 뒤
+## 7. 배포 전 선행 조건 셋
+
+코드는 끝났지만 **운영에 나가려면 저장소 밖 작업이 셋 남았다.** 셋 다 이 저장소에서
+할 수 없다.
+
+1. **운영 DB에 테이블이 없다.** 2026-08-21 확인: `thesis`·`thesis_outcome`·`thesis_evidence`
+   셋 다 없고 `alembic_version`이 `c5f81d3a9b46`(리비전 `6e09dafae6f8` 미적용)이다.
+   적용은 운영 DB 쓰기라 명시적 승인이 필요하다.
+2. **`config.yaml`이 깨져 있다.** YAML 파싱이 실패하는 문자가 하나 섞여 있고 `prod` 별칭의
+   `migration.enabled`가 켜져 있다. 그대로 마이그레이션을 돌리면 운영에
+   `alembic_version_prod`가 생긴다.
+3. **`XAI_API_KEY`.** `compose/prod/airflow/.env`의 값이 무효였다(2026-08-20 실측).
+   유효한 키를 넣기 전에는 매 슬롯 실패한다.
+
+## 8. 배포 뒤
 
 [README.md](README.md) 5절의 4주 검증 항목을 여기서부터 센다.

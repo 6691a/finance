@@ -41,7 +41,7 @@
 
 import json
 import logging
-from collections.abc import Iterable, Sequence
+from collections.abc import Iterable, Mapping, Sequence
 from datetime import UTC, date, datetime, timedelta
 from decimal import ROUND_HALF_UP, Decimal
 from enum import StrEnum
@@ -64,7 +64,8 @@ from modules.utility import KST_TIMEZONE, atomic
 logger = logging.getLogger(__name__)
 
 # 프롬프트를 고치면 올린다. `thesis.prompt_version`에 저장돼 채점 결과를 가르는 기준이 된다.
-PROMPT_VERSION = "1"
+# 2: 과거 추론과 결과를 프롬프트에 미리 싣는 절이 생겼다(2026-08-21).
+PROMPT_VERSION = "2"
 
 # 채점 지평. KRX 영업일 수이고 달력일이 아니다. 0은 예측일 세션 하나다.
 HORIZON_DAYS: tuple[int, ...] = (0, 1, 3, 5)
@@ -114,6 +115,12 @@ MAX_VALUE_SCORE = 100
 # `past_theses`가 한 번에 돌려줄 과거 추론 수의 허용 범위. 문맥을 과거로 다 채우지 않는다.
 MIN_PAST_THESES = 1
 MAX_PAST_THESES = 10
+
+# 장전 추론의 프롬프트에 **미리 실어 주는** 같은 대상의 과거 추론 수. 툴로 두면 모델이 부를지
+# 말지를 정하고 불렀는지도 DB에 안 남는다. 미리 실으면 본 것이 확정되고 `thesis_precedent`에
+# 엣지로 남는다. 0이면 끄는 것이다 — 과거 추론을 안 싣고 엣지도 안 남긴다.
+# T+5 지평이 한 주라 한 주치를 준다.
+PREFETCHED_PAST_THESES = 5
 
 # 이유 문장 하나의 상한. 넘으면 그 필드만 자른다.
 MAX_REASONING_CHARS = 500
@@ -322,6 +329,37 @@ RECENT_DOCUMENTS = read_sql("postgres", "document", "select_recent_top.sql")
 RECENT_DISCLOSURES = read_sql("postgres", "disclosure_event", "select_recent.sql")
 WINDOW_CHANGES = read_sql("postgres", "quote_bar", "select_window_changes.sql")
 PAST_THESES = read_sql("postgres", "thesis", "select_past_with_outcomes.sql")
+PRECEDENT_INSERT = read_sql("postgres", "thesis_precedent", "insert.sql")
+
+
+def past_theses(connection: Connection, *, as_of_at: datetime, subject_code: str, n: int) -> list[dict[str, Any]]:
+    """이 대상의 지난 장전 추론과 지평별 결과. 최근 것부터 `n`건이다. 피드백 루프는 이 조회 하나다.
+
+    **창의 끝은 `as_of_at`이다.** 없으면 장전 슬롯을 오후에 재실행할 때 그날 저녁의 채점이
+    아침 예측에 섞인다. SQL이 술어 셋을 건다.
+
+    `n <= 0`이면 조회하지 않고 빈 목록이다 — `PREFETCHED_PAST_THESES = 0`이 끄는 스위치다.
+    """
+    if n <= 0:
+        return []
+    with connection.cursor() as cursor:
+        cursor.execute(PAST_THESES, (as_of_at, subject_code, n))
+        rows = cursor.fetchall()
+    return [
+        {
+            "id": row[0],
+            "run_date": row[1].isoformat(),
+            "prob_up": float(row[2]),
+            "prob_down": float(row[3]),
+            "prob_flat": float(row[4]),
+            "up_reasoning": row[5],
+            "down_reasoning": row[6],
+            "flat_reasoning": row[7],
+            "outcomes": row[8],
+        }
+        for row in rows
+    ]
+
 
 # 아래 일곱은 2026-08-21에 열었다. 그전까지 모델이 볼 수 있는 것은 문서·공시·분봉 창
 # 변화뿐이어서, 수집 중인 것의 대부분(국채 금리·물가·수급·시장폭·증시자금·일봉 이력)이
@@ -903,10 +941,10 @@ class ThesisToolbox:
         return tool.invoke(arguments)
 
     def _past_theses(self, arguments: dict[str, Any]) -> list[dict[str, Any]]:
-        """이 대상의 지난 장전 추론과 지평별 결과. 피드백 루프는 이 조회 하나다.
+        """툴 판 `past_theses`. 대상 목록 밖을 거절하고 건수를 자른 뒤 모듈 함수에 맡긴다.
 
-        **창의 끝은 여기서도 `as_of_at`이다.** 없으면 장전 슬롯을 오후에 재실행할 때 그날
-        저녁의 채점이 아침 예측에 섞인다. SQL이 술어 셋을 건다.
+        장전은 같은 조회를 프롬프트에 미리 싣는다(`PREFETCHED_PAST_THESES`). 툴은 모델이
+        더 보고 싶을 때의 길이고, 툴로 본 것은 `thesis_precedent`에 남지 않는다.
         """
         code = str(arguments.get("subject_code") or "").strip()
         if not self._subject_codes:
@@ -914,22 +952,7 @@ class ThesisToolbox:
         if code not in self._subject_codes:
             raise ToolLimitExceeded(f"대상 목록 밖이다: {code!r}. 쓸 수 있는 것은 {sorted(self._subject_codes)}")
         count = _clamp_int(arguments.get("n"), MIN_PAST_THESES, MAX_PAST_THESES, MIN_PAST_THESES)
-        with self._connection.cursor() as cursor:
-            cursor.execute(PAST_THESES, (self._as_of_at, code, count))
-            rows = cursor.fetchall()
-        return [
-            {
-                "run_date": row[1].isoformat(),
-                "prob_up": float(row[2]),
-                "prob_down": float(row[3]),
-                "prob_flat": float(row[4]),
-                "up_reasoning": row[5],
-                "down_reasoning": row[6],
-                "flat_reasoning": row[7],
-                "outcomes": row[8],
-            }
-            for row in rows
-        ]
+        return past_theses(self._connection, as_of_at=self._as_of_at, subject_code=code, n=count)
 
     def _recent_documents(self, arguments: dict[str, Any]) -> list[Evidence]:
         hours = _clamp_int(arguments.get("hours"), MIN_WINDOW_HOURS, MAX_WINDOW_HOURS, MAX_WINDOW_HOURS)
@@ -1247,7 +1270,16 @@ INSTRUCTION = """{slot_instruction}
 ```json
 {observed_state}
 ```
+
+## 과거 추론과 결과
+같은 대상에 대해 전에 낸 장전 추론과 그 채점·해설이다. 채점은 실제 등락이고, 해설은 사실이
+아니라 **그때의 해석**이다. 같은 이유로 같은 방향을 고르고 있다면 그 이유가 이번에도 맞는지
+따로 확인하라. 과거 문장을 베끼지 마라.
+{past_theses}
 """
+
+# 과거 추론이 없을 때 그 절에 넣는 말. 절 자체를 빼면 프롬프트 모양이 날마다 달라진다.
+NO_PAST_THESES = "(없음)"
 
 REPAIR_INSTRUCTION = (
     "이전 응답을 쓸 수 없다. 요청 목록의 subject_code만 쓰고, 세 확률의 합을 정확히 1로 맞추고, "
@@ -1302,8 +1334,17 @@ class ThesisBuilder:
         as_of_at: datetime,
         subjects: Sequence[Subject],
         observed_state: dict[str, Any],
+        past_theses: Mapping[str, Sequence[Mapping[str, Any]]],
     ) -> list[BaseMessage]:
+        """`past_theses`는 subject 코드별 과거 추론 목록(`thesis.past_theses`의 행)이다.
+
+        빈 매핑이면 그 절에 `NO_PAST_THESES`가 들어간다. 장후 리뷰가 그 경우다.
+        """
         subject_lines = "\n".join(f"- {subject.code} ({subject.label}, {subject.kind.value})" for subject in subjects)
+        shown = {code: rows for code, rows in past_theses.items() if rows}
+        past_section = (
+            f"```json\n{json.dumps(shown, ensure_ascii=False, indent=2, default=str)}\n```" if shown else NO_PAST_THESES
+        )
         return [
             SystemMessage(SYSTEM_PROMPT),
             HumanMessage(
@@ -1312,6 +1353,7 @@ class ThesisBuilder:
                     as_of_at=kst_label(as_of_at),
                     subjects=subject_lines or "(없음)",
                     observed_state=json.dumps(observed_state, ensure_ascii=False, indent=2, default=str),
+                    past_theses=past_section,
                 )
             ),
         ]
@@ -1323,6 +1365,7 @@ class ThesisBuilder:
         as_of_at: datetime,
         subjects: Sequence[Subject],
         observed_state: dict[str, Any],
+        past_theses: Mapping[str, Sequence[Mapping[str, Any]]],
     ) -> tuple[tuple[ThesisDraft, ...], int]:
         """추론들과 툴 왕복 수. 두 번째도 실패하면 `ThesisError`를 올린다."""
         if not subjects:
@@ -1333,6 +1376,7 @@ class ThesisBuilder:
                 as_of_at=as_of_at,
                 subjects=subjects,
                 observed_state=observed_state,
+                past_theses=past_theses,
             ),
             "subjects": tuple(subjects),
             "tool_rounds": 0,
@@ -1588,14 +1632,17 @@ def store_theses(
     observed_state: dict[str, Any],
     llm_model: str,
     tool_rounds: int,
+    precedents: Mapping[str, Sequence[int]],
 ) -> tuple[StoredThesis, ...]:
-    """추론과 근거를 한 트랜잭션에 쓴다.
+    """추론과 근거, 그리고 본 과거 추론을 한 트랜잭션에 쓴다.
 
     **추론은 `INSERT ... ON CONFLICT DO NOTHING`이다.** 같은 (날짜, 슬롯, subject)에 행이 이미
     있으면 아무 것도 바꾸지 않는다. `RETURNING`이 0행이면 삽입 직전에 다른 실행이 먼저 넣은
     것이므로, 그 경우에도 실패로 보지 않고 저장된 행을 읽어 돌려준다.
 
     thesis와 evidence를 한 트랜잭션에 쓴다 — 추론만 들어가고 근거가 빠진 상태를 남기지 않는다.
+    `precedents`는 subject 코드별로 프롬프트에 실린 과거 thesis ID 목록이고 `thesis_precedent`
+    엣지가 된다. 같은 트랜잭션이다 — "무엇을 보고 냈나"도 추론과 함께 들어가거나 함께 빠진다.
     """
     with atomic(connection) as transaction, transaction.cursor() as cursor:
         for draft in drafts:
@@ -1626,6 +1673,8 @@ def store_theses(
                 logger.info("thesis for %s %s %s already existed", run_date, run_slot.value, draft.subject.code)
                 continue
             _store_evidence(cursor, returned[0], draft.evidence_refs, registry)
+            for precedent_id in precedents.get(draft.subject.code, ()):
+                cursor.execute(PRECEDENT_INSERT, (returned[0], precedent_id))
 
     return existing_theses(connection, run_date=run_date, run_slot=run_slot)
 

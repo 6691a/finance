@@ -35,7 +35,7 @@ DB 연결과 **기준 시각 `as_of_at`**을 들고 읽기 전용 툴 11개를 �
 
 | 툴 | 반환 | SQL |
 | --- | --- | --- |
-| `past_theses(subject_code, n)` | 그 대상의 지난 장전 추론과 지평별 채점·해설 | `thesis/select_past_with_outcomes.sql` |
+| `past_theses(subject_code, n)` | 그 대상의 지난 장전 추론과 지평별 채점·해설. 장전은 같은 조회 `PREFETCHED_PAST_THESES`건을 프롬프트에 **미리 싣고** `thesis_precedent`에 남긴다(5-followup.md 5절). 툴은 더 보고 싶을 때의 길이고 툴로 본 것은 기록되지 않는다 | `thesis/select_past_with_outcomes.sql` |
 | `macro_indicators(kind)` | 각국 국채 곡선·물가·실물활동의 최신값과 직전 대비 변화 | `indicator_observation/select_thesis_latest.sql` |
 | `market_investor_flows()` | 코스피·코스닥의 외국인·기관·개인 장중 누적 순매수 | `market_investor_flow_snapshot/select_thesis_latest.sql` |
 | `market_breadth()` | 상승·보합·하락 종목 수와 상·하한가 수 | `market_movement_snapshot/select_thesis_latest.sql` |

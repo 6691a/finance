@@ -32,7 +32,7 @@
 진 변형을 지우지 않았다. `NarrativeVariant.BLIND`가 남아 있고 `prompt_version`에
 `1/informed` 형태로 어느 변형이었는지 실린다. 분기 재검증이 노트북 재실행으로 끝난다.
 
-`past_theses` 툴도 같은 모양이다 — 효과가 없으면 툴 하나를 빼면 되돌아간다
+과거 추론 프리페치도 같은 모양이다 — 효과가 없으면 `PREFETCHED_PAST_THESES = 0`으로 되돌아간다
 ([5-followup.md](5-followup.md) 5절). **되돌릴 수 있음이 그 방식을 고른 이유다.**
 
 ### 독립 사건으로 센다
@@ -141,7 +141,7 @@ GROUP BY run_slot;
 | `INDEX_SUBJECTS` + `instrument.is_watched` | KOSPI·코스닥 + watched 종목 | `thesis.py` / `instrument` 테이블 | 표본 수 | **표본을 늘리는 가장 싼 손잡이다.** LLM 호출 수는 그대로고 날짜당 건수만 는다([5-followup.md](5-followup.md) 12절). 단 독립 사건 수는 안 는다 — 1절 |
 | `NarrativeVariant` 기본 | `INFORMED` | `thesis.py`, `FollowupNarrator.__init__` | 분기 Brier + `verdict` 분포 | 노트북 재실행으로 재검증. `BLIND`가 남아 있어 되돌리기가 인자 하나다 |
 | `HORIZON_DAYS` | `(0,1,3,5)` | `thesis.py` `HORIZON_DAYS`·`NARRATED_HORIZON_DAYS`, `ops.py` `THESIS_HORIZONS`, DB CHECK — **네 곳** | LLM 호출 비용 | 비용이 문제면 **해설만** T+5 하나로 줄인다. 채점은 SQL이라 공짜다. 네 곳을 같은 커밋에서 만진다 |
-| `past_theses` 툴 | 켜짐 | `thesis.py` `ThesisToolbox._build_tools` | 도입 전후 지평별 Brier 추이 | **효과가 관측되지 않으면 툴을 뺀다**([5-followup.md](5-followup.md) 5절). 분기 판단 |
+| `PREFETCHED_PAST_THESES` | 5 | `thesis.py` | 도입 전후 지평별 Brier 추이 | 장전 프롬프트에 미리 싣는 과거 추론 수. **효과가 관측되지 않으면 0으로 끈다**([5-followup.md](5-followup.md) 5절) — 절은 `(없음)`이 되고 `thesis_precedent` 엣지도 안 남는다. `past_theses` 툴은 그대로다. 분기 판단 |
 | 툴 개수 | 11 | 같은 곳 | **어떤 툴을 실제로 부르는지**와 `tool_rounds` 분포 | 한 번도 안 불리는 툴은 뺀다(문맥만 먹는다). 반대로 상한에 붙어 있으면 왕복을 늘린다. **서브 에이전트로 나누는 것은 여기서 판단한다** — 아래 참고 |
 | `verdict` 값 셋 | `supported`/`contradicted`/`unresolved` | `analysis.py` + CHECK | `contradicted` 비율 | 60% 위가 유지되면 "반박"과 "다른 원인 지목"을 가를지 본다. **지금은 안 가른다** |
 | `MAX_TOOL_ROUNDS` / `MAX_TOOL_CALLS` / `MAX_TOOL_RESULT_CHARS` | 4 / 12 / 24,000 | `thesis.py` | 쿼리 B의 분포 | 상한에 붙어 있으면 올린다. **값이 인자 모델(`RecentDocumentsArgs` 등)의 `Field(description=...)`에 f-string으로 실려 프롬프트가 자동으로 따라간다** |

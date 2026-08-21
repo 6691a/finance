@@ -98,6 +98,8 @@ def build() -> dict[str, Any]:
             macro_window_start=macro_window_start(run_date),
             targets=targets,
             observed=thesis_common.observed_state(conn, market_thesis, run_date, targets),
+            # 장후는 예측이 아니라 해석이다. 과거 예측 성적을 실어 줄 자리가 아니다.
+            past={},
             dag_run_id=dag_run_id,
         )
     return {"run_date": run_date.isoformat(), "slot": SLOT, "written": written}

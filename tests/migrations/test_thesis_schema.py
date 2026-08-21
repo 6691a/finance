@@ -132,3 +132,17 @@ def test_thesis_tables_and_columns_carry_comments(capsys):
         assert f"COMMENT ON COLUMN thesis_outcome.{column} IS" in sql
     for column in ("outcome_horizon_days", "evidence_kind", "evidence_ref", "evidence_url", "rank"):
         assert f"COMMENT ON COLUMN thesis_evidence.{column} IS" in sql
+
+
+def test_thesis_precedent_links_a_thesis_to_the_past_theses_it_saw(capsys):
+    sql = head_sql(capsys)
+    statement = _table_statement(sql, "thesis_precedent")
+
+    # 한 추론이 같은 과거 추론을 두 번 봤다는 행은 없다. 자기 자신을 봤다는 행도 없다.
+    assert "CONSTRAINT uq_thesis_precedent_natural_key UNIQUE (thesis_id, precedent_id)" in statement
+    assert "thesis_id <> precedent_id" in statement
+    # 추론이 지워지면 본 기록도 지운다. 남이 본 과거 추론은 지우지 못한다.
+    assert "FOREIGN KEY(thesis_id) REFERENCES thesis (id) ON DELETE CASCADE" in statement
+    assert "FOREIGN KEY(precedent_id) REFERENCES thesis (id) ON DELETE RESTRICT" in statement
+    # thesis_evidence가 아니다 — 인용이 아니라 보여 준 것이라 rank가 없다.
+    assert "rank" not in statement

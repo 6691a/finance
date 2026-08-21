@@ -47,6 +47,9 @@ relational→Neo4j와 복잡도가 같다. Cypher 방언만 둘(AGE의 openCyphe
   `evaluated_at`)은 그대로 간다. 변환은 `graph.py`의 Pydantic 모델이 한다 — 부르는 쪽은 모른다.
 - `(:Evidence {kind, ref, title, url})` — `MERGE (e:Evidence {kind: $kind, ref: $ref})
   SET e.title = $title, e.url = $url`.
+- `(:Thesis)-[:INFORMED_BY]->(:Thesis)` — `thesis_precedent` 한 행당 관계 하나. 장전 추론이
+  프롬프트에서 본 과거 추론이다(5-followup.md 5절). 양 끝이 다 `Thesis` 노드라 새 노드가 없고,
+  양쪽 다 FK라 문자열 파싱도 없다.
 - `(:Thesis)-[:CITES {rank}]->(:Evidence)` — `thesis_evidence` 한 행당 관계 하나.
   **exact-set으로 맞춘다**: 같은 트랜잭션 안에서 먼저
   `MATCH (t:Thesis {id: $id})-[c:CITES]->() DELETE c`로 그 추론의 기존 관계를 전부 지우고

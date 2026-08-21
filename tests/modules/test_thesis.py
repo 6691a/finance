@@ -8,7 +8,7 @@ import pytest
 from langchain_core.messages import AIMessage, ToolMessage
 from sqlalchemy import Table
 
-from apps.models.analysis import Thesis, ThesisEvidence, ThesisOutcome
+from apps.models.analysis import Thesis, ThesisEvidence, ThesisOutcome, ThesisPrecedent
 from modules.sql import read_sql
 from modules.thesis import (
     DART_VIEWER_URL,
@@ -22,6 +22,7 @@ from modules.thesis import (
     MAX_TOOL_ROUNDS,
     MAX_WINDOW_HOURS,
     NARRATED_HORIZON_DAYS,
+    PREFETCHED_PAST_THESES,
     PROMPT_VERSION,
     Evidence,
     FollowupNarrator,
@@ -44,6 +45,7 @@ from modules.thesis import (
     evidence_ref,
     existing_theses,
     normalize_probabilities,
+    past_theses,
     render_blocks,
     render_text,
     store_narratives,
@@ -59,6 +61,7 @@ NTH_OPEN_DAY = read_sql("postgres", "market_session", "select_nth_open_day.sql")
 STOCK_HORIZON_RETURN = read_sql("postgres", "stock_investor_trade_daily", "select_horizon_return.sql")
 INDEX_HORIZON_RETURN = read_sql("postgres", "index_bar", "select_horizon_return.sql")
 EVIDENCE_INSERT = read_sql("postgres", "thesis_evidence", "insert.sql")
+PRECEDENT_INSERT = read_sql("postgres", "thesis_precedent", "insert.sql")
 EVIDENCE_SELECT_ALL = read_sql("postgres", "thesis_evidence", "select_by_thesis_ids.sql")
 EVIDENCE_SELECT_TOP = read_sql("postgres", "thesis_evidence", "select_top_by_thesis_ids.sql")
 STOCK_SESSION_RETURN = read_sql("postgres", "stock_investor_trade_daily", "select_session_return.sql")
@@ -541,6 +544,8 @@ def _statement_key(statement: str) -> str:
     query = body(statement).strip()
     if query.startswith("INSERT INTO thesis_evidence"):
         return "evidence_insert"
+    if query.startswith("INSERT INTO thesis_precedent"):
+        return "precedent_insert"
     if query.startswith("INSERT INTO thesis_outcome"):
         return "narrative_insert" if "narrative" in query else "grade_insert"
     if query.startswith("INSERT INTO thesis"):
@@ -919,6 +924,7 @@ def run_builder(builder: ThesisBuilder) -> tuple[Any, int]:
         as_of_at=AS_OF,
         subjects=SUBJECTS,
         observed_state=OBSERVED,
+        past_theses={},
     )
 
 
@@ -1307,6 +1313,7 @@ def draft_for(builder_connection: FakeConnection) -> Any:
         as_of_at=AS_OF,
         subjects=SUBJECTS,
         observed_state=OBSERVED,
+        past_theses={},
     )
     return drafts, box.registry
 
@@ -1337,6 +1344,7 @@ def test_storing_writes_the_thesis_and_its_evidence_in_one_transaction():
         observed_state=OBSERVED,
         llm_model="gpt-5.6-luna",
         tool_rounds=1,
+        precedents={},
     )
 
     kinds = [_statement_key(statement) for statement, _ in connection.calls]
@@ -1362,6 +1370,7 @@ def test_storing_never_updates_and_falls_back_to_the_stored_row_on_conflict():
         observed_state=OBSERVED,
         llm_model="gpt-5.6-luna",
         tool_rounds=1,
+        precedents={},
     )
 
     kinds = [_statement_key(statement) for statement, _ in connection.calls]
@@ -1381,6 +1390,7 @@ def test_the_prompt_states_the_reference_time_in_kst():
         as_of_at=pre_open_as_of,
         subjects=SUBJECTS,
         observed_state=OBSERVED,
+        past_theses={},
     )[1].content
 
     assert "2026-08-21 08:35 KST" in prompt
@@ -1413,7 +1423,9 @@ def test_evidence_ranks_follow_the_citation_order():
     box.run("macro_changes", {})
     model = scripted(answer_message(thesis_payload(refs=["macro_change:SP500_FUT", "document:9"])))
     builder = ThesisBuilder(model, box)
-    drafts, _ = builder.run(run_slot=RunSlot.PRE_OPEN, as_of_at=AS_OF, subjects=SUBJECTS, observed_state=OBSERVED)
+    drafts, _ = builder.run(
+        run_slot=RunSlot.PRE_OPEN, as_of_at=AS_OF, subjects=SUBJECTS, observed_state=OBSERVED, past_theses={}
+    )
 
     writer = FakeConnection({"thesis_insert": [(11,)], "select_by_run": [stored_row(11)]})
     store_theses(
@@ -1427,6 +1439,7 @@ def test_evidence_ranks_follow_the_citation_order():
         observed_state=OBSERVED,
         llm_model="gpt-5.6-luna",
         tool_rounds=2,
+        precedents={},
     )
 
     # (outcome_horizon_days, evidence_ref, rank). 원 추론의 근거라 지평 칸은 NULL이다.
@@ -1925,3 +1938,118 @@ def test_the_slack_message_stays_inside_the_block_budget():
 
     # Slack은 메시지당 블록 50개다. 대상이 늘어 가까워지면 메시지를 나눈다.
     assert len(built) <= 50
+
+
+# --- 과거 추론 프리페치와 thesis_precedent ---------------------------------------
+
+
+def test_thesis_precedent_insert_matches_the_model():
+    table = ThesisPrecedent.__table__
+    columns = inserted_columns(PRECEDENT_INSERT)
+
+    assert set(columns) <= {column.name for column in table.columns}
+    assert required_columns(table) <= set(columns)
+    assert placeholder_count(PRECEDENT_INSERT) == len(columns)
+    assert "DO UPDATE" not in PRECEDENT_INSERT
+
+
+def test_past_theses_carries_the_id_the_edge_needs():
+    connection = FakeConnection({"past": [past_thesis_row()]})
+
+    rows = past_theses(connection, as_of_at=AS_OF, subject_code="KOSPI", n=PREFETCHED_PAST_THESES)
+
+    # 프롬프트에 실리는 행과 엣지 끝이 같은 조회에서 나온다. 따로 조회하면 둘이 어긋날 수 있다.
+    assert [row["id"] for row in rows] == [7]
+    assert rows[0]["outcomes"][0]["verdict"] == "contradicted"
+    _, parameters = connection.calls[0]
+    assert parameters == (AS_OF, "KOSPI", PREFETCHED_PAST_THESES)
+
+
+def test_past_theses_zero_is_the_off_switch():
+    connection = FakeConnection({"past": [past_thesis_row()]})
+
+    assert past_theses(connection, as_of_at=AS_OF, subject_code="KOSPI", n=0) == []
+    # 조회조차 하지 않는다. 상수 하나를 0으로 두면 프롬프트 절과 엣지가 같이 꺼진다.
+    assert connection.calls == []
+
+
+def test_the_prompt_carries_the_past_theses_it_was_given():
+    source = FakeConnection({"past": [past_thesis_row()]})
+    past = {"KOSPI": past_theses(source, as_of_at=AS_OF, subject_code="KOSPI", n=3)}
+
+    prompt = ThesisBuilder.build_messages(
+        run_slot=RunSlot.PRE_OPEN,
+        as_of_at=AS_OF,
+        subjects=SUBJECTS,
+        observed_state=OBSERVED,
+        past_theses=past,
+    )[1].content
+
+    assert "## 과거 추론과 결과" in prompt
+    assert '"run_date": "2026-08-20"' in prompt
+    assert "contradicted" in prompt
+    # 해설은 사실이 아니라 그때의 해석이라고 프롬프트가 직접 말한다(사후확신 순환 방지).
+    assert "그때의 해석" in prompt
+
+
+def test_the_prompt_keeps_the_section_when_there_is_nothing_to_show():
+    prompt = ThesisBuilder.build_messages(
+        run_slot=RunSlot.POST_CLOSE,
+        as_of_at=AS_OF,
+        subjects=SUBJECTS,
+        observed_state=OBSERVED,
+        past_theses={"KOSPI": []},
+    )[1].content
+
+    # 절을 빼면 프롬프트 모양이 슬롯마다 달라진다. 빈 목록도 "(없음)"으로 같은 자리에 둔다.
+    assert "## 과거 추론과 결과" in prompt
+    assert "(없음)" in prompt
+    assert "```json\n{}" not in prompt
+
+
+def test_storing_writes_the_precedent_edges_in_the_same_transaction():
+    drafts, registry = draft_for(FakeConnection())
+    connection = FakeConnection({"thesis_insert": [(11,)], "select_by_run": [stored_row(11)]})
+
+    store_theses(
+        connection,
+        run_date=date(2026, 8, 21),
+        run_slot=RunSlot.PRE_OPEN,
+        as_of_at=AS_OF,
+        dag_run_id="manual__run",
+        drafts=drafts,
+        registry=registry,
+        observed_state=OBSERVED,
+        llm_model="grok-4.6",
+        tool_rounds=1,
+        precedents={"KOSPI": [7, 5]},
+    )
+
+    edges = [
+        parameters for statement, parameters in connection.calls if _statement_key(statement) == "precedent_insert"
+    ]
+    # 새 thesis id 11에서 보여 준 과거 추론 둘로 나가는 엣지 둘. 추론과 같은 커밋이다.
+    assert edges == [(11, 7), (11, 5)]
+    assert connection.commits == 1
+
+
+def test_a_thesis_that_already_existed_gets_no_new_edges():
+    drafts, registry = draft_for(FakeConnection())
+    connection = FakeConnection({"thesis_insert": [], "select_by_run": [stored_row(11)]})
+
+    store_theses(
+        connection,
+        run_date=date(2026, 8, 21),
+        run_slot=RunSlot.PRE_OPEN,
+        as_of_at=AS_OF,
+        dag_run_id="manual__run",
+        drafts=drafts,
+        registry=registry,
+        observed_state=OBSERVED,
+        llm_model="grok-4.6",
+        tool_rounds=1,
+        precedents={"KOSPI": [7]},
+    )
+
+    # 첫 성공본 불변. 행이 이미 있으면 근거도 엣지도 덧붙이지 않는다.
+    assert all(_statement_key(statement) != "precedent_insert" for statement, _ in connection.calls)

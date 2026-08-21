@@ -2,7 +2,7 @@
 
 - 상위: [README.md](README.md)
 - 의존: [1-storage.md](1-storage.md), [2-agent.md](2-agent.md), [5-followup.md](5-followup.md)
-- 상태: 구현 완료 (2026-08-21). 운영 배포는 선행 조건 셋이 남아 있다 — 7절
+- 상태: 구현 완료 (2026-08-21). 운영 배포는 선행 조건 둘이 남아 있다 — 7절
 - 산출물: `airflow/dags/market_thesis_analysis.py`, `thesis.py`의 렌더링 함수,
   `tests/dags/test_market_thesis_analysis.py`, 렌더링 테스트
 - **여기서 처음 운영에 발송된다.** 테스트 발송은 `slack_channel_test`로만 한다(프로젝트 규칙).
@@ -154,19 +154,23 @@ SCHEDULE = MultipleCronTriggerTimetable(
 - 기존 행이 있으면 모델이 호출되지 않고 XCom 목록은 같은지.
 - 렌더링 한도: section 3,000자 초과 시 잘림, 블록 수가 50 이하인지.
 
-## 7. 배포 전 선행 조건 셋
+## 7. 배포 전 선행 조건 둘
 
-코드는 끝났지만 **운영에 나가려면 저장소 밖 작업이 셋 남았다.** 셋 다 이 저장소에서
+코드는 끝났지만 **운영에 나가려면 저장소 밖 작업이 둘 남았다.** 둘 다 이 저장소에서
 할 수 없다.
 
 1. **운영 DB에 테이블이 없다.** 2026-08-21 확인: `thesis`·`thesis_outcome`·`thesis_evidence`
    셋 다 없고 `alembic_version`이 `c5f81d3a9b46`(리비전 `6e09dafae6f8` 미적용)이다.
    적용은 운영 DB 쓰기라 명시적 승인이 필요하다.
-2. **`config.yaml`이 깨져 있다.** YAML 파싱이 실패하는 문자가 하나 섞여 있고 `prod` 별칭의
-   `migration.enabled`가 켜져 있다. 그대로 마이그레이션을 돌리면 운영에
-   `alembic_version_prod`가 생긴다.
-3. **`XAI_API_KEY`.** `compose/prod/airflow/.env`의 값이 무효였다(2026-08-20 실측).
+2. **`XAI_API_KEY`.** `compose/prod/airflow/.env`의 값이 무효였다(2026-08-20 실측).
    유효한 키를 넣기 전에는 매 슬롯 실패한다.
+
+`compose/**`와 `requirements.txt`는 이 단계가 건드리지 않는다. **운영 Airflow 이미지를
+다시 빌드할 필요가 없다** — NAS clone에서 `git pull` 뒤 `just deploy-airflow`면 된다.
+
+**`config.yaml`은 선행 조건이 아니다.** 한때 파싱이 깨져 있었으나 2026-08-21에 고쳤고
+(`prod`는 `migration.enabled: false` + `read_only: true`), 애초에 `.gitignore` 대상이라
+배포 산출물이 아니다. 막고 있던 것은 로컬에서 마이그레이션을 돌리는 것뿐이었다.
 
 ## 8. 배포 뒤
 

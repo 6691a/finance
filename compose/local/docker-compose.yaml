@@ -23,6 +23,21 @@ services:
     volumes:
       - redis:/data
 
+  neo4j:
+    image: neo4j:5.26.29-community
+    environment:
+      NEO4J_AUTH: neo4j/finance1234
+    ports:
+      - "17474:7474"
+      - "17687:7687"
+    volumes:
+      - neo4j:/data
+    healthcheck:
+      test: ["CMD-SHELL", "cypher-shell -u neo4j -p finance1234 'RETURN 1'"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
   grafana:
     image: grafana/grafana:13.0-slim
     ports:
@@ -45,4 +60,5 @@ services:
 volumes:
   psql:
   redis:
+  neo4j:
   grafana:

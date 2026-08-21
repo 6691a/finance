@@ -1,3 +1,4 @@
+from apps.models.analysis import Thesis, ThesisEvidence
 from apps.models.content import Document, DocumentIndicator, DocumentInstrument, DocumentSource
 from apps.models.market import (
     BondFutureBar,
@@ -73,4 +74,6 @@ __all__ = [
     "StockDaily",
     "StockInvestorEstimateSnapshot",
     "StockInvestorTradeDaily",
+    "Thesis",
+    "ThesisEvidence",
 ]

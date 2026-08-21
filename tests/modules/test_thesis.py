@@ -405,6 +405,29 @@ def test_lookups_never_read_the_wall_clock(statement):
 # --- 툴 SQL -----------------------------------------------------------------
 
 
+def test_no_sql_comment_carries_a_percent_sign():
+    """psycopg는 **주석까지** 훑어 플레이스홀더를 센다.
+
+    두 가지로 터진다(둘 다 2026-08-21 실측). 주석의 `%` 다음 글자가 `s`가 아니면
+    `only '%s', '%b', '%t' are allowed as placeholders`로 거절되고, `%s`면 자리 수에
+    같이 세어져 `the query has N placeholders but M parameters were passed`가 된다.
+
+    설명하려고 주석에 적은 퍼센트가 런타임에야 터지므로 여기서 막는다. 저장소의 모든 SQL이
+    대상이다 — 이 함정은 thesis 전용이 아니다.
+    """
+    from pathlib import Path
+
+    from modules.sql import SQL_ROOT
+
+    offenders = []
+    for path in sorted(Path(SQL_ROOT).rglob("*.sql")):
+        for number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), start=1):
+            comment = line.partition("--")[2] if "--" in line else ""
+            if "%" in comment:
+                offenders.append(f"{path.relative_to(SQL_ROOT)}:{number}")
+    assert not offenders, offenders
+
+
 def test_document_tool_cuts_on_every_event_time_column():
     query = body(TOOL_DOCUMENTS)
 

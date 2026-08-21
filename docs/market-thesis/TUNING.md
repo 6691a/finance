@@ -141,9 +141,10 @@ GROUP BY run_slot;
 | `INDEX_SUBJECTS` + `instrument.is_watched` | KOSPI·코스닥 + watched 종목 | `thesis.py` / `instrument` 테이블 | 표본 수 | **표본을 늘리는 가장 싼 손잡이다.** LLM 호출 수는 그대로고 날짜당 건수만 는다([5-followup.md](5-followup.md) 12절). 단 독립 사건 수는 안 는다 — 1절 |
 | `NarrativeVariant` 기본 | `INFORMED` | `thesis.py`, `FollowupNarrator.__init__` | 분기 Brier + `verdict` 분포 | 노트북 재실행으로 재검증. `BLIND`가 남아 있어 되돌리기가 인자 하나다 |
 | `HORIZON_DAYS` | `(0,1,3,5)` | `thesis.py` `HORIZON_DAYS`·`NARRATED_HORIZON_DAYS`, `ops.py` `THESIS_HORIZONS`, DB CHECK — **네 곳** | LLM 호출 비용 | 비용이 문제면 **해설만** T+5 하나로 줄인다. 채점은 SQL이라 공짜다. 네 곳을 같은 커밋에서 만진다 |
-| `past_theses` 툴 | 켜짐 | `thesis.py` `TOOL_SCHEMAS` | 도입 전후 지평별 Brier 추이 | **효과가 관측되지 않으면 툴을 뺀다**([5-followup.md](5-followup.md) 5절). 분기 판단 |
+| `past_theses` 툴 | 켜짐 | `thesis.py` `ThesisToolbox._build_tools` | 도입 전후 지평별 Brier 추이 | **효과가 관측되지 않으면 툴을 뺀다**([5-followup.md](5-followup.md) 5절). 분기 판단 |
+| 툴 개수 | 11 | 같은 곳 | **어떤 툴을 실제로 부르는지**와 `tool_rounds` 분포 | 한 번도 안 불리는 툴은 뺀다(문맥만 먹는다). 반대로 상한에 붙어 있으면 왕복을 늘린다. **서브 에이전트로 나누는 것은 여기서 판단한다** — 아래 참고 |
 | `verdict` 값 셋 | `supported`/`contradicted`/`unresolved` | `analysis.py` + CHECK | `contradicted` 비율 | 60% 위가 유지되면 "반박"과 "다른 원인 지목"을 가를지 본다. **지금은 안 가른다** |
-| `MAX_TOOL_ROUNDS` / `MAX_TOOL_CALLS` / `MAX_TOOL_RESULT_CHARS` | 4 / 12 / 24,000 | `thesis.py` | 쿼리 B의 분포 | 상한에 붙어 있으면 올린다. **값이 `TOOL_SCHEMAS`의 description에 f-string으로 실려 프롬프트가 자동으로 따라간다** |
+| `MAX_TOOL_ROUNDS` / `MAX_TOOL_CALLS` / `MAX_TOOL_RESULT_CHARS` | 4 / 12 / 24,000 | `thesis.py` | 쿼리 B의 분포 | 상한에 붙어 있으면 올린다. **값이 인자 모델(`RecentDocumentsArgs` 등)의 `Field(description=...)`에 f-string으로 실려 프롬프트가 자동으로 따라간다** |
 | `PROMPT_VERSION` / `NARRATIVE_PROMPT_VERSION` | `"1"` / `"1"` | `thesis.py` | — | 프롬프트를 고치면 올린다. 올린 뒤 28일은 ops 창이 두 판에 걸친다 |
 | `THESIS_WINDOW_DAYS` | 28 | `ops.py` | — | 판을 올린 직후엔 짧게 줄여 새 판만 본다 |
 | `SCHEDULE` | 08:35 / 20:30 KST | `market_thesis_analysis.py` | 쿼리 C + readiness 재시도 | 재시도가 잦으면 늦춘다. 08:35는 문서 평가(매시 25분) 뒤, 20:30은 확정 종가(18:10) 뒤라는 제약이 있다 |
@@ -207,9 +208,19 @@ ops 브리핑의 **추론 적체** 한 줄. **여기서 즉시 대응하는 것�
   ([4-graph.md](4-graph.md)).
 - **6단계 애널리스트** — 첫 작업이 코드가 아니라 **KIS OpenAPI가 투자의견·목표주가를
   주는지 확인하는 spike**다. 저장소에 관련 코드가 0건이라 출처부터 미확인이다.
-- **새 툴** — 수급 스냅샷, 금리 스프레드([2-agent.md](2-agent.md)에 자리가 있다).
-  **금리는 퍼센트 변화가 아니라 bp 차이로 준다** — `BASIS_POINT_KINDS`가 이미 그 규칙을
-  안다. 웹 검색은 출처를 통제할 수 없어 별도 결정 전까지 안 넣는다.
+- **새 툴** — 2026-08-21에 일곱을 열어 11개가 됐다([2-agent.md](2-agent.md)).
+  남은 후보는 `earnings_fact`(지금 6행뿐)와 증권사 리서치 리포트(소스 자체가 없다,
+  [5-followup.md](5-followup.md) 11절). **금리는 퍼센트 변화가 아니라 bp 차이로 준다** —
+  `BASIS_POINT_KINDS`와 `BASIS_POINT_INDICATOR_KINDS`가 그 규칙을 안다. 웹 검색은 출처를
+  통제할 수 없어 별도 결정 전까지 안 넣는다.
+- **툴 그룹별 서브 에이전트** — 툴이 11개가 되면서 나온 이야기다. **지금은 만들지 않는다.**
+  단일 에이전트가 11개를 못 다룬다는 관측이 아직 없고, 서브 에이전트는 LLM 호출 수를
+  곱한다(이미 `THESIS_TIMEOUT_SECONDS`를 900으로 올린 참이다). 되돌리기 비용도 반대다 —
+  툴은 목록에서 빼면 끝이지만 supervisor 구조는 그래프를 다시 짜야 한다.
+  **발동 조건**: 모델이 부르는 툴이 특정 몇 개에 고정되고 나머지가 문맥만 먹거나,
+  `tool_rounds`가 상한(4)에 붙어 있는데 답변이 얕을 때. 그때의 순서는
+  ① 단일 에이전트 + 툴 그룹 → ② 서브그래프를 툴로 감싸기 → ③ 완전한 multi-agent이고,
+  ②에서 멈추는 경우가 대부분이다.
 - **근거 유효율 계측** — 2절 참고. 4주 검증에서 필요가 보이면.
 
 ---
@@ -229,6 +240,8 @@ ops 브리핑의 **추론 적체** 한 줄. **여기서 즉시 대응하는 것�
 | 2026-08-21 | 채점·판정의 Slack 위치 | 시장 메시지 → ops 브리핑 | — (읽는 사람이 다르다는 판단) | [3-dag-slack.md](3-dag-slack.md) 4절 |
 | 2026-08-21 | 프롬프트의 기준 시각 표기 | UTC isoformat → `2026-08-21 08:35 KST` | 장전 as_of_at이 UTC로 **전날** 23:35라 "오늘 장이 열리기 전"과 날짜가 어긋났다 | `thesis.kst_label`. 판을 안 올렸다 — 그때 `thesis`가 0행이라 갈릴 판이 없었다 |
 | 2026-08-21 | `THESIS_TIMEOUT_SECONDS` | (`REQUEST_TIMEOUT_SECONDS` 300 공용) → 900 전용 | 운영 첫 실행 `RetryableLlmError: Request timed out` 1건 | 표본 1건이다. 다음 실행들에서 안 걸리는지 확인이 남았다 |
+| 2026-08-21 | 툴 정의·실행 방식 | 손으로 쓴 `TOOL_SCHEMAS` dict → `StructuredTool` + `ToolNode` | — (동작 동일. 회귀 테스트로 `handle_tool_errors` 기본값이 DB 오류를 삼키는 것을 확인) | 저장소 규칙과 어긋나 있던 것을 맞췄다 |
+| 2026-08-21 | 툴 개수 | 4 → 11 | 국채 349행·수급 490행·시장폭 748행이 모델에게 안 보이고 있었다 | 운영 DB 실행으로 결함 둘을 잡았다(공매도 당일 0행, 국내 지수 일봉 부재) |
 
 ---
 

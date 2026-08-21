@@ -48,6 +48,7 @@ from typing import Any
 import openai
 from langchain_core.language_models import BaseChatModel
 from langchain_core.messages import AIMessage, BaseMessage
+from langchain_core.tools import BaseTool
 from langchain_openai import ChatOpenAI
 from langchain_xai import ChatXAI
 
@@ -140,7 +141,7 @@ def invoke(
     messages: Sequence[BaseMessage],
     *,
     schema: dict[str, Any] | None = None,
-    tools: Sequence[dict[str, Any]] | None = None,
+    tools: Sequence[BaseTool | dict[str, Any]] | None = None,
 ) -> AIMessage:
     """한 번 부른다. 재시도도 툴 루프도 여기서 돌지 않는다.
 

@@ -12,15 +12,50 @@
 
 ## 1. ThesisToolbox
 
-DB 연결과 **기준 시각 `as_of_at`**을 들고 읽기 전용 툴 3개를 실행한다. 결과의 모든 항목에
-`ref`를 붙이고 `ref → (kind, title, url, detail)` 레지스트리에 등록한다. 이 레지스트리가 답변
-검증과 `thesis_evidence` 저장의 원본이다.
+DB 연결과 **기준 시각 `as_of_at`**을 들고 읽기 전용 툴 11개를 실행한다.
+
+툴은 **근거를 만드는 것과 문맥만 주는 것**으로 갈린다. 근거 툴의 결과 항목에는 `ref`가 붙고
+`ref → (kind, title, url, detail)` 레지스트리에 등록된다. 이 레지스트리가 답변 검증과
+`thesis_evidence` 저장의 원본이다. 문맥 툴은 레지스트리에 넣지 않는다 — **시장 상태는 인용할
+"출처"가 아니라 관측이다.** 넣으면 근거 표에 "코스피 상승 종목 수"가 실린다.
+
+### 근거를 만드는 툴 셋
 
 | 툴 | 반환 | SQL |
 | --- | --- | --- |
 | `recent_documents(hours, min_score)` | value_score 상위 문서(제목·URL·발행시각·점수·방향·티커·`new_facts`·`reason`) | `document/select_recent_top.sql` |
 | `recent_disclosures(hours)` | 추적 종목 공시(회사·제목·URL·감지 시각) | `disclosure_event/select_recent.sql` |
 | `macro_changes()` | 분석 창의 지수·선물·환율 변화(첫봉 대비 마지막봉) | `quote_bar/select_window_changes.sql`(뷰는 읽기 전용 — 조회만) |
+
+### 문맥만 주는 툴 여덟
+
+`past_theses`를 뺀 일곱은 2026-08-21에 열었다. 그전까지 모델이 볼 수 있는 것은 문서·공시·분봉
+창 변화뿐이어서 **수집 중인 것의 대부분이 보이지 않았다** — 특히 `indicator_observation`에
+9개국 국채 곡선이 쌓여 있는데 금리를 못 보면서 "왜 움직였나"를 묻고 있었다.
+
+| 툴 | 반환 | SQL |
+| --- | --- | --- |
+| `past_theses(subject_code, n)` | 그 대상의 지난 장전 추론과 지평별 채점·해설 | `thesis/select_past_with_outcomes.sql` |
+| `macro_indicators(kind)` | 각국 국채 곡선·물가·실물활동의 최신값과 직전 대비 변화 | `indicator_observation/select_thesis_latest.sql` |
+| `market_investor_flows()` | 코스피·코스닥의 외국인·기관·개인 장중 누적 순매수 | `market_investor_flow_snapshot/select_thesis_latest.sql` |
+| `market_breadth()` | 상승·보합·하락 종목 수와 상·하한가 수 | `market_movement_snapshot/select_thesis_latest.sql` |
+| `stock_investor_flows(days)` | 추적 종목의 확정 수급 며칠치 + 장중 추정치 | `stock_investor_trade_daily/select_thesis_flows.sql`, `stock_investor_estimate_snapshot/select_thesis_latest.sql` |
+| `market_funds(days)` | 고객예탁금·신용융자·미수금 추이 | `krx_market_funds_daily/select_thesis_recent.sql` |
+| `daily_history(symbol, days)` | 심볼 하나의 일봉 추세 | `quote_daily/select_thesis_history.sql`, `select_thesis_symbols.sql` |
+| `short_and_credit()` | 공매도 수량·비중, 대차 잔고, 신용융자 잔고 | `krx_stock_short_sale_daily/select_thesis_latest.sql` |
+
+- **`macro_indicators`는 `kind`를 한 번에 하나만 본다.** 국채 금리(Percent)와 물가지수
+  (Index 1982-1984=100)가 한 표에 섞이면 모델이 조용히 거짓을 읽는다. 금리 변화는 퍼센트가
+  아니라 bp다(`BASIS_POINT_INDICATOR_KINDS`).
+- **`stock_investor_flows`는 확정과 추정을 다른 칸에 담는다.** 확정은 마감 뒤 18:10 값이고
+  추정은 장중 값이라 어긋난다. 한 칸에 담으면 모델이 그 차이를 모른 채 읽는다.
+- **`short_and_credit`은 당일 행을 뺀다.** KIS가 장중에 당일 공매도를 0으로 보낸다
+  (2026-08-21 실측). 확정은 다음 영업일 갱신이 채운다.
+- **`daily_history`는 0행이면 쓸 수 있는 심볼을 함께 준다.** `quote_daily`에 KOSPI·KOSDAQ
+  일봉이 없다 — 국내 지수는 분봉만 수집한다. 빈 배열만 주면 모델이 "이력이 없다"가 아니라
+  "움직임이 없었다"로 읽는다.
+- 열지 않은 것: `earnings_fact`(6행뿐이라 지금 열면 빈 결과만 준다), `market_session`
+  (관측 상태가 이미 세션 날짜를 준다).
 
 - **모든 창의 끝은 `as_of_at`이다.** `hours`는 `as_of_at`에서 거슬러 올라가는 길이이지
   `now()`에서가 아니다. `macro_changes()`의 창은 `[전 개장일 15:30, as_of_at]`(장전) /
@@ -38,15 +73,40 @@ DB 연결과 **기준 시각 `as_of_at`**을 들고 읽기 전용 툴 3개를 �
   실행당 툴 결과 누적 ≤ 24,000자. 넘는 호출은 빈 결과가 아니라 "상한 초과" `ToolMessage`로
   돌려 모델이 알게 한다.
 
+### 툴은 LangChain이 정의하고 LangGraph가 돌린다
+
+**JSON Schema를 손으로 쓰지 않는다**(2026-08-21 전환). 인자는 Pydantic 모델
+(`RecentDocumentsArgs` 등)이고 `StructuredTool.from_function(args_schema=...)`이 스키마를
+뽑는다. 이전에는 `{"type": "function", "function": {...}}` dict를 직접 썼는데, 그건 제공처
+wire format이라 이름·타입이 코드와 어긋나도 아무도 못 잡았다.
+
+툴 함수는 **바인드된 메서드**다. 모듈 수준 `@tool`을 쓸 수 없는 이유는 툴이 연결·`as_of_at`·
+레지스트리·상한 같은 `ThesisToolbox`의 상태를 봐야 하기 때문이다.
+
+실행은 `langgraph.prebuilt.ToolNode`다. 손으로 짜던 dispatch 루프를 지웠다.
+
+```python
+ToolNode(toolbox.tools, handle_tool_errors=(ToolLimitExceeded,))
+```
+
+`ThesisToolbox.run(name, arguments)`는 남아 있지만 **운영 경로가 아니다.** 툴 하나를 따로
+확인할 때(테스트·노트북) 쓰고, 같은 `StructuredTool`을 지나므로 판정이 어긋나지 않는다.
+
 ### 툴 호출 계약
 
 - tool_call마다 같은 `tool_call_id`의 `ToolMessage`가 **정확히 하나** 대화에 들어간다.
-  빠지거나 둘이면 제공처가 요청을 거절한다.
-- 모르는 툴 이름, 깨진 JSON 인자, 범위 밖 인자, 상한 초과는 전부 **오류 `ToolMessage`**로
-  답한다(예외로 올리지 않는다 — 모델이 고쳐 부를 기회를 준다). 내용은 한 줄: 무엇이 왜
-  거절됐는지.
+  빠지거나 둘이면 제공처가 요청을 거절한다. **이 보장은 `ToolNode`가 한다.**
+- 모르는 툴 이름과 상한 초과는 **오류 `ToolMessage`**로 답한다(예외로 올리지 않는다 —
+  모델이 고쳐 부를 기회를 준다). 모르는 툴의 문구는 `ToolNode`의 것이고 쓸 수 있는 툴
+  이름을 함께 싣는다.
+- **범위 밖 인자와 못 읽는 인자는 거절하지 않고 자른다.** 숫자 범위는 `_clamp_int`가,
+  타입이 안 맞는 값(`"bad"`, null)은 `ToolArgs`의 before-validator가 필드 기본값으로
+  되돌린다. 왕복 상한이 4뿐이라 그중 하나를 오타에 쓰지 않는다.
 - **DB 오류는 위장하지 않는다.** 연결 끊김·SQL 오류는 빈 결과로 바꾸지 않고 그대로 올려
   태스크를 실패시킨다. 빈 결과는 "그 창에 문서가 없다"는 뜻이어야 한다.
+  **`handle_tool_errors`에 타입을 주는 이유가 이것이다.** 기본값(`True`)은 모든 예외를
+  `ToolMessage`로 바꿔 연결 끊김을 "결과 없음"으로 위장한다. 회귀를 잡는 테스트는
+  `test_database_failures_survive_the_tool_node`다.
 - `evidence_refs`는 순서를 보존한 채 중복을 제거한다(첫 등장 rank). 레지스트리에 없는 ref는
   버리고 건수를 로그로 남긴다.
 - 답변에 같은 `subject_code`가 두 번 오면 그 subject를 거절한다(어느 쪽이 진짜인지 알 수 없다).
@@ -64,7 +124,7 @@ DB 연결과 **기준 시각 `as_of_at`**을 들고 읽기 전용 툴 3개를 �
 investigate → (tool_calls 있으면) tools → investigate → … → answer → (형식 실패) repair → answer
 ```
 
-- `investigate`: `llm.invoke(model, messages, tools=TOOL_SCHEMAS)`. 스키마 없음.
+- `investigate`: `llm.invoke(model, messages, tools=toolbox.tools)`. 스키마 없음.
 - `tools`: tool_call마다 Toolbox 실행, `ToolMessage`로 대화에 추가. 왕복 상한
   `MAX_TOOL_ROUNDS = 4` — 넘으면 조사를 끝내고 답변으로 넘어간다.
 - `answer`: 툴을 빼고 `response_format` 강제. 스키마 미지원 제공처는 검증 폴백

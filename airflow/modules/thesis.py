@@ -45,12 +45,15 @@ from collections.abc import Iterable, Sequence
 from datetime import UTC, date, datetime, timedelta
 from decimal import ROUND_HALF_UP, Decimal
 from enum import StrEnum
-from typing import Any, Literal, Protocol, Self, TypedDict
+from typing import Annotated, Any, Literal, Protocol, Self, TypedDict
 
 from langchain_core.language_models import BaseChatModel
-from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, SystemMessage, ToolMessage
+from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, SystemMessage
+from langchain_core.tools import BaseTool, StructuredTool
 from langgraph.graph import END, START, StateGraph
-from pydantic import BaseModel, ConfigDict, Field, ValidationError
+from langgraph.graph.message import add_messages
+from langgraph.prebuilt import ToolNode
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
 
 from modules import llm
 from modules.llm import UnsupportedResponseFormat
@@ -137,6 +140,25 @@ MACRO_KINDS: tuple[str, ...] = (
 
 # 값이 퍼센트라 변화를 bp로 읽어야 하는 종류. 4.65→4.70은 `+1.08%`가 아니라 `+5bp`다.
 BASIS_POINT_KINDS = frozenset({"rate"})
+
+# `macro_indicators`가 고를 수 있는 `indicator_series.kind`. 단위가 달라 **반드시 걸어야 한다** —
+# 안 걸면 국채 금리(Percent)와 물가지수(Index 1982-1984=100)가 한 표에 섞인다.
+INDICATOR_KINDS: tuple[str, ...] = ("government_bond", "money_market", "price_index", "activity")
+
+# 값이 연이율 퍼센트라 변화를 bp로 읽어야 하는 지표 종류. 위 `BASIS_POINT_KINDS`와 뜻은
+# 같지만 대상이 다르다 — 저쪽은 `quote_symbol.kind`, 이쪽은 `indicator_series.kind`다.
+BASIS_POINT_INDICATOR_KINDS = frozenset({"government_bond", "money_market"})
+
+# `macro_indicators` 한 번이 돌려줄 계열 수 상한. 국채만 40계열이라 안 걸면 한 호출이
+# 결과 예산(`MAX_TOOL_RESULT_CHARS`)을 혼자 다 쓴다.
+MAX_INDICATOR_RESULTS = 40
+
+# 장중 스냅샷 툴이 거슬러 올라가는 길이. 그 슬롯의 세션 안이면 충분하다.
+SNAPSHOT_LOOKBACK = timedelta(hours=12)
+
+# 일별 이력 툴의 `days` 허용 범위.
+MIN_HISTORY_DAYS = 1
+MAX_HISTORY_DAYS = 30
 
 
 class Cursor(Protocol):
@@ -301,88 +323,197 @@ RECENT_DISCLOSURES = read_sql("postgres", "disclosure_event", "select_recent.sql
 WINDOW_CHANGES = read_sql("postgres", "quote_bar", "select_window_changes.sql")
 PAST_THESES = read_sql("postgres", "thesis", "select_past_with_outcomes.sql")
 
-TOOL_SCHEMAS: tuple[dict[str, Any], ...] = (
-    {
-        "type": "function",
-        "function": {
-            "name": "recent_documents",
-            "description": (
-                "최근 평가된 경제 문서 중 가치 점수가 높은 것들. 제목, 발행 시각, 방향, 점수, "
-                "관련 종목 티커, 그리고 앞선 평가가 남긴 새 사실과 판단 근거를 준다."
-            ),
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "hours": {
-                        "type": "integer",
-                        "description": f"기준 시각에서 거슬러 올라갈 시간. {MIN_WINDOW_HOURS}~{MAX_WINDOW_HOURS}.",
-                    },
-                    "min_score": {
-                        "type": "integer",
-                        "description": "가치 점수 하한(0~8). 낮추면 건수가 늘고 잡음도 는다.",
-                    },
-                },
-                "required": ["hours", "min_score"],
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "recent_disclosures",
-            "description": "추적 종목에 대해 최근 접수된 DART 공시. 회사명, 보고서명, 접수일, 감지 시각을 준다.",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "hours": {
-                        "type": "integer",
-                        "description": f"기준 시각에서 거슬러 올라갈 시간. {MIN_WINDOW_HOURS}~{MAX_WINDOW_HOURS}.",
-                    },
-                },
-                "required": ["hours"],
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "macro_changes",
-            "description": (
-                "분석 창 동안의 지수·선물·환율·금리·원자재 변화. 창의 첫 봉과 마지막 봉을 비교한다. "
-                "창은 슬롯이 정하며 인자가 없다."
-            ),
-            "parameters": {"type": "object", "properties": {}, "required": []},
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "past_theses",
-            "description": (
-                "이 대상에 대해 전에 낸 장전 추론과 그 결과. 그때의 세 확률·세 이유, 지평별 실제 등락률과 "
-                "Brier 점수, 사후 해설과 판정을 준다. 같은 실수를 반복하고 있는지 볼 수 있다."
-            ),
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "subject_code": {
-                        "type": "string",
-                        "description": "이번 실행의 대상 목록 안에 있는 값만. 다른 값은 거절된다.",
-                    },
-                    "n": {
-                        "type": "integer",
-                        "description": f"최근 몇 건을 볼지. {MIN_PAST_THESES}~{MAX_PAST_THESES}.",
-                    },
-                },
-                "required": ["subject_code", "n"],
-            },
-        },
-    },
-)
+# 아래 일곱은 2026-08-21에 열었다. 그전까지 모델이 볼 수 있는 것은 문서·공시·분봉 창
+# 변화뿐이어서, 수집 중인 것의 대부분(국채 금리·물가·수급·시장폭·증시자금·일봉 이력)이
+# 보이지 않았다. **국채 금리를 못 보면서 "왜 움직였나"를 묻고 있었다.**
+#
+# 브리핑에 이미 비슷한 쿼리가 있지만 **파일을 나눴다.** 브리핑은 지금까지를 보고 추론은
+# `as_of_at`까지만 본다. 브리핑 쿼리에 상한을 얹으면 브리핑이 쓰지 않는 파라미터를 매번
+# 넘겨야 하고, 한쪽을 고칠 때 다른 쪽이 조용히 따라 바뀐다.
+INDICATOR_LATEST = read_sql("postgres", "indicator_observation", "select_thesis_latest.sql")
+MARKET_FLOWS = read_sql("postgres", "market_investor_flow_snapshot", "select_thesis_latest.sql")
+MARKET_BREADTH = read_sql("postgres", "market_movement_snapshot", "select_thesis_latest.sql")
+STOCK_FLOWS = read_sql("postgres", "stock_investor_trade_daily", "select_thesis_flows.sql")
+STOCK_FLOW_ESTIMATES = read_sql("postgres", "stock_investor_estimate_snapshot", "select_thesis_latest.sql")
+MARKET_FUNDS = read_sql("postgres", "krx_market_funds_daily", "select_thesis_recent.sql")
+DAILY_HISTORY = read_sql("postgres", "quote_daily", "select_thesis_history.sql")
+DAILY_HISTORY_SYMBOLS = read_sql("postgres", "quote_daily", "select_thesis_symbols.sql")
+SHORT_AND_CREDIT = read_sql("postgres", "krx_stock_short_sale_daily", "select_thesis_latest.sql")
+
+# 툴 인자는 **Pydantic 모델로 선언한다.** JSON Schema는 LangChain이 뽑는다 — 손으로 쓴
+# `{"type": "function", ...}` dict는 제공처 wire format이라 이름·타입이 코드와 어긋나도
+# 아무도 못 잡는다(2026-08-21 전환).
+
+
+class ToolArgs(BaseModel):
+    """툴 인자의 공통 규칙.
+
+    **못 읽는 값은 거절하지 않고 기본값으로 되돌린다.** 모델이 `hours`에 `"bad"`나 null을
+    넣어도 왕복 하나를 오타에 쓰지 않는다. 범위를 자르는 것은 각 툴의 `_clamp_int`다
+    (`docs/market-thesis/2-agent.md` 1절 "상한은 코드 상수로 강제한다 — 모델이 인자를
+    넘겨도 잘라서 실행한다").
+
+    거절하는 것은 이 층이 아니라 위다: 모르는 툴 이름과 상한 초과는 `ToolLimitExceeded`가
+    되어 오류 `ToolMessage`로 모델에게 돌아간다.
+    """
+
+    model_config = ConfigDict(extra="ignore")
+
+    @model_validator(mode="before")
+    @classmethod
+    def _drop_unreadable(cls, data: Any) -> Any:
+        if not isinstance(data, dict):
+            return data
+        cleaned = dict(data)
+        for name, field in cls.model_fields.items():
+            if name not in cleaned:
+                continue
+            value = cleaned[name]
+            caster = field.annotation
+            if value is None or not callable(caster):
+                cleaned.pop(name)
+                continue
+            try:
+                cleaned[name] = caster(value)
+            except (TypeError, ValueError):
+                # 키를 빼면 필드 기본값이 들어간다. 그 기본값이 곧 fallback이다.
+                cleaned.pop(name)
+        return cleaned
+
+
+class RecentDocumentsArgs(ToolArgs):
+    hours: int = Field(
+        default=MAX_WINDOW_HOURS,
+        description=f"기준 시각에서 거슬러 올라갈 시간. {MIN_WINDOW_HOURS}~{MAX_WINDOW_HOURS}.",
+    )
+    min_score: int = Field(
+        default=MIN_VALUE_SCORE,
+        description="가치 점수 하한(0~8). 낮추면 건수가 늘고 잡음도 는다.",
+    )
+
+
+class RecentDisclosuresArgs(ToolArgs):
+    hours: int = Field(
+        default=MAX_WINDOW_HOURS,
+        description=f"기준 시각에서 거슬러 올라갈 시간. {MIN_WINDOW_HOURS}~{MAX_WINDOW_HOURS}.",
+    )
+
+
+class MacroChangesArgs(ToolArgs):
+    """인자가 없다. 창은 슬롯이 정한다."""
+
+
+class PastThesesArgs(ToolArgs):
+    subject_code: str = Field(description="이번 실행의 대상 목록 안에 있는 값만. 다른 값은 거절된다.")
+    n: int = Field(
+        default=MIN_PAST_THESES,
+        description=f"최근 몇 건을 볼지. {MIN_PAST_THESES}~{MAX_PAST_THESES}.",
+    )
+
+
+class MacroIndicatorsArgs(ToolArgs):
+    kind: str = Field(
+        default="government_bond",
+        description=(
+            "볼 지표 종류. government_bond(각국 국채 금리), money_market(단기 자금시장 금리), "
+            "price_index(물가지수), activity(소매판매 등 실물활동). "
+            "**단위가 달라 한 번에 하나만 본다.** 모르는 값은 government_bond로 읽는다."
+        ),
+    )
+
+
+class NoArgs(ToolArgs):
+    """인자가 없다. 창은 슬롯이 정한다."""
+
+
+class StockFlowsArgs(ToolArgs):
+    days: int = Field(
+        default=5,
+        description=f"종목마다 최근 며칠치 확정 수급을 볼지. {MIN_HISTORY_DAYS}~{MAX_HISTORY_DAYS}.",
+    )
+
+
+class MarketFundsArgs(ToolArgs):
+    days: int = Field(
+        default=10,
+        description=f"최근 며칠치 증시자금을 볼지. {MIN_HISTORY_DAYS}~{MAX_HISTORY_DAYS}.",
+    )
+
+
+class DailyHistoryArgs(ToolArgs):
+    symbol: str = Field(
+        description=(
+            "일봉을 볼 심볼 하나. macro_changes가 돌려준 symbol 값을 그대로 쓴다"
+            "(예: SP500_FUT, USDKRW, VIX). **국내 지수(KOSPI, KOSDAQ)는 일봉이 없다** — "
+            "없는 심볼을 물으면 쓸 수 있는 목록을 돌려준다."
+        )
+    )
+    days: int = Field(
+        default=10,
+        description=f"최근 며칠치를 볼지. {MIN_HISTORY_DAYS}~{MAX_HISTORY_DAYS}.",
+    )
+
+
+TOOL_DESCRIPTIONS: dict[str, str] = {
+    "recent_documents": (
+        "최근 평가된 경제 문서 중 가치 점수가 높은 것들. 제목, 발행 시각, 방향, 점수, "
+        "관련 종목 티커, 그리고 앞선 평가가 남긴 새 사실과 판단 근거를 준다."
+    ),
+    "recent_disclosures": "추적 종목에 대해 최근 접수된 DART 공시. 회사명, 보고서명, 접수일, 감지 시각을 준다.",
+    "macro_changes": (
+        "분석 창 동안 해외 지수·선물·환율이 얼마나 움직였나. 첫 봉 대비 마지막 봉의 변화를 준다. "
+        "금리 계열은 퍼센트가 아니라 bp 차이로 준다."
+    ),
+    "past_theses": (
+        "이 대상에 대해 전에 낸 장전 추론과 그 결과. 그때의 세 확률·세 이유, 지평별 실제 등락률과 "
+        "Brier 점수, 사후 해설과 판정을 준다. 같은 실수를 반복하고 있는지 볼 수 있다."
+    ),
+    "macro_indicators": (
+        "각국 국채 금리 곡선과 물가·실물 지표의 최신 관측값, 그리고 직전 값 대비 변화. "
+        "미국·한국·일본·영국·독일·유로 지역 등의 만기별 금리를 만기와 나라와 함께 준다. "
+        "금리 변화는 퍼센트가 아니라 bp다. 시세(macro_changes)로는 안 보이는 채권 시장을 본다."
+    ),
+    "market_investor_flows": (
+        "코스피·코스닥의 외국인·기관·개인 장중 누적 순매수. 지수가 왜 그렇게 움직였는지를 "
+        "누가 샀고 누가 팔았나로 본다. 금액 단위는 백만원이다."
+    ),
+    "market_breadth": (
+        "코스피·코스닥의 상승·보합·하락 종목 수와 상한가·하한가 수. 지수 등락률만으로는 "
+        "안 보이는 것을 본다 — 지수는 올랐는데 하락 종목이 더 많은 날이 있다."
+    ),
+    "stock_investor_flows": (
+        "추적 종목의 최근 확정 수급(외국인·기관·개인 순매수)과 오늘의 장중 추정치. "
+        "확정은 마감 뒤 값이고 추정은 장중 값이라 따로 표시해 준다."
+    ),
+    "market_funds": (
+        "고객예탁금, 신용융자 잔고, 미수금 등 국내 증시자금의 최근 추이. 살 돈이 늘고 있는지 줄고 있는지를 본다."
+    ),
+    "daily_history": (
+        "심볼 하나의 최근 일봉(시가·고가·저가·종가·거래량). macro_changes가 창 하나의 양 끝만 "
+        "주는 것과 달리 며칠치 추세를 준다 — '어제 하루 빠진 것'과 '닷새째 빠지는 중'을 가른다."
+    ),
+    "short_and_credit": (
+        "추적 종목의 최신 공매도 수량·비중, 대차 잔고, 신용융자 잔고. 셋이 서로의 재고라 "
+        "한 표로 준다. 수집을 최근에 시작해 아직 며칠치뿐일 수 있다."
+    ),
+}
 
 
 class ToolLimitExceeded(RuntimeError):
     """상한에 걸려 실행하지 않았다. 오류 `ToolMessage`가 되어 모델에게 돌아간다."""
+
+
+def tool_node(toolbox: "ThesisToolbox") -> ToolNode:
+    """툴 실행 노드. 두 그래프(`ThesisBuilder`·`FollowupNarrator`)가 같은 것을 쓴다.
+
+    **`handle_tool_errors`에 타입을 준다.** `ToolLimitExceeded`(상한 초과·모르는 툴·대상
+    목록 밖)만 오류 `ToolMessage`가 되어 모델이 고쳐 부를 기회를 얻고, psycopg 오류 같은
+    나머지는 그대로 올라가 태스크를 죽인다.
+
+    기본값(`True`)을 쓰면 **연결 끊김이 "결과 없음"으로 위장된다.** 빈 결과는 "그 창에
+    문서가 없다"는 뜻이어야 한다는 규칙이 거기서 깨진다.
+    """
+    return ToolNode(toolbox.tools, handle_tool_errors=(ToolLimitExceeded,))
 
 
 class ThesisToolbox:
@@ -414,6 +545,89 @@ class ThesisToolbox:
         self._registry: dict[str, Evidence] = {}
         self._calls = 0
         self._chars = 0
+        self._tools = self._build_tools()
+        self._by_name = {tool.name: tool for tool in self._tools}
+
+    def _build_tools(self) -> list[BaseTool]:
+        """`ToolNode`와 `bind_tools`에 그대로 넘길 툴 목록.
+
+        `StructuredTool.from_function`이 `args_schema`에서 JSON Schema를 뽑으므로 우리가
+        스키마를 손으로 쓰지 않는다. 함수는 **바인드된 메서드**다 — 툴이 연결·`as_of_at`·
+        레지스트리·상한 같은 이 객체의 상태를 봐야 해서 모듈 수준 `@tool`을 쓸 수 없다.
+        """
+        return [
+            StructuredTool.from_function(
+                func=self._tool_recent_documents,
+                name="recent_documents",
+                description=TOOL_DESCRIPTIONS["recent_documents"],
+                args_schema=RecentDocumentsArgs,
+            ),
+            StructuredTool.from_function(
+                func=self._tool_recent_disclosures,
+                name="recent_disclosures",
+                description=TOOL_DESCRIPTIONS["recent_disclosures"],
+                args_schema=RecentDisclosuresArgs,
+            ),
+            StructuredTool.from_function(
+                func=self._tool_macro_changes,
+                name="macro_changes",
+                description=TOOL_DESCRIPTIONS["macro_changes"],
+                args_schema=MacroChangesArgs,
+            ),
+            StructuredTool.from_function(
+                func=self._tool_past_theses,
+                name="past_theses",
+                description=TOOL_DESCRIPTIONS["past_theses"],
+                args_schema=PastThesesArgs,
+            ),
+            StructuredTool.from_function(
+                func=self._tool_macro_indicators,
+                name="macro_indicators",
+                description=TOOL_DESCRIPTIONS["macro_indicators"],
+                args_schema=MacroIndicatorsArgs,
+            ),
+            StructuredTool.from_function(
+                func=self._tool_market_investor_flows,
+                name="market_investor_flows",
+                description=TOOL_DESCRIPTIONS["market_investor_flows"],
+                args_schema=NoArgs,
+            ),
+            StructuredTool.from_function(
+                func=self._tool_market_breadth,
+                name="market_breadth",
+                description=TOOL_DESCRIPTIONS["market_breadth"],
+                args_schema=NoArgs,
+            ),
+            StructuredTool.from_function(
+                func=self._tool_stock_investor_flows,
+                name="stock_investor_flows",
+                description=TOOL_DESCRIPTIONS["stock_investor_flows"],
+                args_schema=StockFlowsArgs,
+            ),
+            StructuredTool.from_function(
+                func=self._tool_market_funds,
+                name="market_funds",
+                description=TOOL_DESCRIPTIONS["market_funds"],
+                args_schema=MarketFundsArgs,
+            ),
+            StructuredTool.from_function(
+                func=self._tool_daily_history,
+                name="daily_history",
+                description=TOOL_DESCRIPTIONS["daily_history"],
+                args_schema=DailyHistoryArgs,
+            ),
+            StructuredTool.from_function(
+                func=self._tool_short_and_credit,
+                name="short_and_credit",
+                description=TOOL_DESCRIPTIONS["short_and_credit"],
+                args_schema=NoArgs,
+            ),
+        ]
+
+    @property
+    def tools(self) -> list[BaseTool]:
+        """`ToolNode(toolbox.tools)`와 `llm.invoke(..., tools=toolbox.tools)`가 쓴다."""
+        return self._tools
 
     @property
     def registry(self) -> dict[str, Evidence]:
@@ -424,12 +638,247 @@ class ThesisToolbox:
     def call_count(self) -> int:
         return self._calls
 
-    def run(self, name: str, arguments: dict[str, Any]) -> str:
-        """툴 하나를 실행하고 모델에게 돌려줄 본문을 만든다.
+    # --- 툴 본체 ---------------------------------------------------------
+    # 시그니처가 곧 스키마다. 반환은 `ToolMessage`에 실릴 본문 문자열이다.
 
-        상한 초과와 모르는 툴은 `ToolLimitExceeded`/`ThesisError`가 아니라 문자열로 돌아간다.
-        모델이 고쳐 부를 기회를 주기 위해서다 — 부르는 쪽이 그것을 `ToolMessage`에 담는다.
+    def _tool_recent_documents(self, hours: int, min_score: int) -> str:
+        self._charge()
+        return self._as_evidence_body(self._recent_documents({"hours": hours, "min_score": min_score}))
+
+    def _tool_recent_disclosures(self, hours: int) -> str:
+        self._charge()
+        return self._as_evidence_body(self._recent_disclosures({"hours": hours}))
+
+    def _tool_macro_changes(self) -> str:
+        self._charge()
+        return self._as_evidence_body(self._macro_changes({}))
+
+    def _tool_past_theses(self, subject_code: str, n: int) -> str:
+        # **레지스트리에 넣지 않는다.** 자기 과거 추론은 근거가 아니다 — 근거 종류는
+        # document·disclosure·macro_change 셋 그대로 두고, 이 툴은 문맥으로만 쓴다.
+        self._charge()
+        body = json.dumps(
+            self._past_theses({"subject_code": subject_code, "n": n}),
+            ensure_ascii=False,
+            default=str,
+        )
+        self._chars += len(body)
+        return body
+
+    # 아래 일곱은 근거(`Evidence`)를 만들지 않는다. `thesis_evidence`의 근거 종류는
+    # document·disclosure·macro_change 셋 그대로 두고, 이들은 **문맥으로만** 쓴다.
+    # `past_theses`와 같은 취급이다 — 시장 상태는 인용할 "출처"가 아니라 관측이다.
+
+    def _tool_macro_indicators(self, kind: str) -> str:
+        self._charge()
+        chosen = kind if kind in INDICATOR_KINDS else INDICATOR_KINDS[0]
+        rows = self._fetch(
+            INDICATOR_LATEST,
+            {"kinds": [chosen], "as_of_at": self._as_of_at, "limit": MAX_INDICATOR_RESULTS},
+        )
+        as_basis_points = chosen in BASIS_POINT_INDICATOR_KINDS
+        return self._body(
+            {
+                "kind": chosen,
+                "unit_note": "변화는 bp다" if as_basis_points else "변화는 값 그대로다",
+                "series": [_indicator_row(row, as_basis_points=as_basis_points) for row in rows],
+            }
+        )
+
+    def _tool_market_investor_flows(self) -> str:
+        self._charge()
+        rows = self._fetch(MARKET_FLOWS, self._snapshot_window())
+        return self._body(
+            [
+                {
+                    "market_code": row[0],
+                    "observed_at": row[1],
+                    "foreign_net_buy_amount": _number(row[2]),
+                    "institution_net_buy_amount": _number(row[3]),
+                    "individual_net_buy_amount": _number(row[4]),
+                    "pension_fund_net_buy_qty": _number(row[5]),
+                    "investment_trust_net_buy_qty": _number(row[6]),
+                    "amount_unit": "백만원",
+                }
+                for row in rows
+            ]
+        )
+
+    def _tool_market_breadth(self) -> str:
+        self._charge()
+        rows = self._fetch(MARKET_BREADTH, self._snapshot_window())
+        return self._body(
+            [
+                {
+                    "symbol": row[0],
+                    "observed_at": row[1],
+                    "rising": row[2],
+                    "unchanged": row[3],
+                    "falling": row[4],
+                    "upper_limit": row[5],
+                    "lower_limit": row[6],
+                }
+                for row in rows
+            ]
+        )
+
+    def _tool_stock_investor_flows(self, days: int) -> str:
+        self._charge()
+        span = _clamp_int(days, MIN_HISTORY_DAYS, MAX_HISTORY_DAYS, 5)
+        settled = self._fetch(
+            STOCK_FLOWS,
+            {"stock_codes": self._watched_codes, "as_of_at": self._as_of_at, "days": span},
+        )
+        estimates = self._fetch(
+            STOCK_FLOW_ESTIMATES,
+            {"stock_codes": self._watched_codes, "as_of_at": self._as_of_at},
+        )
+        return self._body(
+            {
+                "settled": [
+                    {
+                        "stock_code": row[0],
+                        "business_date": row[1],
+                        "close_price": _number(row[2]),
+                        "volume": _number(row[3]),
+                        "foreign_net_buy_qty": _number(row[4]),
+                        "institution_net_buy_qty": _number(row[5]),
+                        "individual_net_buy_qty": _number(row[6]),
+                        "foreign_net_buy_amount": _number(row[7]),
+                        "institution_net_buy_amount": _number(row[8]),
+                        "individual_net_buy_amount": _number(row[9]),
+                    }
+                    for row in settled
+                ],
+                "intraday_estimate": [
+                    {
+                        "stock_code": row[0],
+                        "business_date": row[1],
+                        "source_time_code": row[2],
+                        "collected_at": row[3],
+                        "foreign_net_buy_qty": _number(row[4]),
+                        "institution_net_buy_qty": _number(row[5]),
+                        "total_net_buy_qty": _number(row[6]),
+                    }
+                    for row in estimates
+                ],
+                "note": "settled는 마감 뒤 확정값, intraday_estimate는 장중 추정값이다. 둘은 어긋날 수 있다",
+            }
+        )
+
+    def _tool_market_funds(self, days: int) -> str:
+        self._charge()
+        span = _clamp_int(days, MIN_HISTORY_DAYS, MAX_HISTORY_DAYS, 10)
+        rows = self._fetch(MARKET_FUNDS, {"as_of_at": self._as_of_at, "days": span})
+        return self._body(
+            [
+                {
+                    "business_date": row[0],
+                    "index_close": _number(row[1]),
+                    "index_change": _number(row[2]),
+                    "customer_deposit": _number(row[3]),
+                    "customer_deposit_change": _number(row[4]),
+                    "credit_loan_balance": _number(row[5]),
+                    "unsettled_amount": _number(row[6]),
+                    "turnover_ratio": _number(row[7]),
+                }
+                for row in rows
+            ]
+        )
+
+    def _tool_daily_history(self, symbol: str, days: int) -> str:
+        """심볼 하나의 일봉. **없는 심볼이면 쓸 수 있는 목록을 함께 돌려준다.**
+
+        2026-08-21 실측: `quote_daily`에 KOSPI·KOSDAQ 일봉이 없다. 국내 지수는 분봉만
+        수집하고 일봉 테이블에는 해외 지수만 들어 있다. 그냥 빈 배열을 주면 모델이
+        "이력이 없다"가 아니라 "움직임이 없었다"로 읽을 수 있다.
         """
+        self._charge()
+        span = _clamp_int(days, MIN_HISTORY_DAYS, MAX_HISTORY_DAYS, 10)
+        wanted = str(symbol).strip()
+        rows = self._fetch(
+            DAILY_HISTORY,
+            {"symbol": wanted, "as_of_at": self._as_of_at, "days": span},
+        )
+        if not rows:
+            available = self._fetch(DAILY_HISTORY_SYMBOLS, {"as_of_at": self._as_of_at})
+            return self._body(
+                {
+                    "symbol": wanted,
+                    "bars": [],
+                    "note": f"{wanted}의 일봉이 없다. 아래 심볼만 일봉을 갖는다",
+                    "available_symbols": [{"symbol": row[0], "label": row[1], "kind": row[2]} for row in available],
+                }
+            )
+        return self._body(
+            {
+                "symbol": wanted,
+                "bars": [
+                    {
+                        "label": row[1],
+                        "kind": row[2],
+                        "country": row[3],
+                        "business_date": row[4],
+                        "open": _number(row[5]),
+                        "high": _number(row[6]),
+                        "low": _number(row[7]),
+                        "close": _number(row[8]),
+                        "volume": _number(row[9]),
+                    }
+                    for row in rows
+                ],
+            }
+        )
+
+    def _tool_short_and_credit(self) -> str:
+        self._charge()
+        rows = self._fetch(
+            SHORT_AND_CREDIT,
+            {"stock_codes": self._watched_codes, "as_of_at": self._as_of_at},
+        )
+        return self._body(
+            [
+                {
+                    "stock_code": row[0],
+                    "label": row[1],
+                    "business_date": row[2],
+                    "short_sale_quantity": _number(row[3]),
+                    "short_sale_volume_ratio": _number(row[4]),
+                    "short_sale_amount": _number(row[5]),
+                    "lending_balance_quantity": _number(row[6]),
+                    "lending_balance_change_quantity": _number(row[7]),
+                    "credit_loan_balance_quantity": _number(row[8]),
+                    "credit_loan_balance_amount": _number(row[9]),
+                    "credit_loan_balance_rate": _number(row[10]),
+                }
+                for row in rows
+            ]
+        )
+
+    def _snapshot_window(self) -> dict[str, Any]:
+        """장중 스냅샷 툴의 창. 끝은 `as_of_at`, 시작은 거기서 `SNAPSHOT_LOOKBACK`만큼 앞."""
+        return {"window_start": self._as_of_at - SNAPSHOT_LOOKBACK, "as_of_at": self._as_of_at}
+
+    def _fetch(self, statement: str, parameters: dict[str, Any]) -> list[Sequence[Any]]:
+        with self._connection.cursor() as cursor:
+            cursor.execute(statement, parameters)
+            return list(cursor.fetchall())
+
+    def _body(self, payload: Any) -> str:
+        """근거를 만들지 않는 툴의 반환. 문자 예산만 단다."""
+        body = json.dumps(payload, ensure_ascii=False, default=str)
+        self._chars += len(body)
+        return body
+
+    def _as_evidence_body(self, items: list[Evidence]) -> str:
+        for item in items:
+            self._registry[item.ref] = item
+        body = json.dumps([_tool_row(item) for item in items], ensure_ascii=False)
+        self._chars += len(body)
+        return body
+
+    def _charge(self) -> None:
+        """호출 한 번을 상한에 단다. 넘으면 실행하지 않고 `ToolLimitExceeded`다."""
         self._calls += 1
         if self._calls > MAX_TOOL_CALLS:
             raise ToolLimitExceeded(f"상한 초과: 이 실행의 tool call이 {MAX_TOOL_CALLS}회를 넘었다. 조사를 끝내라")
@@ -438,29 +887,20 @@ class ThesisToolbox:
                 f"상한 초과: 툴 결과가 누적 {MAX_TOOL_RESULT_CHARS}자에 이르렀다. 이미 받은 것으로 답하라"
             )
 
-        handlers = {
-            "recent_documents": self._recent_documents,
-            "recent_disclosures": self._recent_disclosures,
-            "macro_changes": self._macro_changes,
-        }
-        if name == "past_theses":
-            # **레지스트리에 넣지 않는다.** 자기 과거 추론은 근거가 아니다 — 근거 종류는
-            # document·disclosure·macro_change 셋 그대로 두고, 이 툴은 문맥으로만 쓴다.
-            body = json.dumps(self._past_theses(arguments), ensure_ascii=False, default=str)
-            self._chars += len(body)
-            return body
+    def run(self, name: str, arguments: dict[str, Any]) -> str:
+        """이름으로 툴 하나를 부른다. `ToolNode`를 거치지 않는 유일한 경로다.
 
-        handler = handlers.get(name)
-        if handler is None:
-            known = sorted([*handlers, "past_theses"])
-            raise ToolLimitExceeded(f"모르는 툴 이름이다: {name!r}. 쓸 수 있는 것은 {known}")
+        운영 흐름은 `ToolNode`가 돌리고 이 메서드는 **툴 하나를 따로 확인할 때** 쓴다
+        (테스트, 노트북). 같은 `StructuredTool`을 지나가므로 인자 검증과 상한 계산이
+        운영 경로와 어긋나지 않는다.
 
-        items = handler(arguments)
-        for item in items:
-            self._registry[item.ref] = item
-        body = json.dumps([_tool_row(item) for item in items], ensure_ascii=False)
-        self._chars += len(body)
-        return body
+        모르는 툴은 `ToolLimitExceeded`다. 부르는 쪽이 그것을 오류 `ToolMessage`에 담아
+        모델이 고쳐 부를 기회를 준다.
+        """
+        tool = self._by_name.get(name)
+        if tool is None:
+            raise ToolLimitExceeded(f"모르는 툴 이름이다: {name!r}. 쓸 수 있는 것은 {sorted(self._by_name)}")
+        return tool.invoke(arguments)
 
     def _past_theses(self, arguments: dict[str, Any]) -> list[dict[str, Any]]:
         """이 대상의 지난 장전 추론과 지평별 결과. 피드백 루프는 이 조회 하나다.
@@ -615,6 +1055,49 @@ def _change_label(kind: str, first_close: Decimal, last_close: Decimal) -> str:
     if not first_close:
         return "변화 없음"
     return f"{float((last_close - first_close) / first_close) * 100:+.2f}%"
+
+
+def _number(value: Any) -> Any:
+    """`Decimal`을 JSON이 읽는 수로 바꾼다. `None`은 그대로 둔다.
+
+    **0으로 채우지 않는다.** 결측(아직 안 들어온 값)과 실제 0은 다른 뜻이고, 모델이
+    "순매수 0"을 관측으로 읽으면 없는 사실을 근거로 쓴다.
+    """
+    if value is None:
+        return None
+    if isinstance(value, Decimal):
+        return float(value)
+    return value
+
+
+def _indicator_row(row: Sequence[Any], *, as_basis_points: bool) -> dict[str, Any]:
+    """지표 계열 하나의 최신값과 직전값 대비 변화.
+
+    **금리는 bp로 준다.** 4.65에서 4.70으로 가는 것은 `+1.08%`가 아니라 `+5bp`다
+    (`_change_label`과 같은 이유). 물가지수처럼 퍼센트가 아닌 계열은 변화를 값 그대로 준다.
+
+    직전값이 없으면 `change`를 만들지 않는다. 첫 관측을 0 변화로 꾸미지 않기 위해서다.
+    """
+    value, previous = row[9], row[10]
+    detail: dict[str, Any] = {
+        "provider": row[0],
+        "series_id": row[1],
+        "country": row[2],
+        "country_name": row[3],
+        "label": row[4],
+        "maturity_months": row[6],
+        "unit": row[7],
+        "observation_date": row[8],
+        "value": _number(value),
+        "previous_date": row[11],
+        "previous_value": _number(previous),
+    }
+    if value is not None and previous is not None:
+        difference = Decimal(value) - Decimal(previous)
+        detail["change_bp" if as_basis_points else "change"] = (
+            round(float(difference) * 100, 1) if as_basis_points else round(float(difference), 4)
+        )
+    return detail
 
 
 def _clamp_int(value: Any, low: int, high: int, fallback: int) -> int:
@@ -784,7 +1267,9 @@ class ThesisState(TypedDict):
     조사 중에 자라는 값이라 Toolbox가 들고 있고 노드가 그것을 읽는다.
     """
 
-    messages: list[BaseMessage]
+    # `add_messages` 리듀서를 단다. 노드는 **새로 생긴 메시지만** 돌려주고 병합은
+    # 리듀서가 한다 — `ToolNode`가 그 형태로 반환하므로 이게 맞춰야 할 쪽이다.
+    messages: Annotated[list[BaseMessage], add_messages]
     # 요청한 대상. 답변을 거를 때 노드가 읽으므로 상태에 있어야 한다.
     subjects: tuple[Subject, ...]
     tool_rounds: int
@@ -807,6 +1292,7 @@ class ThesisBuilder:
         self._model = model
         self._toolbox = toolbox
         self._schema = response_format(Answers, "market_theses")
+        self._tool_node = tool_node(toolbox)
         self._graph = self._build_graph()
 
     @staticmethod
@@ -955,25 +1441,22 @@ class ThesisBuilder:
 
     def _investigate(self, state: ThesisState) -> dict[str, Any]:
         """툴만 바인딩해 부른다. 스키마는 넣지 않는다(`llm.invoke`가 막는다)."""
-        reply = llm.invoke(self._model, state["messages"], tools=TOOL_SCHEMAS)
-        return {"messages": [*state["messages"], reply]}
+        reply = llm.invoke(self._model, state["messages"], tools=self._toolbox.tools)
+        return {"messages": [reply]}
 
     def _tools(self, state: ThesisState) -> dict[str, Any]:
-        """tool_call마다 Toolbox를 돌리고 `ToolMessage`를 붙인다.
+        """`ToolNode`가 tool_call을 돌리고 `ToolMessage`를 만든다. 우리는 왕복만 센다.
 
-        **`tool_call_id`마다 `ToolMessage`가 정확히 하나**여야 한다. 빠지거나 둘이면 제공처가
-        다음 요청을 거절한다. 그래서 상한 초과와 모르는 툴도 예외로 올리지 않고 오류
-        `ToolMessage`로 답한다 — 모델이 고쳐 부를 기회를 준다.
+        **`tool_call_id`마다 `ToolMessage`가 정확히 하나**여야 하는 것도 `ToolNode`가
+        보장한다. 손으로 짜던 때는 그것이 우리 책임이었다.
+
+        `handle_tool_errors`에 타입을 준 것이 이 노드의 핵심이다 — `ToolLimitExceeded`만
+        오류 `ToolMessage`가 되어 모델이 고쳐 부를 기회를 얻고, **DB 오류는 그대로 올라가
+        태스크를 죽인다.** 기본값(`True`)은 둘을 가르지 않아 연결 끊김이 "결과 없음"으로
+        위장된다.
         """
-        reply = state["messages"][-1]
-        results: list[BaseMessage] = []
-        for call in getattr(reply, "tool_calls", ()):
-            try:
-                body = self._toolbox.run(call["name"], call.get("args") or {})
-            except ToolLimitExceeded as error:
-                body = str(error)
-            results.append(ToolMessage(content=body, tool_call_id=call["id"]))
-        return {"messages": [*state["messages"], *results], "tool_rounds": state["tool_rounds"] + 1}
+        update = self._tool_node.invoke(state)
+        return {"messages": update["messages"], "tool_rounds": state["tool_rounds"] + 1}
 
     def _answer(self, state: ThesisState) -> dict[str, Any]:
         """툴을 빼고 스키마를 강제한다. 제공처가 스키마를 안 받으면 그때만 한 번 더."""
@@ -987,13 +1470,13 @@ class ThesisBuilder:
         try:
             drafts = self.parse(_text(reply), state["subjects"])
         except ThesisError as error:
-            return {"messages": [*messages, reply], "drafts": None, "error": str(error)}
-        return {"messages": [*messages, reply], "drafts": drafts, "error": None}
+            return {"messages": [reply], "drafts": None, "error": str(error)}
+        return {"messages": [reply], "drafts": drafts, "error": None}
 
     def _repair(self, state: ThesisState) -> dict[str, Any]:
         logger.warning("retrying the theses once after %s", state["error"])
         return {
-            "messages": [*state["messages"], HumanMessage(REPAIR_INSTRUCTION)],
+            "messages": [HumanMessage(REPAIR_INSTRUCTION)],
             "attempts": state["attempts"] + 1,
         }
 
@@ -1457,7 +1940,9 @@ NARRATIVE_REPAIR_INSTRUCTION = (
 class NarrativeState(TypedDict):
     """해설 한 번의 상태. 연결·설정 객체는 넣지 않는다."""
 
-    messages: list[BaseMessage]
+    # `add_messages` 리듀서를 단다. 노드는 **새로 생긴 메시지만** 돌려주고 병합은
+    # 리듀서가 한다 — `ToolNode`가 그 형태로 반환하므로 이게 맞춰야 할 쪽이다.
+    messages: Annotated[list[BaseMessage], add_messages]
     targets: tuple[NarrativeTarget, ...]
     drafts: tuple[NarrativeDraft, ...] | None
     error: str | None
@@ -1479,6 +1964,7 @@ class FollowupNarrator:
         self._toolbox = toolbox
         self._include_outcome = include_outcome
         self._schema = response_format(Narratives, "thesis_narratives")
+        self._tool_node = tool_node(toolbox)
         self._graph = self._build_graph()
 
     @property
@@ -1636,19 +2122,13 @@ class FollowupNarrator:
         return graph.compile()
 
     def _investigate(self, state: NarrativeState) -> dict[str, Any]:
-        reply = llm.invoke(self._model, state["messages"], tools=TOOL_SCHEMAS)
-        return {"messages": [*state["messages"], reply]}
+        reply = llm.invoke(self._model, state["messages"], tools=self._toolbox.tools)
+        return {"messages": [reply]}
 
     def _tools(self, state: NarrativeState) -> dict[str, Any]:
-        reply = state["messages"][-1]
-        results: list[BaseMessage] = []
-        for call in getattr(reply, "tool_calls", ()):
-            try:
-                body = self._toolbox.run(call["name"], call.get("args") or {})
-            except ToolLimitExceeded as error:
-                body = str(error)
-            results.append(ToolMessage(content=body, tool_call_id=call["id"]))
-        return {"messages": [*state["messages"], *results]}
+        """`ThesisBuilder._tools`와 같은 노드다. 여기는 왕복을 세지 않고 상한은
+        `ThesisToolbox.call_count`가 본다(`_after_investigate`)."""
+        return {"messages": self._tool_node.invoke(state)["messages"]}
 
     def _answer(self, state: NarrativeState) -> dict[str, Any]:
         messages = state["messages"]
@@ -1661,13 +2141,13 @@ class FollowupNarrator:
         try:
             drafts = self.parse(_text(reply), state["targets"])
         except ThesisError as error:
-            return {"messages": [*messages, reply], "drafts": None, "error": str(error)}
-        return {"messages": [*messages, reply], "drafts": drafts, "error": None}
+            return {"messages": [reply], "drafts": None, "error": str(error)}
+        return {"messages": [reply], "drafts": drafts, "error": None}
 
     def _repair(self, state: NarrativeState) -> dict[str, Any]:
         logger.warning("retrying the narratives once after %s", state["error"])
         return {
-            "messages": [*state["messages"], HumanMessage(NARRATIVE_REPAIR_INSTRUCTION)],
+            "messages": [HumanMessage(NARRATIVE_REPAIR_INSTRUCTION)],
             "attempts": state["attempts"] + 1,
         }
 

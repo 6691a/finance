@@ -210,4 +210,3 @@ def test_response_format_is_shaped_for_the_api(model):
     assert formatted["type"] == "json_schema"
     assert formatted["json_schema"]["name"] == "thing"
     assert formatted["json_schema"]["strict"] is True
-

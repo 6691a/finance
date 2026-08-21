@@ -20,6 +20,7 @@ from modules.thesis import (
     MAX_TOOL_CALLS,
     MAX_TOOL_RESULT_CHARS,
     MAX_TOOL_ROUNDS,
+    MAX_WINDOW_HOURS,
     NARRATED_HORIZON_DAYS,
     PROMPT_VERSION,
     Evidence,
@@ -493,7 +494,10 @@ class FakeCursor:
         return None
 
     def execute(self, statement: str, parameters: Any = ()) -> None:
-        self._connection.calls.append((statement, tuple(parameters)))
+        # psycopg는 위치(tuple)와 이름(dict) 둘 다 받는다. dict를 tuple로 바꾸면 값이
+        # 사라지고 키만 남으므로 모양을 그대로 보존한다.
+        recorded = dict(parameters) if isinstance(parameters, dict) else tuple(parameters)
+        self._connection.calls.append((statement, recorded))
         if self._connection.raises is not None:
             raise self._connection.raises
         self._rows = list(self._connection.results.get(_statement_key(statement), []))
@@ -515,7 +519,7 @@ class FakeConnection:
 
     def __init__(self, results: dict[str, list[tuple]] | None = None) -> None:
         self.results = results or {}
-        self.calls: list[tuple[str, tuple]] = []
+        self.calls: list[tuple[str, tuple | dict[str, Any]]] = []
         self.commits = 0
         self.rollbacks = 0
         self.raises: Exception | None = None
@@ -549,6 +553,22 @@ def _statement_key(statement: str) -> str:
         return "disclosures"
     if "FROM quote_bar" in query:
         return "macro"
+    if "FROM indicator_observation" in query:
+        return "indicators"
+    if "FROM market_investor_flow_snapshot" in query:
+        return "market_flows"
+    if "FROM market_movement_snapshot" in query:
+        return "breadth"
+    if "FROM stock_investor_trade_daily" in query:
+        return "stock_flows"
+    if "FROM stock_investor_estimate_snapshot" in query:
+        return "stock_flow_estimates"
+    if "FROM krx_market_funds_daily" in query:
+        return "market_funds"
+    if "FROM quote_daily" in query:
+        return "daily_history"
+    if "FROM krx_stock_short_sale_daily" in query:
+        return "short_and_credit"
     if "FROM thesis_evidence" in query:
         return "evidence_select"
     if "FROM thesis" in query:
@@ -597,12 +617,36 @@ def macro_row(symbol: str = "SP500_FUT", kind: str = "index_future", first: str 
     )
 
 
-def toolbox(connection: FakeConnection) -> ThesisToolbox:
+def toolbox(connection: FakeConnection, *, subject_codes: list[str] | None = None) -> ThesisToolbox:
     return ThesisToolbox(
         connection,
         as_of_at=AS_OF,
         macro_window_start=MACRO_WINDOW_START,
         watched_codes=["005930", "000660"],
+        subject_codes=subject_codes or [],
+    )
+
+
+def indicator_row(
+    value: Decimal,
+    previous: Decimal | None,
+    *,
+    kind: str = "government_bond",
+) -> tuple:
+    """`indicator_observation/select_thesis_latest.sql`의 한 행."""
+    return (
+        "fred",
+        "DGS10",
+        "US",
+        "미국",
+        "미국 국채 10년",
+        kind,
+        120,
+        "Percent",
+        date(2026, 8, 20),
+        value,
+        previous,
+        date(2026, 8, 19) if previous is not None else None,
     )
 
 
@@ -899,6 +943,185 @@ def test_the_builder_investigates_with_tools_then_answers_with_a_schema():
     assert any(isinstance(message, ToolMessage) for message in model.calls[-1])
 
 
+def test_the_tool_schema_is_derived_from_the_code_not_hand_written():
+    """`args_schema`에서 뽑는다. 손으로 쓴 wire format dict는 코드와 어긋나도 아무도 못 잡는다."""
+    box = toolbox(FakeConnection())
+
+    by_name = {tool.name: tool for tool in box.tools}
+    assert set(by_name) == {
+        "recent_documents",
+        "recent_disclosures",
+        "macro_changes",
+        "past_theses",
+        "macro_indicators",
+        "market_investor_flows",
+        "market_breadth",
+        "stock_investor_flows",
+        "market_funds",
+        "daily_history",
+        "short_and_credit",
+    }
+
+    schema = by_name["recent_documents"].args_schema.model_json_schema()
+    assert schema["properties"]["hours"]["type"] == "integer"
+    # 상한 상수가 description에 실려 프롬프트가 코드를 따라간다.
+    assert str(MAX_WINDOW_HOURS) in schema["properties"]["hours"]["description"]
+
+
+def test_database_failures_survive_the_tool_node():
+    """**`handle_tool_errors` 기본값(True)이면 여기서 깨진다.**
+
+    연결 끊김이 "결과 없음" `ToolMessage`로 위장되면 모델이 "그 창에 문서가 없었다"로 읽고
+    태스크는 성공으로 끝난다. `ToolLimitExceeded`만 잡도록 타입을 준 이유다.
+    """
+    connection = FakeConnection({"documents": []})
+    connection.raises = ConnectionError("server closed the connection")
+    reply = AIMessage("", tool_calls=[{"name": "recent_documents", "args": {"hours": 6, "min_score": 0}, "id": "a"}])
+    builder = build(ScriptedModel(reply), connection)
+
+    with pytest.raises(ConnectionError):
+        run_builder(builder)
+
+
+# --- 2026-08-21에 연 툴 일곱 -------------------------------------------------
+
+
+def test_every_tool_window_ends_at_the_slot_time():
+    """새 툴도 예외가 아니다. `now()`를 보면 장전 슬롯 재실행이 장중 데이터를 끌어온다."""
+    connection = FakeConnection()
+    box = toolbox(connection, subject_codes=["KOSPI"])
+
+    for name, arguments in (
+        ("macro_indicators", {"kind": "government_bond"}),
+        ("market_investor_flows", {}),
+        ("market_breadth", {}),
+        ("stock_investor_flows", {"days": 5}),
+        ("market_funds", {"days": 10}),
+        ("daily_history", {"symbol": "KOSPI", "days": 10}),
+        ("short_and_credit", {}),
+    ):
+        connection.calls.clear()
+        box.run(name, arguments)
+        statement, parameters = connection.calls[0]
+        assert parameters["as_of_at"] == AS_OF, name
+        # 창의 끝을 SQL이 실제로 걸고 있는지도 본다. 파라미터만 넘기고 술어가 없으면 소용없다.
+        assert "as_of_at" in body(statement), name
+
+
+def test_macro_indicators_reports_rate_moves_in_basis_points():
+    """4.65에서 4.70은 `+1.08%`가 아니라 `+5bp`다. 퍼센트로 주면 모델이 급등으로 읽는다."""
+    connection = FakeConnection({"indicators": [indicator_row(Decimal("4.70"), Decimal("4.65"))]})
+    box = toolbox(connection)
+
+    payload = json.loads(box.run("macro_indicators", {"kind": "government_bond"}))
+
+    assert payload["series"][0]["change_bp"] == 5.0
+    assert "change" not in payload["series"][0]
+
+
+def test_macro_indicators_reports_non_rate_moves_as_plain_values():
+    """물가지수는 퍼센트도 bp도 아니다. 지수 포인트를 bp로 부르면 그것도 거짓이다."""
+    connection = FakeConnection({"indicators": [indicator_row(Decimal("315.6"), Decimal("314.8"), kind="price_index")]})
+    box = toolbox(connection)
+
+    payload = json.loads(box.run("macro_indicators", {"kind": "price_index"}))
+
+    assert payload["series"][0]["change"] == 0.8
+    assert "change_bp" not in payload["series"][0]
+
+
+def test_macro_indicators_never_mixes_kinds_in_one_answer():
+    """단위가 다른 값이 한 표에 섞이면 화면이 아니라 모델이 조용히 거짓말을 한다."""
+    connection = FakeConnection({"indicators": []})
+    box = toolbox(connection)
+
+    box.run("macro_indicators", {"kind": "온갖 것"})
+
+    _, parameters = connection.calls[0]
+    # 모르는 값은 거절이 아니라 기본 종류로 읽는다. 왕복 하나를 오타에 쓰지 않는다.
+    assert parameters["kinds"] == ["government_bond"]
+
+
+def test_a_missing_previous_observation_is_not_dressed_up_as_no_change():
+    """첫 관측을 "변화 0"으로 꾸미면 모델이 없는 사실을 근거로 쓴다."""
+    connection = FakeConnection({"indicators": [indicator_row(Decimal("4.70"), None)]})
+    box = toolbox(connection)
+
+    series = json.loads(box.run("macro_indicators", {"kind": "government_bond"}))["series"][0]
+
+    assert series["previous_value"] is None
+    assert "change_bp" not in series
+
+
+def test_settled_and_estimated_flows_stay_in_separate_boxes():
+    """확정 수급과 장중 추정은 어긋난다. 한 칸에 담으면 모델이 그 차이를 모른 채 읽는다."""
+    connection = FakeConnection({"stock_flows": [], "stock_flow_estimates": []})
+    box = toolbox(connection)
+
+    payload = json.loads(box.run("stock_investor_flows", {"days": 5}))
+
+    assert set(payload) == {"settled", "intraday_estimate", "note"}
+
+
+def test_short_and_credit_excludes_the_current_business_day():
+    """KIS가 장중에 당일 공매도를 0으로 보낸다. 그 행을 주면 "오늘 공매도 0주"가 관측이 된다.
+
+    2026-08-21 실측: `business_date = 2026-08-21`, `short_sale_quantity = 0`인 행이 그날
+    08:10 KST에 이미 들어와 있었다. `created_at` cutoff로는 안 걸러진다 — 전날 밤에
+    들어온 행이라서다. 날짜로 직접 잘라야 한다.
+    """
+    connection = FakeConnection({"short_and_credit": []})
+    box = toolbox(connection)
+
+    box.run("short_and_credit", {})
+
+    statement = body(connection.calls[0][0])
+    assert "business_date < (%(as_of_at)s AT TIME ZONE 'Asia/Seoul')::date" in statement
+
+
+def test_daily_history_says_which_symbols_have_bars_when_it_finds_none():
+    """빈 배열만 주면 모델이 "이력이 없다"가 아니라 "움직임이 없었다"로 읽는다.
+
+    2026-08-21 실측: `quote_daily`에 KOSPI·KOSDAQ 일봉이 없다. 국내 지수는 분봉만
+    수집하고 일봉 테이블에는 해외 지수만 들어 있다.
+    """
+    connection = FakeConnection({"daily_history": []})
+    box = toolbox(connection)
+
+    payload = json.loads(box.run("daily_history", {"symbol": "KOSPI", "days": 10}))
+
+    assert payload["bars"] == []
+    assert "KOSPI" in payload["note"]
+    assert "available_symbols" in payload
+
+
+def test_the_new_tools_do_not_create_evidence():
+    """`thesis_evidence`의 근거 종류는 document·disclosure·macro_change 셋 그대로 둔다.
+
+    시장 상태는 인용할 "출처"가 아니라 관측이다. 레지스트리에 넣으면 모델이 그것을
+    `evidence_refs`로 인용하고 근거 표에 "코스피 상승 종목 수"가 실린다.
+    """
+    connection = FakeConnection({"indicators": [indicator_row(Decimal("4.70"), Decimal("4.65"))]})
+    box = toolbox(connection)
+
+    box.run("macro_indicators", {"kind": "government_bond"})
+    box.run("market_breadth", {})
+
+    assert box.registry == {}
+
+
+def test_the_new_tools_count_against_the_call_budget():
+    """상한을 안 달면 툴이 늘어난 만큼 문맥이 무한정 자란다."""
+    connection = FakeConnection({"indicators": []})
+    box = toolbox(connection)
+
+    for _ in range(MAX_TOOL_CALLS):
+        box.run("macro_indicators", {"kind": "government_bond"})
+
+    with pytest.raises(ToolLimitExceeded, match="상한 초과"):
+        box.run("market_breadth", {})
+
+
 def test_every_tool_call_gets_exactly_one_tool_message():
     connection = FakeConnection({"documents": [], "macro": [macro_row()]})
     reply = AIMessage(
@@ -915,10 +1138,12 @@ def test_every_tool_call_gets_exactly_one_tool_message():
     run_builder(builder)
 
     tool_messages = [message for message in model.calls[-1] if isinstance(message, ToolMessage)]
-    # 빠지거나 둘이면 제공처가 다음 요청을 거절한다.
+    # 빠지거나 둘이면 제공처가 다음 요청을 거절한다. 이 보장은 이제 `ToolNode`가 한다.
     assert [message.tool_call_id for message in tool_messages] == ["a", "b", "c"]
     # 모르는 툴도 예외가 아니라 오류 ToolMessage다. 모델이 고쳐 부를 기회를 준다.
-    assert "모르는 툴" in tool_messages[2].content
+    # 문구는 `ToolNode`의 것이고 쓸 수 있는 툴 이름을 함께 싣는다.
+    assert tool_messages[2].status == "error"
+    assert "recent_documents" in tool_messages[2].content
 
 
 def test_the_round_cap_forces_the_answer_step():
@@ -1165,13 +1390,17 @@ def test_the_prompt_states_the_reference_time_in_kst():
 
 
 def test_the_narrative_prompt_states_the_reference_time_in_kst():
-    prompt = narrator(scripted(), FakeConnection()).build_messages(
-        run_date=date(2026, 8, 21),
-        run_slot=RunSlot.PRE_OPEN,
-        horizon_days=1,
-        as_of_at=datetime(2026, 8, 24, 6, 30, tzinfo=UTC),
-        targets=(narrative_target(),),
-    )[1].content
+    prompt = (
+        narrator(scripted(), FakeConnection())
+        .build_messages(
+            run_date=date(2026, 8, 21),
+            run_slot=RunSlot.PRE_OPEN,
+            horizon_days=1,
+            as_of_at=datetime(2026, 8, 24, 6, 30, tzinfo=UTC),
+            targets=(narrative_target(),),
+        )[1]
+        .content
+    )
 
     assert "2026-08-24 15:30 KST" in prompt
     assert "UTC다" in prompt

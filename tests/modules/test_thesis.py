@@ -1390,13 +1390,17 @@ def test_the_prompt_states_the_reference_time_in_kst():
 
 
 def test_the_narrative_prompt_states_the_reference_time_in_kst():
-    prompt = narrator(scripted(), FakeConnection()).build_messages(
-        run_date=date(2026, 8, 21),
-        run_slot=RunSlot.PRE_OPEN,
-        horizon_days=1,
-        as_of_at=datetime(2026, 8, 24, 6, 30, tzinfo=UTC),
-        targets=(narrative_target(),),
-    )[1].content
+    prompt = (
+        narrator(scripted(), FakeConnection())
+        .build_messages(
+            run_date=date(2026, 8, 21),
+            run_slot=RunSlot.PRE_OPEN,
+            horizon_days=1,
+            as_of_at=datetime(2026, 8, 24, 6, 30, tzinfo=UTC),
+            targets=(narrative_target(),),
+        )[1]
+        .content
+    )
 
     assert "2026-08-24 15:30 KST" in prompt
     assert "UTC다" in prompt

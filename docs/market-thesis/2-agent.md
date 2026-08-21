@@ -12,15 +12,50 @@
 
 ## 1. ThesisToolbox
 
-DB 연결과 **기준 시각 `as_of_at`**을 들고 읽기 전용 툴 3개를 실행한다. 결과의 모든 항목에
-`ref`를 붙이고 `ref → (kind, title, url, detail)` 레지스트리에 등록한다. 이 레지스트리가 답변
-검증과 `thesis_evidence` 저장의 원본이다.
+DB 연결과 **기준 시각 `as_of_at`**을 들고 읽기 전용 툴 11개를 실행한다.
+
+툴은 **근거를 만드는 것과 문맥만 주는 것**으로 갈린다. 근거 툴의 결과 항목에는 `ref`가 붙고
+`ref → (kind, title, url, detail)` 레지스트리에 등록된다. 이 레지스트리가 답변 검증과
+`thesis_evidence` 저장의 원본이다. 문맥 툴은 레지스트리에 넣지 않는다 — **시장 상태는 인용할
+"출처"가 아니라 관측이다.** 넣으면 근거 표에 "코스피 상승 종목 수"가 실린다.
+
+### 근거를 만드는 툴 셋
 
 | 툴 | 반환 | SQL |
 | --- | --- | --- |
 | `recent_documents(hours, min_score)` | value_score 상위 문서(제목·URL·발행시각·점수·방향·티커·`new_facts`·`reason`) | `document/select_recent_top.sql` |
 | `recent_disclosures(hours)` | 추적 종목 공시(회사·제목·URL·감지 시각) | `disclosure_event/select_recent.sql` |
 | `macro_changes()` | 분석 창의 지수·선물·환율 변화(첫봉 대비 마지막봉) | `quote_bar/select_window_changes.sql`(뷰는 읽기 전용 — 조회만) |
+
+### 문맥만 주는 툴 여덟
+
+`past_theses`를 뺀 일곱은 2026-08-21에 열었다. 그전까지 모델이 볼 수 있는 것은 문서·공시·분봉
+창 변화뿐이어서 **수집 중인 것의 대부분이 보이지 않았다** — 특히 `indicator_observation`에
+9개국 국채 곡선이 쌓여 있는데 금리를 못 보면서 "왜 움직였나"를 묻고 있었다.
+
+| 툴 | 반환 | SQL |
+| --- | --- | --- |
+| `past_theses(subject_code, n)` | 그 대상의 지난 장전 추론과 지평별 채점·해설 | `thesis/select_past_with_outcomes.sql` |
+| `macro_indicators(kind)` | 각국 국채 곡선·물가·실물활동의 최신값과 직전 대비 변화 | `indicator_observation/select_thesis_latest.sql` |
+| `market_investor_flows()` | 코스피·코스닥의 외국인·기관·개인 장중 누적 순매수 | `market_investor_flow_snapshot/select_thesis_latest.sql` |
+| `market_breadth()` | 상승·보합·하락 종목 수와 상·하한가 수 | `market_movement_snapshot/select_thesis_latest.sql` |
+| `stock_investor_flows(days)` | 추적 종목의 확정 수급 며칠치 + 장중 추정치 | `stock_investor_trade_daily/select_thesis_flows.sql`, `stock_investor_estimate_snapshot/select_thesis_latest.sql` |
+| `market_funds(days)` | 고객예탁금·신용융자·미수금 추이 | `krx_market_funds_daily/select_thesis_recent.sql` |
+| `daily_history(symbol, days)` | 심볼 하나의 일봉 추세 | `quote_daily/select_thesis_history.sql`, `select_thesis_symbols.sql` |
+| `short_and_credit()` | 공매도 수량·비중, 대차 잔고, 신용융자 잔고 | `krx_stock_short_sale_daily/select_thesis_latest.sql` |
+
+- **`macro_indicators`는 `kind`를 한 번에 하나만 본다.** 국채 금리(Percent)와 물가지수
+  (Index 1982-1984=100)가 한 표에 섞이면 모델이 조용히 거짓을 읽는다. 금리 변화는 퍼센트가
+  아니라 bp다(`BASIS_POINT_INDICATOR_KINDS`).
+- **`stock_investor_flows`는 확정과 추정을 다른 칸에 담는다.** 확정은 마감 뒤 18:10 값이고
+  추정은 장중 값이라 어긋난다. 한 칸에 담으면 모델이 그 차이를 모른 채 읽는다.
+- **`short_and_credit`은 당일 행을 뺀다.** KIS가 장중에 당일 공매도를 0으로 보낸다
+  (2026-08-21 실측). 확정은 다음 영업일 갱신이 채운다.
+- **`daily_history`는 0행이면 쓸 수 있는 심볼을 함께 준다.** `quote_daily`에 KOSPI·KOSDAQ
+  일봉이 없다 — 국내 지수는 분봉만 수집한다. 빈 배열만 주면 모델이 "이력이 없다"가 아니라
+  "움직임이 없었다"로 읽는다.
+- 열지 않은 것: `earnings_fact`(6행뿐이라 지금 열면 빈 결과만 준다), `market_session`
+  (관측 상태가 이미 세션 날짜를 준다).
 
 - **모든 창의 끝은 `as_of_at`이다.** `hours`는 `as_of_at`에서 거슬러 올라가는 길이이지
   `now()`에서가 아니다. `macro_changes()`의 창은 `[전 개장일 15:30, as_of_at]`(장전) /

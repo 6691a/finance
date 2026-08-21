@@ -214,6 +214,34 @@ LLM을 부르는 코드는 **Pydantic, LangChain, LangGraph 위에서만 쓴다.
 - **API 키를 그래프 상태에 넣지 않는다.** 상태와 config는 트레이스 입력으로 나간다. `SecretStr`을 담은 설정 객체는 생성자로만 넘긴다.
 - **재시도는 Airflow가 한다.** 모델 클라이언트는 `max_retries=0`으로 만든다. SDK가 먼저 재시도하면 태스크 타임아웃 안에서 몇 번을 불렀는지 로그와 트레이스가 어긋난다.
 - 제공처 예외는 한 곳에서 우리 종류로 바꾼다. 재시도할 값어치가 있는 것(`ConnectionError`)과 없는 것(`LlmError`)을 가르는 판단은 DAG가 한다.
+- **툴은 `StructuredTool`로 정의하고 `ToolNode`가 돌린다.** 인자는 Pydantic 모델로 선언하고
+  JSON Schema는 `args_schema`에서 뽑는다. `{"type": "function", "function": {...}}` dict를 손으로
+  쓰지 않는다 — 그건 제공처 wire format이라 이름·타입이 실제 함수와 어긋나도 아무도 못 잡는다.
+  툴이 연결·기준 시각·레지스트리 같은 상태를 봐야 하면 모듈 수준 `@tool` 대신 **바인드된
+  메서드**를 `StructuredTool.from_function(func=self._tool_x, args_schema=XArgs)`로 감싼다.
+  기준 구현은 `airflow/modules/thesis.py`의 `ThesisToolbox._build_tools`다.
+- **툴 실행 루프를 손으로 짜지 않는다.** `langgraph.prebuilt.ToolNode`가 tool_call을 돌리고
+  `tool_call_id`마다 `ToolMessage` 하나를 보장한다. 직접 짜면 그 보장이 우리 책임이 되고,
+  빠지거나 둘이면 제공처가 다음 요청을 거절한다.
+- **`handle_tool_errors`에는 반드시 예외 타입을 준다.** 기본값(`True`)은 **모든** 예외를
+  `ToolMessage`로 바꿔서 DB 연결 끊김을 "결과 없음"으로 위장한다. 모델은 그것을 "그 창에
+  데이터가 없었다"로 읽고 태스크는 성공으로 끝난다. 모델이 고쳐 부를 수 있는 것(상한 초과,
+  모르는 인자)만 타입으로 지정하고 나머지는 올려서 태스크를 죽인다.
+  `ToolNode(tools, handle_tool_errors=(ToolLimitExceeded,))`가 그 형태다.
+- **상태의 `messages`에는 `add_messages` 리듀서를 단다.** 노드는 새로 생긴 메시지만 돌려주고
+  병합은 리듀서가 한다. `ToolNode`가 그 형태로 반환하므로 맞춰야 할 쪽은 우리다.
+- **툴 상한은 코드 상수로 강제하고 그 값을 `Field(description=...)`에 f-string으로 싣는다.**
+  상수를 고치면 프롬프트가 따라간다. 두 곳에 숫자를 적으면 반드시 어긋난다.
+- **모델에게 주는 시각은 표시 시간대로 준다.** 저장·조회는 UTC지만 프롬프트에 UTC ISO를
+  그대로 실으면 모델이 "오늘"을 하루 어긋나게 읽는다(장전 기준 시각 KST 08:35는 UTC로 전날
+  23:35다). `thesis.kst_label`과 `briefing/documents.pick_input`의 `as_of_kst`가 그 자리다.
+  섞어서 줄 수밖에 없으면 **어느 칸이 어느 시간대인지 프롬프트가 직접 알린다.**
+- **툴을 늘릴 때 조회 SQL은 새 파일로 만든다.** 브리핑 등 기존 쿼리를 재사용하지 않는다.
+  브리핑은 지금까지를 보고 추론 툴은 기준 시각까지만 본다. 기존 쿼리에 상한을 얹으면 그쪽이
+  쓰지 않는 파라미터를 매번 넘겨야 하고, 한쪽을 고칠 때 다른 쪽이 조용히 따라 바뀐다.
+- **새 툴 SQL은 운영 DB에 읽기 전용으로 한 번 돌려 보고 넣는다.** 테스트는 가짜 연결을 쓰므로
+  컬럼 이름과 조인 조건이 틀려도 통과한다. 2026-08-21에 이 확인이 결함 둘을 잡았다 — 공매도
+  당일 행이 0으로 이미 들어와 있던 것과, 국내 지수 일봉이 아예 없던 것이다.
 - 체크포인터·persistence는 붙이지 않는다. 재실행 단위는 Airflow 태스크다.
 - 추적은 `LANGSMITH_*` 환경변수로 켠다. 코드에 추적 호출을 심지 않는다. **켜면 프롬프트와 원문이 외부로 나간다는 사실을 문서에 남긴다.**
 

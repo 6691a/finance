@@ -1226,9 +1226,14 @@ MAX_NARRATIVE_CHARS = 1000
 class NarrativeVariant(StrEnum):
     """해설 프롬프트가 실제 결과를 보느냐 마느냐.
 
-    **어느 쪽이 나은지 추측하지 않고 실측으로 가른다**(`docs/market-thesis/5-followup.md` 12절).
-    `narrative`("왜 움직였나")를 쓰려면 결과를 알아야 하지만, 그것을 알고 `verdict`
-    ("이유가 맞았나")를 판정하면 모델이 결과를 보고 역산한다.
+    어느 쪽이 나은지 추측하지 않고 실측으로 갈랐다(`docs/market-thesis/5-followup.md` 12절).
+
+    **`INFORMED`가 기본이다**(2026-08-21 2회차). `BLIND`가 사는 것이 없었다 — 툴 호출·
+    레지스트리·서술의 질이 같고, 가격은 어차피 후속 기사로 새어 들어오며, 판정만 체계적으로
+    약해졌다(같은 사실을 찾고도 `contradicted` 대신 `unresolved`를 골랐다).
+
+    남겨 두는 이유는 되돌릴 수 있게 하기 위해서다. 독립 사건 둘로 정한 값이라 분기 단위로
+    다시 본다.
     """
 
     INFORMED = "informed"

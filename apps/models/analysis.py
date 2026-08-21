@@ -96,13 +96,8 @@ class Thesis(EntityBase):
             "subject_code",
             name="uq_thesis_natural_key",
         ),
-        Index("ix_thesis_run_slot_evaluated_at", "run_slot", "evaluated_at"),
         CheckConstraint("run_slot IN ('pre_open', 'post_close')", name="ck_thesis_run_slot"),
         CheckConstraint("subject_kind IN ('index', 'stock')", name="ck_thesis_subject_kind"),
-        CheckConstraint(
-            "actual_outcome IN ('up', 'down', 'flat')",
-            name="ck_thesis_actual_outcome",
-        ),
         CheckConstraint(
             "prob_up BETWEEN 0 AND 1 AND prob_down BETWEEN 0 AND 1 AND prob_flat BETWEEN 0 AND 1",
             name="ck_thesis_prob_range",
@@ -113,18 +108,8 @@ class Thesis(EntityBase):
             "abs(prob_up + prob_down + prob_flat - 1) < 0.001",
             name="ck_thesis_prob_sum",
         ),
-        # 채점은 넷이 한 번에 채워지거나 전부 비어 있다. 등락률만 있고 점수가 없는 중간
-        # 상태를 두면 "채점했는데 점수가 없는" 행이 조용히 생긴다.
-        CheckConstraint(
-            "(evaluated_at IS NULL AND actual_return_pct IS NULL"
-            " AND actual_outcome IS NULL AND brier_score IS NULL)"
-            " OR (evaluated_at IS NOT NULL AND actual_return_pct IS NOT NULL"
-            " AND actual_outcome IS NOT NULL AND brier_score IS NOT NULL)",
-            name="ck_thesis_outcome_all_or_none",
-        ),
-        CheckConstraint("brier_score BETWEEN 0 AND 2", name="ck_thesis_brier_range"),
         table_options(
-            comment="슬롯마다 만든 시장 추론과 그 자동 채점 결과를 불변으로 보존하는 테이블",
+            comment="슬롯마다 만든 시장 추론을 불변으로 보존하는 테이블. 채점과 해설은 thesis_outcome이 갖는다",
             database="default",
         ),
     )

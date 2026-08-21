@@ -63,21 +63,23 @@ thesis_outcome (                   -- 추론 하나의 한 지평 = 채점 + (�
     as_of_at        -- 이 지평의 기준 시각(UTC). 그 영업일 장후 15:30 KST
     dag_run_id      -- 이 행을 쓴 Airflow dag_run_id
 
-    -- 채점. SQL과 Python 순수 함수만 쓴다. LLM 없음
-    evaluated_at        timestamptz
-    actual_return_pct   numeric(8,4)  -- 예측 시점 기준가 대비 이 지평 종가의 누적 등락률(%)
-    actual_outcome                    -- CHECK ('up','down','flat'). ThesisDirection 재사용
-    brier_score         numeric(6,5)  -- 원 추론의 세 확률을 이 지평 결과로 채점. CHECK 0~2
+    -- 채점. SQL과 Python 순수 함수만 쓴다. LLM 없음. **pre_open 행에만 찬다**
+    evaluated_at        timestamptz NULL
+    actual_return_pct   numeric(8,4) NULL  -- 예측 시점 기준가 대비 이 지평 종가의 누적 등락률(%)
+    actual_outcome      NULL               -- CHECK ('up','down','flat'). ThesisDirection 재사용
+    brier_score         numeric(6,5) NULL  -- 원 추론의 세 확률을 이 지평 결과로 채점. CHECK 0~2
 
-    -- 사후 해설. LLM. horizon_days = 0 이면 항상 NULL
+    -- 사후 해설. LLM. horizon_days = 0 이면 항상 NULL. **두 슬롯 모두**
     narrative       text NULL         -- "왜 그렇게 움직였나"(한국어, 상한 1000자)
     verdict         NULL              -- CHECK ('supported','contradicted','unresolved').
                                       -- 원 추론의 **이유**가 이후 보도로 지지됐나
     narrative_at    timestamptz NULL
     llm_model       text NULL
-    prompt_version  text NULL
-    -- CHECK: horizon_days = 0 이면 해설 다섯 칸 전부 NULL
+    prompt_version  text NULL         -- "<판>/<변형>". 변형은 informed 또는 blind(4절)
+    -- CHECK: 채점 넷은 전부 NULL이거나 전부 NOT NULL (all-or-none)
     -- CHECK: 해설 다섯 칸은 전부 NULL이거나 전부 NOT NULL (all-or-none)
+    -- CHECK: horizon_days = 0 이면 해설 다섯 칸 전부 NULL
+    -- CHECK: 채점과 해설이 둘 다 비어 있는 행 금지
     UNIQUE (thesis_id, horizon_days)  -- 멱등키
 )
 ```
@@ -87,9 +89,13 @@ thesis_outcome (                   -- 추론 하나의 한 지평 = 채점 + (�
   추론을 가르는 것이 이 칸이고, `narrative`는 자유 서술이라 그것을 셀 수 없다.
   **둘을 합친 종합 점수를 만들지 않는다** — 섞으면 둘 다 못 읽는다.
 - `verdict`를 해설 all-or-none에 함께 넣는다. 해설 없이 판정만 있으면 근거를 되짚을 수 없다.
-
-- **채점 컬럼에는 all-or-none CHECK를 두지 않는다.** 1단계와 달라지는 점이다. 여기서는
-  행 자체가 채점의 산물이라 채점이 안 되면 행이 없다(3절).
+- **채점 칸이 nullable이다**(2026-08-21 변경). 초판은 "행 자체가 채점의 산물"이라 NOT NULL을
+  전제했는데, 해설을 `post_close`에도 붙이기로 하면서(4절) 채점 없이 해설만 있는 행이
+  정상이 됐다. 대신 **둘 다 비어 있는 행을 금지한다** — 채점도 해설도 없으면 그 행은 없는
+  것과 같다.
+- **"`post_close` 행에는 채점이 없다"는 CHECK로 못 막는다.** 다른 테이블(`thesis.run_slot`)을
+  봐야 하기 때문이다. 코드와 테스트가 지킨다 — `thesis_evidence`가 마스터로 FK를 걸지 않고
+  테스트가 대조하는 것과 같은 판단이다.
 - `thesis`에는 채점 컬럼이 남지 않는다. 확률 예측과 그 근거만 갖는다.
 - `horizon_days`가 `days`인데 영업일인 것은 T+N 관용 표기를 따른 것이다. **컬럼 주석에
   거래일임을 못 박는다.** 달력일로 읽고 쿼리를 짜면 조용히 다른 값이 나온다.
@@ -159,14 +165,17 @@ select_pending_grades.sql  →  T+N 등락률 조회  →  classify_outcome / br
 
 ## 4. 해설 태스크 — `narrate_followups`
 
-`post_close` 슬롯에서만 돈다. `grade_followups` 뒤에 붙는다 — 채점 행이 있어야 해설을
-쓸 자리가 있다.
+`post_close` 슬롯 실행에서 돈다. `grade_followups` 뒤에 붙는다.
 
+- **대상은 두 슬롯 모두다**(2026-08-21 변경). 채점(3절)은 `pre_open`만이지만 해설은
+  `post_close` 리뷰에도 붙인다. 장후 리뷰는 "오늘 이래서 움직였다"는 **인과 주장**이라
+  며칠 뒤 보도로 검증할 값어치가 오히려 크다. `post_close` 대상은 채점 넷이 NULL인 채로
+  `thesis_outcome` 행이 새로 생긴다(1절).
 - **지평마다 별도 LLM 호출이다.** T+1·T+3·T+5 각각 한 번, 하루 최대 3회 추가. 툴 조회의
   기준 시각 `as_of_at`이 지평마다 달라서 한 대화에 섞을 수 없다. **한 호출 안에서는 그
   지평의 모든 subject를 한 번에** 준다(건별 호출 금지 규칙 그대로).
-- 대상은 그 지평의 `thesis_outcome` 행 중 `narrative IS NULL`인 것. 해설 LLM이 실패한 날의
-  것도 다음 실행이 회수한다.
+- 대상은 그 지평에서 `narrative IS NULL`인 것(`thesis_outcome` 행이 아직 없는 `post_close`
+  추론 포함). 해설 LLM이 실패한 날의 것도 다음 실행이 회수한다.
 - **쓰기는 `UPDATE ... WHERE narrative IS NULL`이다.** 첫 성공본 불변. 근거는
   `thesis_evidence`에 `outcome_horizon_days`를 채워 INSERT하고, UPDATE와 한 트랜잭션에 넣는다.
 
@@ -181,11 +190,37 @@ investigate → (tool_calls 있으면) tools → investigate → … → answer 
 Toolbox는 2단계의 것을 그대로 쓴다. `as_of_at`만 그 지평의 장후 15:30 KST로 바꿔 만든다.
 상한도 그대로(왕복 4, tool call 12회, 결과 누적 24,000자).
 
-### 프롬프트에 주는 것
+### 프롬프트에 주는 것 — 변형 둘을 실측으로 가른다
 
 - 원 추론의 세 확률과 세 이유 문장, 그리고 그때 인용한 근거 목록
-- **실제 결과** — `actual_return_pct`, `actual_outcome`, `brier_score`
 - 지평(`T+3` 등)과 기준 시각
+- **실제 결과** — `actual_return_pct`, `actual_outcome`, `brier_score`.
+  **이것을 주느냐 마느냐가 변형을 가른다.**
+
+`narrative`("왜 그렇게 움직였나")를 쓰려면 얼마나 움직였는지 알아야 한다. 그런데 그것을
+알고 `verdict`("원 추론의 **이유**가 맞았나")를 판정하면 모델이 결과를 보고 역산한다.
+사후확신 편향 경고는 프롬프트에 적을 수 있지만 검사 가능한 규칙이 아니다.
+
+**어느 쪽이 나은지 추측하지 않고 실측한다.** `FollowupNarrator`가 `include_outcome` 플래그를
+받고, 그 값이 `prompt_version`에 실린다(`assessment.py`의 `LlmSettings.prompt_revision`이
+관점을 판에 싣는 것과 같은 방식 — 새 컬럼을 만들지 않는다).
+
+| 변형 | `prompt_version` | 프롬프트에 결과를 |
+| --- | --- | --- |
+| `informed` | `1/informed` | 준다(초판) |
+| `blind` | `1/blind` | 주지 않는다 |
+
+실험 절차와 판정 지표는 12절에 있다.
+
+### `verdict`에 근거 인용을 강제한다
+
+- 프롬프트 규칙: **`supported`나 `contradicted`를 고르면 그 판단의 근거가 된 ref를 반드시
+  인용하라. 인용할 문서가 없으면 `unresolved`다.**
+- **그리고 저장 전에 코드가 다시 검사한다.** `evidence_refs`가 비었는데 `verdict`가
+  `unresolved`가 아니면 `unresolved`로 내리고 건수를 로그로 남긴다. 프롬프트 규칙만으로는
+  역산을 못 막지만 이 검사는 막는다.
+- 인용이 남으면 나중에 사람이 그 문서를 열어 판정이 실제로 문서에서 나왔는지 확인할 수 있다.
+  **오염을 없애는 장치가 아니라 되짚을 수 있게 만드는 장치다.**
 
 ### 답변 스키마
 
@@ -317,6 +352,12 @@ T+5가 해설이 가장 굳은 시점이기도 하다. `notify_slack`의 기존 
   - `FollowupNarrator`: 지평마다 별도 호출인지, 한 호출 안에서 subject가 한 번에 가는지,
     목록 밖 subject·ref 버림, 전부 버려지면 repair 1회·두 번째는 `ThesisError`,
     `narrative` 1000자 자름, 근거 0건 허용, 목록 밖 `verdict` 값이 그 항목을 버리는지.
+  - **`verdict` 인용 강제**: 근거 0건인데 `supported`·`contradicted`가 오면 `unresolved`로
+    내려가는지, `unresolved`는 근거 0건이어도 그대로인지.
+  - **프롬프트 변형**: `include_outcome=False`면 프롬프트에 `actual_return_pct`·
+    `actual_outcome`·`brier_score`가 **없는지**, `True`면 있는지. `prompt_version`이
+    `"<판>/informed"`·`"<판>/blind"`로 갈리는지.
+  - `post_close` 추론도 해설 대상에 드는지, 그 행의 채점 넷이 NULL로 남는지.
   - 쓰기: `narrative IS NULL`인 행만 UPDATE되는지, 이미 해설이 있으면 모델을 부르지 않는지,
     UPDATE와 evidence INSERT가 한 트랜잭션인지.
   - `past_theses`: `n` 0·11이 잘리는지, subject 목록 밖 값이 오류 `ToolMessage`인지,
@@ -332,6 +373,9 @@ T+5가 해설이 가장 굳은 시점이기도 하다. `notify_slack`의 기존 
 
 - **T+10 이상의 지평** — 5영업일을 넘기면 그날의 예측과 인과가 끊긴다. 넷으로 시작한다.
 - **`post_close` 리뷰의 채점** — 리뷰는 예측이 아니다. 채점할 대상이 없다.
+  (**해설과 `verdict`는 붙인다** — 4절.)
+- **세 번째 프롬프트 변형(`direction_only`)** — 방향만 주고 크기·Brier를 빼는 중간값이다.
+  둘로 먼저 재고, 오염이 확인되면 그때 붙인다. 플래그 하나라 나중에 싸다.
 - **해설의 재해설** — 지평마다 한 번, 첫 성공본 불변. T+5 해설이 마음에 안 들어도 고치지
   않는다.
 - **지평별 Slack 알림 분리** — T+5 하나만 보낸다. 소음이 늘면 이 섹션부터 뺀다.
@@ -358,3 +402,36 @@ T+5가 해설이 가장 굳은 시점이기도 하다. `notify_slack`의 기존 
 - **LLM 호출량** — 하루 최대 3회 추가(지평 셋). 3단계까지가 하루 2회이므로 2.5배가 된다.
   비용이 문제가 되면 지평을 T+5 하나로 줄이는 것이 첫 번째 손잡이다 — 채점(2·3절)은 셋을
   유지해도 되고, 줄어드는 것은 해설뿐이다.
+- **`include_outcome` 기본값** — 12절의 실험이 정한다. 그때까지 코드의 기본은 `informed`
+  (초판 설계)이고, 실험 결과가 반대면 한 상수를 바꾼다.
+
+## 12. 실험 — `informed` vs `blind`
+
+4절의 변형 둘 중 무엇을 기본값으로 둘지 **추측하지 않고 실제 호출로 정한다.**
+
+### 하네스
+
+`FollowupNarrator`를 두 변형으로 각각 부르고 결과를 나란히 찍는다. **DB에 아무 것도 쓰지
+않는다** — 실험 결과는 `thesis_outcome`에 남기지 않고 사람이 읽고 판단한다.
+
+- 입력은 **운영 DB에서 읽는다**(SELECT만). 로컬 DB에는 평가된 문서가 손에 꼽아 현실적인
+  비교가 안 된다(2026-08-21 실측: 로컬 348건 중 평가 5건).
+- 같은 추론·같은 지평·같은 툴 결과에 프롬프트만 바꿔 부른다. 툴 왕복이 변형마다 달라지면
+  비교가 안 되므로 **레지스트리를 공유한다.**
+
+### 판정 지표
+
+`narrative` 문장의 좋고 나쁨은 사람이 읽고 정한다. 그 위에 계산되는 숫자 둘을 함께 낸다.
+
+1. **`verdict`가 가격 방향을 그대로 따라가는가.** `informed`에서 `verdict = supported`가
+   "원 추론의 최빈 방향 == `actual_outcome`"과 거의 일치하면, 그 판정은 이유를 잰 것이
+   아니라 **Brier를 다른 말로 반복한 것**이다. `blind`와의 일치율 차이가 오염의 크기다.
+2. **`unresolved` 비율.** 후속 보도가 원 추론의 이유를 직접 다루는 경우는 흔하지 않다.
+   `informed`에서만 이 비율이 크게 낮으면 결과를 보고 억지 판정하는 것이다.
+
+### 필요한 것
+
+- **LLM 키.** 이 저장소에는 없다(`compose/*/airflow/.env`는 NAS에 있고 `.env.sample`만 커밋돼
+  있다). `XAI_API_KEY`를 환경에 넣어야 돈다. 2026-08-20 실측에서 운영 `.env`의 값이
+  무효였으므로 유효한 키가 먼저다.
+- **운영 DB 읽기.** `config.yaml`의 `prod` 별칭(`read_only: true`, 마이그레이션 꺼짐).

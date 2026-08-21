@@ -56,6 +56,12 @@ requirements) **배포 단위(worktree/PR 하나)마다 문서를 나눴다.** �
 | 2 | [2-agent.md](2-agent.md) | `thesis.py`에 Toolbox·Builder·저장, 툴 SQL 3개, `thesis_model()`, `llm.invoke` tools+schema 가드, `tests/modules/test_thesis.py` | 1 | 있음 |
 | 3 | [3-dag-slack.md](3-dag-slack.md) | `dags/market_thesis_analysis.py`, 스케줄, 채점 호출, Slack 렌더링·발송, DAG 테스트. **여기서 첫 운영 발송** | 1, 2 | 있음 |
 | 4 | [4-graph.md](4-graph.md) | `airflow/modules/graph.py`, `sync_graph` 태스크, `sync_only` Param, compose·requirements, `tests/modules/test_graph.py` | 1 (3과 병렬 가능) | 없음 |
+| 5 | [5-followup.md](5-followup.md) | `thesis_outcome` 테이블, 다지평(T+0·1·3·5) 채점, `FollowupNarrator` 사후 해설과 `verdict`, `past_theses` 툴 | 1, 2, 3 | 있음 |
+| 6 | (문서 미작성) | 애널리스트 투자의견·목표주가 수집기와 해설 툴. **KIS가 이 데이터를 주는지 미확인이라 spike가 선행이다** — 저장소에 관련 코드가 0건이다 | 5 | 없음 |
+
+**5단계는 1단계의 `thesis` 채점 컬럼을 `thesis_outcome`으로 옮긴다.** 채택했으므로
+(2026-08-21) 그 이동을 1·2단계 코드에 먼저 반영한다. 무엇이 바뀌는지는
+[5-followup.md](5-followup.md) 0절의 표에 있다. 테이블이 아직 운영에 없어 데이터 이관은 없다.
 
 - 1→2→3은 순서대로. 4는 1 뒤 언제든 — **구현**은 3과 독립이라 병렬로 진행해도 된다.
   단 `sync_graph` 태스크를 붙이는 자리가 3단계 DAG라 **배포는 3 뒤**다([4-graph.md](4-graph.md)).

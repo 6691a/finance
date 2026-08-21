@@ -49,9 +49,10 @@ thesis (                          -- 추론 하나 = 노드
 thesis_evidence (                 -- 추론 → 근거 = 엣지
     thesis_id FK → thesis ON DELETE CASCADE
     evidence_kind   -- CHECK ('document','disclosure','macro_change')
-    evidence_ref    -- 툴 결과의 ref 그대로. kind 무관 `<kind>:<id>` 2단 고정
-                    -- (예: document:123, disclosure:<rcept_no>, macro:SP500_FUT).
-                    -- kind는 evidence_kind 컬럼과 중복되므로 ref 안에 소스를 다시 넣지 않는다
+    evidence_ref    -- 툴 결과의 ref 그대로. `<evidence_kind>:<id>` 2단 고정이고 앞자리는
+                    -- evidence_kind와 글자 그대로 같다(document:123,
+                    -- disclosure:<rcept_no>, macro_change:SP500_FUT). 접두를 kind와 같게 두면
+                    -- 파싱이 한 규칙으로 끝나고, 소스 이름을 ref 안에 다시 넣지 않는다
     evidence_title  -- 그래프 조회용 제목 스냅샷
     evidence_url    -- 문서면 canonical_url, 공시면 DART 뷰어 URL, 매크로면 NULL. Slack 링크용
     detail jsonb    -- 툴이 준 수치 스냅샷(등락률, 점수 등)

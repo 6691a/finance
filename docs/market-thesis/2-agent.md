@@ -81,7 +81,7 @@ investigate → (tool_calls 있으면) tools → investigate → … → answer 
 {"theses": [{"subject_code": "KOSPI",
              "prob_up": 0.62, "prob_down": 0.23, "prob_flat": 0.15,
              "up_reasoning": "…", "down_reasoning": "…", "flat_reasoning": "…",
-             "evidence_refs": ["macro:SP500_FUT", "document:123"]}]}
+             "evidence_refs": ["macro_change:SP500_FUT", "document:123"]}]}
 ```
 
 - subject_code가 요청 목록 밖이면 그 항목만 버린다. 전부 버려지면 repair 1회.

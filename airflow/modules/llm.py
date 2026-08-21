@@ -103,6 +103,23 @@ def briefing_model() -> BaseChatModel:
     )
 
 
+def thesis_model() -> BaseChatModel:
+    """시장 추론(`modules/thesis.py`)이 쓰는 모델.
+
+    툴 왕복이 많은 작업이라 툴 호출 품질로 고른다. `ChatOpenAI`를 쓰는 이유는 두 가지다 —
+    툴 호출이 안정적이고, 운영에서 `OPENAI_API_KEY`가 살아 있다(2026-08-20 실측에서
+    `XAI_API_KEY`는 `Incorrect API key provided`였다).
+
+    키는 이 클래스가 `OPENAI_API_KEY`에서 스스로 읽는다. 우리가 넘기지 않는다.
+    """
+    return ChatOpenAI(
+        model="gpt-5.6-luna",
+        timeout=REQUEST_TIMEOUT_SECONDS,
+        # 재시도는 Airflow가 한다. 위 모듈 docstring 참고.
+        max_retries=0,
+    )
+
+
 def model_name(model: BaseChatModel) -> str:
     """`document.llm_model`에 남길 이름. 어느 모델이 그 점수를 냈는지 나중에 읽어야 한다."""
     return getattr(model, "model_name", None) or type(model).__name__
@@ -115,7 +132,14 @@ def invoke(
     schema: dict[str, Any] | None = None,
     tools: Sequence[dict[str, Any]] | None = None,
 ) -> AIMessage:
-    """한 번 부른다. 재시도도 툴 루프도 여기서 돌지 않는다."""
+    """한 번 부른다. 재시도도 툴 루프도 여기서 돌지 않는다.
+
+    **툴과 스키마를 한 요청에 섞지 않는다.** 제공처마다 둘을 같이 줬을 때 동작이 다르고
+    (스키마를 주면 툴 호출을 안 하거나 그 반대) 그 차이를 흡수할 방법이 없다. 모듈 docstring의
+    "조사와 답변을 나눈다"가 원칙이고, 이 검사가 그것을 코드 계약으로 만든다.
+    """
+    if tools and schema:
+        raise ValueError("invoke() takes tools or schema, never both — investigate first, then answer")
     bound = model
     if tools:
         bound = bound.bind_tools(tools)

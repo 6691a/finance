@@ -247,9 +247,9 @@ def upgrade_default() -> None:
             sa.Text(),
             nullable=False,
             comment=(
-                "툴 결과가 준 ref 그대로. kind와 무관하게 `<kind>:<id>` 2단이다"
-                "(document:123, disclosure:20260821000123, macro:SP500_FUT). "
-                "종류는 evidence_kind가 이미 갖고 있어 ref 안에 소스를 다시 넣지 않는다"
+                "툴 결과가 준 ref 그대로. `<evidence_kind>:<id>` 2단이며 앞자리는 evidence_kind와 글자 그대로 같다"
+                "(document:123, disclosure:20260821000123, macro_change:SP500_FUT). "
+                "접두를 kind와 같게 두면 파싱이 한 규칙으로 끝나고, 소스 이름을 ref 안에 다시 넣지 않는다"
             ),
         ),
         sa.Column(

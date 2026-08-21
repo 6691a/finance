@@ -1,12 +1,41 @@
+import json
 import re
+from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
+from typing import Any, Self
 
 import pytest
+from langchain_core.messages import AIMessage, ToolMessage
 from sqlalchemy import Table
 
 from apps.models.analysis import Thesis, ThesisEvidence
 from modules.sql import read_sql
-from modules.thesis import FLAT_THRESHOLD_PCT, ThesisDirection, brier_score, classify_outcome
+from modules.thesis import (
+    DART_VIEWER_URL,
+    FLAT_THRESHOLD_PCT,
+    MAX_ITEM_DETAIL_CHARS,
+    MAX_REASONING_CHARS,
+    MAX_TOOL_CALLS,
+    MAX_TOOL_RESULT_CHARS,
+    MAX_TOOL_ROUNDS,
+    PROMPT_VERSION,
+    Evidence,
+    RunSlot,
+    Subject,
+    ThesisBuilder,
+    ThesisDirection,
+    ThesisError,
+    ThesisEvidenceKind,
+    ThesisSubjectKind,
+    ThesisToolbox,
+    ToolLimitExceeded,
+    brier_score,
+    classify_outcome,
+    evidence_ref,
+    existing_theses,
+    normalize_probabilities,
+    store_theses,
+)
 
 THESIS_INSERT = read_sql("postgres", "thesis", "insert.sql")
 THESIS_SELECT_BY_RUN = read_sql("postgres", "thesis", "select_by_run.sql")
@@ -17,6 +46,9 @@ EVIDENCE_SELECT_ALL = read_sql("postgres", "thesis_evidence", "select_by_thesis_
 EVIDENCE_SELECT_TOP = read_sql("postgres", "thesis_evidence", "select_top_by_thesis_ids.sql")
 STOCK_SESSION_RETURN = read_sql("postgres", "stock_investor_trade_daily", "select_session_return.sql")
 INDEX_SESSION_RETURN = read_sql("postgres", "index_bar", "select_session_return.sql")
+TOOL_DOCUMENTS = read_sql("postgres", "document", "select_recent_top.sql")
+TOOL_DISCLOSURES = read_sql("postgres", "disclosure_event", "select_recent.sql")
+TOOL_WINDOW_CHANGES = read_sql("postgres", "quote_bar", "select_window_changes.sql")
 
 
 def inserted_columns(statement: str) -> tuple[str, ...]:
@@ -281,3 +313,759 @@ def test_lookups_never_read_the_wall_clock(statement):
     query = body(statement)
     assert "now()" not in query
     assert "CURRENT_TIMESTAMP" not in query
+
+
+# --- 툴 SQL -----------------------------------------------------------------
+
+
+def test_document_tool_cuts_on_every_event_time_column():
+    query = body(TOOL_DOCUMENTS)
+
+    # 셋 다 걸어야 "그 시각에 알 수 있었던 것"에 가까워진다.
+    assert "document.detected_at <= bounds.as_of_at" in query
+    assert "document.assessed_at <= bounds.as_of_at" in query
+    assert "document.updated_at <= bounds.as_of_at" in query
+    # 이유 문장을 쓸 재료. 둘 다 컬럼이 아니라 assessment JSONB 안의 키다.
+    assert "assessment -> 'new_facts'" in query
+    assert "assessment ->> 'reason'" in query
+
+
+def test_disclosure_tool_cuts_on_detection_not_on_the_receipt_date():
+    query = body(TOOL_DISCLOSURES)
+
+    # 접수일은 날짜뿐이라 창의 끝을 시각으로 자를 수 없다.
+    assert "disclosure_event.detected_at <= bounds.as_of_at" in query
+    assert "receipt_date <=" not in query
+    assert "stock_code = ANY(%s)" in query
+
+
+def test_macro_tool_excludes_the_boundary_bar_and_reads_only_the_view():
+    query = body(TOOL_WINDOW_CHANGES)
+
+    # bar_at은 봉의 시작 시각이라 그대로 자르면 경계 봉의 미래 1분이 섞인다.
+    assert "bar.bar_at + interval '1 minute' <= bounds.as_of_at" in query
+    assert "FROM quote_bar AS bar" in query
+    # 뷰는 읽기 전용이다. 쓰기는 kind별 물리 테이블로 간다.
+    assert "INSERT" not in query.upper()
+    assert "UPDATE" not in query.upper()
+    # 변화를 퍼센트로 만들지 않는다. 금리는 bp로 읽어야 해서 표기는 파이썬이 정한다.
+    assert "first_close" in query
+    assert "last_close" in query
+
+
+# --- Toolbox ----------------------------------------------------------------
+
+AS_OF = datetime(2026, 8, 21, 6, 30, tzinfo=UTC)
+MACRO_WINDOW_START = datetime(2026, 8, 20, 6, 30, tzinfo=UTC)
+
+
+class FakeCursor:
+    def __init__(self, connection: "FakeConnection") -> None:
+        self._connection = connection
+        self._rows: list[tuple] = []
+
+    def __enter__(self) -> Self:
+        return self
+
+    def __exit__(self, *args: object) -> None:
+        return None
+
+    def execute(self, statement: str, parameters: Any = ()) -> None:
+        self._connection.calls.append((statement, tuple(parameters)))
+        if self._connection.raises is not None:
+            raise self._connection.raises
+        self._rows = list(self._connection.results.get(_statement_key(statement), []))
+
+    def fetchall(self) -> list[tuple]:
+        return self._rows
+
+    def fetchone(self) -> tuple | None:
+        return self._rows.pop(0) if self._rows else None
+
+
+class FakeConnection:
+    """PEP 249 연결 자리. SQL 문자열로 응답을 고른다."""
+
+    def __init__(self, results: dict[str, list[tuple]] | None = None) -> None:
+        self.results = results or {}
+        self.calls: list[tuple[str, tuple]] = []
+        self.commits = 0
+        self.rollbacks = 0
+        self.raises: Exception | None = None
+
+    def cursor(self) -> FakeCursor:
+        return FakeCursor(self)
+
+    def commit(self) -> None:
+        self.commits += 1
+
+    def rollback(self) -> None:
+        self.rollbacks += 1
+
+
+def _statement_key(statement: str) -> str:
+    """어느 SQL인지 가르는 짧은 키. 주석을 먼저 뺀다 — 파일마다 머리말이 길다."""
+    query = body(statement).strip()
+    if query.startswith("INSERT INTO thesis_evidence"):
+        return "evidence_insert"
+    if query.startswith("INSERT INTO thesis"):
+        return "thesis_insert"
+    if "FROM document" in query:
+        return "documents"
+    if "FROM disclosure_event" in query:
+        return "disclosures"
+    if "FROM quote_bar" in query:
+        return "macro"
+    if "FROM thesis_evidence" in query:
+        return "evidence_select"
+    if "FROM thesis" in query:
+        return "select_by_run"
+    return "other"
+
+
+def document_row(document_id: int = 1, *, new_facts: list[str] | None = None, reason: str = "이유") -> tuple:
+    return (
+        document_id,
+        f"문서 {document_id}",
+        f"https://example.test/{document_id}",
+        "fed",
+        datetime(2026, 8, 21, 0, 0, tzinfo=UTC),
+        7,
+        "positive",
+        new_facts if new_facts is not None else ["새 사실"],
+        reason,
+        ["005930"],
+    )
+
+
+def disclosure_row(rcept_no: str = "20260821000123") -> tuple:
+    return (
+        rcept_no,
+        "000660",
+        "SK하이닉스",
+        "단일판매·공급계약 해지",
+        date(2026, 8, 21),
+        datetime(2026, 8, 21, 1, 0, tzinfo=UTC),
+    )
+
+
+def macro_row(symbol: str = "SP500_FUT", kind: str = "index_future", first: str = "100", last: str = "101") -> tuple:
+    return (
+        "yahoo",
+        symbol,
+        f"{symbol} 라벨",
+        kind,
+        "US",
+        Decimal(first),
+        Decimal(last),
+        MACRO_WINDOW_START,
+        AS_OF,
+        120,
+    )
+
+
+def toolbox(connection: FakeConnection) -> ThesisToolbox:
+    return ThesisToolbox(
+        connection,
+        as_of_at=AS_OF,
+        macro_window_start=MACRO_WINDOW_START,
+        watched_codes=["005930", "000660"],
+    )
+
+
+def test_tool_windows_end_at_the_slot_time_not_at_the_wall_clock():
+    connection = FakeConnection({"documents": [document_row()]})
+    box = toolbox(connection)
+
+    box.run("recent_documents", {"hours": 12, "min_score": 5})
+
+    _, parameters = connection.calls[0]
+    # 창의 끝은 as_of_at이고 시작은 거기서 12시간 거슬러 올라간 시각이다.
+    assert parameters[0] == AS_OF - timedelta(hours=12)
+    assert parameters[1] == AS_OF
+    assert parameters[2] == 5
+
+
+@pytest.mark.parametrize(
+    ("hours", "expected_hours"),
+    [(0, 1), (73, 72), (12, 12), ("bad", 72), (None, 72)],
+)
+def test_tool_arguments_outside_the_range_are_clamped_not_rejected(hours, expected_hours):
+    connection = FakeConnection({"documents": []})
+    box = toolbox(connection)
+
+    box.run("recent_documents", {"hours": hours, "min_score": 5})
+
+    _, parameters = connection.calls[0]
+    assert parameters[0] == AS_OF - timedelta(hours=expected_hours)
+
+
+@pytest.mark.parametrize(("min_score", "expected"), [(-1, 0), (101, 100), (5, 5)])
+def test_the_score_floor_is_clamped_too(min_score, expected):
+    connection = FakeConnection({"documents": []})
+    box = toolbox(connection)
+
+    box.run("recent_documents", {"hours": 6, "min_score": min_score})
+
+    _, parameters = connection.calls[0]
+    assert parameters[2] == expected
+
+
+def test_the_result_cap_travels_to_the_database_as_a_limit():
+    connection = FakeConnection({"documents": []})
+    box = toolbox(connection)
+
+    box.run("recent_documents", {"hours": 6, "min_score": 0})
+
+    _, parameters = connection.calls[0]
+    # 20건 상한을 파이썬에서 자르지 않고 SQL LIMIT으로 넘긴다.
+    assert parameters[3] == 20
+
+
+def test_tool_results_register_refs_whose_prefix_is_the_evidence_kind():
+    connection = FakeConnection(
+        {
+            "documents": [document_row(7)],
+            "disclosures": [disclosure_row()],
+            "macro": [macro_row()],
+        }
+    )
+    box = toolbox(connection)
+
+    box.run("recent_documents", {"hours": 6, "min_score": 0})
+    box.run("recent_disclosures", {"hours": 6})
+    box.run("macro_changes", {})
+
+    assert set(box.registry) == {
+        "document:7",
+        "disclosure:20260821000123",
+        "macro_change:SP500_FUT",
+    }
+    for ref, item in box.registry.items():
+        assert ref.split(":", 1)[0] == item.kind.value
+
+
+def test_disclosures_carry_a_viewer_url_and_macro_changes_do_not():
+    connection = FakeConnection({"disclosures": [disclosure_row()], "macro": [macro_row()]})
+    box = toolbox(connection)
+
+    box.run("recent_disclosures", {"hours": 6})
+    box.run("macro_changes", {})
+
+    assert box.registry["disclosure:20260821000123"].url == DART_VIEWER_URL.format(rcept_no="20260821000123")
+    # 매크로 변화는 링크할 곳이 없다. Slack 근거 줄이 제목만 그린다.
+    assert box.registry["macro_change:SP500_FUT"].url is None
+
+
+def test_rate_changes_are_reported_in_basis_points_not_percent():
+    connection = FakeConnection({"macro": [macro_row("US10Y", "rate", "4.65", "4.70")]})
+    box = toolbox(connection)
+
+    body_text = box.run("macro_changes", {})
+
+    item = box.registry["macro_change:US10Y"]
+    # 4.65 -> 4.70은 "+1.08%"가 아니라 "+5bp"다. 퍼센트로 주면 모델이 급등으로 읽는다.
+    assert item.detail["change_bp"] == pytest.approx(5.0)
+    assert "change_pct" not in item.detail
+    assert "bp" in body_text
+
+
+def test_non_rate_changes_are_reported_in_percent():
+    connection = FakeConnection({"macro": [macro_row("SP500_FUT", "index_future", "100", "101")]})
+    box = toolbox(connection)
+
+    box.run("macro_changes", {})
+
+    item = box.registry["macro_change:SP500_FUT"]
+    assert item.detail["change_pct"] == pytest.approx(1.0)
+    assert "change_bp" not in item.detail
+
+
+def test_a_long_document_is_trimmed_so_one_item_cannot_eat_the_context():
+    long_reason = "가" * 400
+    facts = ["나" * 150, "다" * 150, "라" * 150]
+    connection = FakeConnection({"documents": [document_row(new_facts=facts, reason=long_reason)]})
+    box = toolbox(connection)
+
+    box.run("recent_documents", {"hours": 6, "min_score": 0})
+
+    detail = box.registry["document:1"].detail
+    spent = len(detail["reason"]) + sum(len(fact) for fact in detail["new_facts"])
+    assert spent <= MAX_ITEM_DETAIL_CHARS
+    assert len(detail["new_facts"]) < len(facts)
+
+
+def test_an_unknown_tool_name_is_refused_without_touching_the_database():
+    connection = FakeConnection()
+    box = toolbox(connection)
+
+    with pytest.raises(ToolLimitExceeded, match="모르는 툴"):
+        box.run("web_search", {"q": "삼성전자"})
+
+    assert connection.calls == []
+
+
+def test_the_call_budget_stops_the_investigation():
+    connection = FakeConnection({"documents": []})
+    box = toolbox(connection)
+
+    for _ in range(MAX_TOOL_CALLS):
+        box.run("recent_documents", {"hours": 1, "min_score": 0})
+
+    with pytest.raises(ToolLimitExceeded, match="상한 초과"):
+        box.run("recent_documents", {"hours": 1, "min_score": 0})
+
+
+def test_the_character_budget_stops_the_investigation():
+    wide = [document_row(index, reason="가" * 500) for index in range(20)]
+    connection = FakeConnection({"documents": wide})
+    box = toolbox(connection)
+
+    with pytest.raises(ToolLimitExceeded, match="상한 초과"):
+        for _ in range(MAX_TOOL_CALLS):
+            box.run("recent_documents", {"hours": 1, "min_score": 0})
+
+
+def test_database_failures_are_not_disguised_as_empty_results():
+    connection = FakeConnection()
+    connection.raises = ConnectionError("server closed the connection")
+    box = toolbox(connection)
+
+    # 빈 결과는 "그 창에 문서가 없다"는 뜻이어야 한다. 오류를 그것으로 바꾸지 않는다.
+    with pytest.raises(ConnectionError):
+        box.run("recent_documents", {"hours": 6, "min_score": 0})
+
+
+# --- 확률 정규화 -------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "probabilities",
+    [(0.62, 0.23, 0.15), (0.6, 0.2, 0.19), (0.34, 0.33, 0.34), (1.0, 0.0, 0.0)],
+)
+def test_probabilities_inside_the_tolerance_are_scaled_to_exactly_one(probabilities):
+    scaled = normalize_probabilities(*probabilities)
+
+    assert scaled is not None
+    # DB CHECK가 합 오차 0.001 미만을 요구한다. 정확히 1이어야 통과한다.
+    assert sum(scaled) == Decimal(1)
+    assert all(Decimal(0) <= value <= Decimal(1) for value in scaled)
+
+
+@pytest.mark.parametrize("probabilities", [(0.3, 0.3, 0.3), (0.5, 0.5, 0.5), (0.0, 0.0, 0.0)])
+def test_probabilities_outside_the_tolerance_are_refused(probabilities):
+    # 억지로 정규화하면 모델이 부르지 않은 확률을 우리가 지어내게 된다.
+    assert normalize_probabilities(*probabilities) is None
+
+
+def test_scaling_keeps_the_relative_order():
+    scaled = normalize_probabilities(0.6, 0.2, 0.19)
+
+    assert scaled is not None
+    assert scaled[0] > scaled[1] > scaled[2]
+
+
+# --- Builder ----------------------------------------------------------------
+
+SUBJECTS = (
+    Subject(kind=ThesisSubjectKind.INDEX, code="KOSPI", label="코스피"),
+    Subject(kind=ThesisSubjectKind.STOCK, code="000660", label="SK하이닉스"),
+)
+OBSERVED = {"KOSPI": {"prev_return_pct": -2.1}}
+
+
+class ScriptedModel:
+    """LangChain 모델 자리. 네트워크를 쓰지 않는다."""
+
+    def __init__(self, *replies: AIMessage) -> None:
+        self.replies = list(replies)
+        self.bound: dict[str, Any] = {}
+        self.tools: Any = None
+        self.calls: list[list[Any]] = []
+
+    def bind(self, **kwargs: Any) -> "ScriptedModel":
+        self.bound.update(kwargs)
+        return self
+
+    def bind_tools(self, tools: Any) -> "ScriptedModel":
+        self.tools = tools
+        return self
+
+    def invoke(self, messages: list[Any]) -> AIMessage:
+        self.calls.append(list(messages))
+        return self.replies.pop(0)
+
+
+def answer_message(*theses: dict[str, Any]) -> AIMessage:
+    return AIMessage(json.dumps({"theses": list(theses)}))
+
+
+def thesis_payload(code: str = "KOSPI", refs: list[str] | None = None, **overrides: Any) -> dict[str, Any]:
+    payload = {
+        "subject_code": code,
+        "prob_up": 0.62,
+        "prob_down": 0.23,
+        "prob_flat": 0.15,
+        "up_reasoning": "밤사이 미국 지수가 올랐다",
+        "down_reasoning": "공시가 수급을 눌렀다",
+        "flat_reasoning": "재료가 상쇄됐다",
+        "evidence_refs": refs if refs is not None else [],
+    }
+    payload.update(overrides)
+    return payload
+
+
+def tool_call_message(name: str = "recent_documents", args: dict[str, Any] | None = None) -> AIMessage:
+    return AIMessage(
+        "",
+        tool_calls=[{"name": name, "args": args or {"hours": 6, "min_score": 5}, "id": f"call_{name}"}],
+    )
+
+
+# 조사 단계가 툴을 부르지 않고 끝냈다는 응답. 그래프는 항상 investigate로 시작하므로
+# 답변부터 검사하는 테스트도 이것을 하나 앞에 둔다.
+DONE_INVESTIGATING = "조사할 것이 없다"
+
+
+def scripted(*replies: AIMessage) -> ScriptedModel:
+    """조사를 건너뛰고 곧바로 답변 단계로 가는 모델."""
+    return ScriptedModel(AIMessage(DONE_INVESTIGATING), *replies)
+
+
+def build(model: ScriptedModel, connection: FakeConnection) -> ThesisBuilder:
+    return ThesisBuilder(model, toolbox(connection))
+
+
+def run_builder(builder: ThesisBuilder) -> tuple[Any, int]:
+    return builder.run(
+        run_slot=RunSlot.PRE_OPEN,
+        as_of_at=AS_OF,
+        subjects=SUBJECTS,
+        observed_state=OBSERVED,
+    )
+
+
+def test_the_builder_investigates_with_tools_then_answers_with_a_schema():
+    connection = FakeConnection({"documents": [document_row(7)]})
+    model = ScriptedModel(
+        tool_call_message(),
+        AIMessage(DONE_INVESTIGATING),
+        answer_message(thesis_payload(refs=["document:7"])),
+    )
+    builder = build(model, connection)
+
+    drafts, tool_rounds = run_builder(builder)
+
+    assert tool_rounds == 1
+    assert len(drafts) == 1
+    assert drafts[0].evidence_refs == ("document:7",)
+    # 조사 요청에는 툴이, 답변 요청에는 스키마가 실린다. 한 요청에 섞이지 않는다.
+    assert model.tools is not None
+    assert "response_format" in model.bound
+    # 툴 결과가 그 사이 대화에 들어가 있다.
+    assert any(isinstance(message, ToolMessage) for message in model.calls[-1])
+
+
+def test_every_tool_call_gets_exactly_one_tool_message():
+    connection = FakeConnection({"documents": [], "macro": [macro_row()]})
+    reply = AIMessage(
+        "",
+        tool_calls=[
+            {"name": "recent_documents", "args": {"hours": 6, "min_score": 5}, "id": "a"},
+            {"name": "macro_changes", "args": {}, "id": "b"},
+            {"name": "nope", "args": {}, "id": "c"},
+        ],
+    )
+    model = ScriptedModel(reply, AIMessage(DONE_INVESTIGATING), answer_message(thesis_payload()))
+    builder = build(model, connection)
+
+    run_builder(builder)
+
+    tool_messages = [message for message in model.calls[-1] if isinstance(message, ToolMessage)]
+    # 빠지거나 둘이면 제공처가 다음 요청을 거절한다.
+    assert [message.tool_call_id for message in tool_messages] == ["a", "b", "c"]
+    # 모르는 툴도 예외가 아니라 오류 ToolMessage다. 모델이 고쳐 부를 기회를 준다.
+    assert "모르는 툴" in tool_messages[2].content
+
+
+def test_the_round_cap_forces_the_answer_step():
+    connection = FakeConnection({"documents": []})
+    replies = [tool_call_message() for _ in range(MAX_TOOL_ROUNDS + 2)]
+    model = ScriptedModel(*replies, answer_message(thesis_payload()))
+    builder = build(model, connection)
+
+    _, tool_rounds = run_builder(builder)
+
+    assert tool_rounds == MAX_TOOL_ROUNDS
+
+
+def test_subjects_outside_the_request_list_are_dropped():
+    connection = FakeConnection()
+    model = scripted(answer_message(thesis_payload("KOSPI"), thesis_payload("AAPL")))
+    builder = build(model, connection)
+
+    drafts, _ = run_builder(builder)
+
+    assert [draft.subject.code for draft in drafts] == ["KOSPI"]
+
+
+def test_a_subject_answered_twice_is_refused_entirely():
+    connection = FakeConnection()
+    model = scripted(
+        answer_message(thesis_payload("KOSPI"), thesis_payload("KOSPI", prob_up=0.1, prob_down=0.8, prob_flat=0.1)),
+        # KOSPI 둘이 다 빠지면 남는 것이 없어 교정이 한 번 돈다.
+        answer_message(thesis_payload("000660")),
+    )
+    builder = build(model, connection)
+
+    drafts, _ = run_builder(builder)
+
+    # 어느 쪽이 진짜인지 알 수 없다. 먼저 넣은 것도 함께 뺀다.
+    assert [draft.subject.code for draft in drafts] == ["000660"]
+
+
+def test_a_missing_subject_is_left_out_and_never_re_requested():
+    connection = FakeConnection()
+    model = scripted(answer_message(thesis_payload("KOSPI")))
+    builder = build(model, connection)
+
+    drafts, _ = run_builder(builder)
+
+    assert [draft.subject.code for draft in drafts] == ["KOSPI"]
+    # 조사 한 번, 답변 한 번. 빠진 subject를 다시 묻지 않는다.
+    assert len(model.calls) == 2
+
+
+def test_a_subject_whose_probabilities_do_not_sum_to_one_is_dropped():
+    connection = FakeConnection()
+    model = scripted(
+        answer_message(
+            thesis_payload("KOSPI", prob_up=0.3, prob_down=0.3, prob_flat=0.3),
+            thesis_payload("000660"),
+        )
+    )
+    builder = build(model, connection)
+
+    drafts, _ = run_builder(builder)
+
+    assert [draft.subject.code for draft in drafts] == ["000660"]
+
+
+def test_everything_unusable_triggers_exactly_one_repair():
+    connection = FakeConnection()
+    model = scripted(answer_message(thesis_payload("AAPL")), answer_message(thesis_payload("KOSPI")))
+    builder = build(model, connection)
+
+    drafts, _ = run_builder(builder)
+
+    assert [draft.subject.code for draft in drafts] == ["KOSPI"]
+    # 조사 한 번, 답변 한 번, 교정 뒤 답변 한 번.
+    assert len(model.calls) == 3
+
+
+def test_a_second_unusable_answer_raises():
+    connection = FakeConnection()
+    model = scripted(answer_message(thesis_payload("AAPL")), answer_message(thesis_payload("MSFT")))
+    builder = build(model, connection)
+
+    with pytest.raises(ThesisError):
+        run_builder(builder)
+
+
+def test_refs_no_tool_returned_are_dropped_and_duplicates_keep_their_first_rank():
+    connection = FakeConnection({"documents": [document_row(7), document_row(9)]})
+    model = ScriptedModel(
+        tool_call_message(),
+        AIMessage(DONE_INVESTIGATING),
+        answer_message(thesis_payload(refs=["document:9", "document:7", "document:9", "document:404"])),
+    )
+    builder = build(model, connection)
+
+    drafts, _ = run_builder(builder)
+
+    # 순서가 곧 rank다. 중복은 첫 등장 자리에 합쳐지고 목록 밖 ref는 버려진다.
+    assert drafts[0].evidence_refs == ("document:9", "document:7")
+
+
+def test_a_thesis_with_no_evidence_is_allowed():
+    connection = FakeConnection()
+    model = scripted(answer_message(thesis_payload(refs=[])))
+    builder = build(model, connection)
+
+    drafts, _ = run_builder(builder)
+
+    # 억지 인용이 근거 없음보다 나쁘다.
+    assert drafts[0].evidence_refs == ()
+
+
+def test_each_reasoning_field_is_trimmed_on_its_own():
+    connection = FakeConnection()
+    long_text = "가" * (MAX_REASONING_CHARS + 200)
+    model = scripted(
+        answer_message(thesis_payload(up_reasoning=long_text, down_reasoning="짧다", flat_reasoning=long_text))
+    )
+    builder = build(model, connection)
+
+    drafts, _ = run_builder(builder)
+
+    assert len(drafts[0].up_reasoning) == MAX_REASONING_CHARS
+    assert len(drafts[0].flat_reasoning) == MAX_REASONING_CHARS
+    assert drafts[0].down_reasoning == "짧다"
+
+
+# --- 저장 --------------------------------------------------------------------
+
+
+def stored_row(thesis_id: int = 1, code: str = "KOSPI") -> tuple:
+    return (
+        thesis_id,
+        "pre_open",
+        date(2026, 8, 21),
+        AS_OF,
+        "manual__run",
+        "index",
+        code,
+        "코스피",
+        Decimal("0.6200"),
+        Decimal("0.2300"),
+        Decimal("0.1500"),
+        "오를 이유",
+        "내릴 이유",
+        "횡보 이유",
+        1,
+        "gpt-5.6-luna",
+        PROMPT_VERSION,
+        None,
+        None,
+        None,
+        None,
+    )
+
+
+def draft_for(builder_connection: FakeConnection) -> Any:
+    model = scripted(answer_message(thesis_payload(refs=["document:7"])))
+    connection = FakeConnection({"documents": [document_row(7)]})
+    box = toolbox(connection)
+    box.run("recent_documents", {"hours": 6, "min_score": 0})
+    builder = ThesisBuilder(model, box)
+    drafts, _ = builder.run(
+        run_slot=RunSlot.PRE_OPEN,
+        as_of_at=AS_OF,
+        subjects=SUBJECTS,
+        observed_state=OBSERVED,
+    )
+    return drafts, box.registry
+
+
+def test_existing_theses_is_what_the_caller_checks_before_paying_for_a_model():
+    connection = FakeConnection({"select_by_run": [stored_row()]})
+
+    rows = existing_theses(connection, run_date=date(2026, 8, 21), run_slot=RunSlot.PRE_OPEN)
+
+    assert [row.subject_code for row in rows] == ["KOSPI"]
+    assert rows[0].run_slot is RunSlot.PRE_OPEN
+    assert rows[0].evaluated_at is None
+
+
+def test_storing_writes_the_thesis_and_its_evidence_in_one_transaction():
+    drafts, registry = draft_for(FakeConnection())
+    connection = FakeConnection({"thesis_insert": [(11,)], "select_by_run": [stored_row(11)]})
+
+    store_theses(
+        connection,
+        run_date=date(2026, 8, 21),
+        run_slot=RunSlot.PRE_OPEN,
+        as_of_at=AS_OF,
+        dag_run_id="manual__run",
+        drafts=drafts,
+        registry=registry,
+        observed_state=OBSERVED,
+        llm_model="gpt-5.6-luna",
+        tool_rounds=1,
+    )
+
+    kinds = [_statement_key(statement) for statement, _ in connection.calls]
+    assert kinds[:2] == ["thesis_insert", "evidence_insert"]
+    # 추론만 들어가고 근거가 빠진 상태를 남기지 않는다.
+    assert connection.commits == 1
+    assert connection.rollbacks == 0
+
+
+def test_storing_never_updates_and_falls_back_to_the_stored_row_on_conflict():
+    drafts, registry = draft_for(FakeConnection())
+    # RETURNING이 0행이면 삽입 직전에 다른 실행이 먼저 넣은 것이다.
+    connection = FakeConnection({"thesis_insert": [], "select_by_run": [stored_row(11)]})
+
+    rows = store_theses(
+        connection,
+        run_date=date(2026, 8, 21),
+        run_slot=RunSlot.PRE_OPEN,
+        as_of_at=AS_OF,
+        dag_run_id="manual__run",
+        drafts=drafts,
+        registry=registry,
+        observed_state=OBSERVED,
+        llm_model="gpt-5.6-luna",
+        tool_rounds=1,
+    )
+
+    kinds = [_statement_key(statement) for statement, _ in connection.calls]
+    assert "evidence_insert" not in kinds
+    assert [row.id for row in rows] == [11]
+
+
+def test_evidence_ranks_follow_the_citation_order():
+    connection = FakeConnection({"documents": [document_row(7), document_row(9)], "macro": [macro_row()]})
+    box = toolbox(connection)
+    box.run("recent_documents", {"hours": 6, "min_score": 0})
+    box.run("macro_changes", {})
+    model = scripted(answer_message(thesis_payload(refs=["macro_change:SP500_FUT", "document:9"])))
+    builder = ThesisBuilder(model, box)
+    drafts, _ = builder.run(run_slot=RunSlot.PRE_OPEN, as_of_at=AS_OF, subjects=SUBJECTS, observed_state=OBSERVED)
+
+    writer = FakeConnection({"thesis_insert": [(11,)], "select_by_run": [stored_row(11)]})
+    store_theses(
+        writer,
+        run_date=date(2026, 8, 21),
+        run_slot=RunSlot.PRE_OPEN,
+        as_of_at=AS_OF,
+        dag_run_id="manual__run",
+        drafts=drafts,
+        registry=box.registry,
+        observed_state=OBSERVED,
+        llm_model="gpt-5.6-luna",
+        tool_rounds=2,
+    )
+
+    ranks = [
+        (parameters[2], parameters[6])
+        for statement, parameters in writer.calls
+        if _statement_key(statement) == "evidence_insert"
+    ]
+    assert ranks == [("macro_change:SP500_FUT", 1), ("document:9", 2)]
+
+
+def test_the_airflow_enums_match_the_backend_vocabulary():
+    from apps.models import analysis
+
+    for airflow_enum, backend_enum in (
+        (RunSlot, analysis.RunSlot),
+        (ThesisSubjectKind, analysis.ThesisSubjectKind),
+        (ThesisDirection, analysis.ThesisDirection),
+        (ThesisEvidenceKind, analysis.ThesisEvidenceKind),
+    ):
+        assert {member.value for member in airflow_enum} == {member.value for member in backend_enum}
+
+
+def test_evidence_refs_are_built_from_the_kind_itself():
+    item = Evidence(
+        kind=ThesisEvidenceKind.MACRO_CHANGE, ref=evidence_ref(ThesisEvidenceKind.MACRO_CHANGE, "US10Y"), title="x"
+    )
+
+    assert item.ref == "macro_change:US10Y"
+    assert item.ref.split(":", 1)[0] == item.kind.value
+
+
+def test_the_character_budget_constant_leaves_room_for_the_answer_step():
+    # 컨텍스트가 근거로 가득 차면 답변 단계에 쓸 자리가 없다.
+    assert MAX_TOOL_RESULT_CHARS < 32_000

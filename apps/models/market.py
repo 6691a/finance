@@ -626,7 +626,6 @@ class StockDaily(EntityBase):
     )
 
 
-
 class DisclosureEvent(EntityBase):
     """DART에 접수된 공시 하나를 종류와 관계없이 보존한다.
 
@@ -1816,6 +1815,74 @@ class StockInvestorTradeDaily(EntityBase):
     )
     individual_net_buy_amount: Mapped[Decimal] = mapped_column(
         Numeric(24, 2), nullable=False, comment="개인 순매수 대금(prsn_ntby_tr_pbmn). 단위는 백만원"
+    )
+    source_record_id: Mapped[int] = mapped_column(
+        BigInteger,
+        ForeignKey("source_record.id", ondelete="RESTRICT"),
+        nullable=False,
+        comment="이 행을 마지막으로 갱신한 수집의 source_record 레코드 ID",
+    )
+
+
+class StockAnalystOpinion(EntityBase):
+    """증권사 애널리스트의 종목별 투자의견·목표주가(KIS `invest-opinion`).
+
+    발표일·증권사마다 한 행이다. 리포트 본문은 여기 없다 — 글은 `document`가 네이버 리서치
+    출처로 갖고, 이 테이블은 숫자만 갖는다(`docs/market-thesis/6-analyst.md`).
+
+    괴리 값은 **발표 전일 종가 대비**만 둔다. KIS가 함께 주는 조회 시점 현재가 대비 괴리
+    (`stft_esdg`·`dprt`)는 매일 바뀌는 값이라 발표일 행에 섞지 않는다.
+    """
+
+    __tablename__ = "stock_analyst_opinion"
+    __table_args__ = (
+        UniqueConstraint(
+            "provider",
+            "stock_code",
+            "business_date",
+            "broker_name",
+            name="uq_stock_analyst_opinion_natural_key",
+        ),
+        Index("ix_stock_analyst_opinion_source_record_id", "source_record_id"),
+        table_options(
+            comment="증권사 애널리스트의 종목별 투자의견·목표주가를 발표일 단위로 누적하는 테이블",
+            database="default",
+        ),
+    )
+
+    provider: Mapped[str] = mapped_column(Text, nullable=False, comment="데이터 제공처 식별자(kis)")
+    stock_code: Mapped[str] = mapped_column(Text, nullable=False, comment="한국거래소 종목코드 6자리(예: 005930)")
+    business_date: Mapped[date] = mapped_column(
+        nullable=False, comment="투자의견 발표 영업일(stck_bsop_date). 기준 시간대는 한국이다"
+    )
+    broker_name: Mapped[str] = mapped_column(
+        Text,
+        nullable=False,
+        comment="투자의견을 낸 증권사(mbcr_name). KIS 표기 그대로의 약칭이다(예: 키움, 한국투자, 신한투자증권)",
+    )
+    opinion: Mapped[str] = mapped_column(
+        Text,
+        nullable=False,
+        comment="투자의견(invt_opnn). 증권사마다 표기가 달라 BUY와 매수가 섞여 온다. 기계 판독은 opinion_code로 한다",
+    )
+    opinion_code: Mapped[str] = mapped_column(Text, nullable=False, comment="투자의견 구분코드(invt_opnn_cls_code)")
+    previous_opinion: Mapped[str] = mapped_column(
+        Text, nullable=False, comment="같은 증권사의 직전 투자의견(rgbf_invt_opnn). 표기 규칙은 opinion과 같다"
+    )
+    previous_opinion_code: Mapped[str] = mapped_column(
+        Text, nullable=False, comment="직전 투자의견 구분코드(rgbf_invt_opnn_cls_code)"
+    )
+    target_price: Mapped[Decimal] = mapped_column(Numeric(18, 4), nullable=False, comment="목표주가(hts_goal_prc). 원")
+    previous_close: Mapped[Decimal] = mapped_column(
+        Numeric(18, 4), nullable=False, comment="발표 전일 종가(stck_prdy_clpr). 원"
+    )
+    gap_amount: Mapped[Decimal] = mapped_column(
+        Numeric(18, 4),
+        nullable=False,
+        comment="발표 전일 종가에서 목표주가를 뺀 괴리(stck_nday_esdg). 원. 음수면 목표가가 종가보다 높다",
+    )
+    gap_rate: Mapped[Decimal] = mapped_column(
+        Numeric(12, 4), nullable=False, comment="목표주가 대비 괴리율(nday_dprt). KIS 표기 그대로의 퍼센트"
     )
     source_record_id: Mapped[int] = mapped_column(
         BigInteger,

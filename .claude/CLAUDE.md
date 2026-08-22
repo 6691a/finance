@@ -15,7 +15,8 @@ Codex용 규칙 원본은 [.codex/AGENTS.md](../.codex/AGENTS.md)이며 두 문�
 | `apps/realtime/` | KIS 실시간 WebSocket 수집 서비스. `python -m apps.realtime.main`, `compose/prod/` 배포 |
 | `migrations/` | Alembic. 리비전 파일은 `migrations/versions` 하나를 모든 별칭이 공유한다 |
 | `migrations/routing.py` | 어떤 테이블이 어떤 DB 별칭에 속하는지 판단하는 순수 함수 |
-| `../airflow/dags/` | Airflow DAG |
+| `../airflow/dags/` | Airflow DAG. 폴더로 나누지 않는다 — 스케줄·재시도·실패 판정만 갖는 얇은 파일이다 |
+| `../airflow/modules/collectors/` | 수집기. 도메인 폴더(`market/`·`document/`·`indicator/`·`calendar/`·`analyst/`)로 나눈다. 전환 진행 상황은 [docs/collectors-class-migration.md](../docs/collectors-class-migration.md) |
 | `tests/` | pytest |
 
 `apps/models/`의 모듈은 도메인 단위로 나눈다(`raw.py`, `market.py`, `reference.py`, `content.py`).
@@ -169,10 +170,43 @@ DAG가 쓰는 코드는 **위치는 Airflow를, 규칙은 백엔드를** 따른�
   `tests/collectors/`의 `test_fred.py`, `test_ecos.py`, `test_mof.py`, `test_boe.py`,
   `test_ecb.py`가 INSERT 컬럼과 `ON CONFLICT` 키를 모델 metadata와 대조한다.
 
+## 클래스와 함수를 가르는 기준
+
+**상태를 쥔 동작은 클래스로 묶고, 상태 없는 변환은 함수로 둔다.** 이 저장소 전체에 같은
+규칙이 적용된다 — LLM 흐름만의 규칙이 아니다.
+
+- **클래스로 묶는다**: 자격 증명·토큰·DB 연결·기준 시각·출처 행처럼 **여러 호출에 걸쳐
+  안 변하는 값**을 들고 도는 것. 그 값이 인자로 함수마다 다시 들어가고 있으면 그게 신호다.
+  기준 구현은 `modules/collectors/analyst/kis_opinion.py`의 `KisAnalystOpinionCollector`,
+  `modules/collectors/document/naver_research.py`의 `NaverResearchCollector`,
+  `modules/assessment.py`의 `DocumentAssessor`, `modules/thesis.py`의 `ThesisToolbox`·
+  `ThesisBuilder`·`FollowupNarrator`다.
+- **생성자는 그 실행 동안 안 변하는 것만 받는다.** 종목·구간처럼 호출마다 바뀌는 것은
+  메서드 인자다.
+- **함수로 둔다**: 파싱·정규화·계산처럼 감쌀 상태가 없는 것, 그리고 그 클래스의 관심사가
+  아닌 조회(`watched_stocks`는 KIS와 무관하게 마스터만 본다). 클래스 안에 두는 편이 읽기
+  좋으면 `@staticmethod`로 둔다.
+- **데이터 모양은 언제나 Pydantic 모델이다.** 응답 행·설정·결과를 `dataclass`나 맨 dict로
+  두지 않는다. 수집기 클래스 안에 중첩하지 않는다 — 테스트와 다른 모듈이 import한다.
+- **감쌀 상태가 없는 것을 클래스로 만들지 않는다.** 메서드가 전부 `@staticmethod`면 그건
+  모듈이다.
+
+**아직 함수인 코드가 많다.** 수집기 17모듈 중 둘만 클래스로 옮겼고 나머지 전환 계획은
+[docs/collectors-class-migration.md](../docs/collectors-class-migration.md)에 있다. 그 문서가
+목표 폴더 구조(도메인별 `market/`·`document/`·`indicator/`·`calendar/`·`analyst/`)와 단계별
+순서를 갖는다. **새 수집기는 처음부터 그 형태로 쓴다.**
+
 ## 수집기 작성
 
-`airflow/modules/collectors/fred.py`가 기준이다.
+`airflow/modules/collectors/analyst/kis_opinion.py`(클래스 형태)와
+`airflow/modules/collectors/fred.py`(옛 함수 형태, 검증 규칙의 기준)를 함께 본다.
 
+- **새 수집기는 클래스로, 도메인 폴더에 둔다.** 위 "클래스와 함수를 가르는 기준"과
+  [docs/collectors-class-migration.md](../docs/collectors-class-migration.md)를 따른다.
+  하위 패키지 `__init__.py`는 재수출하지 않는다 — 한 수집기의 의존성이 없는 환경에서
+  관계없는 DAG이 import 오류로 죽는다.
+- `fetch`(외부 호출)와 `store`(DB 쓰기)를 나눈다. DAG이 `fetch` 실패로 재시도를 판단하고
+  성공한 것만 트랜잭션 안에서 저장한다.
 - 요청 값, 외부 응답 본문, 정규화 결과, 수집 결과를 모두 Pydantic 모델로 선언한다.
   `dataclass`를 쓰지 않는다. 외부 JSON은 `model_validate_json`으로 검증한다.
 - 모델은 `ConfigDict(frozen=True)`다. 재시도 경로에서 값이 바뀌면 원본과 저장값이 어긋난다.
@@ -228,6 +262,18 @@ DAG가 쓰는 코드는 **위치는 Airflow를, 규칙은 백엔드를** 따른�
 - 조회 구간 계산은 `modules/period.py`에 한 벌만 둔다. DAG마다 복사하지 않는다.
   이 모듈은 Airflow를 import하지 않는다. import하면 수집기 테스트가 배포 환경 없이 돌지 않는다.
   실패는 `PeriodError`로 올리고 `AirflowFailException`으로 바꾸는 건 DAG가 한다.
+- 목록 수집이 상세 페이지를 한 번 더 받을 때는 **이미 있는 `(source_slug, external_id)`를 먼저
+  빼고 새 항목만 받는다**(`document_listings.ListingSource.enrich`, 네이버 리서치가 그 예다).
+  기존 항목을 목록 정보로 다시 upsert하면 `content_hash`가 달라져 상세 요약이 지워지고
+  재평가가 돈다. 상세 HTTP는 트랜잭션 바깥에서 부른다.
+- **제공처가 우리 관심 밖까지 밀어 주면 수집 단계에서 거른다.** 종목이 붙은 문서는
+  `instrument.is_watched` 안의 것만 받는다(`documents.watched_tickers`). 거르기는 상세 요청
+  **앞**이고, 거르기에 쓰는 목록 값(`FeedItem.stock_code`)은 저장하지 않는다 — 태그의 원본은
+  LLM 평가가 만드는 `document_instrument`다. 종목이 없는 문서(시황·경제·채권)는 시장 전체
+  이야기라 받고, 카테고리를 통째로 끄는 손잡이는 `document_source.enabled`다.
+- robots.txt가 일반 봇을 막는 출처를 사용자 결정으로 수집할 때는 `document_source.terms_url`·
+  `terms_checked_at`과 시드 리비전 주석에 그 결정을 남긴다. 이용조건이 문제가 되면 코드가
+  아니라 `enabled`를 내리는 것으로 끝나야 한다. 네이버 증권 리서치(2026-08-21)가 그 예다.
 
 ## 시간대 규칙
 
@@ -407,7 +453,8 @@ LLM을 부르는 코드는 **Pydantic, LangChain, LangGraph 위에서만 쓴다.
 - **데이터 모양은 Pydantic이다.** 설정, 모델 응답, 노드가 주고받는 결과는 `BaseModel`로 선언한다.
   `dataclass`나 맨 dict를 쓰지 않는다. 응답 스키마는 Pydantic 모델에서 뽑아 `response_format`으로
   강제하고(`modules/schema.py`), 강제가 안 되는 제공처를 위해 검증을 그대로 남긴다.
-- **흐름은 클래스로 묶는다.** `DocumentAssessor`·`AssessmentBatch`처럼 그래프를 소유한 클래스가
+- **흐름은 클래스로 묶는다**(위 "클래스와 함수를 가르는 기준"의 특수한 경우다 — 여기서 상태는
+  컴파일된 그래프다). `DocumentAssessor`·`AssessmentBatch`처럼 그래프를 소유한 클래스가
   갖고, 그래프는 생성자에서 한 번 `compile()`한다. 프롬프트 조립과 파싱처럼 상태가 필요 없는
   것은 같은 클래스의 `@staticmethod`로 둔다. 반대로 모델 정의와 오류 분류는 `modules/llm.py`의
   함수다. 감쌀 상태가 없는 것을 클래스로 만들지 않는다.
@@ -569,6 +616,11 @@ API, 크롤링, 웹소켓 수집 결과의 출처와 상태를 가볍게 보존�
   마스터에 없는 태그가 오면 태깅 전체가 죽는 대신 그 태그만 빠져야 한다. 후보 목록은
   프롬프트로 주고, 목록 밖의 값은 저장 전에 버린다.
 - `body`는 `content_level`이 `metadata_only`면 `NULL`이고 CHECK 제약이 그것을 강제한다.
+- 출처 고유 값(증권사, 목표가)은 `document`에 컬럼을 더하지 않고 제목·`summary`에 넣는다.
+  **제목 말머리에 대괄호를 쓰지 않는다** — `dedup`이 15자 이하 대괄호 말머리를 벗기고
+  비교해서, 같은 날 두 증권사의 같은 제목이 중복으로 묶인다. 증권사는 제목 끝에 낱말로
+  붙인다(`… - 대신증권`). 구조화된 숫자(투자의견·목표주가)는 `stock_analyst_opinion`처럼
+  별도 테이블이 갖는다.
 
 ## 마이그레이션 작성
 

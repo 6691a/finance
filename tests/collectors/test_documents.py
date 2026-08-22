@@ -10,15 +10,19 @@ from apps.models.content import Document as DocumentModel
 from apps.models.raw import SourceRecord
 from modules.collectors.documents import (
     DOCUMENT_UPSERT,
+    EXISTING_EXTERNAL_IDS,
     SOURCE_RECORD_INSERT,
+    WATCHED_INSTRUMENTS,
     DocumentPayloadError,
     FeedResponse,
     FeedSource,
     canonical_url,
     content_hash,
+    existing_external_ids,
     normalize_text,
     parse_feed,
     store_documents,
+    watched_tickers,
 )
 
 SOURCE_RECORD_ID = 7
@@ -433,6 +437,36 @@ def test_official_sources_are_stored_as_press_releases():
     store_documents(connection, source(source_kind="official"), response_for(), items, False, DETECTED_AT)
 
     assert document_rows(connection.recorded_cursor)[0][3] == "press_release"
+
+
+def test_research_sources_are_stored_as_reports():
+    connection = FakeConnection()
+    items, _ = parse_feed(RSS.encode("utf-8"))
+
+    store_documents(connection, source(source_kind="research"), response_for(), items, False, DETECTED_AT)
+
+    assert document_rows(connection.recorded_cursor)[0][3] == "report"
+
+
+def test_existing_external_ids_asks_by_slug_and_skips_the_query_when_nothing_to_ask():
+    connection = FakeConnection()
+    connection.recorded_cursor.fetchall = lambda: [("a",), ("c",)]  # type: ignore[method-assign]
+
+    assert existing_external_ids(connection, "example", ["a", "b", "c"]) == frozenset({"a", "c"})
+    statement, parameters = connection.recorded_cursor.calls[0]
+    assert statement is EXISTING_EXTERNAL_IDS
+    assert parameters == ("example", ["a", "b", "c"])
+
+    assert existing_external_ids(FakeConnection(), "example", []) == frozenset()
+
+
+def test_watched_tickers_reads_the_instrument_master():
+    """추론 대상·투자의견 수집과 같은 SQL이다. 추적 종목이 늘 때 수집기를 고치지 않는다."""
+    connection = FakeConnection()
+    connection.recorded_cursor.fetchall = lambda: [("005930", "삼성전자"), ("000660", "SK하이닉스")]  # type: ignore[method-assign]
+
+    assert watched_tickers(connection) == frozenset({"005930", "000660"})
+    assert connection.recorded_cursor.calls[0][0] is WATCHED_INSTRUMENTS
 
 
 def test_metadata_only_sources_do_not_store_the_summary():

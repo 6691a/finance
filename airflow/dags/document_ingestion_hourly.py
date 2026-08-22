@@ -35,7 +35,8 @@ RSS는 최근 항목만 준다. **수집을 시작하기 전 기간은 영영 �
 ## 필요한 환경
 
 - `CONNECTION_ID`가 가리키는 Airflow 연결. 접속 정보는 `AIRFLOW_CONN_FINANCE`가 갖는다.
-- 인증은 없다. 전부 공개 피드다.
+- 인증은 없다. 전부 공개 피드다. 네이버 리서치(`naver_research_*`)는 robots.txt가 일반 봇을
+  막는 내부 JSON이고, 사용자 결정으로 수집한다(`docs/market-thesis/6-analyst.md` 1.2절).
 """
 
 import logging
@@ -72,15 +73,19 @@ def collect_source(source: FeedSource, detected_at: datetime) -> tuple[int, Sour
     """출처 하나를 받아 저장한다. 이 함수 하나가 트랜잭션 하나다."""
     listing = LISTING_SOURCES.get(source.slug)
     if listing is not None:
-        # 피드가 없는 출처(KRX·금감원)는 게시판 목록을 직접 읽는다.
+        # 피드가 없는 출처(KRX·금감원·네이버 리서치)는 목록을 직접 읽는다.
         response = listing.fetch(source)
         items, truncated = listing.parse(response.body)
     else:
         response = fetch_feed(source)
         items, truncated = parse_feed(response.body, source.slug, source.feed_url)
 
-    with closing(_connection()) as connection, atomic(connection):
-        stored, outcome = store_documents(connection, source, response, items, truncated, detected_at)
+    with closing(_connection()) as connection:
+        if listing is not None and listing.enrich is not None:
+            # 상세 요청(HTTP)은 트랜잭션 바깥이다. 기존 항목을 빼고 새 항목만 채운다.
+            items = listing.enrich(connection, source, items)
+        with atomic(connection):
+            stored, outcome = store_documents(connection, source, response, items, truncated, detected_at)
 
     if truncated:
         logger.warning("%s returned more items than we take in one run", source.slug)

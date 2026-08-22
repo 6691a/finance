@@ -23,7 +23,8 @@ SCHEDULE = MultipleCronTriggerTimetable(
 
 - **장전 08:35**: 문서 수집이 매시 05분(`document_ingestion_hourly`), 평가가 매시 25분
   (`document_assessment_hourly`)이다. 08:20에 돌면 08:05 수집분이 아직 점수가 없어 근거
-  후보에서 빠진다. 08:25 평가가 끝난 뒤라야 밤사이 기사가 전부 후보에 든다.
+  후보에서 빠진다. 08:25 평가가 끝난 뒤라야 밤사이 기사가 전부 후보에 든다. 투자의견은
+  `kis_analyst_opinion_daily`가 08:20에 넣는다(6단계, 재시도 5분 × 2라 08:35 안이다).
 - **장후 20:30**: 종목 확정 종가는 `kis_investor_trade_daily`가 18:10에 넣는다
   (`stock_investor_trade_daily.close_price`). 지수 15:30 봉은 16:00에 확정이다. 18:10 뒤면
   되지만 선행 DAG 재시도(2회 × 10분) 여유를 두고 20:30에 둔다. 슬롯을 둘로 쪼개지 않는다.

@@ -204,87 +204,95 @@ def parse_overseas_index_bars(
     return tuple(bars), payload.output1.name.strip()
 
 
-def fetch_overseas_index_bars(
-    token: SecretStr,
-    app_key: SecretStr,
-    app_secret: SecretStr,
-    index: OverseasIndex,
-    session_date: date,
-) -> OverseasIndexFetch:
-    """한 지수의 최근 102봉을 받아 파싱까지 끝낸다. HTTP·네트워크 오류는 `send_get`이 올린다."""
-    started_at = datetime.now(UTC)
-    body, status, _headers = send_get(
-        token,
-        app_key,
-        app_secret,
-        OVERSEAS_INDEX_CHART_PATH,
-        OVERSEAS_INDEX_CHART_TR_ID,
-        {
-            "FID_COND_MRKT_DIV_CODE": MARKET_DIV_CODE,
-            "FID_INPUT_ISCD": index.kis_code,
-            "FID_HOUR_CLS_CODE": HOUR_CLS_CODE,
-            "FID_PW_DATA_INCU_YN": "Y",
-        },
-    )
-    completed_at = datetime.now(UTC)
-    bars, name = parse_overseas_index_bars(body, index, session_date)
-    return OverseasIndexFetch(
-        index=index,
-        session_date=session_date,
-        name=name,
-        bars=bars,
-        status=status,
-        started_at=started_at,
-        completed_at=completed_at,
-    )
+class KisOverseasIndexCollector:
+    """KIS 해외지수 분봉 수집기. 자격 증명과 토큰을 들고 지수마다 조회·저장한다.
 
+    한 실행이 객체 하나다. 토큰은 발급 횟수 제한이 있어 DAG이 한 번 받아 넘긴다. 토큰은 이
+    객체가 사는 동안 안 변하는 값이라 갈아 끼우지 않는다 — 401로 다시 받았으면 DAG이 새
+    토큰으로 객체를 다시 만든다.
 
-def store_overseas_index_bars(connection: Connection, fetch: OverseasIndexFetch) -> int:
-    """한 지수의 봉을 저장하고 저장한 봉 수를 돌려준다. 계보 레코드는 조회 1회에 1행이다."""
-    metadata = {
-        "symbol": fetch.index.value,
-        "kis_code": fetch.index.kis_code,
-        "name": fetch.name,
-        "session_date": fetch.session_date.isoformat(),
-        "interval": "1m",
-        "bar_count": len(fetch.bars),
-        "latest_bar_at": fetch.latest_bar_at.isoformat(),
-        "status": fetch.status,
-    }
-    with connection.cursor() as cursor:
-        cursor.execute(
-            SOURCE_RECORD_INSERT,
-            (
-                "api",
-                SOURCE,
-                SOURCE_KEY,
-                fetch.started_at,
-                fetch.completed_at,
-                "succeeded",
-                len(fetch.bars),
-                # 원본은 남기지 않는다. 봉 자체가 전부이고 날마다 쌓으면 계보가 수집보다 빨리 커진다.
-                None,
-                json.dumps(metadata, ensure_ascii=False),
-            ),
+    파싱(`parse_overseas_index_bars`)은 밖에 둔다. 자격 증명도 연결도 보지 않는 순수 변환이다.
+    """
+
+    def __init__(self, token: SecretStr, app_key: SecretStr, app_secret: SecretStr) -> None:
+        self._token = token
+        self._app_key = app_key
+        self._app_secret = app_secret
+
+    def fetch(self, index: OverseasIndex, session_date: date) -> OverseasIndexFetch:
+        """한 지수의 최근 102봉을 받아 파싱까지 끝낸다. HTTP·네트워크 오류는 `send_get`이 올린다."""
+        started_at = datetime.now(UTC)
+        body, status, _headers = send_get(
+            self._token,
+            self._app_key,
+            self._app_secret,
+            OVERSEAS_INDEX_CHART_PATH,
+            OVERSEAS_INDEX_CHART_TR_ID,
+            {
+                "FID_COND_MRKT_DIV_CODE": MARKET_DIV_CODE,
+                "FID_INPUT_ISCD": index.kis_code,
+                "FID_HOUR_CLS_CODE": HOUR_CLS_CODE,
+                "FID_PW_DATA_INCU_YN": "Y",
+            },
         )
-        source_record_id = cursor.fetchone()[0]
-        execute_upserts(
-            cursor,
-            INDEX_BAR_UPSERT,
-            [
+        completed_at = datetime.now(UTC)
+        bars, name = parse_overseas_index_bars(body, index, session_date)
+        return OverseasIndexFetch(
+            index=index,
+            session_date=session_date,
+            name=name,
+            bars=bars,
+            status=status,
+            started_at=started_at,
+            completed_at=completed_at,
+        )
+
+    def store(self, connection: Connection, fetch: OverseasIndexFetch) -> int:
+        """한 지수의 봉을 저장하고 저장한 봉 수를 돌려준다. 계보 레코드는 조회 1회에 1행이다."""
+        metadata = {
+            "symbol": fetch.index.value,
+            "kis_code": fetch.index.kis_code,
+            "name": fetch.name,
+            "session_date": fetch.session_date.isoformat(),
+            "interval": "1m",
+            "bar_count": len(fetch.bars),
+            "latest_bar_at": fetch.latest_bar_at.isoformat(),
+            "status": fetch.status,
+        }
+        with connection.cursor() as cursor:
+            cursor.execute(
+                SOURCE_RECORD_INSERT,
                 (
+                    "api",
                     SOURCE,
-                    fetch.index.value,
-                    bar.bar_at,
-                    bar.open,
-                    bar.high,
-                    bar.low,
-                    bar.close,
-                    bar.volume,
-                    bar.previous_close,
-                    source_record_id,
-                )
-                for bar in fetch.bars
-            ],
-        )
-    return len(fetch.bars)
+                    SOURCE_KEY,
+                    fetch.started_at,
+                    fetch.completed_at,
+                    "succeeded",
+                    len(fetch.bars),
+                    # 원본은 남기지 않는다. 봉 자체가 전부이고 날마다 쌓으면 계보가 수집보다 빨리 커진다.
+                    None,
+                    json.dumps(metadata, ensure_ascii=False),
+                ),
+            )
+            source_record_id = cursor.fetchone()[0]
+            execute_upserts(
+                cursor,
+                INDEX_BAR_UPSERT,
+                [
+                    (
+                        SOURCE,
+                        fetch.index.value,
+                        bar.bar_at,
+                        bar.open,
+                        bar.high,
+                        bar.low,
+                        bar.close,
+                        bar.volume,
+                        bar.previous_close,
+                        source_record_id,
+                    )
+                    for bar in fetch.bars
+                ],
+            )
+        return len(fetch.bars)

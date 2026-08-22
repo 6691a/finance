@@ -23,6 +23,8 @@ from apps.core.database import EntityBase, table_options
 class SourceKind(StrEnum):
     OFFICIAL = "official"
     MEDIA = "media"
+    # 증권사 리서치. 공식기관도 언론도 아니고 `document_type`이 `report`로 갈리는 근거다.
+    RESEARCH = "research"
 
 
 class CollectionMode(StrEnum):
@@ -62,7 +64,7 @@ class DocumentSource(EntityBase):
     __tablename__ = "document_source"
     __table_args__ = (
         UniqueConstraint("slug", name="uq_document_source_slug"),
-        CheckConstraint("source_kind IN ('official', 'media')", name="ck_document_source_kind"),
+        CheckConstraint("source_kind IN ('official', 'media', 'research')", name="ck_document_source_kind"),
         CheckConstraint(
             "collection_mode IN ('metadata_only', 'feed_content', 'full_text')",
             name="ck_document_source_collection_mode",
@@ -87,7 +89,7 @@ class DocumentSource(EntityBase):
             values_callable=lambda enum: [member.value for member in enum],
         ),
         nullable=False,
-        comment="출처 종류(official 또는 media). 공식기관 문서는 가치 점수와 무관하게 보관한다",
+        comment="출처 종류(official, media, research). 공식기관 문서는 가치 점수와 무관하게 보관하고 research는 report로 저장한다",
     )
     country: Mapped[str | None] = mapped_column(
         Text,

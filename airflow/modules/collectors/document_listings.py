@@ -18,6 +18,13 @@
 두 곳 다 발행 **날짜**만 주고 시각은 주지 않는다. 날짜의 기준 시간대는 제공처가 정한다는
 수집기 규칙대로 KST 자정으로 두고 UTC로 정규화한다. 시각을 지어내는 것이 아니라 제공처가
 고시한 날짜를 그 날짜가 속한 시간대로 읽는 것이다.
+
+## 레지스트리는 여기, 수집 규칙은 각자
+
+`LISTING_SOURCES`가 slug로 수집 방법을 고른다. KRX·금감원은 아직 이 파일에 함수로 있고,
+네이버 증권 리서치는 클래스로 `collectors/document/naver_research.py`에 있다. 목록만 읽는
+KRX·금감원과 달리 네이버는 **상세를 한 번 더 받아** 요약을 채우고 그것이 `ListingSource.enrich`
+단계다. 나머지를 클래스로 옮기는 계획은 `docs/collectors-class-migration.md`에 있다.
 """
 
 import json
@@ -32,15 +39,22 @@ from pydantic import BaseModel, ConfigDict, field_validator
 from scrapling import Selector
 from scrapling.fetchers import Fetcher
 
+from modules.collectors.document.naver_research import (
+    NAVER_RESEARCH_CATEGORIES,
+    NAVER_RESEARCH_SLUG_PREFIX,
+    NaverResearchCollector,
+)
 from modules.collectors.documents import (
     IMPERSONATE,
     MAX_ITEMS_PER_FEED,
     REQUEST_TIMEOUT_SECONDS,
+    Connection,
     DocumentHTTPError,
     DocumentPayloadError,
     FeedItem,
     FeedResponse,
     FeedSource,
+    kst_midnight_utc,
     normalize_text,
 )
 
@@ -61,19 +75,22 @@ KRX_PRESS_BLD = "OPN/05/05000000/opn05000000t1_01"
 KRX_PRESS_PAGE = "https://open.krx.co.kr/contents/OPN/05/05000000/OPN05000000T1.jsp"
 
 
-def _kst_midnight_utc(day: date) -> datetime:
-    """제공처가 KST 기준으로 고시한 날짜를 aware UTC 시각으로 바꾼다."""
-    return datetime(day.year, day.month, day.day, tzinfo=KST).astimezone(UTC)
-
-
 class ListingSource(BaseModel):
-    """피드 없는 출처 하나의 수집 방법. `LISTING_SOURCES` 레지스트리의 항목이다."""
+    """피드 없는 출처 하나의 수집 방법. `LISTING_SOURCES` 레지스트리의 항목이다.
+
+    `enrich`는 목록이 주지 않는 것(요약 문단 등)을 **새 항목에만** 상세 요청으로 채우는
+    선택 단계다. 연결을 받는 이유는 이미 있는 `(source_slug, external_id)`를 먼저 빼기
+    위해서다 — 기존 항목을 목록 정보로 다시 upsert하면 `content_hash`가 달라져 상세 요약이
+    지워지고 재평가가 돈다. DAG은 이 단계를 트랜잭션 바깥에서 부른다(HTTP를 트랜잭션 안에
+    두지 않는다).
+    """
 
     model_config = ConfigDict(frozen=True)
 
     slug: str
     fetch: Callable[[FeedSource], FeedResponse]
     parse: Callable[[bytes], tuple[tuple[FeedItem, ...], bool]]
+    enrich: Callable[[Connection, FeedSource, tuple[FeedItem, ...]], tuple[FeedItem, ...]] | None = None
 
 
 class KrxNotice(BaseModel):
@@ -162,7 +179,7 @@ def parse_krx(body: bytes) -> tuple[tuple[FeedItem, ...], bool]:
                 title=title,
                 summary=normalize_text(notice.contn),
                 # 고시일은 KRX가 KST 기준으로 정한 날짜다.
-                published_at=_kst_midnight_utc(published_day),
+                published_at=kst_midnight_utc(published_day),
             )
         )
     return tuple(items), truncated
@@ -222,7 +239,7 @@ def parse_fss(body: bytes) -> tuple[tuple[FeedItem, ...], bool]:
         for cell in row.css("td"):
             text = (cell.text or "").strip()
             try:
-                published_at = _kst_midnight_utc(date.fromisoformat(text))
+                published_at = kst_midnight_utc(date.fromisoformat(text))
                 break
             except ValueError:
                 continue
@@ -242,8 +259,27 @@ def parse_fss(body: bytes) -> tuple[tuple[FeedItem, ...], bool]:
     return tuple(items), False
 
 
+def _naver_research_sources() -> dict[str, ListingSource]:
+    """네이버 리서치 여섯 카테고리. 수집 규칙은 `collectors/document/naver_research.py`가 갖는다.
+
+    레지스트리는 콜러블을 들고 있고 수집기는 클래스라, 출처마다 객체를 만들어 주는 클래스
+    메서드를 끼운다. 다른 출처도 클래스로 옮기면 이 레지스트리 자체를 수집기 팩토리로 바꾼다
+    (`docs/collectors-class-migration.md`).
+    """
+    return {
+        f"{NAVER_RESEARCH_SLUG_PREFIX}{category}": ListingSource(
+            slug=f"{NAVER_RESEARCH_SLUG_PREFIX}{category}",
+            fetch=NaverResearchCollector.fetch_listing,
+            parse=NaverResearchCollector.parse,
+            enrich=NaverResearchCollector.enrich_listing,
+        )
+        for category in NAVER_RESEARCH_CATEGORIES
+    }
+
+
 # 피드가 없어 목록으로 붙는 출처. DAG이 slug로 여기를 먼저 보고, 없으면 RSS 경로로 간다.
 LISTING_SOURCES: dict[str, ListingSource] = {
     "krx": ListingSource(slug="krx", fetch=fetch_krx, parse=parse_krx),
     "fss": ListingSource(slug="fss", fetch=fetch_fss, parse=parse_fss),
+    **_naver_research_sources(),
 }

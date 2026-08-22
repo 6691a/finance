@@ -1,7 +1,7 @@
 # 시장 추론(thesis) 기록 설계 — 개요
 
 - 날짜: 2026-08-20 (2026-08-21 리뷰 반영 후 단계별 문서로 분리)
-- 상태: 1·2·3·5단계 구현 완료, 4단계(그래프)·6단계(애널리스트) 미착수. 운영 배포 전 선행 조건은 5절
+- 상태: 1·2·3·5·6단계 구현 완료(6단계는 2026-08-22, 리비전 둘 운영 반영 전), 4단계(그래프) 미착수. 운영 배포 전 선행 조건은 5절
 
 한 문서로 쓰기엔 범위가 커서(모델·리비전, 모듈 둘, DAG, SQL 열 개, 테스트 넷, compose·
 requirements) **배포 단위(worktree/PR 하나)마다 문서를 나눴다.** 이 파일은 공통 원칙과
@@ -57,7 +57,7 @@ requirements) **배포 단위(worktree/PR 하나)마다 문서를 나눴다.** �
 | 3 | [3-dag-slack.md](3-dag-slack.md) | `dags/market_thesis_forecast.py`·`market_thesis_review.py`, 스케줄, 채점 호출, Slack 렌더링·발송, DAG 테스트. **여기서 첫 운영 발송** | 1, 2 | 있음 |
 | 4 | [4-graph.md](4-graph.md) | `airflow/modules/graph.py`, `sync_graph` 태스크, `sync_only` Param, compose·requirements, `tests/modules/test_graph.py` | 1 (3과 병렬 가능) | 없음 |
 | 5 | [5-followup.md](5-followup.md) | `thesis_outcome` 테이블, 다지평(T+0·1·3·5) 채점, `FollowupNarrator` 사후 해설과 `verdict`, `past_theses` 툴 | 1, 2, 3 | 있음 |
-| 6 | (문서 미작성) | 애널리스트 투자의견·목표주가 수집기와 해설 툴. **KIS가 이 데이터를 주는지 미확인이라 spike가 선행이다** — 저장소에 관련 코드가 0건이다 | 5 | 없음 |
+| 6 | [6-analyst.md](6-analyst.md) | `stock_analyst_opinion` 테이블과 리비전, `collectors/kis_analyst_opinion.py`, `dags/kis_analyst_opinion_daily.py`, `analyst_opinions` 툴, `SourceKind.research`와 네이버 리서치 출처 여섯(`document_listings.py`의 `enrich` 단계), 테스트 | 5 | 없음(리포트는 기존 문서 평가가 읽는다) |
 
 **5단계는 1단계의 `thesis` 채점 컬럼을 `thesis_outcome`으로 옮긴다.** 채택했으므로
 (2026-08-21) 그 이동을 1·2단계 코드에 먼저 반영한다. 무엇이 바뀌는지는

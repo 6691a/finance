@@ -12,14 +12,16 @@
 
 ## 1. ThesisToolbox
 
-DB 연결과 **기준 시각 `as_of_at`**을 들고 읽기 전용 툴 12개를 실행한다.
+DB 연결과 **기준 시각 `as_of_at`**을 들고 읽기 전용 툴 13개를 실행한다.
+**툴 수가 tool call 상한(`MAX_TOOL_CALLS` 12)을 넘었다** — 모델이 툴마다 한 번씩도 못 부른다.
+상한에 붙는 실행이 보이면 그 숫자부터 올린다([TUNING.md](TUNING.md) 5절).
 
 툴은 **근거를 만드는 것과 문맥만 주는 것**으로 갈린다. 근거 툴의 결과 항목에는 `ref`가 붙고
 `ref → (kind, title, url, detail)` 레지스트리에 등록된다. 이 레지스트리가 답변 검증과
 `thesis_evidence` 저장의 원본이다. 문맥 툴은 레지스트리에 넣지 않는다 — **시장 상태는 인용할
 "출처"가 아니라 관측이다.** 넣으면 근거 표에 "코스피 상승 종목 수"가 실린다.
 
-### 근거를 만드는 툴 셋
+### 근거를 만드는 툴 넷
 
 | 툴 | 반환 | SQL |
 | --- | --- | --- |
@@ -28,11 +30,12 @@ DB 연결과 **기준 시각 `as_of_at`**을 들고 읽기 전용 툴 12개를 �
 | `macro_changes()` | 분석 창의 지수·선물·환율 변화(첫봉 대비 마지막봉) | `quote_bar/select_window_changes.sql`(뷰는 읽기 전용 — 조회만) |
 | `us_market_close()` | 밤사이 미국장 마감 종가와 **전일 종가 대비** 등락 | `quote_bar/select_thesis_us_close.sql`(뷰는 읽기 전용 — 조회만) |
 
-### 문맥만 주는 툴 여덟
+### 문맥만 주는 툴 아홉
 
 `past_theses`를 뺀 일곱은 2026-08-21에 열었다. 그전까지 모델이 볼 수 있는 것은 문서·공시·분봉
 창 변화뿐이어서 **수집 중인 것의 대부분이 보이지 않았다** — 특히 `indicator_observation`에
 9개국 국채 곡선이 쌓여 있는데 금리를 못 보면서 "왜 움직였나"를 묻고 있었다.
+`analyst_opinions`는 6단계(2026-08-22, [6-analyst.md](6-analyst.md))가 열었다.
 
 | 툴 | 반환 | SQL |
 | --- | --- | --- |
@@ -44,6 +47,7 @@ DB 연결과 **기준 시각 `as_of_at`**을 들고 읽기 전용 툴 12개를 �
 | `market_funds(days)` | 고객예탁금·신용융자·미수금 추이 | `krx_market_funds_daily/select_thesis_recent.sql` |
 | `daily_history(symbol, days)` | 심볼 하나의 일봉 추세 | `quote_daily/select_thesis_history.sql`, `select_thesis_symbols.sql` |
 | `short_and_credit()` | 공매도 수량·비중, 대차 잔고, 신용융자 잔고 | `krx_stock_short_sale_daily/select_thesis_latest.sql` |
+| `analyst_opinions(ticker)` | 추적 종목 하나의 증권사별 투자의견·목표주가·직전 의견과 그 사유(같은 날 리포트 요약) | `stock_analyst_opinion/select_thesis_recent.sql` |
 
 - **`us_market_close`는 `macro_changes`와 비교 대상이 다르다.** 저쪽은 분석 창의 첫 봉 대비이고
   이쪽은 봉이 들고 온 `previous_close`(전일 정규장 종가) 대비다. KIS 해외지수 현물은 마감 직전
@@ -61,6 +65,11 @@ DB 연결과 **기준 시각 `as_of_at`**을 들고 읽기 전용 툴 12개를 �
 - **`daily_history`는 0행이면 쓸 수 있는 심볼을 함께 준다.** `quote_daily`에 KOSPI·KOSDAQ
   일봉이 없다 — 국내 지수는 분봉만 수집한다. 빈 배열만 주면 모델이 "이력이 없다"가 아니라
   "움직임이 없었다"로 읽는다.
+- **`analyst_opinions`는 당일 행을 빼지 않는다.** 투자의견은 아침에 발표되는 당일 사건이
+  정상값이다. 추적 목록 밖 종목은 `past_theses`의 `subject_code`처럼 거절한다. KIS가 사유를
+  안 주므로 같은 날 같은 증권사 리포트 요약을 `reason`으로 붙인다(못 찾으면 칸이 없다).
+  인용할 `ref`가 붙은 리포트 전문은 이 툴이 아니라 `recent_documents`의 `naver_research_*`
+  문서에 있다(6단계).
 - 열지 않은 것: `earnings_fact`(6행뿐이라 지금 열면 빈 결과만 준다), `market_session`
   (관측 상태가 이미 세션 날짜를 준다).
 

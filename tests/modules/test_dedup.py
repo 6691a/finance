@@ -79,7 +79,9 @@ class TestTitlesDuplicate:
         assert titles_duplicate(a, b)
 
     def test_summary_tagged_reissues_are_duplicates(self):
-        assert titles_duplicate("통상 사령탑 여한구 산업부 통상교섭본부장 경질", "통상 사령탑 여한구 산업부 통상교섭본부장 경질(종합)")
+        assert titles_duplicate(
+            "통상 사령탑 여한구 산업부 통상교섭본부장 경질", "통상 사령탑 여한구 산업부 통상교섭본부장 경질(종합)"
+        )
 
     def test_identical_short_titles_are_still_duplicates(self):
         assert titles_duplicate("Virginia", "Virginia")
@@ -107,10 +109,26 @@ class TestTitlesDuplicate:
             "Federal Reserve Board announces approval of the application by FS Bancorp, Inc.",
         )
 
+    def test_two_brokers_reports_with_the_same_title_are_different_documents(self):
+        # 네이버 리서치는 증권사를 제목 끝에 낱말로 붙인다. 같은 날(둘 다 KST 자정) 두 증권사가
+        # 같은 제목을 내도 그 낱말이 양쪽에 하나씩 남아 다른 문서로 판정된다.
+        # 대괄호 말머리(`[대신증권]`)로 붙였다면 벗겨져서 중복으로 묶였을 것이다.
+        assert not titles_duplicate(
+            "삼성전자: 3Q26 프리뷰, HBM 출하 정상화 - 대신증권",
+            "삼성전자: 3Q26 프리뷰, HBM 출하 정상화 - 키움증권",
+        )
+        assert titles_duplicate(
+            "[대신증권] 삼성전자: 3Q26 프리뷰, HBM 출하 정상화",
+            "[키움증권] 삼성전자: 3Q26 프리뷰, HBM 출하 정상화",
+        )
+
     def test_extra_words_on_one_side_only_stay_duplicates(self):
         # 스텁 제목은 본기사 제목의 부분집합인 경우가 대부분이다. 한쪽에만 낱말이 더 있는
         # 것은 중복이다.
-        assert titles_duplicate("최근 코스피 꾸준한 반등에도…거래대금·거래량 연중 최저수준", "최근 코스피 반등에도…거래대금·거래량 연중 최저수준(종합)")
+        assert titles_duplicate(
+            "최근 코스피 꾸준한 반등에도…거래대금·거래량 연중 최저수준",
+            "최근 코스피 반등에도…거래대금·거래량 연중 최저수준(종합)",
+        )
 
 
 class TestResolveLinks:
@@ -132,7 +150,9 @@ class TestResolveLinks:
 
     def test_follows_the_candidate_link_to_its_root(self):
         # 후보가 이미 대표를 가리키면 그 root를 저장한다. 체인을 만들지 않는다.
-        linked = document(1, "[속보] 코스피 5~6%대 급락…매도 사이드카 발동", content_length=900, canonical_document_id=7)
+        linked = document(
+            1, "[속보] 코스피 5~6%대 급락…매도 사이드카 발동", content_length=900, canonical_document_id=7
+        )
         stub = document(2, "코스피 5~6%대 급락…매도 사이드카 발동", published_minutes=5, content_length=30)
         assert resolve_links(stub, (linked,)) == ((2, 7),)
 
@@ -140,7 +160,9 @@ class TestResolveLinks:
         # 1→2로 묶인 뒤 더 긴 3이 오면 2와 함께 1도 3으로 옮긴다. 남겨 두면 체인이 생긴다.
         stub = document(1, "[속보] 코스피 5~6%대 급락…매도 사이드카 발동", content_length=30, canonical_document_id=2)
         first = document(2, "코스피 5~6%대 급락…매도 사이드카 발동", published_minutes=10, content_length=400)
-        fuller = document(3, "코스피, 장초반 5~6%대 급락…매도 사이드카 발동(종합)", published_minutes=60, content_length=900)
+        fuller = document(
+            3, "코스피, 장초반 5~6%대 급락…매도 사이드카 발동(종합)", published_minutes=60, content_length=900
+        )
         assert resolve_links(fuller, (stub, first)) == ((1, 3), (2, 3))
 
     def test_does_not_rewire_a_member_linked_outside_the_pool(self):
@@ -196,7 +218,9 @@ class TestLinkDuplicates:
     def test_links_and_commits_per_document(self):
         stub = document(1, "[속보] 코스피 5~6%대 급락…매도 사이드카 발동", content_length=30)
         full = document(2, "코스피, 장초반 5~6%대 급락…매도 사이드카 발동", published_minutes=40, content_length=900)
-        pending_rows = [(full.id, full.source_slug, full.title, full.published_at, full.detected_at, full.content_length)]
+        pending_rows = [
+            (full.id, full.source_slug, full.title, full.published_at, full.detected_at, full.content_length)
+        ]
         connection = FakeConnection(results=[pending_rows, [row(stub)]])
 
         outcome = link_duplicates(connection)
@@ -209,7 +233,16 @@ class TestLinkDuplicates:
 
     def test_does_not_commit_without_a_link(self):
         pending = document(1, "코스피 5~6%대 급락…매도 사이드카 발동")
-        pending_rows = [(pending.id, pending.source_slug, pending.title, pending.published_at, pending.detected_at, pending.content_length)]
+        pending_rows = [
+            (
+                pending.id,
+                pending.source_slug,
+                pending.title,
+                pending.published_at,
+                pending.detected_at,
+                pending.content_length,
+            )
+        ]
         connection = FakeConnection(results=[pending_rows, []])
 
         outcome = link_duplicates(connection)
@@ -220,7 +253,16 @@ class TestLinkDuplicates:
 
     def test_passes_the_anchor_and_source_to_the_candidate_query(self):
         pending = document(1, "코스피 5~6%대 급락…매도 사이드카 발동")
-        pending_rows = [(pending.id, pending.source_slug, pending.title, pending.published_at, pending.detected_at, pending.content_length)]
+        pending_rows = [
+            (
+                pending.id,
+                pending.source_slug,
+                pending.title,
+                pending.published_at,
+                pending.detected_at,
+                pending.content_length,
+            )
+        ]
         connection = FakeConnection(results=[pending_rows, []])
 
         link_duplicates(connection)

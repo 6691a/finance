@@ -28,7 +28,7 @@ import json
 import logging
 import re
 from collections.abc import Sequence
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 from email.utils import parsedate_to_datetime
 from typing import Any, Protocol, Self
 from urllib.parse import urljoin
@@ -59,6 +59,9 @@ ATOM = "{http://www.w3.org/2005/Atom}"
 # `2026-08-19 17:01:32` 형태의 naive KST를 준다. 제공처가 시간대 기준을 정하면 그
 # 기준을 따른다는 수집기 규칙 그대로다. 여기 없는 출처의 naive 시각은 계속 버린다.
 NAIVE_FEED_TIMEZONES: dict[str, ZoneInfo] = {"einfomax": ZoneInfo("Asia/Seoul")}
+
+# 날짜만 고시하는 출처가 그 날짜를 정한 시간대. `kst_midnight_utc`가 쓴다.
+KST = ZoneInfo("Asia/Seoul")
 
 # guid가 발표 한 건이 아니라 시계열을 가리키는 피드. Census 경제지표 브리핑룸은 매달 같은
 # guid(`housing_starts`)로 새 발표를 싣는다. 그대로 두면 `(source_slug, external_id)` 자연키가
@@ -139,12 +142,16 @@ class FeedSource(BaseModel):
 
     @property
     def document_type(self) -> str:
-        """공식기관은 보도자료, 언론은 기사로 둔다.
+        """공식기관은 보도자료, 증권사 리서치는 보고서, 언론은 기사로 둔다.
 
-        피드가 종류를 알려 주지 않아 출처 종류로 정한다. 연설문·보고서를 갈라야 할 만큼
-        쌓이면 그때 출처별 규칙을 붙인다.
+        피드가 종류를 알려 주지 않아 출처 종류로 정한다. 연설문을 갈라야 할 만큼 쌓이면
+        그때 출처별 규칙을 붙인다.
         """
-        return "press_release" if self.source_kind == "official" else "article"
+        if self.source_kind == "official":
+            return "press_release"
+        if self.source_kind == "research":
+            return "report"
+        return "article"
 
 
 class FeedItem(BaseModel):
@@ -157,6 +164,9 @@ class FeedItem(BaseModel):
     title: str
     summary: str | None
     published_at: AwareDatetime | None
+    # 목록이 종목을 알려 주는 출처만 채운다(네이버 종목분석). 저장하지 않고 수집 단계의
+    # 필터에만 쓴다 — 종목 태그의 원본은 LLM 평가가 만드는 `document_instrument`다.
+    stock_code: str | None = None
 
     @field_validator("published_at")
     @classmethod
@@ -320,7 +330,9 @@ def parse_feed(
             or _text(entry.find(f"{ATOM}content"))
         )
         published = _published_at(
-            _text(entry.find("pubDate")) or _text(entry.find(f"{ATOM}published")) or _text(entry.find(f"{ATOM}updated")),
+            _text(entry.find("pubDate"))
+            or _text(entry.find(f"{ATOM}published"))
+            or _text(entry.find(f"{ATOM}updated")),
             naive_timezone,
         )
         if source_slug in SERIES_GUID_SOURCES and published is not None:
@@ -338,6 +350,31 @@ def parse_feed(
         )
 
     return tuple(items), truncated
+
+
+def kst_midnight_utc(day: date) -> datetime:
+    """제공처가 KST 기준으로 고시한 날짜를 aware UTC 시각으로 바꾼다.
+
+    발행 **날짜**만 주고 시각은 안 주는 출처가 여럿이다(KRX, 금감원, 네이버 리서치). 날짜의
+    기준 시간대는 제공처가 정한다는 수집기 규칙대로 KST 자정으로 읽는다 — 시각을 지어내는
+    것이 아니라 고시한 날짜를 그 날짜가 속한 시간대로 읽는 것이다.
+    """
+    return datetime(day.year, day.month, day.day, tzinfo=KST).astimezone(UTC)
+
+
+def fetch_url(slug: str, url: str) -> Any:
+    """GET 한 번. 목록·상세처럼 `feed_url`이 아닌 주소를 받을 때 쓴다.
+
+    `fetch_feed`와 같은 규약이다 — 연결 실패는 재시도 가능한 `ConnectionError`, 비2xx는
+    `DocumentHTTPError`. 응답 객체를 그대로 돌려주므로 `FeedResponse` 조립은 부르는 쪽이 한다.
+    """
+    try:
+        response = Fetcher.get(url, impersonate=IMPERSONATE, timeout=REQUEST_TIMEOUT_SECONDS)
+    except CurlError as error:
+        raise ConnectionError(f"Request failed for {slug}: {error}") from error
+    if not 200 <= response.status < 300:
+        raise DocumentHTTPError(response.status)
+    return response
 
 
 def fetch_feed(source: FeedSource) -> FeedResponse:
@@ -366,6 +403,8 @@ def fetch_feed(source: FeedSource) -> FeedResponse:
 SOURCE_RECORD_INSERT = read_sql("postgres", "source_record", "insert.sql")
 DOCUMENT_UPSERT = read_sql("postgres", "document", "upsert.sql")
 ENABLED_SOURCES = read_sql("postgres", "document_source", "select_enabled.sql")
+EXISTING_EXTERNAL_IDS = read_sql("postgres", "document", "select_existing_external_ids.sql")
+WATCHED_INSTRUMENTS = read_sql("postgres", "instrument", "select_watched.sql")
 
 
 def enabled_sources(connection: Connection) -> tuple[FeedSource, ...]:
@@ -385,6 +424,30 @@ def enabled_sources(connection: Connection) -> tuple[FeedSource, ...]:
         )
         for row in rows
     )
+
+
+def existing_external_ids(connection: Connection, slug: str, external_ids: Sequence[str]) -> frozenset[str]:
+    """이 출처에 이미 있는 `external_id`. 목록 수집이 상세 페이지를 새 항목에만 받을 때 쓴다.
+
+    기존 항목을 목록 정보로 다시 upsert하면 `content_hash`가 달라져 상세 요약이 지워지고
+    재평가가 돈다. 그래서 상세를 받는 출처는 기존 항목을 이번 실행에서 아예 뺀다.
+    """
+    if not external_ids:
+        return frozenset()
+    with connection.cursor() as cursor:
+        cursor.execute(EXISTING_EXTERNAL_IDS, (slug, list(external_ids)))
+        return frozenset(str(row[0]) for row in cursor.fetchall())
+
+
+def watched_tickers(connection: Connection) -> frozenset[str]:
+    """수집·분석 대상 종목 코드. 종목이 붙은 문서를 거를 때 쓴다.
+
+    추론 대상(`thesis.subjects`)·투자의견 수집과 같은 SQL이다. 추적 종목이 늘 때 수집기를
+    고치지 않는다.
+    """
+    with connection.cursor() as cursor:
+        cursor.execute(WATCHED_INSTRUMENTS)
+        return frozenset(str(row[0]) for row in cursor.fetchall())
 
 
 def store_documents(

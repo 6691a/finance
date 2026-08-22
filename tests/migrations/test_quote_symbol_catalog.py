@@ -1,6 +1,7 @@
 import pytest
 
 from modules.collectors.kis import DomesticFuture, DomesticIndex, DomesticStock
+from modules.collectors.kis_overseas_index import OverseasIndex
 from modules.collectors.yahoo import QuoteSymbol
 from tests.helpers import NO_REVISION_REASON, head_sql, revision_files
 
@@ -26,6 +27,9 @@ EXPECTED_INDEXES = {
     "HSI",
     "SSE_COMP",
     "RUSSELL2000",
+    # KIS 해외지수로 받는 미국 현물. 선물(SP500_FUT·NASDAQ100_FUT)과 짝이다.
+    "SP500",
+    "NASDAQ",
 }
 EXPECTED_FX = {"USDKRW", "USDJPY", "DXY", "USDCNH", "JPYKRW"}
 EXPECTED_RATES = {"US10Y"}
@@ -57,6 +61,7 @@ def collected_symbols() -> set[str]:
         | {future.value for future in DomesticFuture}
         | {index.value for index in DomesticIndex}
         | {stock.value for stock in DomesticStock}
+        | {index.value for index in OverseasIndex}
     )
 
 
@@ -131,6 +136,15 @@ def test_yield_and_bond_future_are_different_kinds():
     틀리므로 kind로 갈라 둔다.
     """
     assert EXPECTED_RATES & EXPECTED_BOND_FUTURES == set()
+
+
+@pytest.mark.parametrize("symbol", sorted(index.value for index in OverseasIndex))
+def test_us_spot_indexes_are_seeded_under_kis(symbol, capsys):
+    """브리핑·대시보드가 `(provider, symbol)`로 조인한다. 제공처가 yahoo로 잘못 들어가면 봉과 안 붙는다."""
+    sql = head_sql(capsys)
+
+    assert f"'kis', '{symbol}', 'index', 'US', '미국'" in sql
+    assert f"'yahoo', '{symbol}'" not in sql
 
 
 def test_every_kind_covers_every_collected_symbol():

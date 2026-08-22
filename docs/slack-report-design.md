@@ -265,7 +265,10 @@ FRED·yahoo 일봉)이 끝난 뒤가 08:00이다. 미국 휴장일은 `us_equity
 | 섹션 | 거르는 기준 | 내용 |
 | --- | --- | --- |
 | 헤더 | — | "미국장 마감" + 세션 날짜(뉴욕 기준) + 발송 시각(KST) |
-| 미국 지수·선물 | `country = 'US'` | 밤사이 마감 값과 등락. 여기서는 현물도 넣는다. 방금 닫힌 값이라 최신이다 |
+| 미국 지수·선물 | `country = 'US'` AND `kind IN ('index', 'index_future', 'bond_future')` | 밤사이 마감 값과 등락. `US_SYMBOL_ORDER`가 현물 옆에 그 선물을 놓는다(S&P500 → S&P500 선물 → 나스닥 종합 → 나스닥100 선물 …). S&P500·나스닥 종합 현물은 KIS 해외지수(`kis_overseas_index_close`, 07:30)가 마감 뒤 넣은 공식 종가다([개발 문서 4](kis-overseas-index-close.md)) |
+| 원자재 | `country = 'US'` AND `kind = 'commodity'` | 금·은·구리·WTI |
+| 크립토 | `kind = 'crypto'` | 비트코인·이더리움. country가 `XX`라 종류로 고른다 |
+| ADR | Yahoo `equity` | TSMC·SK하이닉스 ADR. 빈 섹션은 그리지 않는다(2026-08-22 분리 전에는 네 묶음이 표 하나였다) |
 | 주요국 10년 금리 | `kind = 'government_bond' AND maturity_months = 120` | 계열별 최근 2건을 pivot해 bp 델타. 미국 중심이지만 밤사이 갱신된 다른 나라도 함께 나온다. **제공처가 늘어도 마스터가 흡수하므로 쿼리를 안 고친다** |
 | 전일 국내 | `country = 'KR'` | 전일 코스피·선물 마감. 조합 요약의 입력이자 같은 화면에서 대조할 값이다 |
 | 수급 | — | 전일 마지막 스냅샷 |

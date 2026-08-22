@@ -1,6 +1,7 @@
 import json
 from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
+from itertools import pairwise
 from typing import Self
 
 import pytest
@@ -32,6 +33,9 @@ QUOTE_ROWS = [
     ("kis", "KOSPI200_FUT", "코스피200 선물", "index_future", "KR", Decimal("361.20"), Decimal("358.80"), MIDDAY),
     ("yahoo", "SP500_FUT", "S&P500 선물", "index_future", "US", Decimal("5621.50"), Decimal("5600.25"), MIDDAY),
     ("yahoo", "SOX", "필라델피아 반도체 지수", "index", "US", Decimal("5310.00"), Decimal("5200.00"), MIDDAY),
+    # KIS 해외지수로 받는 미국 현물. 선물(SP500_FUT) 옆에 놓여야 한다.
+    ("kis", "SP500", "S&P500", "index", "US", Decimal("7674.37"), Decimal("7641.16"), MIDDAY),
+    ("yahoo", "GOLD", "금", "commodity", "US", Decimal("3380.50"), Decimal("3350.00"), MIDDAY),
     ("yahoo", "NIKKEI225", "닛케이225", "index", "JP", Decimal(38000), Decimal(38100), MIDDAY),
     ("yahoo", "BTCUSD", "비트코인", "crypto", "XX", Decimal(118000), Decimal(115000), MIDDAY),
     ("yahoo", "USDKRW", "원/달러(장외)", "fx", "KR", Decimal("1391.20"), Decimal("1388.60"), MIDDAY),
@@ -126,8 +130,6 @@ class FakeConnection:
         return cursor
 
 
-
-
 def summary(now: datetime = MIDDAY):
     connection = FakeConnection(
         QUOTE_ROWS,
@@ -174,7 +176,15 @@ def test_every_row_carries_its_own_as_of_time():
             ("kis", "KOSPI", "코스피", "index", "KR", Decimal("2687.45"), Decimal("2665.60"), stale),
             ("kis", "KOSDAQ", "코스닥", "index", "KR", Decimal("745.10"), Decimal("747.42"), MIDDAY),
         ],
-        [], [], [], [], [], [], [], [], [],
+        [],
+        [],
+        [],
+        [],
+        [],
+        [],
+        [],
+        [],
+        [],
     )
     blocks_out = market.render_blocks(market.collect_summary(connection, MIDDAY), MarketScope.KOREA)
     table = next(block for block in blocks_out if block["type"] == "table")
@@ -197,7 +207,14 @@ def test_nxt_bars_are_labeled_so_they_do_not_read_as_krx_closes():
             ("kis", "005930", "삼성전자", "equity", "KR", Decimal(268500), Decimal(266000), after_hours, "NXT"),
             ("kis", "000660", "SK하이닉스", "equity", "KR", Decimal(298000), Decimal(295500), after_hours, "KRX"),
         ],
-        [], [], [], [], [], [], [], [],
+        [],
+        [],
+        [],
+        [],
+        [],
+        [],
+        [],
+        [],
     )
     result = market.collect_summary(connection, after_hours)
     table = next(block for block in market.render_blocks(result, MarketScope.KOREA) if block["type"] == "table")
@@ -215,9 +232,7 @@ def test_tables_without_exchange_rows_do_not_grow_an_exchange_column():
     blocks_out = market.render_blocks(summary(), MarketScope.KOREA)
     tables = [block for block in blocks_out if block["type"] == "table"]
     overseas = next(
-        table
-        for table in tables
-        if any(cell["text"] == "S&P500 선물" for row in table["rows"] for cell in row)
+        table for table in tables if any(cell["text"] == "S&P500 선물" for row in table["rows"] for cell in row)
     )
 
     assert [cell["text"] for cell in overseas["rows"][0]] == ["구분", "종가", "등락", "기준"]
@@ -263,14 +278,6 @@ def test_us_report_shows_overseas_rates_and_the_korean_recap():
     assert "미국 10년물" in text
     # 조합 평가를 읽는 사람이 같은 화면에서 전일 한국장을 봐야 한다.
     assert "코스피" in text
-
-
-
-
-
-
-
-
 
 
 def test_preopen_report_shows_premarket_stocks_and_skips_us_briefing_sections():
@@ -391,13 +398,66 @@ def test_the_korea_report_draws_the_realtime_fx_table():
     assert "원/달러(장외)" in korea
 
 
-def test_us_rows_are_grouped_by_kind():
-    """정렬 없이 두면 SQL이 심볼 이름순으로 줘서 금·나스닥·비트코인이 섞인다."""
-    kinds = [quote.kind for quote in market._us_quotes(summary())]
+def _us_tables(result) -> list[tuple[str, list[str]]]:
+    """미국장 리포트의 (표 제목, 첫 열) 목록. 제목 section 바로 뒤에 table이 온다."""
+    rendered = market.render_blocks(result, MarketScope.US)
+    tables = []
+    for title_block, table in pairwise(rendered):
+        if table.get("type") == "table":
+            title = title_block["text"]["text"].strip("*")
+            tables.append((title, [row[0]["text"] for row in table["rows"][1:]]))
+    return tables
 
-    assert kinds == sorted(kinds, key=market.US_KIND_ORDER.index)
-    # 픽스처의 SOX, SP500_FUT, BTCUSD, ADR 두 개 순서
-    assert kinds == ["index", "index_future", "crypto", "equity", "equity"]
+
+def test_us_report_splits_sections_by_kind_and_pairs_spot_with_its_future():
+    """한 표에 두면 금·나스닥·비트코인이 한 덩어리로 보인다. 현물 옆에는 그 선물이 온다."""
+    tables = dict(_us_tables(summary(MORNING)))
+
+    assert [title for title, _ in _us_tables(summary(MORNING))][:4] == ["미국 지수·선물", "원자재", "크립토", "ADR"]
+    assert tables["미국 지수·선물"] == ["S&P500", "S&P500 선물", "필라델피아 반도체 지수"]
+    assert tables["원자재"] == ["금"]
+    assert tables["크립토"] == ["비트코인"]
+    assert tables["ADR"] == ["TSMC ADR", "SK하이닉스 ADR"]
+
+
+def test_empty_us_sections_are_not_drawn():
+    connection = FakeConnection(
+        [row for row in QUOTE_ROWS if row[3] not in ("commodity", "crypto")],
+        DOMESTIC_STOCK_ROWS,
+        *([[]] * 8),
+    )
+    result = market.collect_summary(connection, MORNING)
+
+    titles = [title for title, _ in _us_tables(result)]
+    assert "미국 지수·선물" in titles
+    assert "원자재" not in titles
+    assert "크립토" not in titles
+
+
+def test_us_sections_cover_every_quoted_kind():
+    """섹션에 빠진 kind는 조용히 사라진다. QUOTED_KINDS를 늘리면 섹션도 늘려야 한다."""
+    assert frozenset().union(*(kinds for _, kinds in market.US_SECTIONS)) == market.QUOTED_KINDS
+
+
+def test_us_fallback_text_leads_with_the_spot_index_and_its_future():
+    text = market.render_text(summary(MORNING), MarketScope.US)
+
+    assert text.startswith("미국장 마감 · S&P500 7,674.37 ")
+    assert " · S&P500 선물 " in text
+
+
+def test_kis_us_spot_indexes_stay_out_of_the_korean_reports():
+    """미국 현물은 한국장 시간에 닫혀 있다. 부분일치로 보면 `S&P500 선물`에 가려지므로 셀로 본다."""
+    for scope in (MarketScope.KOREA, MarketScope.KOREA_PREOPEN):
+        cells = [
+            cell["text"]
+            for block in market.render_blocks(summary(), scope)
+            if block.get("type") == "table"
+            for row in block["rows"]
+            for cell in row
+        ]
+        assert "S&P500" not in cells
+        assert scope is MarketScope.KOREA_PREOPEN or "S&P500 선물" in cells
 
 
 def test_us_listed_adrs_are_drawn_in_the_us_table_only():
@@ -448,7 +508,10 @@ def test_every_table_ends_with_a_reference_stamp():
 def test_short_sale_and_lending_share_one_table():
     rendered = market.render_blocks(summary(), MarketScope.KOREA)
     table = next(
-        block for block in rendered if block["type"] == "table" and block["rows"][0][0]["text"] == "종목"
+        block
+        for block in rendered
+        if block["type"] == "table"
+        and block["rows"][0][0]["text"] == "종목"
         and block["rows"][0][1]["text"] == "공매도 비중"
     )
     rows = [[cell["text"] for cell in row] for row in table["rows"][1:]]
@@ -547,14 +610,16 @@ def test_stock_estimates_are_counted_in_shares_not_won():
     """종목 수급은 추정 **수량**이다. 억원인 시장 수급과 한 표에 섞으면 자릿수가 뜻을 잃는다."""
     rendered = market.render_blocks(summary(), MarketScope.KOREA)
     titles = [block["text"]["text"] for block in rendered if block["type"] == "section"]
-    table = next(
-        block for block in rendered if block["type"] == "table" and block["rows"][0][0]["text"] == "종목"
-    )
+    table = next(block for block in rendered if block["type"] == "table" and block["rows"][0][0]["text"] == "종목")
 
     assert "*종목 추정 순매수(주)*" in titles
     # 기준은 수집 시각이다. 장중 몇 차례 갱신되는 추정이라 날짜만으로는 아침 값과 마감 값이 같아 보인다.
     assert [cell["text"] for cell in table["rows"][1]] == [
-        "삼성전자", "+1,971,000", "-648,000", "+1,323,000", "08/18 12:30",
+        "삼성전자",
+        "+1,971,000",
+        "-648,000",
+        "+1,323,000",
+        "08/18 12:30",
     ]
 
 

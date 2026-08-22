@@ -12,7 +12,7 @@
 
 ## 1. ThesisToolbox
 
-DB 연결과 **기준 시각 `as_of_at`**을 들고 읽기 전용 툴 11개를 실행한다.
+DB 연결과 **기준 시각 `as_of_at`**을 들고 읽기 전용 툴 12개를 실행한다.
 
 툴은 **근거를 만드는 것과 문맥만 주는 것**으로 갈린다. 근거 툴의 결과 항목에는 `ref`가 붙고
 `ref → (kind, title, url, detail)` 레지스트리에 등록된다. 이 레지스트리가 답변 검증과
@@ -26,6 +26,7 @@ DB 연결과 **기준 시각 `as_of_at`**을 들고 읽기 전용 툴 11개를 �
 | `recent_documents(hours, min_score)` | value_score 상위 문서(제목·URL·발행시각·점수·방향·티커·`new_facts`·`reason`) | `document/select_recent_top.sql` |
 | `recent_disclosures(hours)` | 추적 종목 공시(회사·제목·URL·감지 시각) | `disclosure_event/select_recent.sql` |
 | `macro_changes()` | 분석 창의 지수·선물·환율 변화(첫봉 대비 마지막봉) | `quote_bar/select_window_changes.sql`(뷰는 읽기 전용 — 조회만) |
+| `us_market_close()` | 밤사이 미국장 마감 종가와 **전일 종가 대비** 등락 | `quote_bar/select_thesis_us_close.sql`(뷰는 읽기 전용 — 조회만) |
 
 ### 문맥만 주는 툴 여덟
 
@@ -44,6 +45,12 @@ DB 연결과 **기준 시각 `as_of_at`**을 들고 읽기 전용 툴 11개를 �
 | `daily_history(symbol, days)` | 심볼 하나의 일봉 추세 | `quote_daily/select_thesis_history.sql`, `select_thesis_symbols.sql` |
 | `short_and_credit()` | 공매도 수량·비중, 대차 잔고, 신용융자 잔고 | `krx_stock_short_sale_daily/select_thesis_latest.sql` |
 
+- **`us_market_close`는 `macro_changes`와 비교 대상이 다르다.** 저쪽은 분석 창의 첫 봉 대비이고
+  이쪽은 봉이 들고 온 `previous_close`(전일 정규장 종가) 대비다. KIS 해외지수 현물은 마감 직전
+  두 시간만 쌓여서(`kis_overseas_index_close`) 창 변화로는 밤사이 등락이 거의 0으로 보인다.
+  ref도 갈라 둔다 — 같은 심볼이 `macro_change:SP500_FUT`(창 변화)와
+  `macro_change:SP500_FUT@close`(마감)로 따로 등록된다. 겹치면 나중에 부른 툴이 앞의 근거를
+  조용히 덮는다. 장후 슬롯의 창은 당일 09:00부터라 이 툴은 빈 배열이고, 그 뜻을 툴 설명이 밝힌다.
 - **`macro_indicators`는 `kind`를 한 번에 하나만 본다.** 국채 금리(Percent)와 물가지수
   (Index 1982-1984=100)가 한 표에 섞이면 모델이 조용히 거짓을 읽는다. 금리 변화는 퍼센트가
   아니라 bp다(`BASIS_POINT_INDICATOR_KINDS`).

@@ -77,9 +77,29 @@ INDEX_FUTURE = "index_future"
 KOREA_SYMBOL_ORDER = ("KOSPI", "KOSPI200", "KOSPI200_FUT", "KOSDAQ", "KOSDAQ150_FUT")
 OVERSEAS_COUNTRY_ORDER = ("US", "JP", "CN", "HK", "TW")
 
-# 미국장 표의 줄 순서는 종류로 묶는다. 정렬 없이 두면 SQL이 심볼 이름순으로 줘서
-# 금·나스닥·비트코인이 섞인다. 같은 종류(원자재끼리, 크립토끼리)가 붙어야 비교가 된다.
-US_KIND_ORDER = ("index", "index_future", "bond_future", "commodity", "crypto", "equity")
+# 미국장 지수·선물 표의 줄 순서. 현물 옆에 그 선물을 놓는다. 목록에 없는 심볼은 뒤로 밀린다.
+US_SYMBOL_ORDER = (
+    "SP500",
+    "SP500_FUT",
+    "NASDAQ",
+    "NASDAQ100_FUT",
+    "DOW_FUT",
+    "RUSSELL2000",
+    "RUSSELL2000_FUT",
+    "SOX",
+    "VIX",
+    "US10Y_FUT",
+)
+
+# 미국장 리포트의 시세 표. (제목, 그 표에 넣는 kind). 한 표에 섞어 두면 금·나스닥·비트코인이
+# 한 덩어리로 보여서(2026-08-22 전) 표를 종류별로 가른다. 빈 표는 그리지 않는다.
+# kind의 합집합은 QUOTED_KINDS와 같아야 한다 — 테스트가 대조한다.
+US_SECTIONS = (
+    ("미국 지수·선물", frozenset({"index", "index_future", "bond_future"})),
+    ("원자재", frozenset({"commodity"})),
+    ("크립토", frozenset({"crypto"})),
+    ("ADR", frozenset({"equity"})),
+)
 
 # 장중 차트에 그리는 심볼. 이 순서가 이미지 순서다. 해외를 붙일 때도 이 목록만 늘린다.
 # 지수·환율은 quote_bar 뷰로, DOMESTIC_STOCK_CHART_SYMBOLS에 있는 국내 종목은 NXT까지
@@ -370,8 +390,7 @@ def collect_summary(connection: Connection, now: datetime) -> MarketSummary:
     )
     # 뷰가 준 국내 종목 행(KRX만)을 버리고 stock_bar 직접 조회(NXT 포함)로 바꾼다.
     quotes = (
-        tuple(quote for quote in quotes if not (quote.provider == "kis" and quote.kind == "equity"))
-        + domestic_stocks
+        tuple(quote for quote in quotes if not (quote.provider == "kis" and quote.kind == "equity")) + domestic_stocks
     )
     rates = _fetch(
         connection,
@@ -638,7 +657,7 @@ def render_blocks(
         session = us_session_date(summary.generated_at)
         rendered = [
             blocks.header(f"🌙 미국장 마감 · {session:%m/%d}(현지) · {blocks.timestamp(local)}"),
-            *_quote_section("미국 지수·선물", _us_quotes(summary)),
+            *[block for title, quotes in _us_quote_sections(summary) for block in _quote_section(title, quotes)],
             *_rate_section(summary),
             *_rate_spread_section(summary),
             *_quote_section("전일 국내", _korea_quotes(summary)),
@@ -700,18 +719,33 @@ def _korea_quotes(summary: MarketSummary) -> tuple[QuoteChange, ...]:
     )
 
 
-def _us_quotes(summary: MarketSummary) -> tuple[QuoteChange, ...]:
-    """미국 심볼·크립토·미국 상장 ADR. 크립토는 country가 `XX`(나라 없음)라 종류로 넣는다."""
-    return _ordered(
+def _us_quote_sections(summary: MarketSummary) -> tuple[tuple[str, tuple[QuoteChange, ...]], ...]:
+    """미국장 리포트의 시세 표들. `US_SECTIONS` 순서로 (제목, 줄)을 돌려준다.
+
+    미국 심볼·크립토·미국 상장 ADR이 대상이다. 크립토는 country가 `XX`(나라 없음)라 종류로
+    넣는다. 지수·선물 표만 `US_SYMBOL_ORDER`로 줄을 세우고 나머지는 SQL 순서(심볼 이름순)다.
+    """
+    candidates = [
+        quote
+        for quote in summary.quotes
+        if quote.kind in QUOTED_KINDS and (quote.country == "US" or quote.kind == "crypto" or _us_listed_adr(quote))
+    ]
+    return tuple(
         (
-            quote
-            for quote in summary.quotes
-            if quote.kind in QUOTED_KINDS
-            and (quote.country == "US" or quote.kind == "crypto" or _us_listed_adr(quote))
-        ),
-        lambda quote: quote.kind,
-        US_KIND_ORDER,
+            title,
+            _ordered(
+                (quote for quote in candidates if quote.kind in kinds),
+                lambda quote: quote.symbol,
+                US_SYMBOL_ORDER,
+            ),
+        )
+        for title, kinds in US_SECTIONS
     )
+
+
+def _us_quotes(summary: MarketSummary) -> tuple[QuoteChange, ...]:
+    """미국장 표 전부를 표 순서대로 편 것. 미리보기 한 줄과 footer가 이걸 본다."""
+    return tuple(quote for _title, quotes in _us_quote_sections(summary) for quote in quotes)
 
 
 def _intraday_overseas(summary: MarketSummary) -> tuple[QuoteChange, ...]:

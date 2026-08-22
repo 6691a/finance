@@ -29,8 +29,12 @@ SELECT
         WHERE due.run_slot = 'pre_open'
           AND outcome.evaluated_at IS NULL
     ) AS ungraded,
+    -- 슬롯 목록은 `select_pending_narratives.sql`과 **같아야 한다.** 해설을 만들지 않는
+    -- 슬롯(post_nxt_close)이 여기 남으면 목표일이 지난 뒤 영영 밀림으로 잡혀 이 숫자가
+    -- 매일 자라고, 위 머리말이 경고한 "아무도 안 보게 된다"가 그대로 일어난다.
     count(*) FILTER (
         WHERE due.horizon_days <> 0
+          AND due.run_slot IN ('pre_open', 'post_close')
           AND outcome.narrative IS NULL
     ) AS unnarrated
 FROM due

@@ -41,8 +41,25 @@ def test_thesis_constrains_the_closed_value_sets(capsys):
     statement = _table_statement(head_sql(capsys), "thesis")
 
     # PostgreSQL native enum을 쓰지 않는 대신 CHECK로 막는다(프로젝트 규칙).
-    assert "run_slot IN ('pre_open', 'post_close')" in statement
+    # 슬롯은 CREATE 뒤에 ALTER로 늘어나므로 여기서는 세지 않는다 — 아래 테스트가 본다.
+    assert "run_slot IN (" in statement
     assert "subject_kind IN ('index', 'stock')" in statement
+
+
+def test_the_slot_axis_ends_with_all_three_slots(capsys):
+    """슬롯은 CREATE TABLE 뒤에 ALTER로 늘어난다. 그래서 dump 전체를 본다.
+
+    `_table_statement`는 `CREATE TABLE thesis` 한 문장만 잘라 오므로 나중에 붙은 값을
+    보지 못한다. 마지막에 남는 값 집합이 무엇인지가 이 테스트의 대상이다.
+    """
+    sql = head_sql(capsys)
+
+    assert "CHECK (run_slot IN ('pre_open', 'post_close', 'post_nxt_close'))" in sql
+    # 옛 집합을 만드는 CREATE가 먼저 오고 ALTER가 그것을 갈아 끼운다. 순서가 뒤집히면
+    # 운영 DB에 옛 집합이 남는다.
+    assert sql.index("run_slot IN ('pre_open', 'post_close')") < sql.index(
+        "run_slot IN ('pre_open', 'post_close', 'post_nxt_close')"
+    )
 
 
 def test_thesis_constrains_the_three_probabilities(capsys):

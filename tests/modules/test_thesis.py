@@ -68,6 +68,8 @@ TOOL_DISCLOSURES = read_sql("postgres", "disclosure_event", "select_recent.sql")
 TOOL_WINDOW_CHANGES = read_sql("postgres", "quote_bar", "select_window_changes.sql")
 PAST_THESES = read_sql("postgres", "thesis", "select_past_with_outcomes.sql")
 PENDING_NARRATIVES = read_sql("postgres", "thesis_outcome", "select_pending_narratives.sql")
+THESIS_BACKLOG = read_sql("postgres", "thesis_outcome", "select_backlog.sql")
+NXT_AFTER_HOURS = read_sql("postgres", "stock_bar", "select_nxt_after_hours.sql")
 INSERT_NARRATIVE = read_sql("postgres", "thesis_outcome", "insert_narrative.sql")
 
 
@@ -406,6 +408,7 @@ def test_index_session_return_takes_its_bar_time_as_a_parameter():
         INDEX_SESSION_RETURN,
         STOCK_HORIZON_RETURN,
         INDEX_HORIZON_RETURN,
+        NXT_AFTER_HOURS,
     ],
 )
 def test_lookups_never_read_the_wall_clock(statement):
@@ -1704,6 +1707,52 @@ def test_pending_narratives_covers_both_slots():
     assert "LEFT JOIN thesis_outcome" in query
     assert "outcome.narrative IS NULL" in query
     assert "run_slot = 'pre_open'" not in query
+
+
+def test_the_after_hours_query_isolates_the_nxt_evening():
+    """NXT는 프리·주간도 체결한다. 거래소만 걸면 하루 전체가 섞인다."""
+    query = body(NXT_AFTER_HOURS)
+
+    assert "bar.exchange = 'NXT'" in query
+    # 창의 양 끝이 파라미터다. KST 경계 계산은 파이썬이 한다.
+    assert "bar.bar_at >= bounds.window_start" in query
+    assert "bar.bar_at <= bounds.window_end" in query
+
+
+def test_the_after_hours_return_is_measured_from_the_settled_close():
+    """분모가 `previous_close`면 전일 대비가 된다 — 애프터 등락이 하루 등락으로 부풀려진다."""
+    query = body(NXT_AFTER_HOURS)
+
+    assert "settled.close_price" in query
+    assert "LEFT JOIN stock_investor_trade_daily AS settled" in query
+    assert "previous_close" not in query
+    # 확정 종가가 없으면 0으로 꾸미지 않고 NULL로 둔다.
+    assert "WHEN settled.close_price IS NULL OR settled.close_price = 0 THEN NULL" in query
+
+
+def test_the_after_hours_query_reports_its_own_completeness():
+    """봉 수와 확정 여부가 readiness guard의 판정 둘을 만든다."""
+    query = body(NXT_AFTER_HOURS)
+
+    assert "bar_count" in query
+    assert "bool_and(bar.is_final)" in query
+
+
+def test_narratives_and_backlog_watch_the_same_slots():
+    """해설을 만드는 슬롯과 밀림을 세는 슬롯이 같아야 한다.
+
+    어긋나면 한쪽은 해설을 안 만들고 다른 쪽은 그것을 밀림으로 세서, ops 브리핑의
+    `unnarrated`가 영영 줄지 않는 거짓 경보가 된다. 슬롯이 또 늘 때 이 테스트가 먼저 깨진다.
+    """
+    narratives = body(PENDING_NARRATIVES)
+    backlog = body(THESIS_BACKLOG)
+    narrated_slots = "IN ('pre_open', 'post_close')"
+
+    assert narrated_slots in narratives
+    assert narrated_slots in backlog
+    # NXT 애프터마켓 리뷰는 아직 해설 루프 밖이다(`docs/market-thesis/7-nxt-review.md` 3절).
+    assert "post_nxt_close" not in narratives
+    assert "post_nxt_close" not in backlog
 
 
 def test_the_narrative_write_never_overwrites():

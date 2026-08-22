@@ -62,9 +62,13 @@ REQUEST_TIMEOUT_SECONDS = 300.0
 # 쓰는 일이라 문서 한 건을 태깅하는 것보다 길다. 2026-08-21 운영 첫 실행이 300초에서
 # `APITimeoutError`로 죽었다. 노트북(`narrator_ab.ipynb`)은 이미 900을 쓰고 있었다.
 #
+# **1800은 관측이 아니라 예방이다**(2026-08-22). 900에서 죽은 실행은 아직 없고, 툴이 11개로
+# 늘면서 왕복이 길어질 것을 보고 미리 올렸다. 되돌릴 후보라는 사실을 손잡이 장부에 남겼다
+# (`docs/market-thesis/TUNING.md` 6절 이력). 실제 소요 분포가 쌓이면 다시 정한다.
+#
 # **문서 태깅의 300초를 같이 올리지 않는다.** 그쪽은 지금 값으로 잘 돌고 있고, 한 번에
 # 손잡이 하나만 당긴다(`docs/market-thesis/TUNING.md` 1절).
-THESIS_TIMEOUT_SECONDS = 900.0
+THESIS_TIMEOUT_SECONDS = 1800.0
 
 
 class LlmError(RuntimeError):

@@ -69,7 +69,7 @@ thesis_outcome (                   -- 추론 하나의 한 지평 = 채점 + (�
     actual_outcome      NULL               -- CHECK ('up','down','flat'). ThesisDirection 재사용
     brier_score         numeric(6,5) NULL  -- 원 추론의 세 확률을 이 지평 결과로 채점. CHECK 0~2
 
-    -- 사후 해설. LLM. horizon_days = 0 이면 항상 NULL. **두 슬롯 모두**
+    -- 사후 해설. LLM. horizon_days = 0 이면 항상 NULL. **pre_open·post_close 둘 다**
     narrative       text NULL         -- "왜 그렇게 움직였나"(한국어, 상한 1000자)
     verdict         NULL              -- CHECK ('supported','contradicted','unresolved').
                                       -- 원 추론의 **이유**가 이후 보도로 지지됐나
@@ -169,10 +169,17 @@ select_pending_grades.sql  →  T+N 등락률 조회  →  classify_outcome / br
 
 `post_close` 슬롯 실행에서 돈다. `grade_followups` 뒤에 붙는다.
 
-- **대상은 두 슬롯 모두다**(2026-08-21 변경). 채점(3절)은 `pre_open`만이지만 해설은
+- **대상은 `pre_open`과 `post_close` 둘이다**(2026-08-21 변경). 채점(3절)은 `pre_open`만이지만 해설은
   `post_close` 리뷰에도 붙인다. 장후 리뷰는 "오늘 이래서 움직였다"는 **인과 주장**이라
   며칠 뒤 보도로 검증할 값어치가 오히려 크다. `post_close` 대상은 채점 넷이 NULL인 채로
   `thesis_outcome` 행이 새로 생긴다(1절).
+- **`post_nxt_close`는 빠진다**(2026-08-22). NXT 애프터마켓 리뷰는 해설 루프에 아직 넣지
+  않았다 — 넣으려면 `NarrativeTarget`이 슬롯을 들고 슬롯마다 호출을 나눠야 한다
+  (`FollowupNarrator`의 프롬프트 첫 줄이 슬롯 하나를 전제한다). 그래서
+  `select_pending_narratives.sql`이 슬롯을 **열거한다**. **`select_backlog.sql`의
+  `unnarrated` FILTER가 같은 목록을 봐야 한다** — 어긋나면 해설을 안 만드는 슬롯이 영영
+  밀림으로 잡혀 ops 브리핑이 매일 거짓 경보를 낸다
+  ([7-nxt-review.md](7-nxt-review.md) 3절).
 - **지평마다 별도 LLM 호출이다.** T+1·T+3·T+5 각각 한 번, 하루 최대 3회 추가. 툴 조회의
   기준 시각 `as_of_at`이 지평마다 달라서 한 대화에 섞을 수 없다. **한 호출 안에서는 그
   지평의 모든 subject를 한 번에** 준다(건별 호출 금지 규칙 그대로).

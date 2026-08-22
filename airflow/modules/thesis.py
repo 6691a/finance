@@ -208,6 +208,7 @@ class RunSlot(StrEnum):
 
     PRE_OPEN = "pre_open"
     POST_CLOSE = "post_close"
+    POST_NXT_CLOSE = "post_nxt_close"
 
 
 class ThesisSubjectKind(StrEnum):
@@ -1372,6 +1373,12 @@ SLOT_INSTRUCTION = {
         "**오늘 각 대상이 어느 방향으로 움직일지**를 가설로 적어라."
     ),
     RunSlot.POST_CLOSE: ("오늘 한국 장이 닫혔다. 오늘의 세션 등락을 근거로 **왜 그렇게 움직였는지**를 가설로 적어라."),
+    RunSlot.POST_NXT_CLOSE: (
+        "한국 정규장(KRX)이 15:30에 닫히고 NXT 애프터마켓이 20:00에 닫혔다. 관측 상태에 "
+        "정규장 등락(`regular`)과 애프터마켓 등락(`after_hours`)이 따로 있다. "
+        "**정규장이 닫힌 뒤 무엇이 애프터마켓을 움직였는지**를 가설로 적어라. "
+        "지수(`index_regular`)는 정규장 마감값이라 애프터마켓 움직임을 담지 않는다 — 맥락으로만 읽어라."
+    ),
 }
 
 INSTRUCTION = """{slot_instruction}
@@ -2441,12 +2448,14 @@ SLACK_REVIEW_HORIZON = 5
 SLOT_HEADERS = {
     RunSlot.PRE_OPEN: "🔮 장전 전망",
     RunSlot.POST_CLOSE: "🔎 장후 리뷰",
+    RunSlot.POST_NXT_CLOSE: "🌙 애프터마켓 리뷰",
 }
 
 # 되돌아보기 제목에 쓰는 짧은 이름. 헤더의 이모지까지 반복하면 줄이 길어진다.
 SLOT_LABELS = {
     RunSlot.PRE_OPEN: "장전 전망",
     RunSlot.POST_CLOSE: "장후 리뷰",
+    RunSlot.POST_NXT_CLOSE: "애프터마켓 리뷰",
 }
 
 DIRECTION_MARKS = {"up": "▲", "down": "▼", "flat": "–"}

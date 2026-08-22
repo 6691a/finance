@@ -22,13 +22,15 @@ from apps.core.database import EntityBase, table_options
 class RunSlot(StrEnum):
     """추론을 만든 슬롯. 슬롯이 곧 추론의 종류다.
 
-    `pre_open`은 장이 열리기 전의 전망(forecast)이고 `post_close`는 장이 닫힌 뒤의
-    리뷰(review)다. 별도 `kind` 컬럼을 두지 않는 이유는 둘이 항상 같이 움직이기 때문이다 —
-    슬롯 하나에 종류 둘이 오는 경우가 없다.
+    `pre_open`은 장이 열리기 전의 전망(forecast)이고 `post_close`는 KRX 정규장이 닫힌 뒤의
+    리뷰(review)다. `post_nxt_close`는 NXT 애프터마켓(15:30~20:00)이 닫힌 뒤의 리뷰이고
+    대상이 종목뿐이다 — NXT에는 지수가 없다. 별도 `kind` 컬럼을 두지 않는 이유는 둘이 항상
+    같이 움직이기 때문이다 — 슬롯 하나에 종류 둘이 오는 경우가 없다.
     """
 
     PRE_OPEN = "pre_open"
     POST_CLOSE = "post_close"
+    POST_NXT_CLOSE = "post_nxt_close"
 
 
 class ThesisSubjectKind(StrEnum):
@@ -118,7 +120,7 @@ class Thesis(EntityBase):
             "subject_code",
             name="uq_thesis_natural_key",
         ),
-        CheckConstraint("run_slot IN ('pre_open', 'post_close')", name="ck_thesis_run_slot"),
+        CheckConstraint("run_slot IN ('pre_open', 'post_close', 'post_nxt_close')", name="ck_thesis_run_slot"),
         CheckConstraint("subject_kind IN ('index', 'stock')", name="ck_thesis_subject_kind"),
         CheckConstraint(
             "prob_up BETWEEN 0 AND 1 AND prob_down BETWEEN 0 AND 1 AND prob_flat BETWEEN 0 AND 1",
@@ -139,7 +141,10 @@ class Thesis(EntityBase):
     run_slot: Mapped[RunSlot] = mapped_column(
         _enum_column(RunSlot),
         nullable=False,
-        comment="추론을 만든 슬롯(pre_open은 장전 전망, post_close는 장후 리뷰). 슬롯이 곧 추론의 종류다",
+        comment=(
+            "추론을 만든 슬롯(pre_open은 장전 전망, post_close는 장후 리뷰, "
+            "post_nxt_close는 NXT 애프터마켓 리뷰). 슬롯이 곧 추론의 종류다"
+        ),
     )
     run_date: Mapped[date] = mapped_column(
         nullable=False,
@@ -150,7 +155,7 @@ class Thesis(EntityBase):
         nullable=False,
         comment=(
             "관측 상태와 툴 조회의 기준 시각(UTC). 벽시계가 아니라 슬롯이 정한다"
-            "(장전 = 당일 08:35 KST, 장후 = 당일 15:30 KST). "
+            "(장전 = 당일 08:35 KST, 장후 = 당일 15:30 KST, 애프터마켓 = 당일 20:00 KST). "
             "event-time cutoff라 이 시각 이후 감지·평가·갱신된 행은 조회에서 뺀다"
         ),
     )

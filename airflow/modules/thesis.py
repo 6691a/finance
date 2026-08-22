@@ -103,6 +103,11 @@ MAX_TOOL_RESULTS = 20
 # 항목 하나의 `new_facts` + `reason` 합계 문자 상한.
 MAX_ITEM_DETAIL_CHARS = 600
 
+# 투자의견 한 건에 붙는 리포트 요약의 상한. 스무 건까지 오므로 문서 한 건(600자)보다 짧게 둔다.
+# 사유의 첫 문단이 결론이라 앞쪽만으로도 "왜 그 목표가인가"가 읽힌다. 전문은 같은 리포트가
+# `recent_documents`로 올 때 나온다.
+MAX_OPINION_REASON_CHARS = 200
+
 # `hours` 인자의 허용 범위. 모델이 벗어난 값을 넘기면 잘라서 실행한다.
 MIN_WINDOW_HOURS = 1
 MAX_WINDOW_HOURS = 72
@@ -339,6 +344,8 @@ MARKET_FUNDS = read_sql("postgres", "krx_market_funds_daily", "select_thesis_rec
 DAILY_HISTORY = read_sql("postgres", "quote_daily", "select_thesis_history.sql")
 DAILY_HISTORY_SYMBOLS = read_sql("postgres", "quote_daily", "select_thesis_symbols.sql")
 SHORT_AND_CREDIT = read_sql("postgres", "krx_stock_short_sale_daily", "select_thesis_latest.sql")
+# 6단계(2026-08-22). 증권사 투자의견·목표주가. 리포트 본문은 `recent_documents`가 문서로 준다.
+ANALYST_OPINIONS = read_sql("postgres", "stock_analyst_opinion", "select_thesis_recent.sql")
 
 # 툴 인자는 **Pydantic 모델로 선언한다.** JSON Schema는 LangChain이 뽑는다 — 손으로 쓴
 # `{"type": "function", ...}` dict는 제공처 wire format이라 이름·타입이 코드와 어긋나도
@@ -454,10 +461,18 @@ class DailyHistoryArgs(ToolArgs):
     )
 
 
+class AnalystOpinionsArgs(ToolArgs):
+    ticker: str = Field(
+        description="추적 종목 코드 6자리(예: 005930). 추적 목록 밖이면 거절하고 쓸 수 있는 목록을 돌려준다."
+    )
+
+
 TOOL_DESCRIPTIONS: dict[str, str] = {
     "recent_documents": (
         "최근 평가된 경제 문서 중 가치 점수가 높은 것들. 제목, 발행 시각, 방향, 점수, "
-        "관련 종목 티커, 그리고 앞선 평가가 남긴 새 사실과 판단 근거를 준다."
+        "관련 종목 티커, 그리고 앞선 평가가 남긴 새 사실과 판단 근거를 준다. "
+        "source_slug가 naver_research_로 시작하면 증권사 리서치 리포트다 — 제목 끝에 증권사 이름이 있고, "
+        "종목분석은 요약 첫머리에 투자의견·목표가가 있다."
     ),
     "recent_disclosures": "추적 종목에 대해 최근 접수된 DART 공시. 회사명, 보고서명, 접수일, 감지 시각을 준다.",
     "macro_changes": (
@@ -495,6 +510,13 @@ TOOL_DESCRIPTIONS: dict[str, str] = {
     "short_and_credit": (
         "추적 종목의 최신 공매도 수량·비중, 대차 잔고, 신용융자 잔고. 셋이 서로의 재고라 "
         "한 표로 준다. 수집을 최근에 시작해 아직 며칠치뿐일 수 있다."
+    ),
+    "analyst_opinions": (
+        "추적 종목 하나에 대한 증권사 애널리스트의 최근 투자의견·목표주가. 발표일, 증권사, 의견, "
+        "직전 의견, 목표가, 발표 전일 종가, 목표가 괴리율을 최신 발표부터 준다. 의견이 바뀌었는지는 "
+        "의견과 직전 의견을 비교해 읽는다. 같은 증권사가 같은 날 낸 리포트가 수집돼 있으면 그 요약이 "
+        "reason에 함께 온다 — 왜 그 목표가인지가 거기 있다. 인용할 ref가 붙은 리포트 전문은 "
+        "recent_documents가 naver_research_* 문서로 준다."
     ),
 }
 
@@ -621,6 +643,12 @@ class ThesisToolbox:
                 name="short_and_credit",
                 description=TOOL_DESCRIPTIONS["short_and_credit"],
                 args_schema=NoArgs,
+            ),
+            StructuredTool.from_function(
+                func=self._tool_analyst_opinions,
+                name="analyst_opinions",
+                description=TOOL_DESCRIPTIONS["analyst_opinions"],
+                args_schema=AnalystOpinionsArgs,
             ),
         ]
 
@@ -855,6 +883,28 @@ class ThesisToolbox:
             ]
         )
 
+    def _tool_analyst_opinions(self, ticker: str) -> str:
+        """종목 하나의 최근 투자의견. 문맥 툴이라 레지스트리에 넣지 않는다 — 인용할 출처는
+        리포트 문서(`recent_documents`)이고 이것은 시장 참여자의 관측이다.
+
+        추적 목록 밖 종목은 거절한다. `past_theses`의 `subject_code`와 같은 이유다 — 모델이
+        아무 종목이나 조회하며 문맥을 채우게 두지 않는다.
+        """
+        self._charge()
+        code = str(ticker or "").strip()
+        if code not in self._watched_codes:
+            raise ToolLimitExceeded(f"추적 종목 밖이다: {code!r}. 쓸 수 있는 것은 {sorted(self._watched_codes)}")
+        rows = self._fetch(
+            ANALYST_OPINIONS,
+            {"stock_code": code, "as_of_at": self._as_of_at, "limit": MAX_TOOL_RESULTS},
+        )
+        return self._body(
+            {
+                "stock_code": code,
+                "opinions": [_opinion_detail(row) for row in rows],
+            }
+        )
+
     def _snapshot_window(self) -> dict[str, Any]:
         """장중 스냅샷 툴의 창. 끝은 `as_of_at`, 시작은 거기서 `SNAPSHOT_LOOKBACK`만큼 앞."""
         return {"window_start": self._as_of_at - SNAPSHOT_LOOKBACK, "as_of_at": self._as_of_at}
@@ -1023,6 +1073,27 @@ def _document_detail(row: Sequence[Any]) -> dict[str, Any]:
         "reason": reason[:MAX_ITEM_DETAIL_CHARS],
         "tickers": list(row[9] or ()),
     }
+
+
+def _opinion_detail(row: Sequence[Any]) -> dict[str, Any]:
+    """투자의견 한 건. 같은 증권사·같은 날 리포트 요약이 있으면 사유로 함께 준다.
+
+    KIS는 숫자만 주고 왜 그 의견인지는 안 준다. 사유가 없으면 모델이 목표가 숫자만 보고
+    이유를 지어낸다. 요약은 길어서 자른다 — 스무 건이 컨텍스트를 다 먹으면 안 된다.
+    """
+    detail: dict[str, Any] = {
+        "business_date": row[0],
+        "broker_name": row[1],
+        "opinion": row[2],
+        "previous_opinion": row[3],
+        "target_price": _number(row[4]),
+        "previous_close": _number(row[5]),
+        "gap_rate": _number(row[6]),
+    }
+    reason = row[7] if len(row) > 7 else None
+    if reason:
+        detail["reason"] = str(reason)[:MAX_OPINION_REASON_CHARS]
+    return detail
 
 
 def _macro_detail(row: Sequence[Any]) -> dict[str, Any]:

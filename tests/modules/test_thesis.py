@@ -16,9 +16,11 @@ from modules.thesis import (
     HORIZON_DAYS,
     MAX_ITEM_DETAIL_CHARS,
     MAX_NARRATIVE_CHARS,
+    MAX_OPINION_REASON_CHARS,
     MAX_REASONING_CHARS,
     MAX_TOOL_CALLS,
     MAX_TOOL_RESULT_CHARS,
+    MAX_TOOL_RESULTS,
     MAX_TOOL_ROUNDS,
     MAX_WINDOW_HOURS,
     NARRATED_HORIZON_DAYS,
@@ -66,6 +68,7 @@ INDEX_SESSION_RETURN = read_sql("postgres", "index_bar", "select_session_return.
 TOOL_DOCUMENTS = read_sql("postgres", "document", "select_recent_top.sql")
 TOOL_DISCLOSURES = read_sql("postgres", "disclosure_event", "select_recent.sql")
 TOOL_WINDOW_CHANGES = read_sql("postgres", "quote_bar", "select_window_changes.sql")
+TOOL_ANALYST_OPINIONS = read_sql("postgres", "stock_analyst_opinion", "select_thesis_recent.sql")
 PAST_THESES = read_sql("postgres", "thesis", "select_past_with_outcomes.sql")
 PENDING_NARRATIVES = read_sql("postgres", "thesis_outcome", "select_pending_narratives.sql")
 INSERT_NARRATIVE = read_sql("postgres", "thesis_outcome", "insert_narrative.sql")
@@ -547,6 +550,10 @@ def _statement_key(statement: str) -> str:
         return "thesis_insert"
     if "FROM thesis\nCROSS JOIN bounds" in query:
         return "past"
+    # 투자의견 조회가 리포트 요약을 LATERAL로 붙이느라 `FROM document`를 품고 있다.
+    # 문서 툴보다 먼저 본다 — 순서가 바뀌면 투자의견이 문서 결과를 받는다.
+    if "FROM stock_analyst_opinion" in query:
+        return "analyst_opinions"
     if "FROM document" in query:
         return "documents"
     if "FROM disclosure_event" in query:
@@ -960,6 +967,7 @@ def test_the_tool_schema_is_derived_from_the_code_not_hand_written():
         "market_funds",
         "daily_history",
         "short_and_credit",
+        "analyst_opinions",
     }
 
     schema = by_name["recent_documents"].args_schema.model_json_schema()
@@ -999,6 +1007,7 @@ def test_every_tool_window_ends_at_the_slot_time():
         ("market_funds", {"days": 10}),
         ("daily_history", {"symbol": "KOSPI", "days": 10}),
         ("short_and_credit", {}),
+        ("analyst_opinions", {"ticker": "005930"}),
     ):
         connection.calls.clear()
         box.run(name, arguments)
@@ -1006,6 +1015,72 @@ def test_every_tool_window_ends_at_the_slot_time():
         assert parameters["as_of_at"] == AS_OF, name
         # 창의 끝을 SQL이 실제로 걸고 있는지도 본다. 파라미터만 넘기고 술어가 없으면 소용없다.
         assert "as_of_at" in body(statement), name
+
+
+# --- 6단계(2026-08-22) 애널리스트 투자의견 --------------------------------------
+
+
+def test_analyst_opinions_refuses_a_stock_outside_the_watch_list_without_touching_the_database():
+    """`past_theses`의 `subject_code`와 같다. 모델이 아무 종목이나 조회하며 문맥을 채우게 두지 않는다."""
+    connection = FakeConnection()
+    box = toolbox(connection)
+
+    with pytest.raises(ToolLimitExceeded, match="추적 종목 밖") as error:
+        box.run("analyst_opinions", {"ticker": "003550"})
+
+    assert "005930" in str(error.value)
+    assert connection.calls == []
+
+
+def test_analyst_opinions_keeps_the_broker_wording_and_does_not_cite():
+    """문맥 툴이다 — 레지스트리에 넣지 않는다. 인용할 출처는 리포트 문서이고 이것은 관측이다."""
+    rows = [
+        (date(2026, 8, 10), "키움", "BUY", "BUY", Decimal(350000), Decimal(231000), Decimal("-34.00"), None),
+        (date(2026, 7, 31), "한국투자", "매수", "매수", Decimal(650000), Decimal(207000), Decimal("-68.15"), None),
+    ]
+    connection = FakeConnection({"analyst_opinions": rows})
+    box = toolbox(connection)
+
+    reply = json.loads(box.run("analyst_opinions", {"ticker": "005930"}))
+
+    assert reply["stock_code"] == "005930"
+    assert [item["broker_name"] for item in reply["opinions"]] == ["키움", "한국투자"]
+    assert reply["opinions"][0]["target_price"] == 350000
+    assert reply["opinions"][1]["opinion"] == "매수"
+    # 리포트를 못 찾으면 사유 칸 자체가 없다. 빈 문자열을 주면 모델이 "사유 없음"으로 읽는다.
+    assert "reason" not in reply["opinions"][0]
+    assert box.registry == {}
+    _, parameters = connection.calls[0]
+    assert parameters["stock_code"] == "005930"
+    assert parameters["limit"] == MAX_TOOL_RESULTS
+
+
+def test_analyst_opinions_carries_the_report_summary_as_the_reason():
+    """KIS는 숫자만 준다. 사유가 없으면 모델이 목표가만 보고 이유를 지어낸다."""
+    summary = "투자의견 Buy · 목표가 350,000 · " + "HBM4 공급 정상화로 " * 40
+    rows = [(date(2026, 8, 10), "키움", "BUY", "BUY", Decimal(350000), Decimal(231000), Decimal("-34.00"), summary)]
+    box = toolbox(FakeConnection({"analyst_opinions": rows}))
+
+    (item,) = json.loads(box.run("analyst_opinions", {"ticker": "005930"}))["opinions"]
+
+    assert item["reason"].startswith("투자의견 Buy · 목표가 350,000 · HBM4")
+    # 스무 건까지 오므로 한 건이 컨텍스트를 다 먹으면 안 된다.
+    assert len(item["reason"]) == MAX_OPINION_REASON_CHARS
+
+
+def test_the_opinion_query_joins_the_report_by_stock_broker_and_day():
+    """세 조건이 다 걸려야 한다. 하나라도 빠지면 남의 리포트가 사유로 붙는다."""
+    query = body(TOOL_ANALYST_OPINIONS)
+
+    assert "strpos(document.title, instrument.name || ': ') = 1" in query
+    assert "strpos(document.title, ' - ' || opinion.broker_name) > 0" in query
+    assert "(document.published_at AT TIME ZONE 'Asia/Seoul')::date = opinion.business_date" in query
+    # 리포트가 없어도 숫자는 준다. INNER JOIN이면 네이버에 안 올라온 증권사가 통째로 사라진다.
+    assert "LEFT JOIN LATERAL" in query
+    # 평가 전에도 붙어야 한다. `document_instrument`는 LLM 태깅이 채우는 값이다.
+    assert "document_instrument" not in query
+    # 창의 끝은 여기서도 기준 시각이다.
+    assert query.count("as_of_at") >= 2
 
 
 def test_macro_indicators_reports_rate_moves_in_basis_points():

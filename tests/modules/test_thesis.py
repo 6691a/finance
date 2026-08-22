@@ -66,6 +66,7 @@ INDEX_SESSION_RETURN = read_sql("postgres", "index_bar", "select_session_return.
 TOOL_DOCUMENTS = read_sql("postgres", "document", "select_recent_top.sql")
 TOOL_DISCLOSURES = read_sql("postgres", "disclosure_event", "select_recent.sql")
 TOOL_WINDOW_CHANGES = read_sql("postgres", "quote_bar", "select_window_changes.sql")
+TOOL_US_CLOSE = read_sql("postgres", "quote_bar", "select_thesis_us_close.sql")
 PAST_THESES = read_sql("postgres", "thesis", "select_past_with_outcomes.sql")
 PENDING_NARRATIVES = read_sql("postgres", "thesis_outcome", "select_pending_narratives.sql")
 INSERT_NARRATIVE = read_sql("postgres", "thesis_outcome", "insert_narrative.sql")
@@ -476,6 +477,22 @@ def test_macro_tool_excludes_the_boundary_bar_and_reads_only_the_view():
     assert "last_close" in query
 
 
+def test_us_close_tool_reads_the_last_bar_of_us_symbols_only():
+    query = body(TOOL_US_CLOSE)
+
+    # macro_changes와 같은 경계 규칙. bar_at은 봉의 시작 시각이다.
+    assert "bar.bar_at + interval '1 minute' <= bounds.as_of_at" in query
+    assert "FROM quote_bar AS bar" in query
+    # 창의 첫 봉이 아니라 마지막 봉 하나를 고르고, 비교 대상은 봉이 들고 온 전일 종가다.
+    assert "DISTINCT ON (bar.provider, bar.symbol)" in query
+    assert "ORDER BY bar.provider, bar.symbol, bar.bar_at DESC" in query
+    assert "bar.previous_close" in query
+    # 크립토(country XX)와 ADR(equity)은 여기 안 들어온다.
+    assert "symbol.country = 'US'" in query
+    assert "INSERT" not in query.upper()
+    assert "UPDATE" not in query.upper()
+
+
 # --- Toolbox ----------------------------------------------------------------
 
 AS_OF = datetime(2026, 8, 21, 6, 30, tzinfo=UTC)
@@ -552,7 +569,8 @@ def _statement_key(statement: str) -> str:
     if "FROM disclosure_event" in query:
         return "disclosures"
     if "FROM quote_bar" in query:
-        return "macro"
+        # 둘 다 quote_bar를 읽는다. 마감 쿼리만 previous_close를 고른다.
+        return "us_close" if "previous_close" in query else "macro"
     if "FROM indicator_observation" in query:
         return "indicators"
     if "FROM market_investor_flow_snapshot" in query:
@@ -614,6 +632,24 @@ def macro_row(symbol: str = "SP500_FUT", kind: str = "index_future", first: str 
         MACRO_WINDOW_START,
         AS_OF,
         120,
+    )
+
+
+def us_close_row(
+    symbol: str = "SP500",
+    kind: str = "index",
+    close: str = "7674.37",
+    previous_close: str = "7641.16",
+) -> tuple:
+    """`quote_bar/select_thesis_us_close.sql`의 한 행."""
+    return (
+        "kis" if symbol in ("SP500", "NASDAQ") else "yahoo",
+        symbol,
+        f"{symbol} 라벨",
+        kind,
+        Decimal(close),
+        Decimal(previous_close),
+        AS_OF - timedelta(hours=10),
     )
 
 
@@ -745,6 +781,51 @@ def test_rate_changes_are_reported_in_basis_points_not_percent():
     assert item.detail["change_bp"] == pytest.approx(5.0)
     assert "change_pct" not in item.detail
     assert "bp" in body_text
+
+
+def test_us_close_is_measured_against_the_previous_session_close():
+    """창 첫 봉 대비로는 KIS 현물의 밤사이 등락이 보이지 않는다. 마감 툴은 전일 종가와 비교한다."""
+    connection = FakeConnection({"us_close": [us_close_row()]})
+    box = toolbox(connection)
+
+    body_text = box.run("us_market_close", {})
+
+    item = box.registry["macro_change:SP500@close"]
+    assert item.detail["close"] == pytest.approx(7674.37)
+    assert item.detail["previous_close"] == pytest.approx(7641.16)
+    assert item.detail["change_pct"] == pytest.approx(0.43, abs=0.01)
+    # 시각 칸은 이름이 시간대를 밝힌다. 모델이 "어느 날 장이었나"를 이 값으로 정한다.
+    assert item.detail["closed_at_kst"].endswith("KST")
+    assert "마감" in body_text
+
+
+def test_us_close_rates_are_reported_in_basis_points():
+    connection = FakeConnection({"us_close": [us_close_row("US10Y", "rate", "4.70", "4.65")]})
+    box = toolbox(connection)
+
+    box.run("us_market_close", {})
+
+    item = box.registry["macro_change:US10Y@close"]
+    assert item.detail["change_bp"] == pytest.approx(5.0)
+    assert "change_pct" not in item.detail
+
+
+def test_us_close_refs_do_not_overwrite_the_window_change_of_the_same_symbol():
+    """겹치면 나중에 부른 툴이 앞의 근거를 조용히 덮는다. 창 변화와 마감 등락은 다른 숫자다."""
+    connection = FakeConnection(
+        {
+            "macro": [macro_row("SP500_FUT", "index_future", "100", "101")],
+            "us_close": [us_close_row("SP500_FUT", "index_future", "101", "99")],
+        }
+    )
+    box = toolbox(connection)
+
+    box.run("macro_changes", {})
+    box.run("us_market_close", {})
+
+    assert set(box.registry) == {"macro_change:SP500_FUT", "macro_change:SP500_FUT@close"}
+    assert box.registry["macro_change:SP500_FUT"].detail["change_pct"] == pytest.approx(1.0)
+    assert box.registry["macro_change:SP500_FUT@close"].detail["change_pct"] == pytest.approx(2.02, abs=0.01)
 
 
 def test_non_rate_changes_are_reported_in_percent():
@@ -952,6 +1033,7 @@ def test_the_tool_schema_is_derived_from_the_code_not_hand_written():
         "recent_documents",
         "recent_disclosures",
         "macro_changes",
+        "us_market_close",
         "past_theses",
         "macro_indicators",
         "market_investor_flows",
@@ -992,6 +1074,7 @@ def test_every_tool_window_ends_at_the_slot_time():
     box = toolbox(connection, subject_codes=["KOSPI"])
 
     for name, arguments in (
+        ("us_market_close", {}),
         ("macro_indicators", {"kind": "government_bond"}),
         ("market_investor_flows", {}),
         ("market_breadth", {}),

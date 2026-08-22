@@ -141,6 +141,12 @@ MACRO_KINDS: tuple[str, ...] = (
 # 값이 퍼센트라 변화를 bp로 읽어야 하는 종류. 4.65→4.70은 `+1.08%`가 아니라 `+5bp`다.
 BASIS_POINT_KINDS = frozenset({"rate"})
 
+# `us_market_close`가 만드는 근거의 ref 접미. 같은 심볼이라도 창 변화(`macro_change:SP500_FUT`)와
+# 마감 등락(`macro_change:SP500_FUT@close`)은 다른 숫자라 ref가 겹치면 레지스트리가 하나를
+# 조용히 덮는다. ref는 `<kind>:<id>` 2단을 지켜야 해서(`thesis_evidence.evidence_ref` 주석)
+# 콜론이 아니라 `@`로 붙인다.
+CLOSE_REF_SUFFIX = "@close"
+
 # `macro_indicators`가 고를 수 있는 `indicator_series.kind`. 단위가 달라 **반드시 걸어야 한다** —
 # 안 걸면 국채 금리(Percent)와 물가지수(Index 1982-1984=100)가 한 표에 섞인다.
 INDICATOR_KINDS: tuple[str, ...] = ("government_bond", "money_market", "price_index", "activity")
@@ -321,6 +327,7 @@ def kst_label(moment: datetime) -> str:
 RECENT_DOCUMENTS = read_sql("postgres", "document", "select_recent_top.sql")
 RECENT_DISCLOSURES = read_sql("postgres", "disclosure_event", "select_recent.sql")
 WINDOW_CHANGES = read_sql("postgres", "quote_bar", "select_window_changes.sql")
+US_MARKET_CLOSE = read_sql("postgres", "quote_bar", "select_thesis_us_close.sql")
 PAST_THESES = read_sql("postgres", "thesis", "select_past_with_outcomes.sql")
 
 # 아래 일곱은 2026-08-21에 열었다. 그전까지 모델이 볼 수 있는 것은 문서·공시·분봉 창
@@ -462,7 +469,15 @@ TOOL_DESCRIPTIONS: dict[str, str] = {
     "recent_disclosures": "추적 종목에 대해 최근 접수된 DART 공시. 회사명, 보고서명, 접수일, 감지 시각을 준다.",
     "macro_changes": (
         "분석 창 동안 해외 지수·선물·환율이 얼마나 움직였나. 첫 봉 대비 마지막 봉의 변화를 준다. "
-        "금리 계열은 퍼센트가 아니라 bp 차이로 준다."
+        "금리 계열은 퍼센트가 아니라 bp 차이로 준다. "
+        "**밤사이 미국장이 얼마나 움직였나는 us_market_close로 본다** — 이 툴의 창 변화는 창 첫 봉 "
+        "대비라 마감 직전 몇 시간만 쌓이는 현물 지수는 거의 0으로 보인다."
+    ),
+    "us_market_close": (
+        "밤사이 미국장 마감. 미국 지수·선물·원자재·환율·금리의 마감 종가와 **전일 정규장 종가 대비** "
+        "등락을 준다(금리 계열은 퍼센트가 아니라 bp). 한국 장이 열리기 전 가장 먼저 볼 값이다. "
+        "빈 배열은 이 창에 미국 봉이 없다는 뜻이지 움직이지 않았다는 뜻이 아니다 — 장후 슬롯의 창은 "
+        "당일 09:00부터라 미국 세션이 창 밖이다."
     ),
     "past_theses": (
         "이 대상에 대해 전에 낸 장전 추론과 그 결과. 그때의 세 확률·세 이유, 지평별 실제 등락률과 "
@@ -575,6 +590,12 @@ class ThesisToolbox:
                 args_schema=MacroChangesArgs,
             ),
             StructuredTool.from_function(
+                func=self._tool_us_market_close,
+                name="us_market_close",
+                description=TOOL_DESCRIPTIONS["us_market_close"],
+                args_schema=NoArgs,
+            ),
+            StructuredTool.from_function(
                 func=self._tool_past_theses,
                 name="past_theses",
                 description=TOOL_DESCRIPTIONS["past_theses"],
@@ -652,6 +673,10 @@ class ThesisToolbox:
     def _tool_macro_changes(self) -> str:
         self._charge()
         return self._as_evidence_body(self._macro_changes({}))
+
+    def _tool_us_market_close(self) -> str:
+        self._charge()
+        return self._as_evidence_body(self._us_market_close())
 
     def _tool_past_theses(self, subject_code: str, n: int) -> str:
         # **레지스트리에 넣지 않는다.** 자기 과거 추론은 근거가 아니다 — 근거 종류는
@@ -990,6 +1015,31 @@ class ThesisToolbox:
             for row in rows[:MAX_TOOL_RESULTS]
         ]
 
+    def _us_market_close(self) -> list[Evidence]:
+        """미국 심볼의 마감 값과 전일 종가 대비 등락.
+
+        **`macro_changes`와 ref가 겹치지 않는다.** 같은 심볼이라도 창 변화와 마감 등락은
+        다른 숫자여서, 겹치면 나중에 부른 툴이 앞의 근거를 조용히 덮는다.
+        """
+        rows = self._fetch(
+            US_MARKET_CLOSE,
+            {
+                "window_start": self._macro_window_start,
+                "as_of_at": self._as_of_at,
+                "kinds": list(MACRO_KINDS),
+            },
+        )
+        return [
+            Evidence(
+                kind=ThesisEvidenceKind.MACRO_CHANGE,
+                ref=evidence_ref(ThesisEvidenceKind.MACRO_CHANGE, f"{row[1]}{CLOSE_REF_SUFFIX}"),
+                title=f"{row[2]} 마감 {_change_label(row[3], row[5], row[4])}",
+                url=None,
+                detail=_us_close_detail(row),
+            )
+            for row in rows[:MAX_TOOL_RESULTS]
+        ]
+
 
 def _tool_row(item: Evidence) -> dict[str, Any]:
     """모델에게 보이는 모양. `ref`가 인용 키라 항상 첫 칸이다."""
@@ -1045,6 +1095,27 @@ def _macro_detail(row: Sequence[Any]) -> dict[str, Any]:
         detail["change_bp"] = round(float(last_close - first_close) * 100, 1)
     elif first_close:
         detail["change_pct"] = round(float((last_close - first_close) / first_close) * 100, 2)
+    return detail
+
+
+def _us_close_detail(row: Sequence[Any]) -> dict[str, Any]:
+    """심볼 하나의 마감 값. 비교 대상은 창의 첫 봉이 아니라 **전일 정규장 종가**다.
+
+    시각은 `closed_at_kst` 한 칸이고 이름이 시간대를 밝힌다. 다른 툴의 시각 칸은 UTC라
+    프롬프트가 "9시간을 더한다"고 알리는데, 마감 시각은 모델이 "어느 날 장이었나"를
+    정하는 데 쓰므로 표시 시간대로 준다(`kst_label`).
+    """
+    kind, close, previous_close = row[3], row[4], row[5]
+    detail: dict[str, Any] = {
+        "kind": kind,
+        "close": float(close),
+        "previous_close": float(previous_close),
+        "closed_at_kst": kst_label(row[6]),
+    }
+    if kind in BASIS_POINT_KINDS:
+        detail["change_bp"] = round(float(close - previous_close) * 100, 1)
+    elif previous_close:
+        detail["change_pct"] = round(float((close - previous_close) / previous_close) * 100, 2)
     return detail
 
 

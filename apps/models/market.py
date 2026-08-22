@@ -309,7 +309,7 @@ def _bar_table_args(table: str, comment: str) -> tuple:
 
 
 class IndexBar(MacroBarColumns, EntityBase):
-    """현물 지수 1분봉. KIS(코스피·코스피200·코스닥)와 Yahoo(해외 지수)가 채운다."""
+    """현물 지수 1분봉. KIS(코스피·코스피200·코스닥, 해외지수 S&P500·나스닥 종합)와 Yahoo(해외 지수)가 채운다."""
 
     __tablename__ = "index_bar"
     __table_args__ = _bar_table_args("index_bar", "현물 지수의 1분봉을 장중 알림 판단용으로 누적하는 테이블")

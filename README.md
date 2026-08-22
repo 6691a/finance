@@ -275,6 +275,7 @@ DAG마다 절을 두지 않습니다. 상세는 각 DAG 파일의 `doc_md`에 �
 | `kis_investor_trade_daily` | 평일 18:10 | `stock_investor_trade_daily` | KIS |
 | `kis_stock_minute_bars_daily` | 평일 20:40 | `stock_bar` | KIS |
 | `kis_market_positioning_daily` | 화~토 08:10 | `krx_*` 6종(신용·공매도·대차·증시자금) | KIS |
+| `kis_overseas_index_close` | 화~토 07:30 | `index_bar`(S&P500·나스닥 종합 마감 분봉) | KIS |
 | `yahoo_quote_intraday` | 5분마다(시간 창 없음) | `quote_bar` | Yahoo |
 | `yahoo_quote_daily` | 매일 07:30 | `quote_daily` | Yahoo |
 | `dart_disclosure_intraday` | 평일 07~20시 2분마다 | `disclosure_event`, `earnings_fact` | DART |
@@ -292,7 +293,7 @@ DAG마다 절을 두지 않습니다. 상세는 각 DAG 파일의 `doc_md`에 �
 | DAG | 스케줄(KST) | 채널 | 내용 |
 | --- | --- | --- | --- |
 | `slack_kr_market_briefing` | 평일 12:30·16:30·19:30 | `SLACK_CHANNEL_MARKET` | 국내 지수·선물, 장중 해외(미국 선물·아시아), 환율, 수급 |
-| `slack_us_market_briefing` | 화~토 08:00 | `SLACK_CHANNEL_MARKET` | 밤사이 미국 마감, 주요국 10년 금리, 전일 국내 복기와 조합 요약 |
+| `slack_us_market_briefing` | 화~토 08:00 | `SLACK_CHANNEL_MARKET` | 밤사이 미국 지수·선물(현물 옆에 선물)·원자재·크립토·ADR, 주요국 10년 금리, 전일 국내 복기 |
 | `slack_document_briefing` | 매일 08:00 | `SLACK_CHANNEL_DOCUMENT` | 지난 24시간 평가 집계와 `value_score` 상위 문서 |
 | `slack_ops_briefing` | 매일 08:00 | `SLACK_CHANNEL_OPS` | 지난 24시간 수집 성공·실패·무소식 |
 

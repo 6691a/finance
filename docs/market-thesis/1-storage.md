@@ -57,6 +57,8 @@ thesis_evidence (                 -- 추론 → 근거 = 엣지
     evidence_url    -- 문서면 canonical_url, 공시면 DART 뷰어 URL, 매크로면 NULL. Slack 링크용
     detail jsonb    -- 툴이 준 수치 스냅샷(등락률, 점수 등)
     rank integer    -- 모델이 인용한 순서. CHECK (rank > 0)
+    direction       -- 이 근거가 대상을 미는 방향 up/down/flat. 원 추론의 인용에만 (2026-08-21)
+    mechanism text  -- 그 방향으로 작용하는 경로 한 문장. direction과 쌍으로만 채워진다(CHECK)
     UNIQUE (thesis_id, evidence_kind, evidence_ref)
     UNIQUE (thesis_id, rank)
 )

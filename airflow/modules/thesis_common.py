@@ -19,6 +19,7 @@ LangChain·LangGraph import는 함수 안에서 한다(DagBag 30초 타임아웃
 import logging
 import os
 import re
+from collections.abc import Mapping, Sequence
 from contextlib import closing
 from datetime import UTC, date, datetime, time, timedelta
 from typing import Any
@@ -166,12 +167,15 @@ def build_and_store(
     macro_window_start: datetime,
     targets: Any,
     observed: dict[str, Any],
+    past: Mapping[str, Sequence[Mapping[str, Any]]],
     dag_run_id: str,
 ) -> int:
     """추론을 만들고 저장한다. 저장한 행 수를 준다.
 
     **슬롯으로 갈라지지 않는다.** 슬롯은 값으로 흘러갈 뿐이고, 무엇이 다른지(기준 시각,
-    창의 시작, 관측 세션)는 이미 부르는 쪽이 정해서 인자로 넘겼다.
+    창의 시작, 관측 세션, 프롬프트에 실을 과거 추론 `past`)는 이미 부르는 쪽이 정해서
+    인자로 넘겼다. `past`는 subject 코드별 `thesis.past_theses` 행이고, 그 `id`가
+    `thesis_precedent` 엣지로 남는다.
 
     **첫 성공본 불변.** 행이 있으면 모델을 부르지 않는다 — LLM은 재호출마다 답이 달라서
     덮어쓰면 최초 판단이 사라진다.
@@ -198,6 +202,7 @@ def build_and_store(
             as_of_at=as_of_at,
             subjects=targets,
             observed_state=observed,
+            past_theses=past,
         )
     except market_thesis.ThesisError as error:
         raise AirflowFailException(str(error)) from error
@@ -218,6 +223,7 @@ def build_and_store(
         observed_state=observed,
         llm_model=model_name(model),
         tool_rounds=rounds,
+        precedents={code: [int(row["id"]) for row in rows] for code, rows in past.items()},
     )
     logger.info("stored %s theses for %s %s (%s tool rounds)", len(rows), run_date, run_slot.value, rounds)
     return len(rows)

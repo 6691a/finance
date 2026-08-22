@@ -1,4 +1,4 @@
-from apps.models.analysis import Thesis, ThesisEvidence, ThesisOutcome
+from apps.models.analysis import Thesis, ThesisEvidence, ThesisOutcome, ThesisPrecedent
 from apps.models.content import Document, DocumentIndicator, DocumentInstrument, DocumentSource
 from apps.models.market import (
     BondFutureBar,
@@ -79,4 +79,5 @@ __all__ = [
     "Thesis",
     "ThesisEvidence",
     "ThesisOutcome",
+    "ThesisPrecedent",
 ]

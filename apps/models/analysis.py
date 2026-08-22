@@ -363,6 +363,42 @@ class ThesisOutcome(EntityBase):
     )
 
 
+class ThesisPrecedent(EntityBase):
+    """추론이 프롬프트에서 본 과거 추론 하나. 그래프로 보면 `(:Thesis)-[:INFORMED_BY]->(:Thesis)` 엣지다.
+
+    장전 추론은 같은 대상의 최근 `pre_open` 추론과 그 채점·해설을 프롬프트에 받는다. 무엇을
+    봤는지를 여기 남겨야 "이 판단이 어느 과거 판단을 알고 내려졌나"를 나중에 따라갈 수 있다.
+    툴 호출 흔적은 트레이스에만 남아 DB에서 보이지 않는다.
+
+    **`thesis_evidence`에 넣지 않는다.** 근거는 모델이 **인용한** 것이고 이것은 우리가
+    **보여 준** 것이다. 인용 순서(`rank`)도 없다 — 순서는 precedent의 `run_date`가 말한다.
+    """
+
+    __tablename__ = "thesis_precedent"
+    __table_args__ = (
+        UniqueConstraint("thesis_id", "precedent_id", name="uq_thesis_precedent_natural_key"),
+        CheckConstraint("thesis_id <> precedent_id", name="ck_thesis_precedent_not_self"),
+        table_options(
+            comment="추론이 프롬프트에서 본 과거 추론을 잇는 엣지 테이블. 피드백 루프의 기록이다",
+            database="default",
+        ),
+    )
+
+    thesis_id: Mapped[int] = mapped_column(
+        BigInteger,
+        ForeignKey("thesis.id", ondelete="CASCADE"),
+        nullable=False,
+        comment="과거 추론을 보고 낸 thesis 레코드 ID",
+    )
+    # 남이 본 과거 추론은 지우지 못한다 — 지우면 "무엇을 보고 냈나"가 끊긴다.
+    precedent_id: Mapped[int] = mapped_column(
+        BigInteger,
+        ForeignKey("thesis.id", ondelete="RESTRICT"),
+        nullable=False,
+        comment="프롬프트에 실린 과거 thesis 레코드 ID. 같은 대상의 pre_open 추론이다",
+    )
+
+
 class ThesisEvidence(EntityBase):
     """추론이 실제로 인용한 근거 하나. 그래프로 보면 추론에서 나가는 엣지다.
 
@@ -399,6 +435,15 @@ class ThesisEvidence(EntityBase):
         CheckConstraint(
             "outcome_horizon_days IS NULL OR outcome_horizon_days IN (1, 3, 5)",
             name="ck_thesis_evidence_outcome_horizon_days",
+        ),
+        CheckConstraint(
+            "direction IS NULL OR direction IN ('up', 'down', 'flat')",
+            name="ck_thesis_evidence_direction",
+        ),
+        # 방향과 경로는 한 쌍이다. 방향만 있고 경로가 없으면 그래프 엣지가 "왜"를 잃는다.
+        CheckConstraint(
+            "(direction IS NULL AND mechanism IS NULL) OR (direction IS NOT NULL AND mechanism IS NOT NULL)",
+            name="ck_thesis_evidence_claim_all_or_none",
         ),
         table_options(
             comment="추론과 사후 해설이 인용한 근거를 순위와 함께 보존하는 테이블",
@@ -443,6 +488,22 @@ class ThesisEvidence(EntityBase):
         Text,
         nullable=True,
         comment="문서면 canonical_url, 공시면 DART 뷰어 URL. 매크로 변화처럼 링크할 곳이 없으면 NULL이다",
+    )
+    # 아래 둘은 **이 추론이 이 근거를 어떻게 썼나**다. detail의 direction은 문서 평가 때 붙은
+    # 문서 자체의 방향이라 다른 값이다. 그래프 엣지 `(:Thesis)-[:CITES {direction, mechanism}]`의
+    # 속성이고, 사후 해설이 인용한 근거(outcome_horizon_days NOT NULL)에는 없다.
+    direction: Mapped[ThesisDirection | None] = mapped_column(
+        _enum_column(ThesisDirection),
+        nullable=True,
+        comment=(
+            "이 근거가 대상을 어느 쪽으로 미는지(up/down/flat). 원 추론이 인용한 근거에만 있고 "
+            "사후 해설의 인용에는 NULL이다"
+        ),
+    )
+    mechanism: Mapped[str | None] = mapped_column(
+        Text,
+        nullable=True,
+        comment="그 방향으로 작용하는 경로를 적은 한 문장. direction과 함께 채워지거나 함께 비어 있다",
     )
     detail: Mapped[dict[str, object]] = mapped_column(
         JSONB,

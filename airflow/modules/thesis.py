@@ -41,7 +41,7 @@
 
 import json
 import logging
-from collections.abc import Iterable, Sequence
+from collections.abc import Iterable, Mapping, Sequence
 from datetime import UTC, date, datetime, timedelta
 from decimal import ROUND_HALF_UP, Decimal
 from enum import StrEnum
@@ -64,7 +64,9 @@ from modules.utility import KST_TIMEZONE, atomic
 logger = logging.getLogger(__name__)
 
 # 프롬프트를 고치면 올린다. `thesis.prompt_version`에 저장돼 채점 결과를 가르는 기준이 된다.
-PROMPT_VERSION = "1"
+# 2: 과거 추론과 결과를 프롬프트에 미리 싣는 절이 생겼고, 인용이 `evidence_refs`에서 근거별
+#    방향·경로를 담는 `claims`로 바뀌었다(2026-08-21, 둘 다 운영에 나가기 전이라 한 판이다).
+PROMPT_VERSION = "2"
 
 # 채점 지평. KRX 영업일 수이고 달력일이 아니다. 0은 예측일 세션 하나다.
 HORIZON_DAYS: tuple[int, ...] = (0, 1, 3, 5)
@@ -120,8 +122,17 @@ MAX_VALUE_SCORE = 100
 MIN_PAST_THESES = 1
 MAX_PAST_THESES = 10
 
+# 장전 추론의 프롬프트에 **미리 실어 주는** 같은 대상의 과거 추론 수. 툴로 두면 모델이 부를지
+# 말지를 정하고 불렀는지도 DB에 안 남는다. 미리 실으면 본 것이 확정되고 `thesis_precedent`에
+# 엣지로 남는다. 0이면 끄는 것이다 — 과거 추론을 안 싣고 엣지도 안 남긴다.
+# T+5 지평이 한 주라 한 주치를 준다.
+PREFETCHED_PAST_THESES = 5
+
 # 이유 문장 하나의 상한. 넘으면 그 필드만 자른다.
 MAX_REASONING_CHARS = 500
+
+# 근거 하나의 경로(mechanism) 문장 상한. 엣지 속성이라 이유 문장보다 짧게 둔다.
+MAX_MECHANISM_CHARS = 200
 
 # 확률 합이 1에서 이만큼 안이면 비율을 유지한 채 정규화한다. 넘으면 그 subject를 버린다.
 PROB_SUM_TOLERANCE = Decimal("0.02")
@@ -335,6 +346,37 @@ RECENT_DISCLOSURES = read_sql("postgres", "disclosure_event", "select_recent.sql
 WINDOW_CHANGES = read_sql("postgres", "quote_bar", "select_window_changes.sql")
 US_MARKET_CLOSE = read_sql("postgres", "quote_bar", "select_thesis_us_close.sql")
 PAST_THESES = read_sql("postgres", "thesis", "select_past_with_outcomes.sql")
+PRECEDENT_INSERT = read_sql("postgres", "thesis_precedent", "insert.sql")
+
+
+def past_theses(connection: Connection, *, as_of_at: datetime, subject_code: str, n: int) -> list[dict[str, Any]]:
+    """이 대상의 지난 장전 추론과 지평별 결과. 최근 것부터 `n`건이다. 피드백 루프는 이 조회 하나다.
+
+    **창의 끝은 `as_of_at`이다.** 없으면 장전 슬롯을 오후에 재실행할 때 그날 저녁의 채점이
+    아침 예측에 섞인다. SQL이 술어 셋을 건다.
+
+    `n <= 0`이면 조회하지 않고 빈 목록이다 — `PREFETCHED_PAST_THESES = 0`이 끄는 스위치다.
+    """
+    if n <= 0:
+        return []
+    with connection.cursor() as cursor:
+        cursor.execute(PAST_THESES, (as_of_at, subject_code, n))
+        rows = cursor.fetchall()
+    return [
+        {
+            "id": row[0],
+            "run_date": row[1].isoformat(),
+            "prob_up": float(row[2]),
+            "prob_down": float(row[3]),
+            "prob_flat": float(row[4]),
+            "up_reasoning": row[5],
+            "down_reasoning": row[6],
+            "flat_reasoning": row[7],
+            "outcomes": row[8],
+        }
+        for row in rows
+    ]
+
 
 # 아래 일곱은 2026-08-21에 열었다. 그전까지 모델이 볼 수 있는 것은 문서·공시·분봉 창
 # 변화뿐이어서, 수집 중인 것의 대부분(국채 금리·물가·수급·시장폭·증시자금·일봉 이력)이
@@ -979,10 +1021,10 @@ class ThesisToolbox:
         return tool.invoke(arguments)
 
     def _past_theses(self, arguments: dict[str, Any]) -> list[dict[str, Any]]:
-        """이 대상의 지난 장전 추론과 지평별 결과. 피드백 루프는 이 조회 하나다.
+        """툴 판 `past_theses`. 대상 목록 밖을 거절하고 건수를 자른 뒤 모듈 함수에 맡긴다.
 
-        **창의 끝은 여기서도 `as_of_at`이다.** 없으면 장전 슬롯을 오후에 재실행할 때 그날
-        저녁의 채점이 아침 예측에 섞인다. SQL이 술어 셋을 건다.
+        장전은 같은 조회를 프롬프트에 미리 싣는다(`PREFETCHED_PAST_THESES`). 툴은 모델이
+        더 보고 싶을 때의 길이고, 툴로 본 것은 `thesis_precedent`에 남지 않는다.
         """
         code = str(arguments.get("subject_code") or "").strip()
         if not self._subject_codes:
@@ -990,22 +1032,7 @@ class ThesisToolbox:
         if code not in self._subject_codes:
             raise ToolLimitExceeded(f"대상 목록 밖이다: {code!r}. 쓸 수 있는 것은 {sorted(self._subject_codes)}")
         count = _clamp_int(arguments.get("n"), MIN_PAST_THESES, MAX_PAST_THESES, MIN_PAST_THESES)
-        with self._connection.cursor() as cursor:
-            cursor.execute(PAST_THESES, (self._as_of_at, code, count))
-            rows = cursor.fetchall()
-        return [
-            {
-                "run_date": row[1].isoformat(),
-                "prob_up": float(row[2]),
-                "prob_down": float(row[3]),
-                "prob_flat": float(row[4]),
-                "up_reasoning": row[5],
-                "down_reasoning": row[6],
-                "flat_reasoning": row[7],
-                "outcomes": row[8],
-            }
-            for row in rows
-        ]
+        return past_theses(self._connection, as_of_at=self._as_of_at, subject_code=code, n=count)
 
     def _recent_documents(self, arguments: dict[str, Any]) -> list[Evidence]:
         hours = _clamp_int(arguments.get("hours"), MIN_WINDOW_HOURS, MAX_WINDOW_HOURS, MAX_WINDOW_HOURS)
@@ -1271,6 +1298,20 @@ class Subject(BaseModel):
     label: str
 
 
+class ClaimAnswer(BaseModel):
+    """모델이 근거 하나를 어떻게 썼는지. 검증 전 원본이다.
+
+    이유 문장은 산문이라 그래프 엣지에 실을 수 없다. 근거마다 **방향과 경로**를 따로 받아야
+    `(:Thesis)-[:CITES {direction, mechanism}]->(:Evidence)`가 된다.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    ref: str
+    direction: Literal["up", "down", "flat"]
+    mechanism: str = ""
+
+
 class ThesisAnswer(BaseModel):
     """모델이 subject 하나에 대해 낸 답. 검증 전 원본이다."""
 
@@ -1283,7 +1324,7 @@ class ThesisAnswer(BaseModel):
     up_reasoning: str = ""
     down_reasoning: str = ""
     flat_reasoning: str = ""
-    evidence_refs: tuple[str, ...] = ()
+    claims: tuple[ClaimAnswer, ...] = ()
 
 
 class Answers(BaseModel):
@@ -1292,6 +1333,16 @@ class Answers(BaseModel):
     model_config = ConfigDict(frozen=True)
 
     theses: tuple[ThesisAnswer, ...] = ()
+
+
+class Claim(BaseModel):
+    """레지스트리로 검증을 마친 인용 하나. `thesis_evidence` 행의 direction·mechanism이 된다."""
+
+    model_config = ConfigDict(frozen=True)
+
+    ref: str
+    direction: ThesisDirection
+    mechanism: str
 
 
 class ThesisDraft(BaseModel):
@@ -1306,8 +1357,12 @@ class ThesisDraft(BaseModel):
     up_reasoning: str
     down_reasoning: str
     flat_reasoning: str
-    # 레지스트리로 검증하고 첫 등장 순서로 중복을 없앤 ref. rank는 이 순서다.
-    evidence_refs: tuple[str, ...] = ()
+    # 레지스트리로 검증하고 ref 첫 등장 순서로 중복을 없앤 인용. rank는 이 순서다.
+    claims: tuple[Claim, ...] = ()
+
+    @property
+    def evidence_refs(self) -> tuple[str, ...]:
+        return tuple(claim.ref for claim in self.claims)
 
 
 def normalize_probabilities(
@@ -1354,7 +1409,9 @@ SYSTEM_PROMPT = f"""너는 시장 추론 기록기다. 주어진 관측 상태�
 ## 규칙
 
 - **툴 결과와 관측 상태에 없는 사실·숫자를 쓰지 마라.** 지어낸 근거는 기록을 망친다.
-- `evidence_refs`에는 툴이 준 `ref` 값만 쓴다. 목록 밖의 ref는 버려진다.
+- `claims`에는 인용하는 근거마다 툴이 준 `ref`, 그 근거가 대상을 미는 방향 `direction`
+  (`up`/`down`/`flat`), 그 방향으로 작용하는 경로 `mechanism` 한 문장({MAX_MECHANISM_CHARS}자
+  이내)을 쓴다. 목록 밖의 ref는 버려진다. 같은 ref는 한 번만 쓴다.
   인용할 것이 없으면 빈 배열로 둔다. **억지 인용이 근거 없음보다 나쁘다.**
 - 세 확률 `prob_up`, `prob_down`, `prob_flat`은 각각 0~1이고 **합이 정확히 1이어야 한다.**
 - 세 방향의 이유를 **모두** 쓴다. 오를 이유, 내릴 이유, 횡보할 이유가 각각 있다.
@@ -1365,7 +1422,8 @@ SYSTEM_PROMPT = f"""너는 시장 추론 기록기다. 주어진 관측 상태�
 
 출력 형식:
 {{"theses": [{{"subject_code": "", "prob_up": 0.0, "prob_down": 0.0, "prob_flat": 0.0,
- "up_reasoning": "", "down_reasoning": "", "flat_reasoning": "", "evidence_refs": []}}]}}"""
+ "up_reasoning": "", "down_reasoning": "", "flat_reasoning": "",
+ "claims": [{{"ref": "", "direction": "up", "mechanism": ""}}]}}]}}"""
 
 SLOT_INSTRUCTION = {
     RunSlot.PRE_OPEN: (
@@ -1396,7 +1454,16 @@ INSTRUCTION = """{slot_instruction}
 ```json
 {observed_state}
 ```
+
+## 과거 추론과 결과
+같은 대상에 대해 전에 낸 장전 추론과 그 채점·해설이다. 채점은 실제 등락이고, 해설은 사실이
+아니라 **그때의 해석**이다. 같은 이유로 같은 방향을 고르고 있다면 그 이유가 이번에도 맞는지
+따로 확인하라. 과거 문장을 베끼지 마라.
+{past_theses}
 """
+
+# 과거 추론이 없을 때 그 절에 넣는 말. 절 자체를 빼면 프롬프트 모양이 날마다 달라진다.
+NO_PAST_THESES = "(없음)"
 
 REPAIR_INSTRUCTION = (
     "이전 응답을 쓸 수 없다. 요청 목록의 subject_code만 쓰고, 세 확률의 합을 정확히 1로 맞추고, "
@@ -1451,8 +1518,17 @@ class ThesisBuilder:
         as_of_at: datetime,
         subjects: Sequence[Subject],
         observed_state: dict[str, Any],
+        past_theses: Mapping[str, Sequence[Mapping[str, Any]]],
     ) -> list[BaseMessage]:
+        """`past_theses`는 subject 코드별 과거 추론 목록(`thesis.past_theses`의 행)이다.
+
+        빈 매핑이면 그 절에 `NO_PAST_THESES`가 들어간다. 장후 리뷰가 그 경우다.
+        """
         subject_lines = "\n".join(f"- {subject.code} ({subject.label}, {subject.kind.value})" for subject in subjects)
+        shown = {code: rows for code, rows in past_theses.items() if rows}
+        past_section = (
+            f"```json\n{json.dumps(shown, ensure_ascii=False, indent=2, default=str)}\n```" if shown else NO_PAST_THESES
+        )
         return [
             SystemMessage(SYSTEM_PROMPT),
             HumanMessage(
@@ -1461,6 +1537,7 @@ class ThesisBuilder:
                     as_of_at=kst_label(as_of_at),
                     subjects=subject_lines or "(없음)",
                     observed_state=json.dumps(observed_state, ensure_ascii=False, indent=2, default=str),
+                    past_theses=past_section,
                 )
             ),
         ]
@@ -1472,6 +1549,7 @@ class ThesisBuilder:
         as_of_at: datetime,
         subjects: Sequence[Subject],
         observed_state: dict[str, Any],
+        past_theses: Mapping[str, Sequence[Mapping[str, Any]]],
     ) -> tuple[tuple[ThesisDraft, ...], int]:
         """추론들과 툴 왕복 수. 두 번째도 실패하면 `ThesisError`를 올린다."""
         if not subjects:
@@ -1482,6 +1560,7 @@ class ThesisBuilder:
                 as_of_at=as_of_at,
                 subjects=subjects,
                 observed_state=observed_state,
+                past_theses=past_theses,
             ),
             "subjects": tuple(subjects),
             "tool_rounds": 0,
@@ -1545,7 +1624,7 @@ class ThesisBuilder:
                     up_reasoning=_shorten(answer.up_reasoning),
                     down_reasoning=_shorten(answer.down_reasoning),
                     flat_reasoning=_shorten(answer.flat_reasoning),
-                    evidence_refs=self._known_refs(answer),
+                    claims=self._known_claims(answer),
                 )
             )
 
@@ -1556,24 +1635,28 @@ class ThesisBuilder:
             raise ThesisError(f"Model returned {len(parsed.theses)} theses, none of them usable")
         return kept
 
-    def _known_refs(self, answer: ThesisAnswer) -> tuple[str, ...]:
-        """레지스트리에 있는 ref만, 첫 등장 순서로 중복 없이.
+    def _known_claims(self, answer: ThesisAnswer) -> tuple[Claim, ...]:
+        """레지스트리에 있는 ref의 인용만, ref 첫 등장 순서로 중복 없이.
 
-        순서가 곧 `thesis_evidence.rank`다. 목록 밖 ref는 버리고 건수를 로그로 남긴다 —
+        순서가 곧 `thesis_evidence.rank`다. 같은 ref를 두 번 인용하면 **첫 것이 남는다** — 행이
+        ref당 하나라 방향 둘을 담을 수 없다. 목록 밖 ref는 버리고 건수를 로그로 남긴다 —
         조용히 버리면 모델이 무엇을 지어내는지 알 수 없다.
         """
         registry = self._toolbox.registry
-        kept: list[str] = []
+        kept: dict[str, Claim] = {}
         unknown: list[str] = []
-        for ref in answer.evidence_refs:
-            if ref in registry:
-                if ref not in kept:
-                    kept.append(ref)
-            else:
-                unknown.append(ref)
+        for claim in answer.claims:
+            if claim.ref not in registry:
+                unknown.append(claim.ref)
+            elif claim.ref not in kept:
+                kept[claim.ref] = Claim(
+                    ref=claim.ref,
+                    direction=ThesisDirection(claim.direction),
+                    mechanism=_shorten_to(claim.mechanism, MAX_MECHANISM_CHARS),
+                )
         if unknown:
             logger.warning("%s cited %s refs that no tool returned: %s", answer.subject_code, len(unknown), unknown)
-        return tuple(kept)
+        return tuple(kept.values())
 
     def _build_graph(self):
         graph = StateGraph(ThesisState)
@@ -1737,14 +1820,17 @@ def store_theses(
     observed_state: dict[str, Any],
     llm_model: str,
     tool_rounds: int,
+    precedents: Mapping[str, Sequence[int]],
 ) -> tuple[StoredThesis, ...]:
-    """추론과 근거를 한 트랜잭션에 쓴다.
+    """추론과 근거, 그리고 본 과거 추론을 한 트랜잭션에 쓴다.
 
     **추론은 `INSERT ... ON CONFLICT DO NOTHING`이다.** 같은 (날짜, 슬롯, subject)에 행이 이미
     있으면 아무 것도 바꾸지 않는다. `RETURNING`이 0행이면 삽입 직전에 다른 실행이 먼저 넣은
     것이므로, 그 경우에도 실패로 보지 않고 저장된 행을 읽어 돌려준다.
 
     thesis와 evidence를 한 트랜잭션에 쓴다 — 추론만 들어가고 근거가 빠진 상태를 남기지 않는다.
+    `precedents`는 subject 코드별로 프롬프트에 실린 과거 thesis ID 목록이고 `thesis_precedent`
+    엣지가 된다. 같은 트랜잭션이다 — "무엇을 보고 냈나"도 추론과 함께 들어가거나 함께 빠진다.
     """
     with atomic(connection) as transaction, transaction.cursor() as cursor:
         for draft in drafts:
@@ -1774,7 +1860,9 @@ def store_theses(
             if returned is None:
                 logger.info("thesis for %s %s %s already existed", run_date, run_slot.value, draft.subject.code)
                 continue
-            _store_evidence(cursor, returned[0], draft.evidence_refs, registry)
+            _store_evidence(cursor, returned[0], draft.evidence_refs, registry, claims=draft.claims)
+            for precedent_id in precedents.get(draft.subject.code, ()):
+                cursor.execute(PRECEDENT_INSERT, (returned[0], precedent_id))
 
     return existing_theses(connection, run_date=run_date, run_slot=run_slot)
 
@@ -1785,14 +1873,19 @@ def _store_evidence(
     refs: Iterable[str],
     registry: dict[str, Evidence],
     outcome_horizon_days: int | None = None,
+    claims: Sequence[Claim] = (),
 ) -> None:
     """인용 순서를 `rank`로 굳혀 근거를 넣는다. 1부터 센다.
 
     `outcome_horizon_days`가 `None`이면 원 추론이 인용한 근거이고, 1·3·5면 그 지평의 사후
     해설이 인용한 근거다. 같은 테이블에 들어가고 그 칸이 둘을 가른다.
+
+    `claims`는 원 추론의 인용에만 온다 — ref마다 방향과 경로다. 해설의 인용은 둘 다 NULL이다.
     """
+    by_ref = {claim.ref: claim for claim in claims}
     for rank, ref in enumerate(refs, start=1):
         item = registry[ref]
+        claim = by_ref.get(ref)
         cursor.execute(
             EVIDENCE_INSERT,
             (
@@ -1804,6 +1897,8 @@ def _store_evidence(
                 item.url,
                 json.dumps(item.detail, ensure_ascii=False, default=str),
                 rank,
+                claim.direction.value if claim else None,
+                claim.mechanism if claim else None,
             ),
         )
 

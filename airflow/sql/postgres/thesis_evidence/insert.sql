@@ -9,6 +9,9 @@
 -- `outcome_horizon_days`가 NULL이면 원 추론이 인용한 근거, 1·3·5면 그 지평의 사후 해설이
 -- 인용한 근거다. 행 모양이 같아 테이블을 복제하지 않고 이 한 칸으로 가른다.
 --
+-- `direction`·`mechanism`은 **이 추론이 이 근거를 어떻게 썼나**다. 원 추론의 인용에만 있고
+-- 사후 해설의 인용에는 둘 다 NULL이다(CHECK가 쌍을 강제한다).
+--
 -- 정의의 원본은 `apps/models/analysis.py`의 `ThesisEvidence`이고
 -- `tests/modules/test_thesis.py`가 여기 컬럼을 그 모델 metadata와 대조한다.
 INSERT INTO thesis_evidence (
@@ -19,6 +22,8 @@ INSERT INTO thesis_evidence (
     evidence_title,
     evidence_url,
     detail,
-    rank
-) VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+    rank,
+    direction,
+    mechanism
+) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
 ON CONFLICT DO NOTHING

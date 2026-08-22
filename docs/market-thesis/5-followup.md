@@ -261,34 +261,47 @@ Toolbox는 2단계의 것을 그대로 쓴다. `as_of_at`만 그 지평의 장�
   글이라 사후확신 편향이 들어간다"를 명시**하고 근거 없는 단정 대신 "이 기사들은 …라고
   본다" 형태를 쓰게 한다.
 
-## 5. 피드백 루프 — `past_theses` 툴
+## 5. 피드백 루프 — 과거 추론 프리페치와 `thesis_precedent`
 
-2단계 ThesisToolbox에 네 번째 툴을 더한다. 새 층이나 새 테이블 없이 기존 툴 셋 옆에 하나
-붙는 것뿐이다.
+조회는 하나다(`thesis/select_past_with_outcomes.sql`, `thesis.past_theses`): 그 subject의
+최근 `pre_open` 추론 `n`건 — 예측일, 세 확률, 세 이유, 지평별 `actual_outcome`·`brier_score`,
+지평별 `narrative`·`verdict`. 같은 조회를 두 길로 쓴다.
 
-| 툴 | 반환 | SQL |
+| 길 | 누가 정하나 | 기록 |
 | --- | --- | --- |
-| `past_theses(subject_code, n)` | 그 subject의 최근 `pre_open` 추론 `n`건: 예측일, 세 확률, 세 이유, 지평별 `actual_outcome`·`brier_score`, 지평별 `narrative` | `thesis/select_past_with_outcomes.sql` |
+| **프리페치** — 장전이 subject마다 `PREFETCHED_PAST_THESES`건을 프롬프트의 "과거 추론과 결과" 절에 싣는다 | 코드 | `thesis_precedent` 한 행씩. 추론과 같은 트랜잭션 |
+| `past_theses(subject_code, n)` 툴 | 모델 | 없음(트레이스뿐) |
 
-- 상한은 코드 상수로 강제한다: `1 <= n <= 10`, `subject_code`는 이번 실행의 subject 목록
+처음(2026-08-21)엔 툴만 있었다. 툴만 두면 두 가지가 안 된다 — 모델이 안 부르면 루프가
+안 닫히고, 불러도 **무엇을 봤는지 DB에 안 남는다.** "이 판단이 어느 과거 판단을 알고
+내려졌나"는 그래프의 엣지인데 툴 호출 흔적은 트레이스에만 있다. 그래서 같은 날 저녁
+프리페치를 넣고 엣지 테이블을 만들었다. 프롬프트 판은 `2`다.
+
+- `thesis_precedent(thesis_id, precedent_id)`. `thesis_id`는 CASCADE, `precedent_id`는
+  RESTRICT — 남이 본 과거 추론을 지우면 "무엇을 보고 냈나"가 끊긴다. 자기 자신은 CHECK로
+  막는다. **`rank`가 없다** — 순서는 precedent의 `run_date`가 말한다.
+- **`thesis_evidence`가 아니다.** 근거는 모델이 **인용한** 것이고 이것은 우리가 **보여 준**
+  것이다. 근거 종류는 `document`·`disclosure`·`macro_change` 셋 그대로다. 툴이 돌려준
+  항목에도 여전히 `ref`를 붙이지 않는다.
+- 장후 리뷰는 `past={}`로 부른다. 예측이 아니라 해석이라 과거 예측 성적을 실을 자리가
+  아니다. 절은 `(없음)`으로 남는다 — 절을 빼면 프롬프트 모양이 슬롯마다 달라진다.
+- 툴 쪽 상한은 그대로다: `1 <= n <= 10`, `subject_code`는 이번 실행의 subject 목록
   안의 값만. 넘으면 잘라 실행하거나 "상한 초과" `ToolMessage`로 돌린다(2단계 계약 그대로).
-- **창의 끝은 여기서도 `as_of_at`이다.** `thesis.run_date < as_of_at의 KST 날짜`,
+- **창의 끝은 두 길 다 `as_of_at`이다.** `thesis.run_date < as_of_at의 KST 날짜`,
   `thesis_outcome.evaluated_at <= as_of_at`, `narrative_at <= as_of_at`. 이게 없으면
   장전 슬롯을 재실행할 때 그날 저녁의 채점 결과가 아침 예측에 섞인다.
-- 이 툴이 돌려준 항목에는 `ref`를 붙이지 않는다. 자기 과거 추론은 `thesis_evidence`에
-  근거로 저장할 대상이 아니다 — 근거 종류는 `document`·`disclosure`·`macro_change` 셋
-  그대로 둔다.
 
 ### 이 루프가 효과가 있다는 보장은 없다
 
 - 과거 성적을 문맥에 넣는 것으로 언어 모델의 확률 캘리브레이션이 개선된다는 근거는 약하다.
-  **효과 없음이 관측되면 툴을 뺀다.** 판단 기준은 도입 전후 지평별 Brier 추이이고, 분기
-  단위로 본다(4주 표본으로는 결론이 안 난다 — README 5절).
+  **효과 없음이 관측되면 `PREFETCHED_PAST_THESES = 0`으로 끈다.** 판단 기준은 도입 전후
+  지평별 Brier 추이이고, 분기 단위로 본다(4주 표본으로는 결론이 안 난다 — README 5절).
+  끄면 절이 `(없음)`이 되고 엣지도 안 남는다. 이미 남은 엣지는 그대로다.
 - **사후확신 편향이 순환할 수 있다.** 결과를 알고 쓴 해설이 다음 예측의 문맥에 들어가면
   모델이 "그때는 이런 이유로 올랐으니 지금도"라는 서사를 재생산한다. 프롬프트에서 과거
   해설을 **사실이 아니라 그때의 해석**으로 제시하고, 4주 검증에서 장전 추론의 이유 문장이
   과거 해설 문장을 그대로 베끼는지 사람이 눈으로 본다.
-- 두 위험 모두 툴 하나를 빼면 되돌아간다. 그 되돌릴 수 있음이 이 방식을 고른 이유다.
+- 두 위험 모두 상수 하나를 0으로 두면 되돌아간다. 그 되돌릴 수 있음이 이 방식을 고른 이유다.
 
 ## 6. 그래프 반영 (4단계 뒤)
 

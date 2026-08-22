@@ -4,7 +4,7 @@
 받는다. 추정은 하루 다섯 회차뿐이고 개인이 없지만, 확정값은 12개 분류가 전부 있고 외국인이
 등록·미등록으로 갈리며 대금 단위까지 확정돼 있다(백만원).
 
-수집 규칙은 `modules/collectors/kis_investor_flow.py`에 있다.
+수집 규칙은 `modules/collectors/market/kis_investor_flow.py`에 있다.
 
 ## 한 번 부르면 30 거래일이 온다
 
@@ -62,10 +62,9 @@ from modules.collectors.kis import (
     KisResultError,
     access_token,
 )
-from modules.collectors.kis_investor_flow import (
+from modules.collectors.market.kis_investor_flow import (
     InvestorFlowStock,
-    fetch_stock_trade_daily,
-    store_stock_trade_daily,
+    KisInvestorFlowCollector,
 )
 from modules.market_session import krx_open_day
 from modules.utility import CONNECTION_ID, KIS_UNRECOVERABLE_STATUSES, KST_TIMEZONE, atomic
@@ -172,7 +171,7 @@ def kis_investor_trade_daily():
                 raise AirflowSkipException(f"KRX is closed on {end_date}")
 
         app_key, app_secret = _credentials()
-        token = access_token(Variable, app_key, app_secret)
+        collector = KisInvestorFlowCollector(access_token(Variable, app_key, app_secret), app_key, app_secret)
 
         stored = 0
         failures: list[str] = []
@@ -182,7 +181,7 @@ def kis_investor_trade_daily():
                 for page in range(pages):
                     name = f"{stock.value}:{cursor_date.isoformat()}"
                     try:
-                        fetch = fetch_stock_trade_daily(token, app_key, app_secret, stock, cursor_date)
+                        fetch = collector.fetch_stock_trade_daily(stock, cursor_date)
                     except KisHTTPError as error:
                         if error.status in KIS_UNRECOVERABLE_STATUSES:
                             raise AirflowFailException(f"{name}: {error}") from error
@@ -203,7 +202,7 @@ def kis_investor_trade_daily():
                         break
 
                     with atomic(connection):
-                        rows = store_stock_trade_daily(connection, fetch)
+                        rows = collector.store_stock_trade_daily(connection, fetch)
 
                     stored += rows
                     logger.info("Stored %s rows for %s", rows, name)

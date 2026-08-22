@@ -644,11 +644,14 @@
   <table>
     <thead><tr><th>분류</th><th>내용</th><th>왜 다른가</th></tr></thead>
     <tbody>
-      <tr><td>수급</td><td>선물 외국인 포지션, 프로그램 매매</td>
+      <tr><td>수급</td><td>선물 <strong>미결제약정</strong>, 프로그램 매매</td>
           <td>일 단위 집계값이다. KIS API로 받을 수 있지만 저장 형태가 봉이 아니다.
-              <strong>외국인·기관 순매수는 받는다.</strong> 장중 추정치는
-              <code>market_investor_flow_snapshot</code>·<code>stock_investor_estimate_snapshot</code>,
-              확정값은 <code>stock_investor_trade_daily</code>에 있다</td></tr>
+              <strong>순매수는 현물과 파생 모두 받는다.</strong> 장중 누적은
+              <code>market_investor_flow_snapshot</code>이 일곱 시장(코스피·코스닥·선물·
+              콜옵션·풋옵션·주식선물·ETF)을 5분마다, 종목 추정치는
+              <code>stock_investor_estimate_snapshot</code>, 종목 확정값은
+              <code>stock_investor_trade_daily</code>에 있다. 남은 것은 <em>누가 얼마나
+              들고 있나</em>(미결제약정)와 차익·비차익 프로그램 매매다</td></tr>
       <tr><td>수급</td><td>공매도 <strong>잔고</strong></td>
           <td><strong>공시가 T+2다.</strong> 관측일과 공시일을 따로 저장하지 않으면
               백테스트가 미래를 훔친다(look-ahead bias). <code>published_at</code>이 필수다.

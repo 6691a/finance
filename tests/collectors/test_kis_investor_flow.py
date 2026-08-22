@@ -6,29 +6,25 @@ from typing import Self
 
 import pytest
 from pydantic import SecretStr
-from sqlalchemy import Table
+from sqlalchemy import CheckConstraint, Table
 
 from apps.models.market import (
+    InvestorFlowMarketCode,
     MarketInvestorFlowSnapshot,
     StockInvestorEstimateSnapshot,
     StockInvestorTradeDaily,
 )
 from apps.models.raw import SourceRecord
-from modules.collectors import kis_investor_flow
 from modules.collectors.kis import KisPayloadError, KisResultError
-from modules.collectors.kis_investor_flow import (
+from modules.collectors.market import kis_investor_flow
+from modules.collectors.market.kis_investor_flow import (
     DAILY_TRADE_UPSERT,
     MARKET_FLOW_UPSERT,
     SOURCE_RECORD_INSERT,
     STOCK_ESTIMATE_UPSERT,
     InvestorFlowMarket,
     InvestorFlowStock,
-    fetch_market_flow,
-    fetch_stock_estimates,
-    fetch_stock_trade_daily,
-    store_market_flow,
-    store_stock_estimates,
-    store_stock_trade_daily,
+    KisInvestorFlowCollector,
 )
 
 SOURCE_RECORD_ID = 41
@@ -38,6 +34,10 @@ APP_SECRET = SecretStr("secret")
 SAMSUNG = InvestorFlowStock.SAMSUNG_ELECTRONICS
 BUSINESS_DATE = date(2026, 8, 14)
 OBSERVED_AT = datetime(2026, 8, 14, 1, 55, tzinfo=UTC)
+
+# 수집기는 자격 증명만 들고 있어 테스트마다 새로 만들 이유가 없다. HTTP는
+# `send_get`을 monkeypatch 해서 가른다.
+COLLECTOR = KisInvestorFlowCollector(TOKEN, APP_KEY, APP_SECRET)
 
 # 2026-08-14 장중 실측. 부호 뒤에 0이 채워지는 표기를 그대로 옮겼다.
 ESTIMATE_ROWS = [
@@ -203,23 +203,58 @@ def test_stock_codes_match_the_other_collectors():
     assert codes == {stock.value for stock in PositioningStock}
 
 
-def test_only_confirmed_markets_are_requestable():
+def test_only_documented_markets_are_requestable():
     """잘못된 코드가 오류 없이 0을 돌려주므로 후보를 Enum에 넣어 두면 조용히 0이 쌓인다.
 
-    코드의 근거는 공식 postman 컬렉션과 실측 대조다(모듈 문서). `999/S001`은 코스피가
-    아니라 주식선물이라 되돌리면 안 된다.
+    코드의 근거는 공식 postman 컬렉션의 파라미터 설명이다(모듈 문서의 "시장 코드는 문서에
+    다 있다"). `999/S001`은 코스피가 아니라 주식선물이라 되돌리면 안 된다.
     """
-    assert [market.value for market in InvestorFlowMarket] == ["KOSPI", "KOSDAQ"]
-    assert InvestorFlowMarket.KOSPI.primary_code == "KSP"
-    assert InvestorFlowMarket.KOSPI.secondary_code == "0001"
-    assert InvestorFlowMarket.KOSDAQ.primary_code == "KSQ"
-    assert InvestorFlowMarket.KOSDAQ.secondary_code == "1001"
+    assert {market.value: (market.primary_code, market.secondary_code) for market in InvestorFlowMarket} == {
+        "KOSPI": ("KSP", "0001"),
+        "KOSDAQ": ("KSQ", "1001"),
+        "FUTURES": ("K2I", "F001"),
+        "CALL_OPTION": ("K2I", "OC01"),
+        "PUT_OPTION": ("K2I", "OP01"),
+        "STOCK_FUTURES": ("999", "S001"),
+        "ETF": ("ETF", "T000"),
+    }
+
+
+def test_the_market_enum_matches_the_model_and_its_check_constraint():
+    """수집기가 보내는 시장과 테이블이 받는 시장이 어긋나면 저장에서 죽는다.
+
+    셋을 함께 묶는다. 수집기 Enum, 모델 Enum, 그리고 실제 DDL이 되는 CHECK 제약이다.
+    Enum 둘만 맞춰 두면 제약을 넓히는 마이그레이션을 빠뜨린 것을 못 잡는다.
+    """
+    collected = {market.value for market in InvestorFlowMarket}
+    assert collected == {code.value for code in InvestorFlowMarketCode}
+
+    constraint = next(
+        check
+        for check in MarketInvestorFlowSnapshot.__table__.constraints
+        if isinstance(check, CheckConstraint) and check.name == "ck_market_investor_flow_snapshot_market_code"
+    )
+    allowed = set(re.findall(r"'([A-Z_]+)'", str(constraint.sqltext)))
+    assert allowed == collected
+
+
+def test_derivative_markets_reuse_the_spot_response_shape(monkeypatch):
+    """일곱 시장이 같은 12개 분류를 같은 필드 이름으로 준다.
+
+    같지 않다면 시장마다 다른 파서가 필요하다는 뜻이라 설계가 통째로 달라진다.
+    """
+    monkeypatch.setattr(kis_investor_flow, "send_get", fake_send_get(body(output=[market_row()])))
+
+    fetch = COLLECTOR.fetch_market_flow(InvestorFlowMarket.CALL_OPTION, OBSERVED_AT)
+
+    assert fetch.market_code == "CALL_OPTION"
+    assert fetch.row.foreign_net_buy_qty == -26241
 
 
 def test_estimates_keep_every_slot(monkeypatch):
     monkeypatch.setattr(kis_investor_flow, "send_get", fake_send_get(body(output2=ESTIMATE_ROWS)))
 
-    fetch = fetch_stock_estimates(TOKEN, APP_KEY, APP_SECRET, SAMSUNG, BUSINESS_DATE)
+    fetch = COLLECTOR.fetch_stock_estimates(SAMSUNG, BUSINESS_DATE)
 
     assert [row.source_time_code for row in fetch.rows] == ["2", "1"]
     # 부호 뒤에 0이 채워진 값을 그대로 읽는다.
@@ -232,7 +267,7 @@ def test_estimates_reject_a_sum_that_does_not_add_up(monkeypatch):
     monkeypatch.setattr(kis_investor_flow, "send_get", fake_send_get(body(output2=broken)))
 
     with pytest.raises(KisPayloadError, match="does not add up"):
-        fetch_stock_estimates(TOKEN, APP_KEY, APP_SECRET, SAMSUNG, BUSINESS_DATE)
+        COLLECTOR.fetch_stock_estimates(SAMSUNG, BUSINESS_DATE)
 
 
 def test_estimates_reject_duplicated_slots(monkeypatch):
@@ -241,14 +276,14 @@ def test_estimates_reject_duplicated_slots(monkeypatch):
     )
 
     with pytest.raises(KisPayloadError, match="duplicated slots"):
-        fetch_stock_estimates(TOKEN, APP_KEY, APP_SECRET, SAMSUNG, BUSINESS_DATE)
+        COLLECTOR.fetch_stock_estimates(SAMSUNG, BUSINESS_DATE)
 
 
 def test_an_empty_estimate_response_is_normal(monkeypatch):
     """갱신 전이면 슬롯이 없다. 없는 종목코드도 0행으로 오지만 종목은 Enum이 막는다."""
     monkeypatch.setattr(kis_investor_flow, "send_get", fake_send_get(body(output2=[])))
 
-    fetch = fetch_stock_estimates(TOKEN, APP_KEY, APP_SECRET, SAMSUNG, BUSINESS_DATE)
+    fetch = COLLECTOR.fetch_stock_estimates(SAMSUNG, BUSINESS_DATE)
 
     assert fetch.rows == ()
 
@@ -256,7 +291,7 @@ def test_an_empty_estimate_response_is_normal(monkeypatch):
 def test_market_flow_reads_all_three_investor_groups(monkeypatch):
     monkeypatch.setattr(kis_investor_flow, "send_get", fake_send_get(body(output=[market_row()])))
 
-    fetch = fetch_market_flow(TOKEN, APP_KEY, APP_SECRET, InvestorFlowMarket.KOSPI, OBSERVED_AT)
+    fetch = COLLECTOR.fetch_market_flow(InvestorFlowMarket.KOSPI, OBSERVED_AT)
 
     row = fetch.row
     assert row.foreign_net_buy_qty == -26241
@@ -270,7 +305,7 @@ def test_market_flow_reads_the_institution_breakdown(monkeypatch):
     """기관계 한 칸으로는 연기금이 사는 장과 투신이 파는 장을 가릴 수 없다."""
     monkeypatch.setattr(kis_investor_flow, "send_get", fake_send_get(body(output=[market_row()])))
 
-    row = fetch_market_flow(TOKEN, APP_KEY, APP_SECRET, InvestorFlowMarket.KOSPI, OBSERVED_AT).row
+    row = COLLECTOR.fetch_market_flow(InvestorFlowMarket.KOSPI, OBSERVED_AT).row
 
     assert row.investment_trust_net_buy_qty == 20000
     assert row.pension_fund_net_buy_qty == 21678
@@ -286,7 +321,7 @@ def test_the_institution_parts_must_add_up_to_the_institution_total(monkeypatch)
     monkeypatch.setattr(kis_investor_flow, "send_get", fake_send_get(body(output=[broken])))
 
     with pytest.raises(KisPayloadError, match="institution parts do not add up"):
-        fetch_market_flow(TOKEN, APP_KEY, APP_SECRET, InvestorFlowMarket.KOSPI, OBSERVED_AT)
+        COLLECTOR.fetch_market_flow(InvestorFlowMarket.KOSPI, OBSERVED_AT)
 
 
 def test_the_investor_categories_must_close_to_zero(monkeypatch):
@@ -296,7 +331,7 @@ def test_the_investor_categories_must_close_to_zero(monkeypatch):
     monkeypatch.setattr(kis_investor_flow, "send_get", fake_send_get(body(output=[broken])))
 
     with pytest.raises(KisPayloadError, match="do not close to zero"):
-        fetch_market_flow(TOKEN, APP_KEY, APP_SECRET, InvestorFlowMarket.KOSPI, OBSERVED_AT)
+        COLLECTOR.fetch_market_flow(InvestorFlowMarket.KOSPI, OBSERVED_AT)
 
 
 def test_the_vol_suffix_categories_are_not_read_as_qty():
@@ -316,7 +351,7 @@ def test_an_all_zero_market_response_fails(monkeypatch):
     monkeypatch.setattr(kis_investor_flow, "send_get", fake_send_get(body(output=[ZERO_ROW])))
 
     with pytest.raises(KisPayloadError, match="all-zero"):
-        fetch_market_flow(TOKEN, APP_KEY, APP_SECRET, InvestorFlowMarket.KOSPI, OBSERVED_AT)
+        COLLECTOR.fetch_market_flow(InvestorFlowMarket.KOSPI, OBSERVED_AT)
 
 
 def test_market_flow_tolerates_per_field_rounding(monkeypatch):
@@ -324,7 +359,7 @@ def test_market_flow_tolerates_per_field_rounding(monkeypatch):
     rounded = market_row(frgn_ntby_qty="-26242")
     monkeypatch.setattr(kis_investor_flow, "send_get", fake_send_get(body(output=[rounded])))
 
-    row = fetch_market_flow(TOKEN, APP_KEY, APP_SECRET, InvestorFlowMarket.KOSDAQ, OBSERVED_AT).row
+    row = COLLECTOR.fetch_market_flow(InvestorFlowMarket.KOSDAQ, OBSERVED_AT).row
 
     assert row.foreign_net_buy_qty == -26242
 
@@ -334,14 +369,14 @@ def test_market_flow_rejects_a_net_that_does_not_add_up(monkeypatch):
     monkeypatch.setattr(kis_investor_flow, "send_get", fake_send_get(body(output=[broken])))
 
     with pytest.raises(KisPayloadError, match="foreign net buy does not add up"):
-        fetch_market_flow(TOKEN, APP_KEY, APP_SECRET, InvestorFlowMarket.KOSPI, OBSERVED_AT)
+        COLLECTOR.fetch_market_flow(InvestorFlowMarket.KOSPI, OBSERVED_AT)
 
 
 def test_market_flow_sends_both_codes(monkeypatch):
     send = fake_send_get(body(output=[market_row()]))
     monkeypatch.setattr(kis_investor_flow, "send_get", send)
 
-    fetch_market_flow(TOKEN, APP_KEY, APP_SECRET, InvestorFlowMarket.KOSPI, OBSERVED_AT)
+    COLLECTOR.fetch_market_flow(InvestorFlowMarket.KOSPI, OBSERVED_AT)
 
     assert send.sent[0]["query"] == {"FID_INPUT_ISCD": "KSP", "FID_INPUT_ISCD_2": "0001"}
 
@@ -350,17 +385,17 @@ def test_result_code_failures_are_raised(monkeypatch):
     monkeypatch.setattr(kis_investor_flow, "send_get", fake_send_get(body(rt_cd="1", msg1="권한이 없습니다")))
 
     with pytest.raises(KisResultError) as error:
-        fetch_stock_estimates(TOKEN, APP_KEY, APP_SECRET, SAMSUNG, BUSINESS_DATE)
+        COLLECTOR.fetch_stock_estimates(SAMSUNG, BUSINESS_DATE)
 
     assert error.value.code == "1"
 
 
 def test_store_estimates_writes_one_row_per_slot(monkeypatch):
     monkeypatch.setattr(kis_investor_flow, "send_get", fake_send_get(body(output2=ESTIMATE_ROWS)))
-    fetch = fetch_stock_estimates(TOKEN, APP_KEY, APP_SECRET, SAMSUNG, BUSINESS_DATE)
+    fetch = COLLECTOR.fetch_stock_estimates(SAMSUNG, BUSINESS_DATE)
     connection = FakeConnection()
 
-    stored = store_stock_estimates(connection, fetch)
+    stored = COLLECTOR.store_stock_estimates(connection, fetch)
     upserts = rows_for(connection.recorded_cursor, "stock_investor_estimate_snapshot")
     assert stored == len(upserts) == 2
     assert [row[2] for row in upserts] == ["2", "1"]
@@ -377,10 +412,10 @@ def test_store_estimates_writes_one_row_per_slot(monkeypatch):
 
 def test_store_market_flow_writes_one_row(monkeypatch):
     monkeypatch.setattr(kis_investor_flow, "send_get", fake_send_get(body(output=[market_row()])))
-    fetch = fetch_market_flow(TOKEN, APP_KEY, APP_SECRET, InvestorFlowMarket.KOSPI, OBSERVED_AT)
+    fetch = COLLECTOR.fetch_market_flow(InvestorFlowMarket.KOSPI, OBSERVED_AT)
     connection = FakeConnection()
 
-    assert store_market_flow(connection, fetch) == 1
+    assert COLLECTOR.store_market_flow(connection, fetch) == 1
     upsert = rows_for(connection.recorded_cursor, "market_investor_flow_snapshot")[0]
     assert upsert[0] == "KOSPI"
     assert upsert[1] == OBSERVED_AT
@@ -435,7 +470,7 @@ def test_daily_trade_reads_every_investor_category(monkeypatch):
     """장중 추정에는 개인이 없다. 확정값에서 12분류가 다 오는 것이 이 조회의 이유다."""
     monkeypatch.setattr(kis_investor_flow, "send_get", fake_send_get(body(output2=[DAILY_ROW])))
 
-    fetch = fetch_stock_trade_daily(TOKEN, APP_KEY, APP_SECRET, SAMSUNG, BUSINESS_DATE)
+    fetch = COLLECTOR.fetch_stock_trade_daily(SAMSUNG, BUSINESS_DATE)
 
     row = fetch.rows[0]
     assert row.business_date == date(2026, 8, 14)
@@ -462,7 +497,7 @@ def test_daily_trade_enforces_all_four_identities(monkeypatch, overrides, messag
     monkeypatch.setattr(kis_investor_flow, "send_get", fake_send_get(body(output2=[daily_row(**overrides)])))
 
     with pytest.raises(KisPayloadError, match=message):
-        fetch_stock_trade_daily(TOKEN, APP_KEY, APP_SECRET, SAMSUNG, BUSINESS_DATE)
+        COLLECTOR.fetch_stock_trade_daily(SAMSUNG, BUSINESS_DATE)
 
 
 def test_daily_trade_sends_the_market_division_and_end_date(monkeypatch):
@@ -470,7 +505,7 @@ def test_daily_trade_sends_the_market_division_and_end_date(monkeypatch):
     send = fake_send_get(body(output2=[DAILY_ROW]))
     monkeypatch.setattr(kis_investor_flow, "send_get", send)
 
-    fetch_stock_trade_daily(TOKEN, APP_KEY, APP_SECRET, SAMSUNG, BUSINESS_DATE)
+    COLLECTOR.fetch_stock_trade_daily(SAMSUNG, BUSINESS_DATE)
 
     assert send.sent[0]["tr_id"] == "FHPTJ04160001"
     assert send.sent[0]["query"] == {
@@ -491,14 +526,14 @@ def test_daily_trade_rejects_rows_after_the_end_date(monkeypatch):
     monkeypatch.setattr(kis_investor_flow, "send_get", fake_send_get(body(output2=[ahead])))
 
     with pytest.raises(KisPayloadError, match="returned rows after"):
-        fetch_stock_trade_daily(TOKEN, APP_KEY, APP_SECRET, SAMSUNG, BUSINESS_DATE)
+        COLLECTOR.fetch_stock_trade_daily(SAMSUNG, BUSINESS_DATE)
 
 
 def test_daily_trade_rejects_duplicated_business_dates(monkeypatch):
     monkeypatch.setattr(kis_investor_flow, "send_get", fake_send_get(body(output2=[DAILY_ROW, DAILY_ROW])))
 
     with pytest.raises(KisPayloadError, match="duplicated business dates"):
-        fetch_stock_trade_daily(TOKEN, APP_KEY, APP_SECRET, SAMSUNG, BUSINESS_DATE)
+        COLLECTOR.fetch_stock_trade_daily(SAMSUNG, BUSINESS_DATE)
 
 
 def test_daily_trade_rejects_an_unreadable_date(monkeypatch):
@@ -507,15 +542,15 @@ def test_daily_trade_rejects_an_unreadable_date(monkeypatch):
     )
 
     with pytest.raises(KisPayloadError, match="unreadable stck_bsop_date"):
-        fetch_stock_trade_daily(TOKEN, APP_KEY, APP_SECRET, SAMSUNG, BUSINESS_DATE)
+        COLLECTOR.fetch_stock_trade_daily(SAMSUNG, BUSINESS_DATE)
 
 
 def test_store_daily_trade_writes_one_row_per_business_date(monkeypatch):
     monkeypatch.setattr(kis_investor_flow, "send_get", fake_send_get(body(output2=[DAILY_ROW, DAILY_ROW_PREVIOUS])))
-    fetch = fetch_stock_trade_daily(TOKEN, APP_KEY, APP_SECRET, SAMSUNG, BUSINESS_DATE)
+    fetch = COLLECTOR.fetch_stock_trade_daily(SAMSUNG, BUSINESS_DATE)
     connection = FakeConnection()
 
-    assert store_stock_trade_daily(connection, fetch) == 2
+    assert COLLECTOR.store_stock_trade_daily(connection, fetch) == 2
 
     rows = rows_for(connection.recorded_cursor, "stock_investor_trade_daily")
     assert [row[1] for row in rows] == [date(2026, 8, 14), date(2026, 8, 13)]
@@ -526,9 +561,9 @@ def test_store_daily_trade_writes_one_row_per_business_date(monkeypatch):
 def test_store_daily_trade_records_the_covered_range(monkeypatch):
     """백필이 어디까지 갔는지 계보만 보고 읽을 수 있어야 한다."""
     monkeypatch.setattr(kis_investor_flow, "send_get", fake_send_get(body(output2=[DAILY_ROW, DAILY_ROW_PREVIOUS])))
-    fetch = fetch_stock_trade_daily(TOKEN, APP_KEY, APP_SECRET, SAMSUNG, BUSINESS_DATE)
+    fetch = COLLECTOR.fetch_stock_trade_daily(SAMSUNG, BUSINESS_DATE)
     connection = FakeConnection()
-    store_stock_trade_daily(connection, fetch)
+    COLLECTOR.store_stock_trade_daily(connection, fetch)
 
     record = rows_for(connection.recorded_cursor, "source_record")[0]
     metadata = json.loads(record[-1])
@@ -560,7 +595,7 @@ def test_daily_trade_rejects_an_inconsistent_candle(monkeypatch, overrides):
     monkeypatch.setattr(kis_investor_flow, "send_get", fake_send_get(body(output2=[daily_row(**overrides)])))
 
     with pytest.raises(KisPayloadError, match="daily candle is inconsistent"):
-        fetch_stock_trade_daily(TOKEN, APP_KEY, APP_SECRET, SAMSUNG, BUSINESS_DATE)
+        COLLECTOR.fetch_stock_trade_daily(SAMSUNG, BUSINESS_DATE)
 
 
 def test_a_candle_of_zeros_passes(monkeypatch):
@@ -568,6 +603,6 @@ def test_a_candle_of_zeros_passes(monkeypatch):
     flat = daily_row(stck_oprc="0", stck_hgpr="0", stck_lwpr="0", stck_clpr="0")
     monkeypatch.setattr(kis_investor_flow, "send_get", fake_send_get(body(output2=[flat])))
 
-    row = fetch_stock_trade_daily(TOKEN, APP_KEY, APP_SECRET, SAMSUNG, BUSINESS_DATE).rows[0]
+    row = COLLECTOR.fetch_stock_trade_daily(SAMSUNG, BUSINESS_DATE).rows[0]
 
     assert row.high_price == Decimal(0)

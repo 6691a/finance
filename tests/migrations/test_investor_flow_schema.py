@@ -21,7 +21,21 @@ def test_the_market_key_is_one_row_per_minute(capsys):
 
     assert "CREATE TABLE market_investor_flow_snapshot" in sql
     assert "uq_market_investor_flow_snapshot_natural_key UNIQUE (provider, market_code, observed_at)" in sql
-    assert "market_code IN ('KOSPI', 'KOSDAQ')" in sql
+
+
+def test_the_market_check_covers_the_derivative_markets(capsys):
+    """수집기 Enum이 보내는 일곱 시장을 제약이 전부 받아야 한다.
+
+    이 대조는 `tests/collectors/test_kis_investor_flow.py`가 Enum 대 모델로 한 번 더 한다.
+    여기서 보는 것은 마이그레이션이 실제 DDL을 그렇게 내는가다 — 모델만 고치고 리비전을
+    빠뜨리면 저장이 CHECK 위반으로 죽는다.
+    """
+    sql = head_sql(capsys)
+
+    # 넓히는 리비전이 CREATE 뒤에 오므로 마지막에 남는 제약을 본다.
+    widened = "market_code IN ('KOSPI', 'KOSDAQ', 'FUTURES', 'CALL_OPTION', 'PUT_OPTION', 'STOCK_FUTURES', 'ETF')"
+    assert widened in sql
+    assert sql.index(widened) > sql.index("CREATE TABLE market_investor_flow_snapshot")
 
 
 def test_market_flow_stores_all_three_investor_groups(capsys):

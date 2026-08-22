@@ -349,13 +349,25 @@ def test_positioning_tables_document_every_column():
 
 
 def test_investor_flow_tables_keep_the_shared_vocabularies():
-    from apps.models.market import KrxMarket, MarketInvestorFlowSnapshot, StockInvestorEstimateSnapshot
+    from apps.models.market import InvestorFlowMarketCode, MarketInvestorFlowSnapshot, StockInvestorEstimateSnapshot
 
-    # 종목은 6자리 코드, 시장은 KrxMarket. 셋째 어휘를 만들지 않는다.
+    # 종목은 6자리 코드, 시장은 InvestorFlowMarketCode. 셋째 어휘를 만들지 않는다.
     assert "stock_code" in StockInvestorEstimateSnapshot.__table__.c
     assert "target" not in StockInvestorEstimateSnapshot.__table__.c
     market_column = MarketInvestorFlowSnapshot.__table__.c.market_code
-    assert set(market_column.type.enums) == {member.value for member in KrxMarket}
+    assert set(market_column.type.enums) == {member.value for member in InvestorFlowMarketCode}
+
+
+def test_the_derivative_markets_do_not_leak_into_krx_market():
+    """`KrxMarket`은 현물 두 시장으로 닫혀 있다.
+
+    상승·보합·하락 분포와 시장 대차 잔고가 그 Enum을 쓴다. 거기에 콜옵션이 들어가면
+    "시장 전체 종목 수"라는 뜻이 무너진다. 수급만 파생까지 넓히는 것이라 Enum을 나눴다.
+    """
+    from apps.models.market import InvestorFlowMarketCode, KrxMarket
+
+    assert {member.value for member in KrxMarket} == {"KOSPI", "KOSDAQ"}
+    assert {member.value for member in KrxMarket} < {member.value for member in InvestorFlowMarketCode}
 
 
 def test_the_estimate_table_names_itself_an_estimate():

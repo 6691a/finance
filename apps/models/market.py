@@ -1546,6 +1546,27 @@ class StockInvestorEstimateSnapshot(EntityBase):
     )
 
 
+class InvestorFlowMarketCode(StrEnum):
+    """시장별 투자자 매매동향이 붙는 시장 구분.
+
+    `KrxMarket`과 값 집합이 다르다. 저쪽은 "코스피·코스닥 두 현물 시장"이고 여기는 그 둘에
+    **파생과 ETF까지** 더한 일곱이다. 상승·보합·하락 분포나 시장 대차 잔고에 콜옵션이라는
+    값이 있으면 안 되므로 Enum을 합치지 않는다.
+
+    값은 KIS 조회 코드가 아니라 우리 이름이다. 조회 코드 두 개는 수집기의
+    `modules/collectors/market/kis_investor_flow.InvestorFlowMarket`이 든다. 이름을 코드로 두면
+    (`K2I`, `999`) DB만 보고 무엇인지 알 수 없다.
+    """
+
+    KOSPI = "KOSPI"
+    KOSDAQ = "KOSDAQ"
+    FUTURES = "FUTURES"
+    CALL_OPTION = "CALL_OPTION"
+    PUT_OPTION = "PUT_OPTION"
+    STOCK_FUTURES = "STOCK_FUTURES"
+    ETF = "ETF"
+
+
 class MarketInvestorFlowSnapshot(EntityBase):
     """시장별 투자자 누적 매매동향.
 
@@ -1581,7 +1602,7 @@ class MarketInvestorFlowSnapshot(EntityBase):
             name="uq_market_investor_flow_snapshot_natural_key",
         ),
         CheckConstraint(
-            "market_code IN ('KOSPI', 'KOSDAQ')",
+            "market_code IN ('KOSPI', 'KOSDAQ', 'FUTURES', 'CALL_OPTION', 'PUT_OPTION', 'STOCK_FUTURES', 'ETF')",
             name="ck_market_investor_flow_snapshot_market_code",
         ),
         Index("ix_market_investor_flow_snapshot_source_record_id", "source_record_id"),
@@ -1592,15 +1613,18 @@ class MarketInvestorFlowSnapshot(EntityBase):
     )
 
     provider: Mapped[str] = mapped_column(Text, nullable=False, comment="데이터 제공처 식별자(kis)")
-    market_code: Mapped[KrxMarket] = mapped_column(
+    market_code: Mapped[InvestorFlowMarketCode] = mapped_column(
         SqlEnum(
-            KrxMarket,
+            InvestorFlowMarketCode,
             native_enum=False,
             length=20,
             values_callable=lambda enum: [member.value for member in enum],
         ),
         nullable=False,
-        comment="시장 구분(KOSPI, KOSDAQ). 코스닥 조회 코드는 아직 확인하지 못해 KOSPI만 채워진다",
+        comment=(
+            "시장 구분(KOSPI, KOSDAQ, FUTURES, CALL_OPTION, PUT_OPTION, STOCK_FUTURES, ETF). "
+            "현물과 파생이 한 테이블에 섞여 있으므로 조회하는 쪽은 이 칸을 반드시 건다"
+        ),
     )
     observed_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),

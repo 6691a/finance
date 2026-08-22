@@ -1,6 +1,6 @@
 """DAG 객체와 params 해석만 검증한다.
 
-파싱과 저장 규칙은 `modules/collectors/kis_investor_flow.py`에 있고 `tests/collectors/`가 덮는다.
+파싱과 저장 규칙은 `modules/collectors/market/kis_investor_flow.py`에 있고 `tests/collectors/`가 덮는다.
 """
 
 from datetime import UTC, date, datetime

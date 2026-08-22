@@ -1,7 +1,7 @@
 """widen investor flow market codes
 
 Revision ID: b7d21e4a9f38
-Revises: a3f9c1d27e64
+Revises: c2d9e4f1a7b3
 Create Date: 2026-08-22 15:00:00.000000
 
 시장별 투자자 매매동향(`market_investor_flow_snapshot`)을 코스피·코스닥 둘에서 선물·콜옵션·
@@ -10,7 +10,7 @@ Create Date: 2026-08-22 15:00:00.000000
 같은 조회(`FHPTJ04030000`)가 일곱 시장에 같은 12개 투자자 분류를 같은 필드 이름으로 준다.
 그래서 컬럼은 하나도 바뀌지 않고 `market_code`가 받는 값 집합만 넓어진다. 조회 코드는 공식
 postman 컬렉션의 파라미터 설명에 있고 근거는
-`airflow/modules/collectors/kis_investor_flow.py`의 "시장 코드는 문서에 다 있다" 절에 있다.
+`airflow/modules/collectors/market/kis_investor_flow.py`의 "시장 코드는 문서에 다 있다" 절에 있다.
 
 컬럼 타입은 그대로다. `Enum(native_enum=False)`는 PostgreSQL native enum이 아니라
 `VARCHAR(20)`이고, 가장 긴 값 `STOCK_FUTURES`가 13자라 길이도 그대로다. 바뀌는 것은 명시
@@ -26,7 +26,7 @@ from alembic import op
 
 # revision identifiers, used by Alembic.
 revision: str = "b7d21e4a9f38"
-down_revision: str | Sequence[str] | None = "a3f9c1d27e64"
+down_revision: str | Sequence[str] | None = "c2d9e4f1a7b3"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 

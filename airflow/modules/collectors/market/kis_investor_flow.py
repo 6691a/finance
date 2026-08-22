@@ -6,12 +6,29 @@
 파나"**다. 지수가 오르는데 외국인이 팔고 개인이 받는 장과, 외국인이 사는 장은 다음 날이
 다르다.
 
-토큰 발급과 HTTP는 `kis.py`가 갖고 있어 그대로 쓴다. `kis_market_calendar.py`·
+토큰 발급과 HTTP는 `collectors/kis.py`가 갖고 있어 그대로 쓴다. `kis_market_calendar.py`·
 `kis_positioning.py`와 같은 이유로 모듈을 나눴다.
 
 저장 대상은 `stock_investor_estimate_snapshot`, `market_investor_flow_snapshot`,
 `stock_investor_trade_daily`다. 정의의 원본은 백엔드의 `apps/models/market.py`이며 여기 SQL의
 컬럼 이름은 `tests/collectors/test_kis_investor_flow.py`가 그 모델 metadata와 대조한다.
+
+## 클래스인 이유
+
+**자격 증명과 토큰이 상태다.** 함수로 두면 조회마다 `token, app_key, app_secret`을 다시
+넘겨야 하고 DAG이 그 셋을 들고 다녀야 한다. 수집기 하나가 객체 하나이고, 종목·시장 순회는
+`fetch_*(...)` 반복이다.
+
+세 조회를 한 클래스에 둔다. 셋이 같은 자격 증명과 같은 응답 규약(`rt_cd`, `output`)을 쓰기
+때문이다. 나누면 `_call`·`_rows`가 세 벌이 된다. 부르는 DAG이 둘(장중·일별)인 것은 스케줄이
+다른 것이지 수집 규칙이 다른 것이 아니다.
+
+상태가 필요 없는 것은 클래스 밖이다. 응답 칸 파싱(`_int`, `_decimal`), 값 모양
+(`*Row`, `*Fetch`), 대상 목록(`InvestorFlowStock`, `InvestorFlowMarket`)이 그것이다.
+**Pydantic 모델을 클래스 안에 중첩하지 않는다** — 테스트와 다른 모듈이 import한다.
+
+기준 구현은 `collectors/analyst/kis_opinion.py`이고 나머지 수집기의 전환 계획은
+`docs/collectors-class-migration.md`에 있다.
 
 아래 계약은 2026-08-14 장중에 운영 키로 확인했다.
 
@@ -219,6 +236,50 @@ class InvestorFlowMarket(StrEnum):
     ETF = ("ETF", "ETF", "T000")
 
 
+def _int(value: Any, field: str) -> int:
+    """수량 한 칸.
+
+    값이 `000000000000878000`, `-00000000000464000`처럼 부호 뒤에 0이 채워져 온다. 파이썬
+    `int`가 그대로 읽는다. 음수는 정상값이다.
+    """
+    text = str(value if value is not None else "").strip().replace(",", "")
+    if not text or text == "-":
+        return 0
+    try:
+        return int(text)
+    except ValueError:
+        raise KisPayloadError(f"KIS returned a non-numeric {field}: {value!r}") from None
+
+
+def _decimal(value: Any, field: str) -> Decimal:
+    text = str(value if value is not None else "").strip().replace(",", "")
+    if not text or text == "-":
+        return Decimal(0)
+    try:
+        return Decimal(text)
+    except InvalidOperation:
+        raise KisPayloadError(f"KIS returned a non-numeric {field}: {value!r}") from None
+
+
+# 기관계를 이루는 세부 일곱. **접미사가 분류마다 다르다.** 사모펀드만 `_ntby_vol`이고
+# 나머지는 `_ntby_qty`다(실측). 한 벌로 조립하면 그 하나가 조용히 0이 된다.
+INSTITUTION_PARTS: tuple[tuple[str, str], ...] = (
+    ("securities", "scrt_ntby_qty"),
+    ("investment_trust", "ivtr_ntby_qty"),
+    ("private_equity", "pe_fund_ntby_vol"),
+    ("bank", "bank_ntby_qty"),
+    ("insurance", "insu_ntby_qty"),
+    ("merchant_bank", "mrbn_ntby_qty"),
+    ("pension_fund", "fund_ntby_qty"),
+)
+
+# 기관에도 개인에도 들어가지 않는 둘. 이 둘까지 있어야 합이 0으로 닫힌다.
+OTHER_PARTS: tuple[tuple[str, str], ...] = (
+    ("other_corporation", "etc_corp_ntby_vol"),
+    ("other_organization", "etc_orgt_ntby_vol"),
+)
+
+
 class StockEstimateRow(BaseModel):
     """종목 추정 응답의 한 슬롯."""
 
@@ -246,25 +307,6 @@ class StockEstimateRow(BaseModel):
             institution_net_buy_qty=institution,
             total_net_buy_qty=total,
         )
-
-
-# 기관계를 이루는 세부 일곱. **접미사가 분류마다 다르다.** 사모펀드만 `_ntby_vol`이고
-# 나머지는 `_ntby_qty`다(실측). 한 벌로 조립하면 그 하나가 조용히 0이 된다.
-INSTITUTION_PARTS: tuple[tuple[str, str], ...] = (
-    ("securities", "scrt_ntby_qty"),
-    ("investment_trust", "ivtr_ntby_qty"),
-    ("private_equity", "pe_fund_ntby_vol"),
-    ("bank", "bank_ntby_qty"),
-    ("insurance", "insu_ntby_qty"),
-    ("merchant_bank", "mrbn_ntby_qty"),
-    ("pension_fund", "fund_ntby_qty"),
-)
-
-# 기관에도 개인에도 들어가지 않는 둘. 이 둘까지 있어야 합이 0으로 닫힌다.
-OTHER_PARTS: tuple[tuple[str, str], ...] = (
-    ("other_corporation", "etc_corp_ntby_vol"),
-    ("other_organization", "etc_orgt_ntby_vol"),
-)
 
 
 class MarketFlowRow(BaseModel):
@@ -356,275 +398,6 @@ class MarketFlowRow(BaseModel):
                 self.individual_buy_qty,
             )
         )
-
-
-class StockEstimateFetch(BaseModel):
-    model_config = ConfigDict(frozen=True)
-
-    stock_code: str
-    business_date: date
-    rows: tuple[StockEstimateRow, ...]
-    started_at: datetime
-    completed_at: datetime
-
-
-class MarketFlowFetch(BaseModel):
-    model_config = ConfigDict(frozen=True)
-
-    market_code: str
-    observed_at: datetime
-    row: MarketFlowRow
-    started_at: datetime
-    completed_at: datetime
-
-
-def _int(value: Any, field: str) -> int:
-    """수량 한 칸.
-
-    값이 `000000000000878000`, `-00000000000464000`처럼 부호 뒤에 0이 채워져 온다. 파이썬
-    `int`가 그대로 읽는다. 음수는 정상값이다.
-    """
-    text = str(value if value is not None else "").strip().replace(",", "")
-    if not text or text == "-":
-        return 0
-    try:
-        return int(text)
-    except ValueError:
-        raise KisPayloadError(f"KIS returned a non-numeric {field}: {value!r}") from None
-
-
-def _decimal(value: Any, field: str) -> Decimal:
-    text = str(value if value is not None else "").strip().replace(",", "")
-    if not text or text == "-":
-        return Decimal(0)
-    try:
-        return Decimal(text)
-    except InvalidOperation:
-        raise KisPayloadError(f"KIS returned a non-numeric {field}: {value!r}") from None
-
-
-def _call(
-    token: SecretStr,
-    app_key: SecretStr,
-    app_secret: SecretStr,
-    path: str,
-    tr_id: str,
-    query: dict[str, str],
-) -> dict[str, Any]:
-    body, _, _ = send_get(token, app_key, app_secret, path, tr_id, query)
-    try:
-        payload = json.loads(body)
-    except json.JSONDecodeError as error:
-        raise KisPayloadError(f"KIS returned a non-JSON body: {error}") from None
-    if not isinstance(payload, dict):
-        raise KisPayloadError("KIS returned a JSON body that is not an object")
-
-    code = str(payload.get("rt_cd", ""))
-    if code != "0":
-        raise KisResultError(code, str(payload.get("msg1", "")).strip())
-    return payload
-
-
-def _rows(payload: dict[str, Any], key: str) -> list[dict[str, Any]]:
-    output = payload.get(key) or []
-    if isinstance(output, dict):
-        return [output]
-    if not isinstance(output, list):
-        raise KisPayloadError(f"KIS returned a {key} that is neither a list nor an object")
-    return output
-
-
-def fetch_stock_estimates(
-    token: SecretStr,
-    app_key: SecretStr,
-    app_secret: SecretStr,
-    stock: InvestorFlowStock,
-    business_date: date,
-) -> StockEstimateFetch:
-    """한 종목의 외국인·기관 추정 순매수를 받는다.
-
-    응답에 날짜가 없어 `business_date`를 호출자가 넘긴다. 없는 종목코드는 오류가 아니라
-    0행으로 오는데(실측) 종목은 Enum이 막으므로 0행은 정상으로 다룬다.
-    """
-    started_at = datetime.now(UTC)
-    payload = _call(
-        token,
-        app_key,
-        app_secret,
-        STOCK_ESTIMATE_PATH,
-        STOCK_ESTIMATE_TR_ID,
-        {"MKSC_SHRN_ISCD": stock.value},
-    )
-    raw = _rows(payload, "output2")
-    try:
-        rows = tuple(StockEstimateRow.from_payload(row) for row in raw)
-    except (KeyError, ValidationError) as error:
-        raise KisPayloadError(f"KIS estimate row is malformed: {error}") from None
-
-    slots = {row.source_time_code for row in rows}
-    if len(slots) != len(rows):
-        raise KisPayloadError(f"KIS returned duplicated slots for {stock.value}: {sorted(slots)}")
-
-    return StockEstimateFetch(
-        stock_code=stock.value,
-        business_date=business_date,
-        rows=rows,
-        started_at=started_at,
-        completed_at=datetime.now(UTC),
-    )
-
-
-def fetch_market_flow(
-    token: SecretStr,
-    app_key: SecretStr,
-    app_secret: SecretStr,
-    market: InvestorFlowMarket,
-    observed_at: datetime,
-) -> MarketFlowFetch:
-    """한 시장의 투자자 누적 매매동향을 받는다.
-
-    **모든 값이 0이면 실패시킨다.** 잘못된 시장 코드가 오류 없이 0을 돌려주기 때문이다.
-    `observed_at`은 제공처가 준 시각이 아니라 호출자가 절삭한 수집 시각이다.
-    """
-    started_at = datetime.now(UTC)
-    payload = _call(
-        token,
-        app_key,
-        app_secret,
-        MARKET_FLOW_PATH,
-        MARKET_FLOW_TR_ID,
-        {"FID_INPUT_ISCD": market.primary_code, "FID_INPUT_ISCD_2": market.secondary_code},
-    )
-    raw = _rows(payload, "output")
-    if not raw:
-        raise KisPayloadError(f"KIS returned no market flow row for {market.value}")
-
-    try:
-        row = MarketFlowRow.from_payload(raw[0])
-    except (KeyError, ValidationError) as error:
-        raise KisPayloadError(f"KIS market flow row is malformed: {error}") from None
-
-    if row.empty:
-        raise KisPayloadError(
-            f"KIS returned an all-zero market flow for {market.value} "
-            f"({market.primary_code}/{market.secondary_code}); the code is probably wrong"
-        )
-
-    return MarketFlowFetch(
-        market_code=market.value,
-        observed_at=observed_at.astimezone(UTC),
-        row=row,
-        started_at=started_at,
-        completed_at=datetime.now(UTC),
-    )
-
-
-def _insert_source_record(
-    cursor: Any,
-    source_key: str,
-    started_at: datetime,
-    completed_at: datetime,
-    record_count: int,
-    metadata: dict[str, Any],
-) -> int:
-    cursor.execute(
-        SOURCE_RECORD_INSERT,
-        (
-            "api",
-            SOURCE,
-            source_key,
-            started_at,
-            completed_at,
-            "succeeded",
-            record_count,
-            # 원본은 남기지 않는다. 5분마다 도는 조회라 계보가 값보다 빨리 커진다.
-            None,
-            json.dumps(metadata, ensure_ascii=False),
-        ),
-    )
-    return cursor.fetchone()[0]
-
-
-def store_stock_estimates(connection: Connection, fetch: StockEstimateFetch) -> int:
-    """슬롯마다 한 행을 저장한다. 같은 슬롯을 다시 받으면 갱신된다."""
-    with connection.cursor() as cursor:
-        source_record_id = _insert_source_record(
-            cursor,
-            STOCK_ESTIMATE_SOURCE_KEY,
-            fetch.started_at,
-            fetch.completed_at,
-            len(fetch.rows),
-            {
-                "stock_code": fetch.stock_code,
-                "business_date": fetch.business_date.isoformat(),
-                "slots": [row.source_time_code for row in fetch.rows],
-            },
-        )
-        execute_upserts(
-            cursor,
-            STOCK_ESTIMATE_UPSERT,
-            [
-                (
-                    fetch.stock_code,
-                    fetch.business_date,
-                    row.source_time_code,
-                    row.foreign_net_buy_qty,
-                    row.institution_net_buy_qty,
-                    row.total_net_buy_qty,
-                    fetch.completed_at,
-                    source_record_id,
-                )
-                for row in fetch.rows
-            ],
-        )
-    return len(fetch.rows)
-
-
-def store_market_flow(connection: Connection, fetch: MarketFlowFetch) -> int:
-    """누적 스냅샷 한 분을 저장한다. 델타는 계산하지 않는다."""
-    row = fetch.row
-    with connection.cursor() as cursor:
-        source_record_id = _insert_source_record(
-            cursor,
-            MARKET_FLOW_SOURCE_KEY,
-            fetch.started_at,
-            fetch.completed_at,
-            1,
-            {
-                "market_code": fetch.market_code,
-                "observed_at": fetch.observed_at.isoformat(),
-            },
-        )
-        cursor.execute(
-            MARKET_FLOW_UPSERT,
-            (
-                fetch.market_code,
-                fetch.observed_at,
-                row.foreign_sell_qty,
-                row.foreign_buy_qty,
-                row.foreign_net_buy_qty,
-                row.foreign_net_buy_amount,
-                row.institution_sell_qty,
-                row.institution_buy_qty,
-                row.institution_net_buy_qty,
-                row.institution_net_buy_amount,
-                row.individual_sell_qty,
-                row.individual_buy_qty,
-                row.individual_net_buy_qty,
-                row.individual_net_buy_amount,
-                row.securities_net_buy_qty,
-                row.investment_trust_net_buy_qty,
-                row.private_equity_net_buy_qty,
-                row.bank_net_buy_qty,
-                row.insurance_net_buy_qty,
-                row.merchant_bank_net_buy_qty,
-                row.pension_fund_net_buy_qty,
-                row.other_corporation_net_buy_qty,
-                row.other_organization_net_buy_qty,
-                source_record_id,
-            ),
-        )
-    return 1
 
 
 class StockTradeDailyRow(BaseModel):
@@ -724,6 +497,26 @@ class StockTradeDailyRow(BaseModel):
         return cls(**values)
 
 
+class StockEstimateFetch(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    stock_code: str
+    business_date: date
+    rows: tuple[StockEstimateRow, ...]
+    started_at: datetime
+    completed_at: datetime
+
+
+class MarketFlowFetch(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    market_code: str
+    observed_at: datetime
+    row: MarketFlowRow
+    started_at: datetime
+    completed_at: datetime
+
+
 class StockTradeDailyFetch(BaseModel):
     model_config = ConfigDict(frozen=True)
 
@@ -734,98 +527,197 @@ class StockTradeDailyFetch(BaseModel):
     completed_at: datetime
 
 
-def fetch_stock_trade_daily(
-    token: SecretStr,
-    app_key: SecretStr,
-    app_secret: SecretStr,
-    stock: InvestorFlowStock,
-    end_date: date,
-) -> StockTradeDailyFetch:
-    """한 종목의 확정 일별 투자자 매매동향을 받는다.
+class KisInvestorFlowCollector:
+    """KIS 투자자 매매동향 수집기. 자격 증명과 토큰을 들고 세 조회를 돈다.
 
-    `end_date`는 **구간의 끝**이다. 한 응답이 그날부터 과거로 30 거래일을 담는다(실측:
-    2026-07-01을 넣으면 2026-07-01~2026-05-19). 그래서 백필은 날짜를 뒤로 걸으면 된다.
+    한 실행이 객체 하나다. 토큰은 발급 횟수 제한이 있어 DAG이 한 번 받아 넘긴다. 세 조회를
+    한 클래스에 두는 것은 셋이 같은 자격 증명과 같은 응답 규약(`rt_cd`, `output`)을 쓰기
+    때문이다. 나누면 `_call`·`_rows`가 세 벌이 된다.
 
-    당일치는 장 마감 뒤에만 확정이다. 시각 판단은 DAG가 한다.
+    조회하는 쪽(장중 DAG은 추정·시장 누적, 일별 DAG은 확정 일별)이 다른 것은 스케줄이지
+    수집 규칙이 아니다.
     """
-    started_at = datetime.now(UTC)
-    payload = _call(
-        token,
-        app_key,
-        app_secret,
-        DAILY_TRADE_PATH,
-        DAILY_TRADE_TR_ID,
-        {
-            "FID_COND_MRKT_DIV_CODE": DAILY_TRADE_MARKET_DIV,
-            "FID_INPUT_ISCD": stock.value,
-            "FID_INPUT_DATE_1": end_date.strftime("%Y%m%d"),
-            "FID_ORG_ADJ_PRC": "",
-            "FID_ETC_CLS_CODE": "",
-        },
-    )
-    raw = _rows(payload, "output2")
-    try:
-        rows = tuple(StockTradeDailyRow.from_payload(row) for row in raw)
-    except (KeyError, ValidationError) as error:
-        raise KisPayloadError(f"KIS daily trade row is malformed: {error}") from None
 
-    dates = {row.business_date for row in rows}
-    if len(dates) != len(rows):
-        raise KisPayloadError(f"KIS returned duplicated business dates for {stock.value}")
+    def __init__(self, token: SecretStr, app_key: SecretStr, app_secret: SecretStr) -> None:
+        self._token = token
+        self._app_key = app_key
+        self._app_secret = app_secret
 
-    late = [row.business_date for row in rows if row.business_date > end_date]
-    if late:
-        # 구간 끝보다 뒤의 거래일이 섞이면 요청 날짜의 뜻이 바뀐 것이다. 백필이 조용히
-        # 같은 구간을 맴돌게 되므로 멈춘다.
-        raise KisPayloadError(f"KIS returned rows after {end_date}: {sorted(late)}")
+    def fetch_stock_estimates(self, stock: InvestorFlowStock, business_date: date) -> StockEstimateFetch:
+        """한 종목의 외국인·기관 추정 순매수를 받는다.
 
-    return StockTradeDailyFetch(
-        stock_code=stock.value,
-        end_date=end_date,
-        rows=rows,
-        started_at=started_at,
-        completed_at=datetime.now(UTC),
-    )
+        응답에 날짜가 없어 `business_date`를 호출자가 넘긴다. 없는 종목코드는 오류가 아니라
+        0행으로 오는데(실측) 종목은 Enum이 막으므로 0행은 정상으로 다룬다.
+        """
+        started_at = datetime.now(UTC)
+        payload = self._call(
+            STOCK_ESTIMATE_PATH,
+            STOCK_ESTIMATE_TR_ID,
+            {"MKSC_SHRN_ISCD": stock.value},
+        )
+        raw = self._rows(payload, "output2")
+        try:
+            rows = tuple(StockEstimateRow.from_payload(row) for row in raw)
+        except (KeyError, ValidationError) as error:
+            raise KisPayloadError(f"KIS estimate row is malformed: {error}") from None
 
+        slots = {row.source_time_code for row in rows}
+        if len(slots) != len(rows):
+            raise KisPayloadError(f"KIS returned duplicated slots for {stock.value}: {sorted(slots)}")
 
-def store_stock_trade_daily(connection: Connection, fetch: StockTradeDailyFetch) -> int:
-    """거래일마다 한 행을 저장한다. 확정값이라 다시 받아도 같은 값으로 갱신된다."""
-    rows = fetch.rows
-    covered = sorted(row.business_date for row in rows)
-    with connection.cursor() as cursor:
-        source_record_id = _insert_source_record(
-            cursor,
-            DAILY_TRADE_SOURCE_KEY,
-            fetch.started_at,
-            fetch.completed_at,
-            len(rows),
+        return StockEstimateFetch(
+            stock_code=stock.value,
+            business_date=business_date,
+            rows=rows,
+            started_at=started_at,
+            completed_at=datetime.now(UTC),
+        )
+
+    def fetch_market_flow(self, market: InvestorFlowMarket, observed_at: datetime) -> MarketFlowFetch:
+        """한 시장의 투자자 누적 매매동향을 받는다.
+
+        **모든 값이 0이면 실패시킨다.** 잘못된 시장 코드가 오류 없이 0을 돌려주기 때문이다.
+        `observed_at`은 제공처가 준 시각이 아니라 호출자가 절삭한 수집 시각이다.
+        """
+        started_at = datetime.now(UTC)
+        payload = self._call(
+            MARKET_FLOW_PATH,
+            MARKET_FLOW_TR_ID,
+            {"FID_INPUT_ISCD": market.primary_code, "FID_INPUT_ISCD_2": market.secondary_code},
+        )
+        raw = self._rows(payload, "output")
+        if not raw:
+            raise KisPayloadError(f"KIS returned no market flow row for {market.value}")
+
+        try:
+            row = MarketFlowRow.from_payload(raw[0])
+        except (KeyError, ValidationError) as error:
+            raise KisPayloadError(f"KIS market flow row is malformed: {error}") from None
+
+        if row.empty:
+            raise KisPayloadError(
+                f"KIS returned an all-zero market flow for {market.value} "
+                f"({market.primary_code}/{market.secondary_code}); the code is probably wrong"
+            )
+
+        return MarketFlowFetch(
+            market_code=market.value,
+            observed_at=observed_at.astimezone(UTC),
+            row=row,
+            started_at=started_at,
+            completed_at=datetime.now(UTC),
+        )
+
+    def fetch_stock_trade_daily(self, stock: InvestorFlowStock, end_date: date) -> StockTradeDailyFetch:
+        """한 종목의 확정 일별 투자자 매매동향을 받는다.
+
+        `end_date`는 **구간의 끝**이다. 한 응답이 그날부터 과거로 30 거래일을 담는다(실측:
+        2026-07-01을 넣으면 2026-07-01~2026-05-19). 그래서 백필은 날짜를 뒤로 걸으면 된다.
+
+        당일치는 장 마감 뒤에만 확정이다. 시각 판단은 DAG가 한다.
+        """
+        started_at = datetime.now(UTC)
+        payload = self._call(
+            DAILY_TRADE_PATH,
+            DAILY_TRADE_TR_ID,
             {
-                "stock_code": fetch.stock_code,
-                "end_date": fetch.end_date.isoformat(),
-                # 어느 구간이 이 응답에 들어 있었는지를 남긴다. 백필이 어디까지 갔는지
-                # 계보만으로 읽을 수 있어야 한다.
-                "covered_from": covered[0].isoformat() if covered else None,
-                "covered_to": covered[-1].isoformat() if covered else None,
+                "FID_COND_MRKT_DIV_CODE": DAILY_TRADE_MARKET_DIV,
+                "FID_INPUT_ISCD": stock.value,
+                "FID_INPUT_DATE_1": end_date.strftime("%Y%m%d"),
+                "FID_ORG_ADJ_PRC": "",
+                "FID_ETC_CLS_CODE": "",
             },
         )
-        execute_upserts(
-            cursor,
-            DAILY_TRADE_UPSERT,
-            [
+        raw = self._rows(payload, "output2")
+        try:
+            rows = tuple(StockTradeDailyRow.from_payload(row) for row in raw)
+        except (KeyError, ValidationError) as error:
+            raise KisPayloadError(f"KIS daily trade row is malformed: {error}") from None
+
+        dates = {row.business_date for row in rows}
+        if len(dates) != len(rows):
+            raise KisPayloadError(f"KIS returned duplicated business dates for {stock.value}")
+
+        late = [row.business_date for row in rows if row.business_date > end_date]
+        if late:
+            # 구간 끝보다 뒤의 거래일이 섞이면 요청 날짜의 뜻이 바뀐 것이다. 백필이 조용히
+            # 같은 구간을 맴돌게 되므로 멈춘다.
+            raise KisPayloadError(f"KIS returned rows after {end_date}: {sorted(late)}")
+
+        return StockTradeDailyFetch(
+            stock_code=stock.value,
+            end_date=end_date,
+            rows=rows,
+            started_at=started_at,
+            completed_at=datetime.now(UTC),
+        )
+
+    def store_stock_estimates(self, connection: Connection, fetch: StockEstimateFetch) -> int:
+        """슬롯마다 한 행을 저장한다. 같은 슬롯을 다시 받으면 갱신된다."""
+        with connection.cursor() as cursor:
+            source_record_id = self._insert_source_record(
+                cursor,
+                STOCK_ESTIMATE_SOURCE_KEY,
+                fetch.started_at,
+                fetch.completed_at,
+                len(fetch.rows),
+                {
+                    "stock_code": fetch.stock_code,
+                    "business_date": fetch.business_date.isoformat(),
+                    "slots": [row.source_time_code for row in fetch.rows],
+                },
+            )
+            execute_upserts(
+                cursor,
+                STOCK_ESTIMATE_UPSERT,
+                [
+                    (
+                        fetch.stock_code,
+                        fetch.business_date,
+                        row.source_time_code,
+                        row.foreign_net_buy_qty,
+                        row.institution_net_buy_qty,
+                        row.total_net_buy_qty,
+                        fetch.completed_at,
+                        source_record_id,
+                    )
+                    for row in fetch.rows
+                ],
+            )
+        return len(fetch.rows)
+
+    def store_market_flow(self, connection: Connection, fetch: MarketFlowFetch) -> int:
+        """누적 스냅샷 한 분을 저장한다. 델타는 계산하지 않는다."""
+        row = fetch.row
+        with connection.cursor() as cursor:
+            source_record_id = self._insert_source_record(
+                cursor,
+                MARKET_FLOW_SOURCE_KEY,
+                fetch.started_at,
+                fetch.completed_at,
+                1,
+                {
+                    "market_code": fetch.market_code,
+                    "observed_at": fetch.observed_at.isoformat(),
+                },
+            )
+            cursor.execute(
+                MARKET_FLOW_UPSERT,
                 (
-                    fetch.stock_code,
-                    row.business_date,
-                    row.open_price,
-                    row.high_price,
-                    row.low_price,
-                    row.close_price,
-                    row.accumulated_volume,
-                    row.accumulated_trade_amount,
+                    fetch.market_code,
+                    fetch.observed_at,
+                    row.foreign_sell_qty,
+                    row.foreign_buy_qty,
                     row.foreign_net_buy_qty,
-                    row.foreign_registered_net_buy_qty,
-                    row.foreign_unregistered_net_buy_qty,
-                    row.individual_net_buy_qty,
+                    row.foreign_net_buy_amount,
+                    row.institution_sell_qty,
+                    row.institution_buy_qty,
                     row.institution_net_buy_qty,
+                    row.institution_net_buy_amount,
+                    row.individual_sell_qty,
+                    row.individual_buy_qty,
+                    row.individual_net_buy_qty,
+                    row.individual_net_buy_amount,
                     row.securities_net_buy_qty,
                     row.investment_trust_net_buy_qty,
                     row.private_equity_net_buy_qty,
@@ -835,12 +727,115 @@ def store_stock_trade_daily(connection: Connection, fetch: StockTradeDailyFetch)
                     row.pension_fund_net_buy_qty,
                     row.other_corporation_net_buy_qty,
                     row.other_organization_net_buy_qty,
-                    row.foreign_net_buy_amount,
-                    row.institution_net_buy_amount,
-                    row.individual_net_buy_amount,
                     source_record_id,
-                )
-                for row in rows
-            ],
+                ),
+            )
+        return 1
+
+    def store_stock_trade_daily(self, connection: Connection, fetch: StockTradeDailyFetch) -> int:
+        """거래일마다 한 행을 저장한다. 확정값이라 다시 받아도 같은 값으로 갱신된다."""
+        rows = fetch.rows
+        covered = sorted(row.business_date for row in rows)
+        with connection.cursor() as cursor:
+            source_record_id = self._insert_source_record(
+                cursor,
+                DAILY_TRADE_SOURCE_KEY,
+                fetch.started_at,
+                fetch.completed_at,
+                len(rows),
+                {
+                    "stock_code": fetch.stock_code,
+                    "end_date": fetch.end_date.isoformat(),
+                    # 어느 구간이 이 응답에 들어 있었는지를 남긴다. 백필이 어디까지 갔는지
+                    # 계보만으로 읽을 수 있어야 한다.
+                    "covered_from": covered[0].isoformat() if covered else None,
+                    "covered_to": covered[-1].isoformat() if covered else None,
+                },
+            )
+            execute_upserts(
+                cursor,
+                DAILY_TRADE_UPSERT,
+                [
+                    (
+                        fetch.stock_code,
+                        row.business_date,
+                        row.open_price,
+                        row.high_price,
+                        row.low_price,
+                        row.close_price,
+                        row.accumulated_volume,
+                        row.accumulated_trade_amount,
+                        row.foreign_net_buy_qty,
+                        row.foreign_registered_net_buy_qty,
+                        row.foreign_unregistered_net_buy_qty,
+                        row.individual_net_buy_qty,
+                        row.institution_net_buy_qty,
+                        row.securities_net_buy_qty,
+                        row.investment_trust_net_buy_qty,
+                        row.private_equity_net_buy_qty,
+                        row.bank_net_buy_qty,
+                        row.insurance_net_buy_qty,
+                        row.merchant_bank_net_buy_qty,
+                        row.pension_fund_net_buy_qty,
+                        row.other_corporation_net_buy_qty,
+                        row.other_organization_net_buy_qty,
+                        row.foreign_net_buy_amount,
+                        row.institution_net_buy_amount,
+                        row.individual_net_buy_amount,
+                        source_record_id,
+                    )
+                    for row in rows
+                ],
+            )
+        return len(rows)
+
+    # --- 내부 -----------------------------------------------------------------
+
+    def _call(self, path: str, tr_id: str, query: dict[str, str]) -> dict[str, Any]:
+        body, _, _ = send_get(self._token, self._app_key, self._app_secret, path, tr_id, query)
+        try:
+            payload = json.loads(body)
+        except json.JSONDecodeError as error:
+            raise KisPayloadError(f"KIS returned a non-JSON body: {error}") from None
+        if not isinstance(payload, dict):
+            raise KisPayloadError("KIS returned a JSON body that is not an object")
+
+        code = str(payload.get("rt_cd", ""))
+        if code != "0":
+            raise KisResultError(code, str(payload.get("msg1", "")).strip())
+        return payload
+
+    @staticmethod
+    def _rows(payload: dict[str, Any], key: str) -> list[dict[str, Any]]:
+        output = payload.get(key) or []
+        if isinstance(output, dict):
+            return [output]
+        if not isinstance(output, list):
+            raise KisPayloadError(f"KIS returned a {key} that is neither a list nor an object")
+        return output
+
+    @staticmethod
+    def _insert_source_record(
+        cursor: Any,
+        source_key: str,
+        started_at: datetime,
+        completed_at: datetime,
+        record_count: int,
+        metadata: dict[str, Any],
+    ) -> int:
+        cursor.execute(
+            SOURCE_RECORD_INSERT,
+            (
+                "api",
+                SOURCE,
+                source_key,
+                started_at,
+                completed_at,
+                "succeeded",
+                record_count,
+                # 원본은 남기지 않는다. 5분마다 도는 조회라 계보가 값보다 빨리 커진다.
+                None,
+                json.dumps(metadata, ensure_ascii=False),
+            ),
         )
-    return len(rows)
+        return cursor.fetchone()[0]

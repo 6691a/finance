@@ -4,7 +4,7 @@
 파나"**다. 지수가 오르는데 외국인이 팔고 개인이 받는 장과, 외국인이 사는 장은 다음 날이
 다르다.
 
-수집 규칙은 `modules/collectors/kis_investor_flow.py`에 있다.
+수집 규칙은 `modules/collectors/market/kis_investor_flow.py`에 있다.
 
 ## 두 조회의 주기가 다르다
 
@@ -24,7 +24,7 @@
 
 잘못된 시장 코드는 오류가 아니라 값 0으로 온다(실측). 그래서 수집기 Enum에는 공식 postman
 컬렉션에 적힌 코드만 있고, **모든 값이 0인 응답은 실패로 다룬다.** 코드표와 근거는
-`modules/collectors/kis_investor_flow.py`의 "시장 코드는 문서에 다 있다" 절에 있다.
+`modules/collectors/market/kis_investor_flow.py`의 "시장 코드는 문서에 다 있다" 절에 있다.
 
 일곱 시장을 받는다. 코스피·코스닥 현물 둘에 선물·콜옵션·풋옵션·주식선물·ETF다. 응답 모양이
 일곱 다 같아서 여기서는 대상이 늘 뿐 분기가 없다. **파생은 수량이 주가 아니라 계약이다** —
@@ -73,13 +73,10 @@ from modules.collectors.kis import (
     KisResultError,
     access_token,
 )
-from modules.collectors.kis_investor_flow import (
+from modules.collectors.market.kis_investor_flow import (
     InvestorFlowMarket,
     InvestorFlowStock,
-    fetch_market_flow,
-    fetch_stock_estimates,
-    store_market_flow,
-    store_stock_estimates,
+    KisInvestorFlowCollector,
 )
 from modules.market_session import krx_open_day
 from modules.utility import CONNECTION_ID, KIS_UNRECOVERABLE_STATUSES, KST_TIMEZONE, atomic
@@ -181,7 +178,7 @@ def kis_investor_flow_intraday():
             raise AirflowSkipException("KIS has not published the first aggregation yet")
 
         app_key, app_secret = _credentials()
-        token = access_token(Variable, app_key, app_secret)
+        collector = KisInvestorFlowCollector(access_token(Variable, app_key, app_secret), app_key, app_secret)
 
         # 이 조회에는 원천 시각이 없다. 응답을 받은 분으로 찍는다.
         observed_at = now.replace(second=0, microsecond=0)
@@ -189,8 +186,8 @@ def kis_investor_flow_intraday():
         jobs: list[tuple[str, Any, Any]] = [
             (
                 f"market:{market.value}",
-                lambda market=market: fetch_market_flow(token, app_key, app_secret, market, observed_at),
-                store_market_flow,
+                lambda market=market: collector.fetch_market_flow(market, observed_at),
+                collector.store_market_flow,
             )
             for market in InvestorFlowMarket
         ]
@@ -198,8 +195,8 @@ def kis_investor_flow_intraday():
             jobs += [
                 (
                     f"estimate:{stock.value}",
-                    lambda stock=stock: fetch_stock_estimates(token, app_key, app_secret, stock, now_kst.date()),
-                    store_stock_estimates,
+                    lambda stock=stock: collector.fetch_stock_estimates(stock, now_kst.date()),
+                    collector.store_stock_estimates,
                 )
                 for stock in InvestorFlowStock
             ]

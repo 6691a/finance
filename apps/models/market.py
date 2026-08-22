@@ -1554,7 +1554,7 @@ class InvestorFlowMarketCode(StrEnum):
     값이 있으면 안 되므로 Enum을 합치지 않는다.
 
     값은 KIS 조회 코드가 아니라 우리 이름이다. 조회 코드 두 개는 수집기의
-    `modules/collectors/kis_investor_flow.InvestorFlowMarket`이 든다. 이름을 코드로 두면
+    `modules/collectors/market/kis_investor_flow.InvestorFlowMarket`이 든다. 이름을 코드로 두면
     (`K2I`, `999`) DB만 보고 무엇인지 알 수 없다.
     """
 

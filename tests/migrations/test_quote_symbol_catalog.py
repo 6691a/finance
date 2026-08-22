@@ -184,7 +184,7 @@ def test_kospi_is_seeded_under_the_domestic_collector(capsys):
 def test_stock_symbols_match_the_other_collectors():
     """봉과 수급을 한 화면에서 겹치려면 종목 식별자가 같아야 한다."""
     from modules.collectors.dart import DartCompany
-    from modules.collectors.kis_investor_flow import InvestorFlowStock
+    from modules.collectors.market.kis_investor_flow import InvestorFlowStock
 
     codes = {stock.value for stock in DomesticStock}
 

@@ -1,7 +1,8 @@
 # 시장 추론(thesis) 기록 설계 — 개요
 
-- 날짜: 2026-08-20 (2026-08-21 리뷰 반영 후 단계별 문서로 분리)
-- 상태: 1·2·3·5·6단계 구현 완료(6단계는 2026-08-22, 리비전 둘 운영 반영 전), 4단계(그래프) 미착수. 운영 배포 전 선행 조건은 5절
+- 날짜: 2026-08-20 (2026-08-21 리뷰 반영 후 단계별 문서로 분리, 2026-08-22 6·7단계 추가)
+- 상태: 1·2·3·5·6·7단계 구현 완료(6·7단계는 2026-08-22, 리비전 셋 운영 반영 전),
+  4단계(그래프) 미착수. 운영 배포 전 선행 조건은 5절
 
 한 문서로 쓰기엔 범위가 커서(모델·리비전, 모듈 둘, DAG, SQL 열 개, 테스트 넷, compose·
 requirements) **배포 단위(worktree/PR 하나)마다 문서를 나눴다.** 이 파일은 공통 원칙과
@@ -58,6 +59,7 @@ requirements) **배포 단위(worktree/PR 하나)마다 문서를 나눴다.** �
 | 4 | [4-graph.md](4-graph.md) | `airflow/modules/graph.py`, `sync_graph` 태스크, `sync_only` Param, compose·requirements, `tests/modules/test_graph.py` | 1 (3과 병렬 가능) | 없음 |
 | 5 | [5-followup.md](5-followup.md) | `thesis_outcome` 테이블, 다지평(T+0·1·3·5) 채점, `FollowupNarrator` 사후 해설과 `verdict`, `past_theses` 툴 | 1, 2, 3 | 있음 |
 | 6 | [6-analyst.md](6-analyst.md) | `stock_analyst_opinion` 테이블과 리비전, `collectors/kis_analyst_opinion.py`, `dags/kis_analyst_opinion_daily.py`, `analyst_opinions` 툴, `SourceKind.research`와 네이버 리서치 출처 여섯(`document_listings.py`의 `enrich` 단계), 테스트 | 5 | 없음(리포트는 기존 문서 평가가 읽는다) |
+| 7 | [7-nxt-review.md](7-nxt-review.md) | `post_nxt_close` 슬롯, `thesis_nxt_review.py`, `market_thesis_nxt_review` DAG, 애프터마켓 조회 SQL, 수기 리비전(CHECK 확장) | 1, 2, 3 | 있음 |
 
 **5단계는 1단계의 `thesis` 채점 컬럼을 `thesis_outcome`으로 옮긴다.** 채택했으므로
 (2026-08-21) 그 이동을 1·2단계 코드에 먼저 반영한다. 무엇이 바뀌는지는
@@ -68,6 +70,9 @@ requirements) **배포 단위(worktree/PR 하나)마다 문서를 나눴다.** �
 - **4는 prod Neo4j 인스턴스가 선행 조건이다.** 이 저장소 코드만으로 끝나지 않는다
   (NAS 쪽 컨테이너, Airflow 이미지 재빌드). 그 전까지 3까지만 운영에 나가고 `sync_graph`는
   `NEO4J_URI` 미설정으로 skip이다.
+- **7은 5와 독립이다.** 애프터마켓 리뷰는 예측이 아니라 채점 대상이 아니고 해설도 붙이지
+  않아, 5단계의 채점·해설 루프와 만나지 않는다. 다만 그 루프가 새 슬롯을 **자동으로** 집지
+  않도록 두 SQL에 슬롯 목록을 걸어야 한다([7-nxt-review.md](7-nxt-review.md) 3절).
 - 한 단계가 끝날 때마다 그 단계 문서의 "테스트" 절이 통과해야 다음으로 간다.
 
 **[TUNING.md](TUNING.md)는 단계가 아니다.** 다 만든 뒤에 쓰는 운영 규칙이라 번호가 없다 —

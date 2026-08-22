@@ -31,11 +31,13 @@ SCHEDULE = MultipleCronTriggerTimetable(
 - **시각은 전제이지 보장이 아니다.** 두 선행 DAG 모두 재시도가 있어(`document_assessment_hourly`
   `retries=3` + 백오프, `kis_investor_trade_daily` `retries=2, 10분`) 그 시각을 넘길 수 있다.
   그래서 `build_thesis` 맨 앞에 readiness guard가 있다(2절).
-- 슬롯은 logical time으로 판정(정오 전 = pre_open). 휴장 판정은 `krx_open_day` —
-  모르면 돌린다. 장전 창의 시작은 전 개장일 15:30(달력을 되짚어 찾는다).
-- **`as_of_at`은 슬롯이 정한다**(장전 = 당일 08:35 KST, 장후 = 당일 15:30 KST). 벽시계를
-  쓰지 않는다 — 오후에 장전 슬롯을 clear해 다시 돌려도 장중 정보로 아침 예측을 덮지 않는다
-  (event-time cutoff까지, README 1절).
+- **슬롯은 DAG가 정한다**(2026-08-21 분리). 초판은 logical time으로 판정했는데(정오 전 =
+  pre_open) 그러면 슬롯이 실행자의 의도가 아니라 시계에서 나오고 수동 실행이 벽시계로
+  떨어진다. 휴장 판정은 `krx_open_day` — 모르면 돌린다. 장전 창의 시작은 전 개장일
+  15:30(달력을 되짚어 찾는다).
+- **`as_of_at`은 슬롯이 정한다**(장전 = 당일 08:35 KST, 장후 = 당일 15:30 KST,
+  애프터마켓 = 당일 20:00 KST). 벽시계를 쓰지 않는다 — 오후에 장전 슬롯을 clear해 다시
+  돌려도 장중 정보로 아침 예측을 덮지 않는다(event-time cutoff까지, README 1절).
 - DAG 인자: `max_active_runs=1`, `default_args={"retries": 3, "retry_delay": timedelta(minutes=10)}`.
   재시도 셋은 readiness guard가 선행 DAG의 지연을 기다리는 수단이다.
 
@@ -101,7 +103,8 @@ SCHEDULE = MultipleCronTriggerTimetable(
 방향별 확률·이유 문장과 **상위 근거 1~3개**를 보인다. 근거 없이 확률만 보내면 읽는 사람이
 검증할 수 없는 시장 서사가 된다 — "어떤 정보로 어떤 결론을 냈는가"가 이 기능의 목적
 (README 0절)이라 Slack에서도 보여야 한다. 헤더는 `장전 전망`(pre_open) / `장후 리뷰`
-(post_close). subject마다 `section()` 블록 하나:
+(post_close) / `애프터마켓 리뷰`(post_nxt_close, [7-nxt-review.md](7-nxt-review.md)).
+subject마다 `section()` 블록 하나:
 
 ```
 *{label}*  ▲ 상승 {prob_up:.0%} · ▼ 하락 {prob_down:.0%} · – 횡보 {prob_flat:.0%}
@@ -142,14 +145,15 @@ SCHEDULE = MultipleCronTriggerTimetable(
 ## 6. 테스트
 
 - `tests/modules/test_thesis.py`에 추가 — 렌더링(`render_blocks`/`render_text`):
-  pre_open/post_close 헤더 분기, 세 확률·세 이유가 전부 나오는지, 확률 퍼센트 반올림,
+  슬롯별 헤더 분기, 세 확률·세 이유가 전부 나오는지, 확률 퍼센트 반올림,
   근거 줄이 `rank` 순 상위 3개·URL 있는 것만 링크·0건이면 "근거: 없음", subject 0건일 때
   "추론 결과 없음" 짧은 형태.
-- `tests/dags/test_market_thesis_forecast.py`·`test_market_thesis_review.py` — 스케줄 고정(`35 8`·`30 20`),
-  `max_active_runs=1`, 태스크 넷의 한 줄 구조, `as_of_at`이 슬롯으로 고정되는지,
-  슬롯이 벽시계가 아니라 logical time으로 갈리는지, `run_date`가 ISO 주 표기를 거절하는지,
-  DAG 화면 메타데이터, `tests/dags/test_quote_intraday.py`의
-  `test_the_dags_stay_on_their_intended_schedules` 패턴.
+- `tests/dags/test_market_thesis_forecast.py`·`test_market_thesis_review.py`·
+  `test_market_thesis_nxt_review.py` — 스케줄 고정(`35 8`·`30 20`·`0 21`),
+  `max_active_runs=1`, 태스크 구조, `as_of_at`이 슬롯으로 고정되는지,
+  **슬롯이 시계가 아니라 DAG로 갈리는지**(각 파일이 자기 모듈의 `SLOT`을 고정한다),
+  `run_date`가 ISO 주 표기를 거절하는지, DAG 화면 메타데이터,
+  `tests/dags/test_quote_intraday.py`의 `test_the_dags_stay_on_their_intended_schedules` 패턴.
 - readiness guard(FakeConnection): 장후에 종가 행이 하나라도 빠지면 `ThesisNotReady`,
   장전에 `assessed_at` 최댓값이 오래됐고 직전 1시간 문서가 있으면 `ThesisNotReady`,
   문서가 0건이면 통과.

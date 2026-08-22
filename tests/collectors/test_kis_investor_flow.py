@@ -6,9 +6,10 @@ from typing import Self
 
 import pytest
 from pydantic import SecretStr
-from sqlalchemy import Table
+from sqlalchemy import CheckConstraint, Table
 
 from apps.models.market import (
+    InvestorFlowMarketCode,
     MarketInvestorFlowSnapshot,
     StockInvestorEstimateSnapshot,
     StockInvestorTradeDaily,
@@ -203,17 +204,52 @@ def test_stock_codes_match_the_other_collectors():
     assert codes == {stock.value for stock in PositioningStock}
 
 
-def test_only_confirmed_markets_are_requestable():
+def test_only_documented_markets_are_requestable():
     """잘못된 코드가 오류 없이 0을 돌려주므로 후보를 Enum에 넣어 두면 조용히 0이 쌓인다.
 
-    코드의 근거는 공식 postman 컬렉션과 실측 대조다(모듈 문서). `999/S001`은 코스피가
-    아니라 주식선물이라 되돌리면 안 된다.
+    코드의 근거는 공식 postman 컬렉션의 파라미터 설명이다(모듈 문서의 "시장 코드는 문서에
+    다 있다"). `999/S001`은 코스피가 아니라 주식선물이라 되돌리면 안 된다.
     """
-    assert [market.value for market in InvestorFlowMarket] == ["KOSPI", "KOSDAQ"]
-    assert InvestorFlowMarket.KOSPI.primary_code == "KSP"
-    assert InvestorFlowMarket.KOSPI.secondary_code == "0001"
-    assert InvestorFlowMarket.KOSDAQ.primary_code == "KSQ"
-    assert InvestorFlowMarket.KOSDAQ.secondary_code == "1001"
+    assert {market.value: (market.primary_code, market.secondary_code) for market in InvestorFlowMarket} == {
+        "KOSPI": ("KSP", "0001"),
+        "KOSDAQ": ("KSQ", "1001"),
+        "FUTURES": ("K2I", "F001"),
+        "CALL_OPTION": ("K2I", "OC01"),
+        "PUT_OPTION": ("K2I", "OP01"),
+        "STOCK_FUTURES": ("999", "S001"),
+        "ETF": ("ETF", "T000"),
+    }
+
+
+def test_the_market_enum_matches_the_model_and_its_check_constraint():
+    """수집기가 보내는 시장과 테이블이 받는 시장이 어긋나면 저장에서 죽는다.
+
+    셋을 함께 묶는다. 수집기 Enum, 모델 Enum, 그리고 실제 DDL이 되는 CHECK 제약이다.
+    Enum 둘만 맞춰 두면 제약을 넓히는 마이그레이션을 빠뜨린 것을 못 잡는다.
+    """
+    collected = {market.value for market in InvestorFlowMarket}
+    assert collected == {code.value for code in InvestorFlowMarketCode}
+
+    constraint = next(
+        check
+        for check in MarketInvestorFlowSnapshot.__table__.constraints
+        if isinstance(check, CheckConstraint) and check.name == "ck_market_investor_flow_snapshot_market_code"
+    )
+    allowed = set(re.findall(r"'([A-Z_]+)'", str(constraint.sqltext)))
+    assert allowed == collected
+
+
+def test_derivative_markets_reuse_the_spot_response_shape(monkeypatch):
+    """일곱 시장이 같은 12개 분류를 같은 필드 이름으로 준다.
+
+    같지 않다면 시장마다 다른 파서가 필요하다는 뜻이라 설계가 통째로 달라진다.
+    """
+    monkeypatch.setattr(kis_investor_flow, "send_get", fake_send_get(body(output=[market_row()])))
+
+    fetch = fetch_market_flow(TOKEN, APP_KEY, APP_SECRET, InvestorFlowMarket.CALL_OPTION, OBSERVED_AT)
+
+    assert fetch.market_code == "CALL_OPTION"
+    assert fetch.row.foreign_net_buy_qty == -26241
 
 
 def test_estimates_keep_every_slot(monkeypatch):

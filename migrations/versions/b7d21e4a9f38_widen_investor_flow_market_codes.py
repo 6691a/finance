@@ -1,7 +1,7 @@
 """widen investor flow market codes
 
 Revision ID: b7d21e4a9f38
-Revises: c2d9e4f1a7b3
+Revises: d7a2f4e91c68
 Create Date: 2026-08-22 15:00:00.000000
 
 시장별 투자자 매매동향(`market_investor_flow_snapshot`)을 코스피·코스닥 둘에서 선물·콜옵션·
@@ -26,7 +26,7 @@ from alembic import op
 
 # revision identifiers, used by Alembic.
 revision: str = "b7d21e4a9f38"
-down_revision: str | Sequence[str] | None = "c2d9e4f1a7b3"
+down_revision: str | Sequence[str] | None = "d7a2f4e91c68"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 

@@ -1,7 +1,7 @@
 """add thesis precedent
 
 Revision ID: a4d1e7c93b02
-Revises: 6e09dafae6f8
+Revises: b7d21e4a9f38
 Create Date: 2026-08-21 21:30:00.000000
 
 장전 추론이 프롬프트에서 본 과거 추론을 잇는 엣지 테이블을 만든다. 설계는
@@ -22,7 +22,7 @@ from alembic import op
 
 # revision identifiers, used by Alembic.
 revision: str = "a4d1e7c93b02"
-down_revision: str | Sequence[str] | None = "6e09dafae6f8"
+down_revision: str | Sequence[str] | None = "b7d21e4a9f38"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 

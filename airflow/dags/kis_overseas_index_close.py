@@ -58,10 +58,9 @@ from pydantic import SecretStr
 
 from modules.collectors.kis import KisHTTPError, KisPayloadError, KisResultError, access_token
 from modules.collectors.kis_overseas_index import (
+    KisOverseasIndexCollector,
     OverseasIndex,
     OverseasIndexFetch,
-    fetch_overseas_index_bars,
-    store_overseas_index_bars,
     us_session_date,
 )
 from modules.market_session import us_equity_open_day
@@ -98,22 +97,27 @@ def _skip_when_closed(session_date: date) -> None:
 
 
 def _fetch_with_retry(
-    index: OverseasIndex, session_date: date, token: SecretStr, app_key, app_secret
+    collector: KisOverseasIndexCollector,
+    index: OverseasIndex,
+    session_date: date,
+    app_key: SecretStr,
+    app_secret: SecretStr,
 ) -> OverseasIndexFetch:
-    """401이면 토큰을 한 번만 재발급하고 다시 시도한다. 되돌릴 수 없는 HTTP 오류는 즉시 실패다."""
+    """401이면 토큰을 한 번만 재발급하고 다시 시도한다. 되돌릴 수 없는 HTTP 오류는 즉시 실패다.
 
-    def call(current: SecretStr) -> OverseasIndexFetch:
-        return fetch_overseas_index_bars(current, app_key, app_secret, index, session_date)
-
+    토큰은 수집기 객체가 사는 동안 안 변하므로 재발급은 객체를 다시 만드는 것이다.
+    자격 증명이 여기 남는 이유는 재발급이 DAG의 일이기 때문이다.
+    """
     try:
-        return call(token)
+        return collector.fetch(index, session_date)
     except KisHTTPError as error:
         if error.status in KIS_UNRECOVERABLE_STATUSES:
             raise AirflowFailException(f"{index.value}: {error}") from error
         if error.status != 401:
             raise
         logger.warning("KIS returned 401; reissuing the token once")
-        return call(_cached_token(app_key, app_secret, force=True))
+        reissued = KisOverseasIndexCollector(_cached_token(app_key, app_secret, force=True), app_key, app_secret)
+        return reissued.fetch(index, session_date)
 
 
 @dag(
@@ -135,18 +139,18 @@ def kis_overseas_index_close():
         _skip_when_closed(session_date)
 
         app_key, app_secret = _credentials()
-        token = _cached_token(app_key, app_secret)
+        collector = KisOverseasIndexCollector(_cached_token(app_key, app_secret), app_key, app_secret)
 
         # 둘 다 먼저 받는다. 하나라도 실패하면 저장 없이 태스크가 죽는다.
         fetches: list[OverseasIndexFetch] = []
         for index in OverseasIndex:
             try:
-                fetches.append(_fetch_with_retry(index, session_date, token, app_key, app_secret))
+                fetches.append(_fetch_with_retry(collector, index, session_date, app_key, app_secret))
             except (KisPayloadError, KisResultError) as error:
                 raise AirflowFailException(f"{index.value}: {error}") from error
 
         with closing(_connection()) as connection, atomic(connection):
-            stored = [store_overseas_index_bars(connection, fetch) for fetch in fetches]
+            stored = [collector.store(connection, fetch) for fetch in fetches]
 
         for fetch, count in zip(fetches, stored, strict=True):
             logger.info(

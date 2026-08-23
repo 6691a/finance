@@ -27,11 +27,10 @@ from modules.collectors.kis_overseas_index import (
     OVERSEAS_INDEX_CHART_PATH,
     OVERSEAS_INDEX_CHART_TR_ID,
     SOURCE_KEY,
+    KisOverseasIndexCollector,
     OverseasIndex,
     OverseasIndexFetch,
-    fetch_overseas_index_bars,
     parse_overseas_index_bars,
-    store_overseas_index_bars,
     us_session_date,
 )
 from modules.collectors.yahoo import QuoteSymbol
@@ -142,6 +141,11 @@ def required_columns(table: Table) -> set[str]:
         for column in table.columns
         if not column.nullable and column.server_default is None and not column.primary_key
     }
+
+
+def collector() -> KisOverseasIndexCollector:
+    """자격 증명은 생성자로만 들어간다. 값 자체는 `send_get`을 가짜로 바꾼 테스트에서만 쓰인다."""
+    return KisOverseasIndexCollector(SecretStr("t"), SecretStr("k"), SecretStr("s"))
 
 
 def fetch_for(body: bytes | None = None, index: OverseasIndex = OverseasIndex.SP500) -> OverseasIndexFetch:
@@ -262,7 +266,7 @@ def test_fetch_sends_the_documented_query(monkeypatch):
 
     monkeypatch.setattr(overseas, "send_get", fake_send_get)
 
-    fetch = fetch_overseas_index_bars(SecretStr("t"), SecretStr("k"), SecretStr("s"), OverseasIndex.NASDAQ, SESSION)
+    fetch = collector().fetch(OverseasIndex.NASDAQ, SESSION)
 
     assert sent["path"] == OVERSEAS_INDEX_CHART_PATH
     assert sent["tr_id"] == OVERSEAS_INDEX_CHART_TR_ID
@@ -282,7 +286,7 @@ def test_fetch_sends_the_documented_query(monkeypatch):
 def test_store_writes_one_source_record_without_the_payload():
     connection = FakeConnection()
 
-    stored = store_overseas_index_bars(connection, fetch_for())
+    stored = collector().store(connection, fetch_for())
 
     statement, parameters = connection.recorded_cursor.calls[0]
     assert statement == SOURCE_RECORD_INSERT
@@ -300,7 +304,7 @@ def test_store_writes_one_source_record_without_the_payload():
 def test_store_row_shape_matches_the_index_bar_upsert():
     connection = FakeConnection()
 
-    store_overseas_index_bars(connection, fetch_for())
+    collector().store(connection, fetch_for())
 
     rows = [parameters for statement, parameters in connection.recorded_cursor.calls if statement == INDEX_BAR_UPSERT]
     assert len(rows) == len(RAW_BARS)

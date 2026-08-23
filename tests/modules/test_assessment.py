@@ -492,6 +492,14 @@ def test_pending_query_covers_the_three_reasons_to_assess():
     assert "prompt_version IS DISTINCT FROM %s" in PENDING_DOCUMENTS
 
 
+def test_pending_query_reserves_batch_slots_for_reassessment():
+    # 신규 유입이 batch_size에 가까우면 최신순 하나로는 재평가 대상이 영영 차례가 안 온다.
+    # 신규·재평가를 따로 순위 매겨 번갈아 집는다. 파라미터는 둘 그대로다.
+    assert "PARTITION BY assessed_at IS NULL" in PENDING_DOCUMENTS
+    assert re.search(r"ORDER BY rank\b", PENDING_DOCUMENTS)
+    assert PENDING_DOCUMENTS.count("%s") == 2
+
+
 def test_update_statement_only_touches_assessment_columns():
     # 평가가 문서의 내용이나 계보를 바꾸면 안 된다.
     assert "title" not in UPDATE_ASSESSMENT

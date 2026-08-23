@@ -43,7 +43,7 @@ uv run pytest tests -q
 ```
 
 ```bash
-uv run ruff check apps core dags migrations tests
+uv run ruff check apps airflow migrations tests
 ```
 
 한 번의 명령이 마이그레이션이 켜진 모든 별칭을 순서대로 처리한다. 별칭을 인자로 주지 않는다.
@@ -191,7 +191,7 @@ DAG가 쓰는 코드는 **위치는 Airflow를, 규칙은 백엔드를** 따른�
 - **감쌀 상태가 없는 것을 클래스로 만들지 않는다.** 메서드가 전부 `@staticmethod`면 그건
   모듈이다.
 
-**아직 함수인 코드가 많다.** 수집기 17모듈 중 둘만 클래스로 옮겼고 나머지 전환 계획은
+**아직 함수인 코드가 많다.** 수집기 17모듈 중 넷만 클래스로 옮겼고 나머지 전환 계획은
 [docs/collectors-class-migration.md](../docs/collectors-class-migration.md)에 있다. 그 문서가
 목표 폴더 구조(도메인별 `market/`·`document/`·`indicator/`·`calendar/`·`analyst/`)와 단계별
 순서를 갖는다. **새 수집기는 처음부터 그 형태로 쓴다.**

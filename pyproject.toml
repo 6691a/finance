@@ -56,4 +56,4 @@ line-length = 120
 [tool.ruff.lint.isort]
 # `modules`는 Airflow가 보는 폴더(`airflow/modules`)의 최상위 패키지다. 설치된 배포판이 아니라
 # 이 저장소의 코드이므로 first-party로 묶는다.
-known-first-party = ["apps", "core", "dags", "migrations", "modules", "utility"]
+known-first-party = ["apps", "dags", "migrations", "modules", "utility"]

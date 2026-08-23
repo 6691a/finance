@@ -240,6 +240,8 @@ class NxtAfterHoursReview:
             macro_window_start=macro_window_start(self._run_date),
             targets=self.targets,
             observed=self.observed_state(),
+            # 리뷰는 예측이 아니라 해석이다. 과거 예측 성적을 실어 줄 자리가 아니다(장후와 같다).
+            past={},
             dag_run_id=dag_run_id,
         )
 

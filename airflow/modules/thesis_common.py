@@ -181,7 +181,7 @@ def build_and_store(
     덮어쓰면 최초 판단이 사라진다.
     """
     from modules import thesis as market_thesis
-    from modules.llm import LlmError, model_name, thesis_model
+    from modules.llm import LlmError, RetryableLlmError, model_name, thesis_model
 
     stored = market_thesis.existing_theses(conn, run_date=run_date, run_slot=run_slot)
     if stored:
@@ -208,7 +208,7 @@ def build_and_store(
         raise AirflowFailException(str(error)) from error
     except LlmError as error:
         # 재시도할 값어치가 있는 것은 그대로 올린다. 판단은 여기서 한다.
-        if type(error).__name__ == "RetryableLlmError":
+        if isinstance(error, RetryableLlmError):
             raise
         raise AirflowFailException(str(error)) from error
 

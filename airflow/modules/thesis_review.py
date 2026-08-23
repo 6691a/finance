@@ -143,7 +143,7 @@ def grade_followups() -> int:
 def narrate_followups(built: dict[str, Any]) -> int:
     """지평마다 해설과 판정을 붙인다. 지평마다 LLM 호출 하나다."""
     from modules import thesis as market_thesis
-    from modules.llm import LlmError, model_name, thesis_model
+    from modules.llm import LlmError, RetryableLlmError, model_name, thesis_model
 
     run_date = date.fromisoformat(built["run_date"])
     dag_run_id = str(get_current_context()["dag_run"].run_id)
@@ -180,7 +180,7 @@ def narrate_followups(built: dict[str, Any]) -> int:
                 logger.warning("T+%s narration failed for %s: %s", horizon, origin, error)
                 continue
             except LlmError as error:
-                if type(error).__name__ == "RetryableLlmError":
+                if isinstance(error, RetryableLlmError):
                     raise
                 raise AirflowFailException(str(error)) from error
 

@@ -2162,7 +2162,7 @@ Brier 점수로 따로 잰다. 네가 답할 것은 **이유가 맞았는가**�
 출력 형식:
 {{"narratives": [{{"subject_code": "", "narrative": "", "verdict": "unresolved", "evidence_refs": []}}]}}"""
 
-NARRATIVE_INSTRUCTION = """{run_date} 장{slot_label}에 쓴 추론을 {horizon_days}영업일 뒤에 되돌아본다.
+NARRATIVE_INSTRUCTION = """{run_date} {slot_label}에 쓴 추론을 {horizon_days}영업일 뒤에 되돌아본다.
 
 기준 시각(이 시각 이후의 정보는 너에게 주어지지 않는다): {as_of_at}
 
@@ -2238,7 +2238,7 @@ class FollowupNarrator:
             HumanMessage(
                 NARRATIVE_INSTRUCTION.format(
                     run_date=run_date.isoformat(),
-                    slot_label="전" if run_slot is RunSlot.PRE_OPEN else "후",
+                    slot_label=SLOT_LABELS[run_slot],
                     horizon_days=horizon_days,
                     as_of_at=kst_label(as_of_at),
                     targets="\n\n".join(self._render_target(target) for target in targets),

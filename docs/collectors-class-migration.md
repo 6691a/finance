@@ -88,8 +88,9 @@ airflow/modules/collectors/
 | `collectors/document/naver_research.py` | `NaverResearchCollector` | 2026-08-22 |
 | `collectors/kis_overseas_index.py` | `KisOverseasIndexCollector` | 2026-08-22 (폴더 이동은 아직) |
 | `collectors/market/kis_investor_flow.py` | `KisInvestorFlowCollector` | 2026-08-22 |
+| `collectors/indicator/fred.py` | `FredCollector` | 2026-08-23 |
 
-### 1단계 — 자격 증명을 인자로 도는 수집기 (남은 6모듈)
+### 1단계 — 자격 증명을 인자로 도는 수집기 (남은 5모듈)
 
 규칙이 정확히 겨냥한 것이고 이득이 가장 크다. 처음 8모듈 중 `kis_overseas_index`와
 `kis_investor_flow`는 끝났다.
@@ -101,7 +102,6 @@ airflow/modules/collectors/
 | `collectors/kis_market_calendar.py` | 482 | `KisMarketCalendarCollector` | 〃 | `_paged`·`fetch_domestic_calendar`·`fetch_overseas_settlement`·`store_domestic`·`store_overseas` |
 | `collectors/dart.py` | 822 | `DartCollector` | api_key | `_get`·`fetch_disclosures`·`fetch_provisional`·`fetch_financials`·`store_disclosures`·`store_earnings` |
 | `collectors/ecos.py` | 440 | `EcosCollector` | api_key | `build_url`·`fetch_series`·`store_observations` |
-| `collectors/fred.py` | 338 | `FredCollector` | api_key | `build_url`·`fetch_series`·`store_observations` |
 
 모듈 함수로 남는 것: `expiry_date`·`front_contract`·`parse_bars`·`parse_market_movement`·
 `parse_observations`·`parse_financials`·`parse_provisional`·`us_session_date`·
@@ -114,7 +114,7 @@ airflow/modules/collectors/
 
 남은 DAG 쪽 호출 지점: `kis_quote_intraday` 12, `market_calendar_daily` 8,
 `kis_market_positioning_daily` 8, `kis_stock_minute_bars_daily` 3.
-`dart_disclosure_intraday`의 `_extract(api_key, disclosure)`와 `fred_*`·`ecos_*`의 태스크
+`dart_disclosure_intraday`의 `_extract(api_key, disclosure)`와 `ecos_*`의 태스크
 매핑 인자에서도 키가 빠진다. **스케줄·재시도·실패 판정은 건드리지 않는다.**
 
 테스트는 8파일 ~3,950줄이 영향받는다. 대부분 호출 표현 치환이고,

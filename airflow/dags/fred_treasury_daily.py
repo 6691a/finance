@@ -1,7 +1,7 @@
 """FRED 미국 국채 금리 일별 수집 DAG.
 
 시계열마다 태스크를 하나씩 매핑한다. 한 시계열이 실패해도 나머지는 저장되고, 재시도도
-실패한 시계열만 다시 호출한다. 수집 대상은 `modules.collectors.fred.TREASURY_SERIES`가
+실패한 시계열만 다시 호출한다. 수집 대상은 `modules.collectors.indicator.fred.TREASURY_SERIES`가
 정한다(현재 DGS3MO, DGS2, DGS10, DGS30). 시계열을 늘려도 이 파일은 바뀌지 않는다.
 
 스케줄과 조회 기간은 한국 시간(KST) 기준이다. 저장하는 시각(`started_at`, `completed_at`)은
@@ -95,13 +95,12 @@ from airflow.providers.postgres.hooks.postgres import PostgresHook
 from airflow.sdk import Param, dag, get_current_context, task
 from pydantic import SecretStr
 
-from modules.collectors.fred import (
+from modules.collectors.indicator.fred import (
     TREASURY_SERIES,
+    FredCollector,
     FredHTTPError,
     FredPayloadError,
     FredRequest,
-    fetch_series,
-    store_observations,
 )
 from modules.period import (
     LOOKBACK_DAYS,
@@ -168,9 +167,10 @@ def fred_treasury_daily():
         api_key = os.environ.get("FRED_API_KEY")
         if not api_key:
             raise AirflowFailException("FRED_API_KEY is required")
+        collector = FredCollector(SecretStr(api_key))
 
         try:
-            response = fetch_series(SecretStr(api_key), request)
+            response = collector.fetch_series(request)
         except FredHTTPError as error:
             if error.status in UNRECOVERABLE_STATUSES:
                 raise AirflowFailException(str(error)) from error
@@ -181,7 +181,7 @@ def fred_treasury_daily():
         with closing(PostgresHook(postgres_conn_id=CONNECTION_ID).get_conn()) as connection:
             try:
                 with atomic(connection):
-                    count = store_observations(connection, response)
+                    count = collector.store_observations(connection, response)
             except FredPayloadError as error:
                 raise AirflowFailException(str(error)) from error
 

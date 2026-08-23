@@ -198,8 +198,8 @@ DAG가 쓰는 코드는 **위치는 Airflow를, 규칙은 백엔드를** 따른�
 
 ## 수집기 작성
 
-`airflow/modules/collectors/analyst/kis_opinion.py`(클래스 형태)와
-`airflow/modules/collectors/fred.py`(옛 함수 형태, 검증 규칙의 기준)를 함께 본다.
+`airflow/modules/collectors/analyst/kis_opinion.py`(KIS 토큰을 쥔 클래스)와
+`airflow/modules/collectors/indicator/fred.py`(API 키 하나를 쥔 클래스, 검증 규칙의 기준)를 함께 본다.
 
 - **새 수집기는 클래스로, 도메인 폴더에 둔다.** 위 "클래스와 함수를 가르는 기준"과
   [docs/collectors-class-migration.md](../docs/collectors-class-migration.md)를 따른다.

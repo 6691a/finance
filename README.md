@@ -239,7 +239,7 @@ import 뿌리는 `airflow/`입니다. DAG는 배포와 같은 이름으로 `from
 
 ### 수집기 작성 규칙
 
-[airflow/modules/collectors/fred.py](airflow/modules/collectors/fred.py)가 기준 예시입니다.
+[airflow/modules/collectors/indicator/fred.py](airflow/modules/collectors/indicator/fred.py)가 기준 예시입니다.
 
 - 요청 값(`FredRequest`), 외부 응답 본문(`FredObservationsPayload`), 정규화 결과(`FredObservation`), 수집 결과(`FredResponse`)를 모두 Pydantic 모델로 선언합니다. `dataclass`를 쓰지 않습니다. 외부 JSON은 `model_validate_json`으로 검증합니다.
 - 모델은 `ConfigDict(frozen=True)`로 둡니다. 재시도 경로에서 값이 바뀌면 원본과 저장값이 어긋납니다.

@@ -14,6 +14,9 @@
 
 원본 응답은 `source_record`에, 유효 관측값은 `indicator_observation`에 저장한다. 두 쓰기는
 호출자가 연 하나의 트랜잭션 안에서 실행되며 커밋과 롤백은 호출자가 결정한다.
+
+API 키는 `FredCollector`가 쥔다. 계열·구간처럼 호출마다 바뀌는 것은 메서드 인자고,
+파싱(`parse_observations`)은 키도 연결도 보지 않아 모듈 함수로 둔다.
 """
 
 import json
@@ -219,49 +222,6 @@ class FredResponse(BaseModel):
         return self.request.series_id
 
 
-def build_url(api_key: SecretStr, request: FredRequest) -> str:
-    """호출 URL. 반환값에 API 키가 들어가므로 로그나 예외 메시지에 넣지 않는다."""
-    if not api_key.get_secret_value():
-        raise ValueError("FRED API key is required")
-
-    query = urlencode(
-        {
-            # 요청에는 FRED 좌표가 들어간다. 저장 식별자와 다른 계열이 있다.
-            "series_id": FredSeries(request.series_id).fred_id,
-            "api_key": api_key.get_secret_value(),
-            "file_type": "json",
-            "observation_start": request.observation_start.isoformat(),
-            "observation_end": request.observation_end.isoformat(),
-        }
-    )
-    return f"{FRED_URL}?{query}"
-
-
-def fetch_series(api_key: SecretStr, request: FredRequest) -> FredResponse:
-    url = build_url(api_key, request)
-    started_at = datetime.now(UTC)
-    try:
-        with urlopen(url, timeout=REQUEST_TIMEOUT_SECONDS) as response:
-            body = response.read()
-            status = response.status
-    # `from None`은 여기서 의도적이다. `from error`로 바꾸지 않는다. URL에 API 키가 들어 있고
-    # `HTTPError`는 그 URL을 `filename`에 담는다. 체인을 남기면 Sentry나 Airflow 로그가 원인
-    # 예외를 붙잡을 때 키가 함께 실린다. `mof.py`·`boe.py`는 URL에 비밀이 없어서 체인을 남긴다.
-    except HTTPError as error:
-        raise FredHTTPError(error.code, error.headers.get("Retry-After")) from None
-    except URLError as error:
-        # 타임아웃과 DNS·연결 실패는 재시도 가능한 오류로 올린다.
-        raise ConnectionError(f"FRED request failed: {error.reason}") from None
-
-    return FredResponse(
-        request=request,
-        body=body,
-        status=status,
-        started_at=started_at,
-        completed_at=datetime.now(UTC),
-    )
-
-
 def parse_observations(body: bytes) -> tuple[FredObservation, ...]:
     """유효 관측값만 뽑는다. 결측(`.`)은 건너뛰고, 형식이 깨진 항목은 전체를 실패시킨다."""
     try:
@@ -286,53 +246,103 @@ def _require_first_of_month(series: FredSeries, observation_date: date) -> None:
         raise FredPayloadError(f"{series.value} is monthly but FRED returned {observation_date.isoformat()}")
 
 
-def store_observations(connection: Connection, response: FredResponse) -> int:
-    """원본 1건과 유효 관측값을 저장하고 정규화한 관측값 수를 돌려준다.
+class FredCollector:
+    """FRED 수집기. API 키를 쥐고 계열마다 조회·저장한다.
 
-    파싱을 먼저 해서 형식 오류면 아무 것도 쓰지 않는다. `(provider, series_id, observation_date)`가
-    멱등 키라서 같은 기간을 다시 수집해도 행이 늘지 않고 최신 값으로 갱신된다. `series_id`는
-    제공처 안에서만 고유하므로 이 수집기의 `provider`는 항상 `SOURCE`다.
-
-    ORM 대신 문자열 SQL을 쓴다. Airflow 이미지에는 SQLAlchemy와 이 프로젝트의 DB 설정이
-    없기 때문이다. 컬럼 이름은 `tests/collectors/test_fred.py`가 모델 metadata와 맞춰 둔다.
+    한 실행이 객체 하나다. 키는 이 객체가 사는 동안 안 변하는 값이라 생성자가 받고, 계열과
+    구간은 `FredRequest`로 호출마다 들어온다. 파싱은 밖에 둔다(`parse_observations`).
     """
-    series = FredSeries(response.series_id)
-    observations = parse_observations(response.body)
-    request_metadata = json.dumps(
-        {
-            "http_status": response.status,
-            "observation_start": response.request.observation_start.isoformat(),
-            "observation_end": response.request.observation_end.isoformat(),
-        }
-    )
 
-    with connection.cursor() as cursor:
-        cursor.execute(
-            SOURCE_RECORD_INSERT,
-            (
-                "api",
-                SOURCE,
-                response.series_id,
-                response.started_at,
-                response.completed_at,
-                "succeeded",
-                len(observations),
-                response.body.decode("utf-8"),
-                request_metadata,
-            ),
+    def __init__(self, api_key: SecretStr) -> None:
+        if not api_key.get_secret_value():
+            raise ValueError("FRED API key is required")
+        self._api_key = api_key
+
+    def build_url(self, request: FredRequest) -> str:
+        """호출 URL. 반환값에 API 키가 들어가므로 로그나 예외 메시지에 넣지 않는다."""
+        query = urlencode(
+            {
+                # 요청에는 FRED 좌표가 들어간다. 저장 식별자와 다른 계열이 있다.
+                "series_id": FredSeries(request.series_id).fred_id,
+                "api_key": self._api_key.get_secret_value(),
+                "file_type": "json",
+                "observation_start": request.observation_start.isoformat(),
+                "observation_end": request.observation_end.isoformat(),
+            }
         )
-        source_record_id = cursor.fetchone()[0]
-        for observation in observations:
-            _require_first_of_month(series, observation.observation_date)
+        return f"{FRED_URL}?{query}"
+
+    def fetch_series(self, request: FredRequest) -> FredResponse:
+        url = self.build_url(request)
+        started_at = datetime.now(UTC)
+        try:
+            with urlopen(url, timeout=REQUEST_TIMEOUT_SECONDS) as response:
+                body = response.read()
+                status = response.status
+        # `from None`은 여기서 의도적이다. `from error`로 바꾸지 않는다. URL에 API 키가 들어 있고
+        # `HTTPError`는 그 URL을 `filename`에 담는다. 체인을 남기면 Sentry나 Airflow 로그가 원인
+        # 예외를 붙잡을 때 키가 함께 실린다. `mof.py`·`boe.py`는 URL에 비밀이 없어서 체인을 남긴다.
+        except HTTPError as error:
+            raise FredHTTPError(error.code, error.headers.get("Retry-After")) from None
+        except URLError as error:
+            # 타임아웃과 DNS·연결 실패는 재시도 가능한 오류로 올린다.
+            raise ConnectionError(f"FRED request failed: {error.reason}") from None
+
+        return FredResponse(
+            request=request,
+            body=body,
+            status=status,
+            started_at=started_at,
+            completed_at=datetime.now(UTC),
+        )
+
+    def store_observations(self, connection: Connection, response: FredResponse) -> int:
+        """원본 1건과 유효 관측값을 저장하고 정규화한 관측값 수를 돌려준다.
+
+        파싱을 먼저 해서 형식 오류면 아무 것도 쓰지 않는다. `(provider, series_id, observation_date)`가
+        멱등 키라서 같은 기간을 다시 수집해도 행이 늘지 않고 최신 값으로 갱신된다. `series_id`는
+        제공처 안에서만 고유하므로 이 수집기의 `provider`는 항상 `SOURCE`다.
+
+        ORM 대신 문자열 SQL을 쓴다. Airflow 이미지에는 SQLAlchemy와 이 프로젝트의 DB 설정이
+        없기 때문이다. 컬럼 이름은 `tests/collectors/test_fred.py`가 모델 metadata와 맞춰 둔다.
+        """
+        series = FredSeries(response.series_id)
+        observations = parse_observations(response.body)
+        request_metadata = json.dumps(
+            {
+                "http_status": response.status,
+                "observation_start": response.request.observation_start.isoformat(),
+                "observation_end": response.request.observation_end.isoformat(),
+            }
+        )
+
+        with connection.cursor() as cursor:
             cursor.execute(
-                OBSERVATION_UPSERT,
+                SOURCE_RECORD_INSERT,
                 (
+                    "api",
                     SOURCE,
                     response.series_id,
-                    observation.observation_date,
-                    observation.value,
-                    series.unit,
-                    source_record_id,
+                    response.started_at,
+                    response.completed_at,
+                    "succeeded",
+                    len(observations),
+                    response.body.decode("utf-8"),
+                    request_metadata,
                 ),
             )
-    return len(observations)
+            source_record_id = cursor.fetchone()[0]
+            for observation in observations:
+                _require_first_of_month(series, observation.observation_date)
+                cursor.execute(
+                    OBSERVATION_UPSERT,
+                    (
+                        SOURCE,
+                        response.series_id,
+                        observation.observation_date,
+                        observation.value,
+                        series.unit,
+                        source_record_id,
+                    ),
+                )
+        return len(observations)

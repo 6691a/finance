@@ -11,20 +11,18 @@ from sqlalchemy import Table
 
 from apps.models.market import IndicatorObservation
 from apps.models.raw import SourceRecord
-from modules.collectors.fred import (
+from modules.collectors.indicator.fred import (
     MACRO_SERIES,
     OBSERVATION_UPSERT,
     SOURCE_RECORD_INSERT,
     TREASURY_SERIES,
+    FredCollector,
     FredHTTPError,
     FredPayloadError,
     FredRequest,
     FredResponse,
     FredSeries,
-    build_url,
-    fetch_series,
     parse_observations,
-    store_observations,
 )
 
 PAYLOAD = json.dumps(
@@ -38,6 +36,7 @@ PAYLOAD = json.dumps(
 
 SOURCE_RECORD_ID = 1
 API_KEY = SecretStr("a" * 32)
+COLLECTOR = FredCollector(API_KEY)
 STARTED_AT = datetime(2026, 8, 4, 22, 30, tzinfo=UTC)
 COMPLETED_AT = datetime(2026, 8, 4, 22, 30, 1, tzinfo=UTC)
 
@@ -171,14 +170,14 @@ def test_monthly_series_are_marked_in_the_stored_identifier():
 def test_the_request_uses_the_provider_coordinate_not_the_stored_identifier():
     # `CPIAUCSL`은 DB만 보고 무슨 값인지 알 수 없어 읽히는 이름으로 저장한다. 요청은 좌표로 간다.
     assert FredSeries.CPI_M.fred_id == "CPIAUCSL"
-    url = build_url(API_KEY, request_for("CPI_M"))
+    url = COLLECTOR.build_url(request_for("CPI_M"))
 
     assert "series_id=CPIAUCSL" in url
     assert "series_id=CPI_M" not in url
 
 
 def test_build_url_requests_one_series_as_json_for_the_given_period():
-    url = build_url(API_KEY, request_for())
+    url = COLLECTOR.build_url(request_for())
 
     assert "series_id=DGS10" in url
     assert "file_type=json" in url
@@ -194,9 +193,9 @@ def test_request_rejects_unknown_series_and_reversed_period():
         FredRequest(series_id="DGS10", observation_start=date(2026, 8, 4), observation_end=date(2026, 7, 29))
 
 
-def test_build_url_requires_an_api_key():
+def test_the_collector_requires_an_api_key():
     with pytest.raises(ValueError, match="API key"):
-        build_url(SecretStr(""), request_for())
+        FredCollector(SecretStr(""))
 
 
 def test_request_and_response_are_frozen_so_a_retry_cannot_mutate_them():
@@ -267,10 +266,10 @@ def test_fetch_preserves_retry_after_for_rate_limit(monkeypatch):
     def raise_429(url, timeout):
         raise HTTPError(url, 429, "rate limited", {"Retry-After": "60"}, None)
 
-    monkeypatch.setattr("modules.collectors.fred.urlopen", raise_429)
+    monkeypatch.setattr("modules.collectors.indicator.fred.urlopen", raise_429)
 
     with pytest.raises(FredHTTPError) as raised:
-        fetch_series(API_KEY, request_for())
+        COLLECTOR.fetch_series(request_for())
 
     assert raised.value.status == 429
     assert raised.value.retry_after == "60"
@@ -280,7 +279,7 @@ def test_fetch_preserves_retry_after_for_rate_limit(monkeypatch):
 def test_store_writes_the_raw_response_once_and_upserts_only_valid_observations():
     connection = FakeConnection()
 
-    assert store_observations(connection, response_for()) == 1
+    assert COLLECTOR.store_observations(connection, response_for()) == 1
 
     statements = [statement for statement, _ in connection.recorded_cursor.calls]
     assert len(statements) == 2
@@ -292,7 +291,7 @@ def test_store_writes_the_raw_response_once_and_upserts_only_valid_observations(
 def test_store_records_lineage_and_collection_state_on_the_source_record():
     connection = FakeConnection()
 
-    store_observations(connection, response_for())
+    COLLECTOR.store_observations(connection, response_for())
 
     source_type, source, source_key, started_at, completed_at, status, record_count, payload, metadata = (
         connection.recorded_cursor.calls[0][1]
@@ -313,7 +312,7 @@ def test_store_records_lineage_and_collection_state_on_the_source_record():
 def test_store_links_each_observation_to_the_stored_source_record():
     connection = FakeConnection()
 
-    store_observations(connection, response_for())
+    COLLECTOR.store_observations(connection, response_for())
 
     provider, series_id, observation_date, value, unit, source_record_id = connection.recorded_cursor.calls[1][1]
 
@@ -332,7 +331,7 @@ def test_store_writes_nothing_when_the_payload_is_broken():
     connection = FakeConnection()
 
     with pytest.raises(FredPayloadError):
-        store_observations(connection, response_for(body=b'{"observations": "nope"}'))
+        COLLECTOR.store_observations(connection, response_for(body=b'{"observations": "nope"}'))
 
     assert connection.recorded_cursor.calls == []
 
@@ -340,7 +339,7 @@ def test_store_writes_nothing_when_the_payload_is_broken():
 def test_store_repeats_the_same_upsert_for_a_rerun_of_the_same_period():
     first, second = FakeConnection(), FakeConnection()
 
-    assert store_observations(first, response_for()) == store_observations(second, response_for()) == 1
+    assert COLLECTOR.store_observations(first, response_for()) == COLLECTOR.store_observations(second, response_for()) == 1
     assert [statement for statement, _ in first.recorded_cursor.calls] == [
         statement for statement, _ in second.recorded_cursor.calls
     ]

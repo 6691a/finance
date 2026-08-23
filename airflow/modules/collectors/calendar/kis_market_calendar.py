@@ -5,7 +5,8 @@
 대조한다.
 
 토큰 발급과 HTTP는 `kis.py`가 이미 갖고 있어 그대로 쓴다. 여기 있는 것은 이 두 조회에만
-있는 규칙이다.
+있는 규칙이다. 자격 증명과 토큰은 `KisMarketCalendarCollector`가 쥐고, 기준일처럼 호출마다
+바뀌는 것은 메서드 인자다.
 
 ## 두 조회의 성격이 다르다
 
@@ -216,117 +217,6 @@ def _rows(payload: dict[str, Any]) -> list[dict[str, Any]]:
     return output
 
 
-def _paged(
-    token: SecretStr,
-    app_key: SecretStr,
-    app_secret: SecretStr,
-    path: str,
-    tr_id: str,
-    query: dict[str, str],
-    sleep: float = PAGE_DELAY_SECONDS,
-) -> tuple[list[dict[str, Any]], int]:
-    """연속조회를 돌며 행을 모은다. (행 목록, 받은 장 수)를 돌려준다.
-
-    **페이지 상한은 정지 조건이지 오류가 아니다.** 국내 조회는 미래를 끝없이 주므로
-    (실측: 12장 288행에도 계속) 언젠가 끝나기를 기다릴 수 없다. 필요한 만큼 받고 멈춘다.
-    """
-    parameters = dict(query) | {"CTX_AREA_FK": "", "CTX_AREA_NK": ""}
-    tr_cont = ""
-    rows: list[dict[str, Any]] = []
-    previous_cursor: str | None = None
-
-    for page in range(1, MAX_PAGES + 1):
-        body, _, headers = send_get(token, app_key, app_secret, path, tr_id, parameters, tr_cont)
-        payload = _parse_body(body)
-        rows.extend(_rows(payload))
-
-        if headers.get("tr_cont", "") not in CONTINUE_FLAGS:
-            return rows, page
-
-        cursor = str(payload.get("ctx_area_nk", ""))
-        if cursor == previous_cursor:
-            # 커서가 멈췄는데 계속 이어진다고 한다. 더 돌면 같은 행만 쌓인다.
-            raise KisCursorError(f"KIS kept the same continuation cursor after page {page}")
-        previous_cursor = cursor
-        parameters["CTX_AREA_FK"] = str(payload.get("ctx_area_fk", ""))
-        parameters["CTX_AREA_NK"] = cursor
-        tr_cont = "N"
-        time.sleep(sleep)
-
-    logger.info("Stopping at the %s page cap; KIS still had more to give", MAX_PAGES)
-    return rows, MAX_PAGES
-
-
-def fetch_domestic_calendar(
-    token: SecretStr,
-    app_key: SecretStr,
-    app_secret: SecretStr,
-    base_date: date,
-    sleep: float = PAGE_DELAY_SECONDS,
-) -> DomesticFetch:
-    """`base_date`부터 앞으로의 국내 거래일을 받는다."""
-    started_at = datetime.now(UTC)
-    rows, page_count = _paged(
-        token,
-        app_key,
-        app_secret,
-        DOMESTIC_PATH,
-        DOMESTIC_TR_ID,
-        {"BASS_DT": base_date.strftime("%Y%m%d")},
-        sleep,
-    )
-    try:
-        days = tuple(DomesticDay.from_payload(row) for row in rows)
-    except (KeyError, ValueError, ValidationError) as error:
-        raise KisPayloadError(f"KIS domestic holiday row is malformed: {error}") from None
-
-    return DomesticFetch(
-        base_date=base_date,
-        days=days,
-        page_count=page_count,
-        started_at=started_at,
-        completed_at=datetime.now(UTC),
-    )
-
-
-def fetch_overseas_settlement(
-    token: SecretStr,
-    app_key: SecretStr,
-    app_secret: SecretStr,
-    trade_date: date,
-    sleep: float = PAGE_DELAY_SECONDS,
-) -> OverseasFetch:
-    """`trade_date` 하루의 국가·시장별 결제일을 받는다.
-
-    미래 날짜는 값 없음과 같은 0행으로 오므로 여기서는 성공으로 다룬다. 판정은 저장 쪽이 한다.
-    """
-    started_at = datetime.now(UTC)
-    raw, page_count = _paged(
-        token,
-        app_key,
-        app_secret,
-        OVERSEAS_PATH,
-        OVERSEAS_TR_ID,
-        {"TRAD_DT": trade_date.strftime("%Y%m%d")},
-        sleep,
-    )
-    try:
-        rows = tuple(OverseasRow.from_payload(row) for row in raw)
-    except (KeyError, ValueError, ValidationError) as error:
-        raise KisPayloadError(f"KIS overseas settlement row is malformed: {error}") from None
-
-    return OverseasFetch(
-        trade_date=trade_date,
-        rows=rows,
-        # 3.5KB 남짓이라 원본을 그대로 남긴다. 미국 외 나라를 나중에 행으로 승격할 때
-        # 과거를 재구성할 근거가 된다.
-        payload=json.dumps(raw, ensure_ascii=False),
-        page_count=page_count,
-        started_at=started_at,
-        completed_at=datetime.now(UTC),
-    )
-
-
 def fold_us_settlement(fetch: OverseasFetch) -> UsSettlement | None:
     """미국 시장별 행을 한 벌로 접는다. 미국 행이 없으면 `None`이다.
 
@@ -380,103 +270,209 @@ def _insert_source_record(
     return cursor.fetchone()[0]
 
 
-def store_domestic(connection: Connection, fetch: DomesticFetch) -> int:
-    """국내 거래일을 저장하고 저장한 날짜 수를 돌려준다.
+class KisMarketCalendarCollector:
+    """KIS 캘린더 수집기. 자격 증명과 토큰을 들고 국내 휴장일과 해외 결제일을 조회·저장한다.
 
-    국내는 KIS가 판정의 주인이므로 `effective_open_day`를 `opnd_yn`으로 함께 채운다.
+    한 실행이 객체 하나다. 토큰은 발급 횟수 제한이 있어 DAG이 한 번 받아 넘긴다. 토큰은 이
+    객체가 사는 동안 안 변하는 값이라 갈아 끼우지 않는다 — 401로 다시 받았으면 DAG이 새
+    토큰으로 객체를 다시 만든다.
+
+    파싱(`DomesticDay.from_payload`·`OverseasRow.from_payload`)과 접기(`fold_us_settlement`)는
+    밖에 둔다. 자격 증명도 연결도 보지 않는 순수 변환이다.
     """
-    verified_at = fetch.completed_at
-    with connection.cursor() as cursor:
-        source_record_id = _insert_source_record(
-            cursor,
-            DOMESTIC_SOURCE_KEY,
-            fetch.started_at,
-            fetch.completed_at,
-            "succeeded" if fetch.days else "failed",
-            len(fetch.days),
-            # 한 번에 수백 행이라 payload에 넣지 않는다. 매일 쌓으면 계보가 캘린더보다 커진다.
-            None,
-            {
-                "base_date": fetch.base_date.isoformat(),
-                "page_count": fetch.page_count,
-                "day_count": len(fetch.days),
-                "last_date": fetch.days[-1].session_date.isoformat() if fetch.days else None,
-                "closed_count": sum(1 for day in fetch.days if not day.open_day),
-            },
+
+    def __init__(self, token: SecretStr, app_key: SecretStr, app_secret: SecretStr) -> None:
+        self._token = token
+        self._app_key = app_key
+        self._app_secret = app_secret
+
+    def _paged(
+        self,
+        path: str,
+        tr_id: str,
+        query: dict[str, str],
+        sleep: float = PAGE_DELAY_SECONDS,
+    ) -> tuple[list[dict[str, Any]], int]:
+        """연속조회를 돌며 행을 모은다. (행 목록, 받은 장 수)를 돌려준다.
+
+        **페이지 상한은 정지 조건이지 오류가 아니다.** 국내 조회는 미래를 끝없이 주므로
+        (실측: 12장 288행에도 계속) 언젠가 끝나기를 기다릴 수 없다. 필요한 만큼 받고 멈춘다.
+        """
+        parameters = dict(query) | {"CTX_AREA_FK": "", "CTX_AREA_NK": ""}
+        tr_cont = ""
+        rows: list[dict[str, Any]] = []
+        previous_cursor: str | None = None
+
+        for page in range(1, MAX_PAGES + 1):
+            body, _, headers = send_get(self._token, self._app_key, self._app_secret, path, tr_id, parameters, tr_cont)
+            payload = _parse_body(body)
+            rows.extend(_rows(payload))
+
+            if headers.get("tr_cont", "") not in CONTINUE_FLAGS:
+                return rows, page
+
+            cursor = str(payload.get("ctx_area_nk", ""))
+            if cursor == previous_cursor:
+                # 커서가 멈췄는데 계속 이어진다고 한다. 더 돌면 같은 행만 쌓인다.
+                raise KisCursorError(f"KIS kept the same continuation cursor after page {page}")
+            previous_cursor = cursor
+            parameters["CTX_AREA_FK"] = str(payload.get("ctx_area_fk", ""))
+            parameters["CTX_AREA_NK"] = cursor
+            tr_cont = "N"
+            time.sleep(sleep)
+
+        logger.info("Stopping at the %s page cap; KIS still had more to give", MAX_PAGES)
+        return rows, MAX_PAGES
+
+
+    def fetch_domestic_calendar(self, base_date: date, sleep: float = PAGE_DELAY_SECONDS) -> DomesticFetch:
+        """`base_date`부터 앞으로의 국내 거래일을 받는다."""
+        started_at = datetime.now(UTC)
+        rows, page_count = self._paged(
+            DOMESTIC_PATH,
+            DOMESTIC_TR_ID,
+            {"BASS_DT": base_date.strftime("%Y%m%d")},
+            sleep,
         )
-        execute_upserts(
-            cursor,
-            MARKET_SESSION_DOMESTIC_UPSERT,
-            [
-                (
-                    day.session_date,
-                    day.weekday_code,
-                    day.business_day,
-                    day.trading_day,
-                    day.open_day,
-                    day.settlement_day,
-                    day.open_day,
-                    verified_at,
-                    source_record_id,
-                )
-                for day in fetch.days
-            ],
-        )
-    return len(fetch.days)
+        try:
+            days = tuple(DomesticDay.from_payload(row) for row in rows)
+        except (KeyError, ValueError, ValidationError) as error:
+            raise KisPayloadError(f"KIS domestic holiday row is malformed: {error}") from None
 
-
-def store_overseas(connection: Connection, fetch: OverseasFetch) -> UsSettlement | None:
-    """미국 행의 결제일만 채운다. 개장 판정은 건드리지 않는다.
-
-    미국 행이 응답에 없으면 아무 것도 갱신하지 않는다. NYSE가 이미 그 날짜를 판정했으므로
-    부재를 휴장으로 해석할 필요가 없다. 다만 NYSE가 개장으로 본 날에 미국 행이 없으면
-    둘 중 하나가 틀렸다는 뜻이라 경고를 남긴다.
-    """
-    settlement = fold_us_settlement(fetch)
-
-    with connection.cursor() as cursor:
-        source_record_id = _insert_source_record(
-            cursor,
-            OVERSEAS_SOURCE_KEY,
-            fetch.started_at,
-            fetch.completed_at,
-            "succeeded",
-            1 if settlement else 0,
-            fetch.payload,
-            {
-                "trade_date": fetch.trade_date.isoformat(),
-                "page_count": fetch.page_count,
-                "row_count": len(fetch.rows),
-                "countries": sorted({row.country_abbreviation for row in fetch.rows}),
-                "us_market_count": settlement.market_count if settlement else 0,
-            },
+        return DomesticFetch(
+            base_date=base_date,
+            days=days,
+            page_count=page_count,
+            started_at=started_at,
+            completed_at=datetime.now(UTC),
         )
 
-        if settlement is None:
-            if fetch.rows:
-                logger.warning(
-                    "KIS returned %s rows for %s but none for the US; leaving the NYSE verdict alone",
-                    len(fetch.rows),
-                    fetch.trade_date,
-                )
-            else:
-                # 주말·미래·장애가 모두 0행이다. 응답만으로는 가를 수 없어 판정하지 않는다.
-                logger.info("KIS returned no settlement rows for %s", fetch.trade_date)
-            return None
 
-        cursor.execute(
-            MARKET_SESSION_SETTLEMENT_UPDATE,
-            (
-                settlement.local_settlement_date,
-                settlement.domestic_settlement_date,
-                source_record_id,
-                settlement.session_date,
-            ),
+    def fetch_overseas_settlement(self, trade_date: date, sleep: float = PAGE_DELAY_SECONDS) -> OverseasFetch:
+        """`trade_date` 하루의 국가·시장별 결제일을 받는다.
+
+        미래 날짜는 값 없음과 같은 0행으로 오므로 여기서는 성공으로 다룬다. 판정은 저장 쪽이 한다.
+        """
+        started_at = datetime.now(UTC)
+        raw, page_count = self._paged(
+            OVERSEAS_PATH,
+            OVERSEAS_TR_ID,
+            {"TRAD_DT": trade_date.strftime("%Y%m%d")},
+            sleep,
         )
-        updated = cursor.fetchone()
-        if updated is None:
-            logger.warning(
-                "No US_EQUITY row for %s; NYSE has not covered that year yet",
-                settlement.session_date,
+        try:
+            rows = tuple(OverseasRow.from_payload(row) for row in raw)
+        except (KeyError, ValueError, ValidationError) as error:
+            raise KisPayloadError(f"KIS overseas settlement row is malformed: {error}") from None
+
+        return OverseasFetch(
+            trade_date=trade_date,
+            rows=rows,
+            # 3.5KB 남짓이라 원본을 그대로 남긴다. 미국 외 나라를 나중에 행으로 승격할 때
+            # 과거를 재구성할 근거가 된다.
+            payload=json.dumps(raw, ensure_ascii=False),
+            page_count=page_count,
+            started_at=started_at,
+            completed_at=datetime.now(UTC),
+        )
+
+    def store_domestic(self, connection: Connection, fetch: DomesticFetch) -> int:
+        """국내 거래일을 저장하고 저장한 날짜 수를 돌려준다.
+
+        국내는 KIS가 판정의 주인이므로 `effective_open_day`를 `opnd_yn`으로 함께 채운다.
+        """
+        verified_at = fetch.completed_at
+        with connection.cursor() as cursor:
+            source_record_id = _insert_source_record(
+                cursor,
+                DOMESTIC_SOURCE_KEY,
+                fetch.started_at,
+                fetch.completed_at,
+                "succeeded" if fetch.days else "failed",
+                len(fetch.days),
+                # 한 번에 수백 행이라 payload에 넣지 않는다. 매일 쌓으면 계보가 캘린더보다 커진다.
+                None,
+                {
+                    "base_date": fetch.base_date.isoformat(),
+                    "page_count": fetch.page_count,
+                    "day_count": len(fetch.days),
+                    "last_date": fetch.days[-1].session_date.isoformat() if fetch.days else None,
+                    "closed_count": sum(1 for day in fetch.days if not day.open_day),
+                },
             )
-    return settlement
+            execute_upserts(
+                cursor,
+                MARKET_SESSION_DOMESTIC_UPSERT,
+                [
+                    (
+                        day.session_date,
+                        day.weekday_code,
+                        day.business_day,
+                        day.trading_day,
+                        day.open_day,
+                        day.settlement_day,
+                        day.open_day,
+                        verified_at,
+                        source_record_id,
+                    )
+                    for day in fetch.days
+                ],
+            )
+        return len(fetch.days)
+
+
+    def store_overseas(self, connection: Connection, fetch: OverseasFetch) -> UsSettlement | None:
+        """미국 행의 결제일만 채운다. 개장 판정은 건드리지 않는다.
+
+        미국 행이 응답에 없으면 아무 것도 갱신하지 않는다. NYSE가 이미 그 날짜를 판정했으므로
+        부재를 휴장으로 해석할 필요가 없다. 다만 NYSE가 개장으로 본 날에 미국 행이 없으면
+        둘 중 하나가 틀렸다는 뜻이라 경고를 남긴다.
+        """
+        settlement = fold_us_settlement(fetch)
+
+        with connection.cursor() as cursor:
+            source_record_id = _insert_source_record(
+                cursor,
+                OVERSEAS_SOURCE_KEY,
+                fetch.started_at,
+                fetch.completed_at,
+                "succeeded",
+                1 if settlement else 0,
+                fetch.payload,
+                {
+                    "trade_date": fetch.trade_date.isoformat(),
+                    "page_count": fetch.page_count,
+                    "row_count": len(fetch.rows),
+                    "countries": sorted({row.country_abbreviation for row in fetch.rows}),
+                    "us_market_count": settlement.market_count if settlement else 0,
+                },
+            )
+
+            if settlement is None:
+                if fetch.rows:
+                    logger.warning(
+                        "KIS returned %s rows for %s but none for the US; leaving the NYSE verdict alone",
+                        len(fetch.rows),
+                        fetch.trade_date,
+                    )
+                else:
+                    # 주말·미래·장애가 모두 0행이다. 응답만으로는 가를 수 없어 판정하지 않는다.
+                    logger.info("KIS returned no settlement rows for %s", fetch.trade_date)
+                return None
+
+            cursor.execute(
+                MARKET_SESSION_SETTLEMENT_UPDATE,
+                (
+                    settlement.local_settlement_date,
+                    settlement.domestic_settlement_date,
+                    source_record_id,
+                    settlement.session_date,
+                ),
+            )
+            updated = cursor.fetchone()
+            if updated is None:
+                logger.warning(
+                    "No US_EQUITY row for %s; NYSE has not covered that year yet",
+                    settlement.session_date,
+                )
+        return settlement

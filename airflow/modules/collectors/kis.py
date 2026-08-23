@@ -597,117 +597,6 @@ def send_get(
         raise ConnectionError(f"KIS request failed: {error.reason}") from None
 
 
-def fetch_bars(
-    token: SecretStr,
-    app_key: SecretStr,
-    app_secret: SecretStr,
-    future: DomesticFuture,
-    contract_code: str,
-    until: datetime,
-) -> KisResponse:
-    """한 선물 계약의 1분봉을 받아 온다. 파싱은 하지 않는다.
-
-    `until`은 조회 기준 시각이고 KIS는 **그 시각 이전 102봉**을 최신순으로 돌려준다.
-    """
-    reference = until.astimezone(KST)
-    started_at = datetime.now(UTC)
-    body, status, _ = send_get(
-        token,
-        app_key,
-        app_secret,
-        FUTURE_CHART_PATH,
-        FUTURE_CHART_TR_ID,
-        {
-            "FID_COND_MRKT_DIV_CODE": "F",  # F = 지수선물
-            "FID_INPUT_ISCD": contract_code,
-            "FID_HOUR_CLS_CODE": "60",  # 60 = 1분봉
-            "FID_PW_DATA_INCU_YN": "Y",  # 과거 데이터 포함
-            "FID_FAKE_TICK_INCU_YN": "N",  # 허봉 제외
-            "FID_INPUT_DATE_1": reference.strftime("%Y%m%d"),
-            "FID_INPUT_HOUR_1": reference.strftime("%H%M%S"),
-        },
-    )
-    return KisResponse(
-        symbol=future.value,
-        contract_code=contract_code,
-        body=body,
-        status=status,
-        started_at=started_at,
-        completed_at=datetime.now(UTC),
-    )
-
-
-def fetch_index_bars(
-    token: SecretStr,
-    app_key: SecretStr,
-    app_secret: SecretStr,
-    index: DomesticIndex,
-) -> KisResponse:
-    """한 업종지수의 1분봉을 받아 온다.
-
-    선물과 달리 조회 기준 시각을 받지 않는다. 이 엔드포인트의 `FID_INPUT_HOUR_1`은 기준
-    시각이 아니라 **봉 간격**(60 = 1분)이다. 이름이 같아 헷갈리기 쉽다.
-
-    `FID_ETC_CLS_CODE`는 반드시 `1`이다. `0`이면 시각이 `999999`(장마감)·`888888`(시간외)인
-    의사 봉이 섞여 들어와 시각 파싱이 깨진다.
-    """
-    started_at = datetime.now(UTC)
-    body, status, _ = send_get(
-        token,
-        app_key,
-        app_secret,
-        INDEX_CHART_PATH,
-        INDEX_CHART_TR_ID,
-        {
-            "FID_COND_MRKT_DIV_CODE": "U",  # U = 업종. KRX 지수다
-            "FID_ETC_CLS_CODE": INDEX_ETC_CLS_CODE,
-            "FID_INPUT_ISCD": index.index_code,
-            "FID_INPUT_HOUR_1": "60",  # 여기서는 봉 간격이다
-            "FID_PW_DATA_INCU_YN": "Y",
-        },
-    )
-    return KisResponse(
-        symbol=index.value,
-        contract_code=None,
-        body=body,
-        status=status,
-        started_at=started_at,
-        completed_at=datetime.now(UTC),
-    )
-
-
-def fetch_index_price(
-    token: SecretStr,
-    app_key: SecretStr,
-    app_secret: SecretStr,
-    index: DomesticIndex,
-) -> KisResponse:
-    """지수 현재가를 받아 온다. 여기서 쓰는 것은 상승·보합·하락 종목 수뿐이다.
-
-    지수 값과 거래량은 이미 `quote_bar`가 갖고 있어 다시 저장하지 않는다.
-    """
-    started_at = datetime.now(UTC)
-    body, status, _ = send_get(
-        token,
-        app_key,
-        app_secret,
-        INDEX_PRICE_PATH,
-        INDEX_PRICE_TR_ID,
-        {
-            "FID_COND_MRKT_DIV_CODE": "U",  # U = 업종. 분봉 조회와 같은 구분이다
-            "FID_INPUT_ISCD": index.index_code,
-        },
-    )
-    return KisResponse(
-        symbol=index.value,
-        contract_code=None,
-        body=body,
-        status=status,
-        started_at=started_at,
-        completed_at=datetime.now(UTC),
-    )
-
-
 def _extract_message(raw: bytes) -> str:
     """오류 본문에서 `msg_cd`/`msg1`을 긁는다.
 
@@ -876,89 +765,6 @@ def _stock_bar_rows(body: bytes) -> tuple[KisRawBar, ...]:
     return payload.output2
 
 
-def fetch_stock_bars(
-    token: SecretStr,
-    app_key: SecretStr,
-    app_secret: SecretStr,
-    stock: DomesticStock,
-    business_date: date,
-    previous_close: Decimal,
-    exchange: StockExchange = StockExchange.KRX,
-) -> StockBarFetch:
-    """한 종목의 하루치 정규장 1분봉을 받는다.
-
-    한 응답이 120봉이라 정규장 381봉을 덮으려면 커서를 뒤로 걸며 네 번 부른다. 다음 커서는
-    이번 응답에서 **그 거래일에 속한** 가장 이른 봉의 1분 전이다.
-
-    **응답에 전 거래일 봉이 섞여 온다.** 09:00 이전을 요청하면 직전 세션의 뒷부분이 딸려
-    온다(실측: 2026-08-14를 훑으면 2026-08-13의 13:42~15:32가 99봉 들어온다). 날짜로 거르지
-    않고 시각만 키로 쓰면 전날 값이 그날 봉을 덮어써서 하루 합이 누적 거래량과 어긋난다.
-
-    `previous_close`를 호출자가 넘긴다. 응답의 `output1`은 요청한 날짜와 무관하게 **지금
-    시세**를 담고 있어(실측: 2026-07-03을 요청해도 `acml_vol`이 오늘 값이다) 백필에서 쓰면
-    모든 봉에 오늘의 전일종가가 박힌다.
-
-    **마감 동시호가가 15:30 봉에 없는 날이 있다.** 보통은 하루 봉 거래량 합이 그날 누적
-    거래량과 0.05% 안에서 맞는데, 2026-08-13 005930은 15:19가 마지막 봉이고 동시호가가
-    15:32에 찍혀 31%가 빈다. 그 15:32 행은 같은 값(11,196,308주)이 다른 날짜 응답에도
-    나와서 믿을 수 없다. 그래서 정규장 밖은 그대로 버리고 **봉 합이 누적 거래량과 맞는다고
-    약속하지 않는다.** 지어낸 봉을 넣는 것보다 빈 쪽이 낫다.
-    """
-    started_at = datetime.now(UTC)
-    stamp = business_date.strftime("%Y%m%d")
-    cursor = exchange.last_bar
-    seen: dict[time, QuoteBar] = {}
-    calls = 0
-
-    while calls < exchange.max_calls:
-        body, _, _ = send_get(
-            token,
-            app_key,
-            app_secret,
-            STOCK_CHART_PATH,
-            STOCK_CHART_TR_ID,
-            {
-                # J = KRX, NX = NXT. UN(통합)은 쓰지 않는다 — 두 거래소 체결이 섞인다.
-                "FID_COND_MRKT_DIV_CODE": exchange.division_code,
-                "FID_INPUT_ISCD": stock.value,
-                "FID_INPUT_DATE_1": stamp,
-                "FID_INPUT_HOUR_1": cursor.strftime("%H%M%S"),
-                "FID_PW_DATA_INCU_YN": "Y",
-                "FID_FAKE_TICK_INCU_YN": "N",  # 허봉 제외
-            },
-        )
-        calls += 1
-        rows = _stock_bar_rows(body)
-        if not rows:
-            break
-
-        same_day = [row for row in rows if row.business_date.strip() == stamp]
-        if not same_day:
-            break
-
-        earliest = min(_bar_time(row) for row in same_day)
-        for row in same_day:
-            moment = _bar_time(row)
-            if not (exchange.first_bar <= moment <= exchange.last_bar):
-                continue
-            seen[moment] = _stock_bar(row, business_date, moment, previous_close)
-
-        if earliest <= exchange.first_bar:
-            break
-        cursor = (datetime.combine(business_date, earliest) - timedelta(minutes=1)).time()
-
-    bars = tuple(seen[moment] for moment in sorted(seen))
-    return StockBarFetch(
-        stock_code=stock.value,
-        exchange=exchange,
-        business_date=business_date,
-        bars=bars,
-        call_count=calls,
-        started_at=started_at,
-        completed_at=datetime.now(UTC),
-    )
-
-
 def _bar_time(row: KisRawBar) -> time:
     stamp = row.contract_hour.strip()
     # 벽시계 시각만 온다. 날짜와 시간대는 `_stock_bar`가 붙인다.
@@ -985,56 +791,6 @@ def _stock_bar(row: KisRawBar, business_date: date, moment: time, previous_close
         )
     except ValidationError as error:
         raise KisPayloadError("KIS returned an invalid stock bar") from error
-
-
-def store_stock_bars(connection: Connection, fetch: StockBarFetch) -> int:
-    """한 종목·한 거래일의 봉을 저장한다. 겹치는 봉은 갱신된다."""
-    with connection.cursor() as cursor:
-        cursor.execute(
-            SOURCE_RECORD_INSERT,
-            (
-                "api",
-                SOURCE,
-                STOCK_BARS_SOURCE_KEY,
-                fetch.started_at,
-                fetch.completed_at,
-                "succeeded",
-                len(fetch.bars),
-                None,
-                json.dumps(
-                    {
-                        "stock_code": fetch.stock_code,
-                        "exchange": fetch.exchange.value,
-                        "business_date": fetch.business_date.isoformat(),
-                        "interval": "1m",
-                        "call_count": fetch.call_count,
-                    },
-                    ensure_ascii=False,
-                ),
-            ),
-        )
-        source_record_id = cursor.fetchone()[0]
-        execute_upserts(
-            cursor,
-            STOCK_BAR_UPSERT,
-            [
-                (
-                    SOURCE,
-                    fetch.stock_code,
-                    fetch.exchange.value,
-                    bar.bar_at,
-                    bar.open,
-                    bar.high,
-                    bar.low,
-                    bar.close,
-                    bar.volume,
-                    bar.previous_close,
-                    source_record_id,
-                )
-                for bar in fetch.bars
-            ],
-        )
-    return len(fetch.bars)
 
 
 def parse_market_movement(response: KisResponse, observed_at: datetime) -> MarketMovement:
@@ -1096,203 +852,452 @@ class SymbolOutcome(BaseModel):
     error: str | None = None
 
 
-def store_bars(
-    connection: Connection,
-    responses: Sequence[KisResponse],
-    since: datetime,
-    failures: Sequence[SymbolOutcome] = (),
-) -> tuple[int, tuple[SymbolOutcome, ...]]:
-    """폴링 1회분을 저장하고 (저장한 봉 수, 심볼별 결과)를 돌려준다.
+class KisQuoteCollector:
+    """KIS 시세 수집기. 자격 증명과 토큰을 들고 지수·지수선물·종목 분봉과 종목 분포를 조회·저장한다.
 
-    구조는 `yahoo.store_bars`와 같다. 폴링 1회가 `source_record` 1건이고, 원본은 남기지
-    않으며, 봉이 0건이어도 계보 레코드는 남긴다. 다른 점은 월물 코드를 함께 저장한다는 것뿐이다.
+    한 실행이 객체 하나다. 토큰은 발급 횟수 제한이 있어 DAG이 한 번 받아 넘긴다. 토큰은 이
+    객체가 사는 동안 안 변하는 값이라 갈아 끼우지 않는다 — 401로 다시 받았으면 DAG이 새
+    토큰으로 객체를 다시 만든다.
+
+    전송(`send_get`·`issue_token`·`access_token`)은 다른 KIS 수집기도 쓰는 공용 층이라 모듈
+    함수로 남는다. 파싱(`parse_bars`·`parse_market_movement`)과 월물 계산(`front_contract`)도
+    자격 증명을 보지 않아 밖에 둔다.
     """
-    started_at = min((response.started_at for response in responses), default=datetime.now(UTC))
-    completed_at = max((response.completed_at for response in responses), default=started_at)
 
-    parsed: list[tuple[KisResponse, tuple[QuoteBar, ...]]] = []
-    outcomes: list[SymbolOutcome] = list(failures)
-    for response in responses:
-        try:
-            result = parse_bars(response.body, since=since)
-        except (KisPayloadError, KisResultError) as error:
+    def __init__(self, token: SecretStr, app_key: SecretStr, app_secret: SecretStr) -> None:
+        self._token = token
+        self._app_key = app_key
+        self._app_secret = app_secret
+
+    def fetch_bars(
+        self,
+        future: DomesticFuture,
+        contract_code: str,
+        until: datetime,
+    ) -> KisResponse:
+        """한 선물 계약의 1분봉을 받아 온다. 파싱은 하지 않는다.
+
+        `until`은 조회 기준 시각이고 KIS는 **그 시각 이전 102봉**을 최신순으로 돌려준다.
+        """
+        reference = until.astimezone(KST)
+        started_at = datetime.now(UTC)
+        body, status, _ = send_get(
+            self._token,
+            self._app_key,
+            self._app_secret,
+            FUTURE_CHART_PATH,
+            FUTURE_CHART_TR_ID,
+            {
+                "FID_COND_MRKT_DIV_CODE": "F",  # F = 지수선물
+                "FID_INPUT_ISCD": contract_code,
+                "FID_HOUR_CLS_CODE": "60",  # 60 = 1분봉
+                "FID_PW_DATA_INCU_YN": "Y",  # 과거 데이터 포함
+                "FID_FAKE_TICK_INCU_YN": "N",  # 허봉 제외
+                "FID_INPUT_DATE_1": reference.strftime("%Y%m%d"),
+                "FID_INPUT_HOUR_1": reference.strftime("%H%M%S"),
+            },
+        )
+        return KisResponse(
+            symbol=future.value,
+            contract_code=contract_code,
+            body=body,
+            status=status,
+            started_at=started_at,
+            completed_at=datetime.now(UTC),
+        )
+
+    def fetch_index_bars(
+        self,
+        index: DomesticIndex,
+    ) -> KisResponse:
+        """한 업종지수의 1분봉을 받아 온다.
+
+        선물과 달리 조회 기준 시각을 받지 않는다. 이 엔드포인트의 `FID_INPUT_HOUR_1`은 기준
+        시각이 아니라 **봉 간격**(60 = 1분)이다. 이름이 같아 헷갈리기 쉽다.
+
+        `FID_ETC_CLS_CODE`는 반드시 `1`이다. `0`이면 시각이 `999999`(장마감)·`888888`(시간외)인
+        의사 봉이 섞여 들어와 시각 파싱이 깨진다.
+        """
+        started_at = datetime.now(UTC)
+        body, status, _ = send_get(
+            self._token,
+            self._app_key,
+            self._app_secret,
+            INDEX_CHART_PATH,
+            INDEX_CHART_TR_ID,
+            {
+                "FID_COND_MRKT_DIV_CODE": "U",  # U = 업종. KRX 지수다
+                "FID_ETC_CLS_CODE": INDEX_ETC_CLS_CODE,
+                "FID_INPUT_ISCD": index.index_code,
+                "FID_INPUT_HOUR_1": "60",  # 여기서는 봉 간격이다
+                "FID_PW_DATA_INCU_YN": "Y",
+            },
+        )
+        return KisResponse(
+            symbol=index.value,
+            contract_code=None,
+            body=body,
+            status=status,
+            started_at=started_at,
+            completed_at=datetime.now(UTC),
+        )
+
+    def fetch_index_price(
+        self,
+        index: DomesticIndex,
+    ) -> KisResponse:
+        """지수 현재가를 받아 온다. 여기서 쓰는 것은 상승·보합·하락 종목 수뿐이다.
+
+        지수 값과 거래량은 이미 `quote_bar`가 갖고 있어 다시 저장하지 않는다.
+        """
+        started_at = datetime.now(UTC)
+        body, status, _ = send_get(
+            self._token,
+            self._app_key,
+            self._app_secret,
+            INDEX_PRICE_PATH,
+            INDEX_PRICE_TR_ID,
+            {
+                "FID_COND_MRKT_DIV_CODE": "U",  # U = 업종. 분봉 조회와 같은 구분이다
+                "FID_INPUT_ISCD": index.index_code,
+            },
+        )
+        return KisResponse(
+            symbol=index.value,
+            contract_code=None,
+            body=body,
+            status=status,
+            started_at=started_at,
+            completed_at=datetime.now(UTC),
+        )
+
+    def fetch_stock_bars(
+        self,
+        stock: DomesticStock,
+        business_date: date,
+        previous_close: Decimal,
+        exchange: StockExchange = StockExchange.KRX,
+    ) -> StockBarFetch:
+        """한 종목의 하루치 정규장 1분봉을 받는다.
+
+        한 응답이 120봉이라 정규장 381봉을 덮으려면 커서를 뒤로 걸며 네 번 부른다. 다음 커서는
+        이번 응답에서 **그 거래일에 속한** 가장 이른 봉의 1분 전이다.
+
+        **응답에 전 거래일 봉이 섞여 온다.** 09:00 이전을 요청하면 직전 세션의 뒷부분이 딸려
+        온다(실측: 2026-08-14를 훑으면 2026-08-13의 13:42~15:32가 99봉 들어온다). 날짜로 거르지
+        않고 시각만 키로 쓰면 전날 값이 그날 봉을 덮어써서 하루 합이 누적 거래량과 어긋난다.
+
+        `previous_close`를 호출자가 넘긴다. 응답의 `output1`은 요청한 날짜와 무관하게 **지금
+        시세**를 담고 있어(실측: 2026-07-03을 요청해도 `acml_vol`이 오늘 값이다) 백필에서 쓰면
+        모든 봉에 오늘의 전일종가가 박힌다.
+
+        **마감 동시호가가 15:30 봉에 없는 날이 있다.** 보통은 하루 봉 거래량 합이 그날 누적
+        거래량과 0.05% 안에서 맞는데, 2026-08-13 005930은 15:19가 마지막 봉이고 동시호가가
+        15:32에 찍혀 31%가 빈다. 그 15:32 행은 같은 값(11,196,308주)이 다른 날짜 응답에도
+        나와서 믿을 수 없다. 그래서 정규장 밖은 그대로 버리고 **봉 합이 누적 거래량과 맞는다고
+        약속하지 않는다.** 지어낸 봉을 넣는 것보다 빈 쪽이 낫다.
+        """
+        started_at = datetime.now(UTC)
+        stamp = business_date.strftime("%Y%m%d")
+        cursor = exchange.last_bar
+        seen: dict[time, QuoteBar] = {}
+        calls = 0
+
+        while calls < exchange.max_calls:
+            body, _, _ = send_get(
+                self._token,
+                self._app_key,
+                self._app_secret,
+                STOCK_CHART_PATH,
+                STOCK_CHART_TR_ID,
+                {
+                    # J = KRX, NX = NXT. UN(통합)은 쓰지 않는다 — 두 거래소 체결이 섞인다.
+                    "FID_COND_MRKT_DIV_CODE": exchange.division_code,
+                    "FID_INPUT_ISCD": stock.value,
+                    "FID_INPUT_DATE_1": stamp,
+                    "FID_INPUT_HOUR_1": cursor.strftime("%H%M%S"),
+                    "FID_PW_DATA_INCU_YN": "Y",
+                    "FID_FAKE_TICK_INCU_YN": "N",  # 허봉 제외
+                },
+            )
+            calls += 1
+            rows = _stock_bar_rows(body)
+            if not rows:
+                break
+
+            same_day = [row for row in rows if row.business_date.strip() == stamp]
+            if not same_day:
+                break
+
+            earliest = min(_bar_time(row) for row in same_day)
+            for row in same_day:
+                moment = _bar_time(row)
+                if not (exchange.first_bar <= moment <= exchange.last_bar):
+                    continue
+                seen[moment] = _stock_bar(row, business_date, moment, previous_close)
+
+            if earliest <= exchange.first_bar:
+                break
+            cursor = (datetime.combine(business_date, earliest) - timedelta(minutes=1)).time()
+
+        bars = tuple(seen[moment] for moment in sorted(seen))
+        return StockBarFetch(
+            stock_code=stock.value,
+            exchange=exchange,
+            business_date=business_date,
+            bars=bars,
+            call_count=calls,
+            started_at=started_at,
+            completed_at=datetime.now(UTC),
+        )
+
+    def store_stock_bars(self, connection: Connection, fetch: StockBarFetch) -> int:
+        """한 종목·한 거래일의 봉을 저장한다. 겹치는 봉은 갱신된다."""
+        with connection.cursor() as cursor:
+            cursor.execute(
+                SOURCE_RECORD_INSERT,
+                (
+                    "api",
+                    SOURCE,
+                    STOCK_BARS_SOURCE_KEY,
+                    fetch.started_at,
+                    fetch.completed_at,
+                    "succeeded",
+                    len(fetch.bars),
+                    None,
+                    json.dumps(
+                        {
+                            "stock_code": fetch.stock_code,
+                            "exchange": fetch.exchange.value,
+                            "business_date": fetch.business_date.isoformat(),
+                            "interval": "1m",
+                            "call_count": fetch.call_count,
+                        },
+                        ensure_ascii=False,
+                    ),
+                ),
+            )
+            source_record_id = cursor.fetchone()[0]
+            execute_upserts(
+                cursor,
+                STOCK_BAR_UPSERT,
+                [
+                    (
+                        SOURCE,
+                        fetch.stock_code,
+                        fetch.exchange.value,
+                        bar.bar_at,
+                        bar.open,
+                        bar.high,
+                        bar.low,
+                        bar.close,
+                        bar.volume,
+                        bar.previous_close,
+                        source_record_id,
+                    )
+                    for bar in fetch.bars
+                ],
+            )
+        return len(fetch.bars)
+
+    def store_bars(
+        self,
+        connection: Connection,
+        responses: Sequence[KisResponse],
+        since: datetime,
+        failures: Sequence[SymbolOutcome] = (),
+    ) -> tuple[int, tuple[SymbolOutcome, ...]]:
+        """폴링 1회분을 저장하고 (저장한 봉 수, 심볼별 결과)를 돌려준다.
+
+        구조는 `yahoo.store_bars`와 같다. 폴링 1회가 `source_record` 1건이고, 원본은 남기지
+        않으며, 봉이 0건이어도 계보 레코드는 남긴다. 다른 점은 월물 코드를 함께 저장한다는 것뿐이다.
+        """
+        started_at = min((response.started_at for response in responses), default=datetime.now(UTC))
+        completed_at = max((response.completed_at for response in responses), default=started_at)
+
+        parsed: list[tuple[KisResponse, tuple[QuoteBar, ...]]] = []
+        outcomes: list[SymbolOutcome] = list(failures)
+        for response in responses:
+            try:
+                result = parse_bars(response.body, since=since)
+            except (KisPayloadError, KisResultError) as error:
+                outcomes.append(
+                    SymbolOutcome(
+                        symbol=response.symbol,
+                        contract_code=response.contract_code,
+                        status=response.status,
+                        error=str(error),
+                    )
+                )
+                continue
+
+            parsed.append((response, result.bars))
             outcomes.append(
                 SymbolOutcome(
                     symbol=response.symbol,
                     contract_code=response.contract_code,
+                    contract_name=result.contract_name,
                     status=response.status,
-                    error=str(error),
+                    bar_count=len(result.bars),
+                    latest_bar_at=result.latest_bar_at.isoformat() if result.latest_bar_at else None,
                 )
             )
-            continue
 
-        parsed.append((response, result.bars))
-        outcomes.append(
-            SymbolOutcome(
-                symbol=response.symbol,
-                contract_code=response.contract_code,
-                contract_name=result.contract_name,
-                status=response.status,
-                bar_count=len(result.bars),
-                latest_bar_at=result.latest_bar_at.isoformat() if result.latest_bar_at else None,
-            )
+        bar_count = sum(len(bars) for _, bars in parsed)
+        metadata = json.dumps(
+            {
+                "interval": "1m",
+                "window_start": since.isoformat(),
+                "symbols": [outcome.model_dump() for outcome in outcomes],
+            },
+            ensure_ascii=False,
         )
 
-    bar_count = sum(len(bars) for _, bars in parsed)
-    metadata = json.dumps(
-        {
-            "interval": "1m",
-            "window_start": since.isoformat(),
-            "symbols": [outcome.model_dump() for outcome in outcomes],
-        },
-        ensure_ascii=False,
-    )
-
-    with connection.cursor() as cursor:
-        cursor.execute(
-            SOURCE_RECORD_INSERT,
-            (
-                "api",
-                SOURCE,
-                SOURCE_KEY,
-                started_at,
-                completed_at,
-                "succeeded" if parsed else "failed",
-                bar_count,
-                # 원본은 남기지 않는다. 폴링마다 쌓으면 계보 테이블이 수집보다 빨리 커진다.
-                None,
-                metadata,
-            ),
-        )
-        source_record_id = cursor.fetchone()[0]
-        # 봉마다 왕복하지 않고 묶어 보낸다. 폴링 1회가 계약·지수 합쳐 수백 행이다.
-        # 선물(월물 있음)과 지수는 저장 테이블이 다르다.
-        execute_upserts(
-            cursor,
-            INDEX_FUTURE_BAR_UPSERT,
-            [
+        with connection.cursor() as cursor:
+            cursor.execute(
+                SOURCE_RECORD_INSERT,
                 (
+                    "api",
                     SOURCE,
-                    response.symbol,
-                    bar.bar_at,
-                    bar.open,
-                    bar.high,
-                    bar.low,
-                    bar.close,
-                    bar.volume,
-                    bar.previous_close,
-                    response.contract_code,
-                    source_record_id,
-                )
-                for response, bars in parsed
-                if response.contract_code is not None
-                for bar in bars
-            ],
-        )
-        execute_upserts(
-            cursor,
-            INDEX_BAR_UPSERT,
-            [
-                (
-                    SOURCE,
-                    response.symbol,
-                    bar.bar_at,
-                    bar.open,
-                    bar.high,
-                    bar.low,
-                    bar.close,
-                    bar.volume,
-                    bar.previous_close,
-                    source_record_id,
-                )
-                for response, bars in parsed
-                if response.contract_code is None
-                for bar in bars
-            ],
-        )
-    return bar_count, tuple(outcomes)
-
-
-def store_market_movement(
-    connection: Connection,
-    responses: Sequence[KisResponse],
-    observed_at: datetime,
-    failures: Sequence[SymbolOutcome] = (),
-) -> tuple[int, tuple[SymbolOutcome, ...]]:
-    """분포 조회 1회분을 저장하고 (저장한 행 수, 지수별 결과)를 돌려준다.
-
-    **장 밖의 all-zero 응답은 행을 만들지 않는다.** 계보 레코드는 남겨서 "조회했지만 장이
-    닫혀 있었다"와 "아직 조회하지 않았다"를 구분한다.
-
-    한 지수가 실패해도 다른 지수는 저장한다. 판정은 `source_record.metadata`에 남는다.
-    """
-    started_at = min((response.started_at for response in responses), default=observed_at)
-    completed_at = max((response.completed_at for response in responses), default=started_at)
-
-    movements: list[MarketMovement] = []
-    outcomes: list[SymbolOutcome] = list(failures)
-    closed: list[str] = []
-    for response in responses:
-        try:
-            movement = parse_market_movement(response, observed_at)
-        except (KisPayloadError, KisResultError) as error:
-            outcomes.append(SymbolOutcome(symbol=response.symbol, status=response.status, error=str(error)))
-            continue
-
-        if movement.closed:
-            closed.append(response.symbol)
-        else:
-            movements.append(movement)
-        outcomes.append(
-            SymbolOutcome(
-                symbol=response.symbol,
-                status=response.status,
-                bar_count=0 if movement.closed else 1,
+                    SOURCE_KEY,
+                    started_at,
+                    completed_at,
+                    "succeeded" if parsed else "failed",
+                    bar_count,
+                    # 원본은 남기지 않는다. 폴링마다 쌓으면 계보 테이블이 수집보다 빨리 커진다.
+                    None,
+                    metadata,
+                ),
             )
-        )
+            source_record_id = cursor.fetchone()[0]
+            # 봉마다 왕복하지 않고 묶어 보낸다. 폴링 1회가 계약·지수 합쳐 수백 행이다.
+            # 선물(월물 있음)과 지수는 저장 테이블이 다르다.
+            execute_upserts(
+                cursor,
+                INDEX_FUTURE_BAR_UPSERT,
+                [
+                    (
+                        SOURCE,
+                        response.symbol,
+                        bar.bar_at,
+                        bar.open,
+                        bar.high,
+                        bar.low,
+                        bar.close,
+                        bar.volume,
+                        bar.previous_close,
+                        response.contract_code,
+                        source_record_id,
+                    )
+                    for response, bars in parsed
+                    if response.contract_code is not None
+                    for bar in bars
+                ],
+            )
+            execute_upserts(
+                cursor,
+                INDEX_BAR_UPSERT,
+                [
+                    (
+                        SOURCE,
+                        response.symbol,
+                        bar.bar_at,
+                        bar.open,
+                        bar.high,
+                        bar.low,
+                        bar.close,
+                        bar.volume,
+                        bar.previous_close,
+                        source_record_id,
+                    )
+                    for response, bars in parsed
+                    if response.contract_code is None
+                    for bar in bars
+                ],
+            )
+        return bar_count, tuple(outcomes)
 
-    metadata = json.dumps(
-        {
-            "observed_at": observed_at.isoformat(),
-            # 장 밖이라 저장하지 않은 지수. 실패와 구분해서 남긴다.
-            "closed_symbols": closed,
-            "symbols": [outcome.model_dump() for outcome in outcomes],
-        },
-        ensure_ascii=False,
-    )
+    def store_market_movement(
+        self,
+        connection: Connection,
+        responses: Sequence[KisResponse],
+        observed_at: datetime,
+        failures: Sequence[SymbolOutcome] = (),
+    ) -> tuple[int, tuple[SymbolOutcome, ...]]:
+        """분포 조회 1회분을 저장하고 (저장한 행 수, 지수별 결과)를 돌려준다.
 
-    with connection.cursor() as cursor:
-        cursor.execute(
-            SOURCE_RECORD_INSERT,
-            (
-                "api",
-                SOURCE,
-                INDEX_PRICE_SOURCE_KEY,
-                started_at,
-                completed_at,
-                "succeeded" if len(outcomes) > len(failures) else "failed",
-                len(movements),
-                # 원본은 남기지 않는다. 5분마다 도는 조회라 계보가 분포보다 빨리 커진다.
-                None,
-                metadata,
-            ),
-        )
-        source_record_id = cursor.fetchone()[0]
-        execute_upserts(
-            cursor,
-            MARKET_MOVEMENT_UPSERT,
-            [
-                (
-                    movement.symbol,
-                    movement.observed_at,
-                    movement.upper_limit_count,
-                    movement.rising_count,
-                    movement.unchanged_count,
-                    movement.falling_count,
-                    movement.lower_limit_count,
-                    source_record_id,
+        **장 밖의 all-zero 응답은 행을 만들지 않는다.** 계보 레코드는 남겨서 "조회했지만 장이
+        닫혀 있었다"와 "아직 조회하지 않았다"를 구분한다.
+
+        한 지수가 실패해도 다른 지수는 저장한다. 판정은 `source_record.metadata`에 남는다.
+        """
+        started_at = min((response.started_at for response in responses), default=observed_at)
+        completed_at = max((response.completed_at for response in responses), default=started_at)
+
+        movements: list[MarketMovement] = []
+        outcomes: list[SymbolOutcome] = list(failures)
+        closed: list[str] = []
+        for response in responses:
+            try:
+                movement = parse_market_movement(response, observed_at)
+            except (KisPayloadError, KisResultError) as error:
+                outcomes.append(SymbolOutcome(symbol=response.symbol, status=response.status, error=str(error)))
+                continue
+
+            if movement.closed:
+                closed.append(response.symbol)
+            else:
+                movements.append(movement)
+            outcomes.append(
+                SymbolOutcome(
+                    symbol=response.symbol,
+                    status=response.status,
+                    bar_count=0 if movement.closed else 1,
                 )
-                for movement in movements
-            ],
+            )
+
+        metadata = json.dumps(
+            {
+                "observed_at": observed_at.isoformat(),
+                # 장 밖이라 저장하지 않은 지수. 실패와 구분해서 남긴다.
+                "closed_symbols": closed,
+                "symbols": [outcome.model_dump() for outcome in outcomes],
+            },
+            ensure_ascii=False,
         )
-    return len(movements), tuple(outcomes)
+
+        with connection.cursor() as cursor:
+            cursor.execute(
+                SOURCE_RECORD_INSERT,
+                (
+                    "api",
+                    SOURCE,
+                    INDEX_PRICE_SOURCE_KEY,
+                    started_at,
+                    completed_at,
+                    "succeeded" if len(outcomes) > len(failures) else "failed",
+                    len(movements),
+                    # 원본은 남기지 않는다. 5분마다 도는 조회라 계보가 분포보다 빨리 커진다.
+                    None,
+                    metadata,
+                ),
+            )
+            source_record_id = cursor.fetchone()[0]
+            execute_upserts(
+                cursor,
+                MARKET_MOVEMENT_UPSERT,
+                [
+                    (
+                        movement.symbol,
+                        movement.observed_at,
+                        movement.upper_limit_count,
+                        movement.rising_count,
+                        movement.unchanged_count,
+                        movement.falling_count,
+                        movement.lower_limit_count,
+                        source_record_id,
+                    )
+                    for movement in movements
+                ],
+            )
+        return len(movements), tuple(outcomes)

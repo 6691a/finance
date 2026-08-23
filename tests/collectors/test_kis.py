@@ -30,19 +30,16 @@ from modules.collectors.kis import (
     DomesticIndex,
     DomesticStock,
     KisPayloadError,
+    KisQuoteCollector,
     KisResponse,
     KisResultError,
     StockExchange,
     SymbolOutcome,
     access_token,
     expiry_date,
-    fetch_stock_bars,
     front_contract,
     parse_bars,
     parse_market_movement,
-    store_bars,
-    store_market_movement,
-    store_stock_bars,
 )
 
 KST = ZoneInfo("Asia/Seoul")
@@ -347,7 +344,7 @@ def test_parse_returns_no_bars_outside_the_session():
 def test_store_writes_one_source_record_without_the_payload():
     connection = FakeConnection()
 
-    store_bars(connection, [response_for()], WINDOW_START)
+    COLLECTOR.store_bars(connection, [response_for()], WINDOW_START)
 
     statements = [statement for statement, _ in connection.recorded_cursor.calls]
     assert sum("INSERT INTO source_record" in statement for statement in statements) == 1
@@ -365,7 +362,7 @@ def test_store_writes_one_source_record_without_the_payload():
 def test_store_saves_the_contract_code_with_every_bar():
     connection = FakeConnection()
 
-    bar_count, outcomes = store_bars(connection, [response_for()], WINDOW_START)
+    bar_count, outcomes = COLLECTOR.store_bars(connection, [response_for()], WINDOW_START)
 
     assert bar_count == 3
     calls = upsert_calls(connection.recorded_cursor)
@@ -387,7 +384,7 @@ def test_store_saves_the_contract_code_with_every_bar():
 def test_store_keeps_only_the_bars_inside_the_window():
     connection = FakeConnection()
 
-    bar_count, _ = store_bars(connection, [response_for()], datetime(2026, 8, 7, 6, 44, tzinfo=UTC))
+    bar_count, _ = COLLECTOR.store_bars(connection, [response_for()], datetime(2026, 8, 7, 6, 44, tzinfo=UTC))
 
     # 06:43 은 창 밖이라 빠지고 06:44, 06:45 만 남는다.
     assert bar_count == 2
@@ -396,7 +393,7 @@ def test_store_keeps_only_the_bars_inside_the_window():
 def test_store_records_a_closed_session_as_a_success_with_no_bars():
     connection = FakeConnection()
 
-    bar_count, outcomes = store_bars(connection, [response_for()], datetime(2026, 8, 7, 12, 0, tzinfo=UTC))
+    bar_count, outcomes = COLLECTOR.store_bars(connection, [response_for()], datetime(2026, 8, 7, 12, 0, tzinfo=UTC))
 
     assert bar_count == 0
     assert upsert_calls(connection.recorded_cursor) == []
@@ -408,7 +405,7 @@ def test_store_records_a_closed_session_as_a_success_with_no_bars():
 def test_store_marks_the_record_failed_when_nothing_parses():
     connection = FakeConnection()
 
-    bar_count, outcomes = store_bars(connection, [response_for(body=b"not json")], WINDOW_START)
+    bar_count, outcomes = COLLECTOR.store_bars(connection, [response_for(body=b"not json")], WINDOW_START)
 
     assert bar_count == 0
     assert connection.recorded_cursor.calls[0][1][5] == "failed"
@@ -419,7 +416,7 @@ def test_store_carries_fetch_failures_into_the_metadata():
     failure = SymbolOutcome(symbol="KOSPI200_FUT", contract_code=CONTRACT, status=500, error="boom")
     connection = FakeConnection()
 
-    _, outcomes = store_bars(connection, [response_for()], WINDOW_START, [failure])
+    _, outcomes = COLLECTOR.store_bars(connection, [response_for()], WINDOW_START, [failure])
 
     assert outcomes[0] == failure
     metadata = json.loads(connection.recorded_cursor.calls[0][1][8])
@@ -635,7 +632,7 @@ def test_store_movement_writes_one_row_per_index():
     connection = FakeConnection()
     responses = [index_price_response("KOSPI"), index_price_response("KOSDAQ", rising="900")]
 
-    stored, outcomes = store_market_movement(connection, responses, OBSERVED_AT)
+    stored, outcomes = COLLECTOR.store_market_movement(connection, responses, OBSERVED_AT)
 
     assert stored == 2
     upserts = movement_upserts(connection.recorded_cursor)
@@ -648,7 +645,7 @@ def test_closed_market_leaves_a_lineage_record_but_no_rows():
     connection = FakeConnection()
     closed = index_price_response(upper="0", rising="0", unchanged="0", falling="0", lower="0")
 
-    stored, outcomes = store_market_movement(connection, [closed], OBSERVED_AT)
+    stored, outcomes = COLLECTOR.store_market_movement(connection, [closed], OBSERVED_AT)
 
     assert stored == 0
     assert movement_upserts(connection.recorded_cursor) == []
@@ -665,7 +662,7 @@ def test_one_index_failing_does_not_drop_the_other():
     connection = FakeConnection()
     responses = [index_price_response("KOSPI"), index_price_response("KOSDAQ", rt_cd="1", msg1="권한 없음")]
 
-    stored, outcomes = store_market_movement(connection, responses, OBSERVED_AT)
+    stored, outcomes = COLLECTOR.store_market_movement(connection, responses, OBSERVED_AT)
 
     assert stored == 1
     assert [row[0] for row in movement_upserts(connection.recorded_cursor)] == ["KOSPI"]
@@ -677,6 +674,7 @@ STOCK_DATE = date(2026, 8, 14)
 TOKEN = SecretStr("token")
 APP_KEY = SecretStr("key")
 APP_SECRET = SecretStr("secret")
+COLLECTOR = KisQuoteCollector(TOKEN, APP_KEY, APP_SECRET)
 
 
 def stock_row(hour: str, business_date: str = "20260814", volume: str = "1000", close: str = "274500") -> dict:
@@ -729,7 +727,7 @@ def test_stock_bars_walk_the_session_backwards(monkeypatch):
     )
     monkeypatch.setattr(kis, "send_get", send)
 
-    fetch = fetch_stock_bars(TOKEN, APP_KEY, APP_SECRET, DomesticStock.SAMSUNG_ELECTRONICS, STOCK_DATE, Decimal(268000))
+    fetch = COLLECTOR.fetch_stock_bars(DomesticStock.SAMSUNG_ELECTRONICS, STOCK_DATE, Decimal(268000))
 
     assert fetch.call_count == 2
     assert [call["query"]["FID_INPUT_HOUR_1"] for call in send.sent] == ["153000", "115900"]
@@ -761,7 +759,7 @@ def test_stock_bars_drop_the_previous_session(monkeypatch):
     )
     monkeypatch.setattr(kis, "send_get", send)
 
-    fetch = fetch_stock_bars(TOKEN, APP_KEY, APP_SECRET, DomesticStock.SAMSUNG_ELECTRONICS, STOCK_DATE, Decimal(268000))
+    fetch = COLLECTOR.fetch_stock_bars(DomesticStock.SAMSUNG_ELECTRONICS, STOCK_DATE, Decimal(268000))
 
     assert [bar.volume for bar in fetch.bars] == [700, 500]
     assert all(bar.bar_at.astimezone(KST).date() == STOCK_DATE for bar in fetch.bars)
@@ -772,7 +770,7 @@ def test_stock_bars_keep_only_the_regular_session(monkeypatch):
     send = fake_stock_send([[stock_row("153200", volume="11196308"), stock_row("153000"), stock_row("090000")]])
     monkeypatch.setattr(kis, "send_get", send)
 
-    fetch = fetch_stock_bars(TOKEN, APP_KEY, APP_SECRET, DomesticStock.SAMSUNG_ELECTRONICS, STOCK_DATE, Decimal(268000))
+    fetch = COLLECTOR.fetch_stock_bars(DomesticStock.SAMSUNG_ELECTRONICS, STOCK_DATE, Decimal(268000))
 
     hours = [bar.bar_at.astimezone(KST).time() for bar in fetch.bars]
     assert hours == [SESSION_FIRST_BAR, SESSION_LAST_BAR]
@@ -783,7 +781,7 @@ def test_stock_bars_stop_when_a_day_is_empty(monkeypatch):
     send = fake_stock_send([[]])
     monkeypatch.setattr(kis, "send_get", send)
 
-    fetch = fetch_stock_bars(TOKEN, APP_KEY, APP_SECRET, DomesticStock.SAMSUNG_ELECTRONICS, STOCK_DATE, Decimal(268000))
+    fetch = COLLECTOR.fetch_stock_bars(DomesticStock.SAMSUNG_ELECTRONICS, STOCK_DATE, Decimal(268000))
 
     assert fetch.bars == ()
     assert fetch.call_count == 1
@@ -794,7 +792,7 @@ def test_stock_bars_never_call_forever(monkeypatch):
     send = fake_stock_send([[stock_row("153000")] for _ in range(20)])
     monkeypatch.setattr(kis, "send_get", send)
 
-    fetch = fetch_stock_bars(TOKEN, APP_KEY, APP_SECRET, DomesticStock.SAMSUNG_ELECTRONICS, STOCK_DATE, Decimal(268000))
+    fetch = COLLECTOR.fetch_stock_bars(DomesticStock.SAMSUNG_ELECTRONICS, STOCK_DATE, Decimal(268000))
 
     assert fetch.call_count == kis.MAX_STOCK_BAR_CALLS
 
@@ -807,7 +805,7 @@ def test_stock_bars_carry_the_previous_close_given_by_the_caller(monkeypatch):
     send = fake_stock_send([[stock_row("090000")]])
     monkeypatch.setattr(kis, "send_get", send)
 
-    fetch = fetch_stock_bars(TOKEN, APP_KEY, APP_SECRET, DomesticStock.SAMSUNG_ELECTRONICS, STOCK_DATE, Decimal(111))
+    fetch = COLLECTOR.fetch_stock_bars(DomesticStock.SAMSUNG_ELECTRONICS, STOCK_DATE, Decimal(111))
 
     assert fetch.bars[0].previous_close == Decimal(111)
 
@@ -816,10 +814,10 @@ def test_store_stock_bars_writes_the_stock_code_as_the_symbol(monkeypatch):
     """봉과 수급을 한 화면에서 겹치려면 심볼이 종목코드여야 한다."""
     send = fake_stock_send([[stock_row("090000"), stock_row("090100")]])
     monkeypatch.setattr(kis, "send_get", send)
-    fetch = fetch_stock_bars(TOKEN, APP_KEY, APP_SECRET, DomesticStock.SAMSUNG_ELECTRONICS, STOCK_DATE, Decimal(268000))
+    fetch = COLLECTOR.fetch_stock_bars(DomesticStock.SAMSUNG_ELECTRONICS, STOCK_DATE, Decimal(268000))
     connection = FakeConnection()
 
-    assert store_stock_bars(connection, fetch) == 2
+    assert COLLECTOR.store_stock_bars(connection, fetch) == 2
 
     rows = [args for statement, args in connection.recorded_cursor.calls if "INSERT INTO stock_bar" in statement]
     assert [row[1] for row in rows] == ["005930", "005930"]
@@ -832,9 +830,9 @@ def test_store_stock_bars_records_the_call_count(monkeypatch):
     """호출 수가 계보에 남아야 한 거래일에 몇 번 물어봤는지 나중에 읽을 수 있다."""
     send = fake_stock_send([[stock_row("153000")], [stock_row("090000")]])
     monkeypatch.setattr(kis, "send_get", send)
-    fetch = fetch_stock_bars(TOKEN, APP_KEY, APP_SECRET, DomesticStock.SAMSUNG_ELECTRONICS, STOCK_DATE, Decimal(268000))
+    fetch = COLLECTOR.fetch_stock_bars(DomesticStock.SAMSUNG_ELECTRONICS, STOCK_DATE, Decimal(268000))
     connection = FakeConnection()
-    store_stock_bars(connection, fetch)
+    COLLECTOR.store_stock_bars(connection, fetch)
 
     record = next(
         args for statement, args in connection.recorded_cursor.calls if "INSERT INTO source_record" in statement

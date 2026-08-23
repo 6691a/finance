@@ -350,72 +350,6 @@ def _json(raw: bytes) -> dict[str, Any]:
     return payload
 
 
-def fetch_disclosures(
-    api_key: SecretStr,
-    company: DartCompany,
-    begin_date: date,
-    end_date: date,
-) -> DisclosureFetch:
-    """한 회사의 공시 목록을 받는다. 데이터 없음은 0건 성공이다."""
-    started_at = datetime.now(UTC)
-    rows: list[dict[str, Any]] = []
-    total_count = 0
-    page = 0
-
-    while page < MAX_PAGES:
-        page += 1
-        payload = _json(
-            _get(
-                f"{OPENDART_BASE_URL}/list.json",
-                {
-                    "crtfc_key": api_key.get_secret_value(),
-                    "corp_code": company.corp_code,
-                    "bgn_de": begin_date.strftime("%Y%m%d"),
-                    "end_de": end_date.strftime("%Y%m%d"),
-                    "sort": "date",
-                    "sort_mth": "desc",
-                    "last_reprt_at": "N",
-                    "page_no": str(page),
-                    "page_count": str(PAGE_COUNT),
-                },
-            )
-        )
-        status = str(payload.get("status", ""))
-        if status == STATUS_NO_DATA:
-            break
-        if status != STATUS_OK:
-            raise DartStatusError(status, str(payload.get("message", "")).strip())
-
-        rows.extend(payload.get("list") or [])
-        total_count = int(payload.get("total_count") or 0)
-        if page >= int(payload.get("total_page") or 1):
-            break
-
-    # 장 상한에서 멈추면 조회 구간에 구멍이 남는다. 조용히 잘린 목록보다 실패가 낫다.
-    if total_count > len(rows):
-        raise DartPayloadError(
-            f"DART returned {total_count} disclosures for {company.value} "
-            f"but only {len(rows)} were read in {page} pages; narrow the window or raise MAX_PAGES"
-        )
-
-    try:
-        disclosures = tuple(Disclosure.from_payload(row) for row in rows)
-    except (KeyError, TypeError) as error:
-        raise DartPayloadError(f"DART disclosure row is malformed: {error}") from None
-
-    return DisclosureFetch(
-        company=company.value,
-        corp_code=company.corp_code,
-        begin_date=begin_date,
-        end_date=end_date,
-        disclosures=disclosures,
-        page_count=page,
-        total_count=total_count,
-        started_at=started_at,
-        completed_at=datetime.now(UTC),
-    )
-
-
 def normalized_report_name(report_name: str) -> str:
     """`[기재정정]` 같은 접두사를 뗀 이름. 원문 이름은 저장할 때 그대로 쓴다."""
     return CORRECTION_PREFIX_PATTERN.sub("", report_name).strip()
@@ -538,48 +472,6 @@ def parse_provisional(xml: str) -> tuple[tuple[EarningsValue, ...], dict[str, An
     return tuple(values), {"unit_multiplier": str(multiplier), "statement_scope": scope}
 
 
-def fetch_provisional(api_key: SecretStr, disclosure: Disclosure) -> EarningsFetch | None:
-    """잠정실적 공시 원문을 받아 세 지표를 뽑는다. 원문이 아직 없으면 `None`이다."""
-    started_at = datetime.now(UTC)
-    raw = _get(
-        f"{OPENDART_BASE_URL}/document.xml",
-        {"crtfc_key": api_key.get_secret_value(), "rcept_no": disclosure.rcept_no},
-    )
-
-    # ZIP이 아니면 오류 XML이다. HTTP는 200으로 온다.
-    if raw[:2] != b"PK":
-        text = raw.decode("utf-8", errors="replace")
-        code = re.search(r"<status>(\d+)</status>", text)
-        status = code.group(1) if code else ""
-        if status == STATUS_NO_FILE:
-            logger.info("Document for %s is not available yet", disclosure.rcept_no)
-            return None
-        raise DartStatusError(status, "document.xml did not return a ZIP")
-
-    with zipfile.ZipFile(io.BytesIO(raw)) as archive:
-        names = archive.namelist()
-        if not names:
-            raise DartPayloadError(f"document ZIP for {disclosure.rcept_no} is empty")
-        content = archive.read(names[0])
-
-    values, metadata = parse_provisional(content.decode("utf-8", errors="replace"))
-    return EarningsFetch(
-        rcept_no=disclosure.rcept_no,
-        stock_code=disclosure.stock_code,
-        release_type="provisional",
-        values=values,
-        metadata={
-            "rcept_no": disclosure.rcept_no,
-            "file_name": names[0],
-            # 같은 접수번호의 첨부가 바뀌면 이 해시가 달라진다.
-            "sha256": hashlib.sha256(raw).hexdigest(),
-            **metadata,
-        },
-        started_at=started_at,
-        completed_at=datetime.now(UTC),
-    )
-
-
 def parse_financials(payload: dict[str, Any], period_end: date, scope: str) -> tuple[EarningsValue, ...]:
     """재무제표 응답에서 세 지표를 읽는다. 계정은 이름이 아니라 `account_id`로 잡는다."""
     values: list[EarningsValue] = []
@@ -616,73 +508,6 @@ def parse_financials(payload: dict[str, Any], period_end: date, scope: str) -> t
     return tuple(values)
 
 
-def fetch_financials(api_key: SecretStr, disclosure: Disclosure) -> EarningsFetch | None:
-    """정기보고서의 재무제표를 받는다.
-
-    이 API는 접수번호가 아니라 회사·사업연도·보고서코드로 조회한다. **응답 `rcept_no`가
-    처리 중인 공시와 다르면 저장하지 않는다.** 아직 반영 전이라는 뜻이고 다음 run이 다시 본다.
-
-    연결(`CFS`)을 먼저 보고 없을 때만 별도(`OFS`)를 쓴다. 둘을 합치거나 대체하지 않는다.
-    """
-    periodic = periodic_report(disclosure.report_name)
-    if periodic is None:
-        return None
-    year, report_code, period_end = periodic
-
-    started_at = datetime.now(UTC)
-    for scope in ("CFS", "OFS"):
-        payload = _json(
-            _get(
-                f"{OPENDART_BASE_URL}/fnlttSinglAcntAll.json",
-                {
-                    "crtfc_key": api_key.get_secret_value(),
-                    "corp_code": _company_of(disclosure).corp_code,
-                    "bsns_year": str(year),
-                    "reprt_code": report_code,
-                    "fs_div": scope,
-                },
-            )
-        )
-        status = str(payload.get("status", ""))
-        if status == STATUS_NO_DATA:
-            continue
-        if status != STATUS_OK:
-            raise DartStatusError(status, str(payload.get("message", "")).strip())
-
-        rows = payload.get("list") or []
-        answered = {str(row.get("rcept_no", "")).strip() for row in rows}
-        if disclosure.rcept_no not in answered:
-            logger.info(
-                "Financial statements for %s still answer with %s; retrying next run",
-                disclosure.rcept_no,
-                sorted(answered)[:1],
-            )
-            return None
-
-        values = parse_financials(payload, period_end, scope)
-        if not values:
-            continue
-        return EarningsFetch(
-            rcept_no=disclosure.rcept_no,
-            stock_code=disclosure.stock_code,
-            release_type="periodic",
-            values=values,
-            metadata={
-                "rcept_no": disclosure.rcept_no,
-                "business_year": year,
-                "report_code": report_code,
-                "statement_scope": scope,
-                "row_count": len(rows),
-                # 재무제표 금액은 원 단위로 온다. 곱하지 않는다.
-                "unit_multiplier": "1",
-            },
-            started_at=started_at,
-            completed_at=datetime.now(UTC),
-        )
-
-    return None
-
-
 def _company_of(disclosure: Disclosure) -> DartCompany:
     for company in DartCompany:
         if company.value == disclosure.stock_code:
@@ -717,90 +542,6 @@ def _insert_source_record(
     return cursor.fetchone()[0]
 
 
-def store_disclosures(connection: Connection, fetch: DisclosureFetch, detected_at: datetime | None = None) -> int:
-    """공시 이벤트를 저장하고 저장한 건수를 돌려준다.
-
-    `detected_at`은 새 행에만 들어간다. 이미 있는 접수번호는 최초값을 지킨다.
-    """
-    detected_at = detected_at or fetch.completed_at
-    with connection.cursor() as cursor:
-        source_record_id = _insert_source_record(
-            cursor,
-            SOURCE_KEY_LIST,
-            fetch.started_at,
-            fetch.completed_at,
-            "succeeded",
-            len(fetch.disclosures),
-            {
-                "company": fetch.company,
-                "corp_code": fetch.corp_code,
-                "begin_date": fetch.begin_date.isoformat(),
-                "end_date": fetch.end_date.isoformat(),
-                "page_count": fetch.page_count,
-                "total_count": fetch.total_count,
-            },
-        )
-        execute_upserts(
-            cursor,
-            DISCLOSURE_EVENT_UPSERT,
-            [
-                (
-                    disclosure.corp_code,
-                    disclosure.stock_code,
-                    disclosure.corp_name,
-                    disclosure.rcept_no,
-                    disclosure.report_name,
-                    disclosure.filer_name,
-                    disclosure.corp_class,
-                    disclosure.receipt_date,
-                    detected_at,
-                    disclosure.remarks,
-                    source_record_id,
-                )
-                for disclosure in fetch.disclosures
-            ],
-        )
-    return len(fetch.disclosures)
-
-
-def store_earnings(connection: Connection, fetch: EarningsFetch) -> int:
-    """실적 지표를 저장하고 저장한 행 수를 돌려준다."""
-    source_key = SOURCE_KEY_DOCUMENT if fetch.release_type == "provisional" else SOURCE_KEY_FINANCIALS
-    with connection.cursor() as cursor:
-        source_record_id = _insert_source_record(
-            cursor,
-            source_key,
-            fetch.started_at,
-            fetch.completed_at,
-            "succeeded",
-            len(fetch.values),
-            fetch.metadata,
-        )
-        execute_upserts(
-            cursor,
-            EARNINGS_FACT_UPSERT,
-            [
-                (
-                    fetch.stock_code,
-                    fetch.rcept_no,
-                    fetch.release_type,
-                    value.period_end,
-                    value.statement_scope,
-                    value.amount_basis,
-                    value.metric,
-                    value.current_amount,
-                    value.prior_year_amount,
-                    value.currency,
-                    value.source_account_id,
-                    value.source_account_name,
-                    source_record_id,
-                )
-                for value in fetch.values
-            ],
-        )
-    return len(fetch.values)
-
-
 def pending_earnings(connection: Connection, stock_codes: tuple[str, ...], since: date) -> tuple[Disclosure, ...]:
     """실적 숫자를 아직 못 얻은 공시. 별도 작업 큐 없이 이 조회가 재시도 목록이다."""
     with connection.cursor() as cursor:
@@ -820,3 +561,272 @@ def pending_earnings(connection: Connection, stock_codes: tuple[str, ...], since
         )
         for row in rows
     )
+
+
+class DartCollector:
+    """OpenDART 수집기. API 키를 쥐고 공시 목록·원문·재무제표를 조회하고 저장한다.
+
+    한 실행이 객체 하나다. 키는 이 객체가 사는 동안 안 변하는 값이라 생성자가 받고, 회사·구간·
+    공시처럼 호출마다 바뀌는 것은 메서드 인자다. 전송(`_get`)과 파싱(`parse_provisional`·
+    `parse_financials`), 그리고 DART와 무관하게 DB만 보는 `pending_earnings`는 밖에 둔다.
+    """
+
+    def __init__(self, api_key: SecretStr) -> None:
+        if not api_key.get_secret_value():
+            raise ValueError("DART API key is required")
+        self._api_key = api_key
+
+    def _call(self, path: str, params: dict[str, str]) -> bytes:
+        """키를 붙여 한 번 부른다. **키가 질의 문자열에 들어가므로 URL을 예외나 로그에 남기지 않는다.**"""
+        return _get(f"{OPENDART_BASE_URL}/{path}", {"crtfc_key": self._api_key.get_secret_value(), **params})
+
+    def fetch_disclosures(
+        self,
+        company: DartCompany,
+        begin_date: date,
+        end_date: date,
+    ) -> DisclosureFetch:
+        """한 회사의 공시 목록을 받는다. 데이터 없음은 0건 성공이다."""
+        started_at = datetime.now(UTC)
+        rows: list[dict[str, Any]] = []
+        total_count = 0
+        page = 0
+
+        while page < MAX_PAGES:
+            page += 1
+            payload = _json(
+                self._call(
+                    "list.json",
+                    {
+                        "corp_code": company.corp_code,
+                        "bgn_de": begin_date.strftime("%Y%m%d"),
+                        "end_de": end_date.strftime("%Y%m%d"),
+                        "sort": "date",
+                        "sort_mth": "desc",
+                        "last_reprt_at": "N",
+                        "page_no": str(page),
+                        "page_count": str(PAGE_COUNT),
+                    },
+                )
+            )
+            status = str(payload.get("status", ""))
+            if status == STATUS_NO_DATA:
+                break
+            if status != STATUS_OK:
+                raise DartStatusError(status, str(payload.get("message", "")).strip())
+
+            rows.extend(payload.get("list") or [])
+            total_count = int(payload.get("total_count") or 0)
+            if page >= int(payload.get("total_page") or 1):
+                break
+
+        # 장 상한에서 멈추면 조회 구간에 구멍이 남는다. 조용히 잘린 목록보다 실패가 낫다.
+        if total_count > len(rows):
+            raise DartPayloadError(
+                f"DART returned {total_count} disclosures for {company.value} "
+                f"but only {len(rows)} were read in {page} pages; narrow the window or raise MAX_PAGES"
+            )
+
+        try:
+            disclosures = tuple(Disclosure.from_payload(row) for row in rows)
+        except (KeyError, TypeError) as error:
+            raise DartPayloadError(f"DART disclosure row is malformed: {error}") from None
+
+        return DisclosureFetch(
+            company=company.value,
+            corp_code=company.corp_code,
+            begin_date=begin_date,
+            end_date=end_date,
+            disclosures=disclosures,
+            page_count=page,
+            total_count=total_count,
+            started_at=started_at,
+            completed_at=datetime.now(UTC),
+        )
+
+    def fetch_provisional(self, disclosure: Disclosure) -> EarningsFetch | None:
+        """잠정실적 공시 원문을 받아 세 지표를 뽑는다. 원문이 아직 없으면 `None`이다."""
+        started_at = datetime.now(UTC)
+        raw = self._call("document.xml", {"rcept_no": disclosure.rcept_no})
+
+        # ZIP이 아니면 오류 XML이다. HTTP는 200으로 온다.
+        if raw[:2] != b"PK":
+            text = raw.decode("utf-8", errors="replace")
+            code = re.search(r"<status>(\d+)</status>", text)
+            status = code.group(1) if code else ""
+            if status == STATUS_NO_FILE:
+                logger.info("Document for %s is not available yet", disclosure.rcept_no)
+                return None
+            raise DartStatusError(status, "document.xml did not return a ZIP")
+
+        with zipfile.ZipFile(io.BytesIO(raw)) as archive:
+            names = archive.namelist()
+            if not names:
+                raise DartPayloadError(f"document ZIP for {disclosure.rcept_no} is empty")
+            content = archive.read(names[0])
+
+        values, metadata = parse_provisional(content.decode("utf-8", errors="replace"))
+        return EarningsFetch(
+            rcept_no=disclosure.rcept_no,
+            stock_code=disclosure.stock_code,
+            release_type="provisional",
+            values=values,
+            metadata={
+                "rcept_no": disclosure.rcept_no,
+                "file_name": names[0],
+                # 같은 접수번호의 첨부가 바뀌면 이 해시가 달라진다.
+                "sha256": hashlib.sha256(raw).hexdigest(),
+                **metadata,
+            },
+            started_at=started_at,
+            completed_at=datetime.now(UTC),
+        )
+
+    def fetch_financials(self, disclosure: Disclosure) -> EarningsFetch | None:
+        """정기보고서의 재무제표를 받는다.
+
+        이 API는 접수번호가 아니라 회사·사업연도·보고서코드로 조회한다. **응답 `rcept_no`가
+        처리 중인 공시와 다르면 저장하지 않는다.** 아직 반영 전이라는 뜻이고 다음 run이 다시 본다.
+
+        연결(`CFS`)을 먼저 보고 없을 때만 별도(`OFS`)를 쓴다. 둘을 합치거나 대체하지 않는다.
+        """
+        periodic = periodic_report(disclosure.report_name)
+        if periodic is None:
+            return None
+        year, report_code, period_end = periodic
+
+        started_at = datetime.now(UTC)
+        for scope in ("CFS", "OFS"):
+            payload = _json(
+                self._call(
+                    "fnlttSinglAcntAll.json",
+                    {
+                        "corp_code": _company_of(disclosure).corp_code,
+                        "bsns_year": str(year),
+                        "reprt_code": report_code,
+                        "fs_div": scope,
+                    },
+                )
+            )
+            status = str(payload.get("status", ""))
+            if status == STATUS_NO_DATA:
+                continue
+            if status != STATUS_OK:
+                raise DartStatusError(status, str(payload.get("message", "")).strip())
+
+            rows = payload.get("list") or []
+            answered = {str(row.get("rcept_no", "")).strip() for row in rows}
+            if disclosure.rcept_no not in answered:
+                logger.info(
+                    "Financial statements for %s still answer with %s; retrying next run",
+                    disclosure.rcept_no,
+                    sorted(answered)[:1],
+                )
+                return None
+
+            values = parse_financials(payload, period_end, scope)
+            if not values:
+                continue
+            return EarningsFetch(
+                rcept_no=disclosure.rcept_no,
+                stock_code=disclosure.stock_code,
+                release_type="periodic",
+                values=values,
+                metadata={
+                    "rcept_no": disclosure.rcept_no,
+                    "business_year": year,
+                    "report_code": report_code,
+                    "statement_scope": scope,
+                    "row_count": len(rows),
+                    # 재무제표 금액은 원 단위로 온다. 곱하지 않는다.
+                    "unit_multiplier": "1",
+                },
+                started_at=started_at,
+                completed_at=datetime.now(UTC),
+            )
+
+        return None
+
+    def store_disclosures(
+        self, connection: Connection, fetch: DisclosureFetch, detected_at: datetime | None = None
+    ) -> int:
+        """공시 이벤트를 저장하고 저장한 건수를 돌려준다.
+
+        `detected_at`은 새 행에만 들어간다. 이미 있는 접수번호는 최초값을 지킨다.
+        """
+        detected_at = detected_at or fetch.completed_at
+        with connection.cursor() as cursor:
+            source_record_id = _insert_source_record(
+                cursor,
+                SOURCE_KEY_LIST,
+                fetch.started_at,
+                fetch.completed_at,
+                "succeeded",
+                len(fetch.disclosures),
+                {
+                    "company": fetch.company,
+                    "corp_code": fetch.corp_code,
+                    "begin_date": fetch.begin_date.isoformat(),
+                    "end_date": fetch.end_date.isoformat(),
+                    "page_count": fetch.page_count,
+                    "total_count": fetch.total_count,
+                },
+            )
+            execute_upserts(
+                cursor,
+                DISCLOSURE_EVENT_UPSERT,
+                [
+                    (
+                        disclosure.corp_code,
+                        disclosure.stock_code,
+                        disclosure.corp_name,
+                        disclosure.rcept_no,
+                        disclosure.report_name,
+                        disclosure.filer_name,
+                        disclosure.corp_class,
+                        disclosure.receipt_date,
+                        detected_at,
+                        disclosure.remarks,
+                        source_record_id,
+                    )
+                    for disclosure in fetch.disclosures
+                ],
+            )
+        return len(fetch.disclosures)
+
+    def store_earnings(self, connection: Connection, fetch: EarningsFetch) -> int:
+        """실적 지표를 저장하고 저장한 행 수를 돌려준다."""
+        source_key = SOURCE_KEY_DOCUMENT if fetch.release_type == "provisional" else SOURCE_KEY_FINANCIALS
+        with connection.cursor() as cursor:
+            source_record_id = _insert_source_record(
+                cursor,
+                source_key,
+                fetch.started_at,
+                fetch.completed_at,
+                "succeeded",
+                len(fetch.values),
+                fetch.metadata,
+            )
+            execute_upserts(
+                cursor,
+                EARNINGS_FACT_UPSERT,
+                [
+                    (
+                        fetch.stock_code,
+                        fetch.rcept_no,
+                        fetch.release_type,
+                        value.period_end,
+                        value.statement_scope,
+                        value.amount_basis,
+                        value.metric,
+                        value.current_amount,
+                        value.prior_year_amount,
+                        value.currency,
+                        value.source_account_id,
+                        value.source_account_name,
+                        source_record_id,
+                    )
+                    for value in fetch.values
+                ],
+            )
+        return len(fetch.values)

@@ -93,7 +93,7 @@ uv run ruff check apps airflow migrations tests
 - 함수로 두는 것: 파싱·정규화·계산처럼 감쌀 상태가 없는 것, 그 클래스의 관심사가 아닌 조회(`watched_stocks`). 클래스 안이 읽기 좋으면 `@staticmethod`.
 - 데이터 모양은 언제나 Pydantic 모델이다. 수집기 클래스 안에 중첩하지 않는다.
 - **감쌀 상태가 없는 것을 클래스로 만들지 않는다.** 메서드가 전부 `@staticmethod`면 그건 모듈이다.
-- 수집기 17모듈 중 넷만 전환했다. 목표 폴더 구조(도메인별 `market/`·`document/`·`indicator/`·`calendar/`·`analyst/`)와 단계별 순서는 `docs/collectors-class-migration.md`에 있다. **새 수집기는 처음부터 그 형태로 쓴다.**
+- 자격 증명을 쥐는 수집기 10모듈은 클래스로 옮겼다(2026-08-23). 흐름 코드(2단계)와 폴더 이동(3단계)이 남았다. 목표 폴더 구조(도메인별 `market/`·`document/`·`indicator/`·`calendar/`·`analyst/`)와 단계별 순서는 `docs/collectors-class-migration.md`에 있다. **새 수집기는 처음부터 그 형태로 쓴다.**
 
 ## 수집기 작성 규칙
 
@@ -122,7 +122,7 @@ uv run ruff check apps airflow migrations tests
 - 응답이 페이지 단위로 잘릴 수 있으면 제공처가 알려 준 전체 건수와 받은 행 수를 대조해 잘림을 실패로 만든다. 조용히 잘린 응답은 조회 구간에 구멍을 남긴다.
 - HTML 수집은 scrapling을 쓴다. 요청은 `Fetcher`(curl_cffi), 파싱은 `Selector`다. `impersonate`로 실제 브라우저 지문을 흉내 내므로 앞단 WAF에 막히지 않는다. 페이지가 JavaScript로 표를 그릴 때만 `DynamicFetcher`나 `StealthyFetcher`를 쓴다. 이건 브라우저를 띄우므로 기본값이 아니다.
 - 표를 위치(index)로 읽으면 칸 수를 상수로 두고 응답마다 검증한다. 사이트가 열을 추가하면 값이 조용히 옆 칸으로 밀린다. 칸 수 검사가 먼저 실패해야 그걸 알 수 있다. CSV도 같고, 저장하지 않는 열까지 헤더 전체를 대조한다(`mof.EXPECTED_HEADER`).
-- 기준 예시는 `airflow/modules/collectors/fred.py`와 `airflow/dags/fred_treasury_daily.py`다. 본문으로 실패를 알리는 API는 `airflow/modules/collectors/ecos.py`와 `airflow/dags/ecos_market_rate_daily.py`, 인증 없는 CSV 파일은 `airflow/modules/collectors/mof.py`와 `airflow/dags/mof_jgb_daily.py`, `boe.py`, `ecb.py`를 본다.
+- 기준 예시는 `airflow/modules/collectors/indicator/fred.py`와 `airflow/dags/fred_treasury_daily.py`다. 본문으로 실패를 알리는 API는 `airflow/modules/collectors/indicator/ecos.py`와 `airflow/dags/ecos_market_rate_daily.py`, 인증 없는 CSV 파일은 `airflow/modules/collectors/mof.py`와 `airflow/dags/mof_jgb_daily.py`, `boe.py`, `ecb.py`를 본다.
 
 ## 마이그레이션 라우팅 규칙
 

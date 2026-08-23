@@ -102,15 +102,11 @@ from modules.collectors.kis import (
     DomesticIndex,
     KisHTTPError,
     KisPayloadError,
+    KisQuoteCollector,
     KisResultError,
     SymbolOutcome,
     access_token,
-    fetch_bars,
-    fetch_index_bars,
-    fetch_index_price,
     front_contract,
-    store_bars,
-    store_market_movement,
 )
 from modules.market_session import krx_open_day
 from modules.utility import CONNECTION_ID, KIS_UNRECOVERABLE_STATUSES, KST_TIMEZONE, atomic
@@ -158,6 +154,10 @@ def cached_access_token(app_key: SecretStr, app_secret: SecretStr, force: bool =
     return access_token(Variable, app_key, app_secret, force=force)
 
 
+def _collector(app_key: SecretStr, app_secret: SecretStr, force: bool = False) -> KisQuoteCollector:
+    return KisQuoteCollector(cached_access_token(app_key, app_secret, force=force), app_key, app_secret)
+
+
 @dag(
     dag_id="kis_quote_intraday",
     dag_display_name="📈 국내 지수·선물 1분봉 (KIS)",
@@ -198,7 +198,7 @@ def kis_quote_intraday():
         _skip_when_closed(today_kst)
 
         app_key, app_secret = _credentials()
-        token = cached_access_token(app_key, app_secret)
+        collector = _collector(app_key, app_secret)
 
         # 선물은 월물을 계산해 넣고, 지수는 업종코드로 바로 부른다. 엔드포인트가 다르다.
         jobs: list[tuple[str, str | None, object]] = [
@@ -210,7 +210,7 @@ def kis_quote_intraday():
         failures: list[SymbolOutcome] = []
         for symbol, contract, target in jobs:
             try:
-                responses.append(_fetch(token, app_key, app_secret, target, contract, now))
+                responses.append(_fetch(collector, app_key, app_secret, target, contract, now))
             except KisHTTPError as error:
                 if error.status in KIS_UNRECOVERABLE_STATUSES:
                     raise AirflowFailException(f"{symbol} ({contract or 'index'}): {error}") from error
@@ -233,7 +233,7 @@ def kis_quote_intraday():
         with closing(PostgresHook(postgres_conn_id=CONNECTION_ID).get_conn()) as connection:
             try:
                 with atomic(connection):
-                    bar_count, outcomes = store_bars(connection, responses, since, failures)
+                    bar_count, outcomes = collector.store_bars(connection, responses, since, failures)
             except (KisPayloadError, KisResultError) as error:
                 raise AirflowFailException(str(error)) from error
 
@@ -263,13 +263,13 @@ def kis_quote_intraday():
         _skip_when_closed(today_kst)
 
         app_key, app_secret = _credentials()
-        token = cached_access_token(app_key, app_secret)
+        collector = _collector(app_key, app_secret)
 
         responses = []
         failures: list[SymbolOutcome] = []
         for index in MOVEMENT_INDEXES:
             try:
-                responses.append(_fetch(token, app_key, app_secret, index, None, now, price=True))
+                responses.append(_fetch(collector, app_key, app_secret, index, None, now, price=True))
             except KisHTTPError as error:
                 if error.status in KIS_UNRECOVERABLE_STATUSES:
                     raise AirflowFailException(f"{index.value}: {error}") from error
@@ -288,7 +288,7 @@ def kis_quote_intraday():
         with closing(PostgresHook(postgres_conn_id=CONNECTION_ID).get_conn()) as connection:
             try:
                 with atomic(connection):
-                    stored, outcomes = store_market_movement(connection, responses, observed_at, failures)
+                    stored, outcomes = collector.store_market_movement(connection, responses, observed_at, failures)
             except (KisPayloadError, KisResultError) as error:
                 raise AirflowFailException(str(error)) from error
 
@@ -303,29 +303,30 @@ def kis_quote_intraday():
     collect_movement()
 
 
-def _fetch(token, app_key, app_secret, target, contract, now, price: bool = False):
+def _fetch(collector: KisQuoteCollector, app_key, app_secret, target, contract, now, price: bool = False):
     """분봉을 받는다. 401 이면 토큰을 한 번만 재발급하고 다시 시도한다.
 
     선물이면 월물 코드로 선물 엔드포인트를, 지수면 업종 엔드포인트를 부른다.
 
     토큰은 24시간짜리라 폴링 중 만료되는 일이 드물지만, 만료됐을 때 run 하나를 통째로
-    버리지 않으려면 여기서 한 번 흡수하는 편이 싸다.
+    버리지 않으려면 여기서 한 번 흡수하는 편이 싸다. 토큰은 수집기 객체가 사는 동안 안
+    변하므로 재발급은 객체를 다시 만드는 것이다.
     """
 
-    def call(active):
+    def call(active: KisQuoteCollector):
         if price:
-            return fetch_index_price(active, app_key, app_secret, target)
+            return active.fetch_index_price(target)
         if isinstance(target, DomesticIndex):
-            return fetch_index_bars(active, app_key, app_secret, target)
-        return fetch_bars(active, app_key, app_secret, target, contract, now)
+            return active.fetch_index_bars(target)
+        return active.fetch_bars(target, contract, now)
 
     try:
-        return call(token)
+        return call(collector)
     except KisHTTPError as error:
         if error.status != 401:
             raise
         logger.warning("KIS returned 401; reissuing the token once")
-        return call(cached_access_token(app_key, app_secret, force=True))
+        return call(_collector(app_key, app_secret, force=True))
 
 
 kis_quote_intraday = kis_quote_intraday()

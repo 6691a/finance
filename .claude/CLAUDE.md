@@ -191,15 +191,16 @@ DAG가 쓰는 코드는 **위치는 Airflow를, 규칙은 백엔드를** 따른�
 - **감쌀 상태가 없는 것을 클래스로 만들지 않는다.** 메서드가 전부 `@staticmethod`면 그건
   모듈이다.
 
-**아직 함수인 코드가 많다.** 수집기 17모듈 중 넷만 클래스로 옮겼고 나머지 전환 계획은
+**아직 함수인 코드가 있다.** 자격 증명을 쥐는 수집기 10모듈은 클래스로 옮겼고(2026-08-23),
+흐름 코드(2단계)와 폴더 이동(3단계) 계획은
 [docs/collectors-class-migration.md](../docs/collectors-class-migration.md)에 있다. 그 문서가
 목표 폴더 구조(도메인별 `market/`·`document/`·`indicator/`·`calendar/`·`analyst/`)와 단계별
 순서를 갖는다. **새 수집기는 처음부터 그 형태로 쓴다.**
 
 ## 수집기 작성
 
-`airflow/modules/collectors/analyst/kis_opinion.py`(클래스 형태)와
-`airflow/modules/collectors/fred.py`(옛 함수 형태, 검증 규칙의 기준)를 함께 본다.
+`airflow/modules/collectors/analyst/kis_opinion.py`(KIS 토큰을 쥔 클래스)와
+`airflow/modules/collectors/indicator/fred.py`(API 키 하나를 쥔 클래스, 검증 규칙의 기준)를 함께 본다.
 
 - **새 수집기는 클래스로, 도메인 폴더에 둔다.** 위 "클래스와 함수를 가르는 기준"과
   [docs/collectors-class-migration.md](../docs/collectors-class-migration.md)를 따른다.
@@ -214,7 +215,7 @@ DAG가 쓰는 코드는 **위치는 Airflow를, 규칙은 백엔드를** 따른�
 - 허용 값이 정해진 필드는 validator로 막는다(예: 시계열 ID는 `TREASURY_SERIES` 안의 값만).
 - 제공처가 잘못된 식별자에도 정상 응답으로 답하면 식별자를 Enum으로 좁혀 요청 전에 막는다.
   ECOS는 없는 항목코드에도 데이터 없음(`INFO-200`)으로 답해서 오타가 조용한 0건이 된다.
-  `airflow/modules/collectors/ecos.py`의 `MarketRateSeries`가 그 예다.
+  `airflow/modules/collectors/indicator/ecos.py`의 `MarketRateSeries`가 그 예다.
 - API 키는 `SecretStr`로 받는다. URL에 키가 들어가므로 예외 메시지와 로그에 URL을 넣지 않는다.
   ECOS는 질의 문자열이 아니라 URL 경로에 키를 받는데 규칙은 같다. 반대로 인증이 없는 제공처는
   URL을 그대로 남긴다(`mof.py`, `boe.py`, `ecb.py`). 감출 게 없는데 감추면 디버깅만 어려워진다.

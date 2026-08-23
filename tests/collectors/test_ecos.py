@@ -11,23 +11,21 @@ from sqlalchemy import Table
 
 from apps.models.market import IndicatorObservation
 from apps.models.raw import SourceRecord
-from modules.collectors.ecos import (
+from modules.collectors.indicator.ecos import (
     MARKET_RATE_SERIES,
     OBSERVATION_UPSERT,
     SERIES_UNIT,
     SOURCE_RECORD_INSERT,
     SOURCE_UNIT_NAME,
     STAT_CODE,
+    EcosCollector,
     EcosHTTPError,
     EcosPayloadError,
     EcosRequest,
     EcosResponse,
     EcosResultError,
     MarketRateSeries,
-    build_url,
-    fetch_series,
     parse_observations,
-    store_observations,
 )
 
 SERIES = MarketRateSeries.KTB_10Y
@@ -64,6 +62,7 @@ PAYLOAD = search_payload(row(), row(time="20260803", value="4.264"))
 
 SOURCE_RECORD_ID = 1
 API_KEY = SecretStr("a" * 20)
+COLLECTOR = EcosCollector(API_KEY)
 STARTED_AT = datetime(2026, 8, 6, 23, 0, tzinfo=UTC)
 COMPLETED_AT = datetime(2026, 8, 6, 23, 0, 1, tzinfo=UTC)
 
@@ -184,7 +183,7 @@ def test_every_series_declares_a_distinct_item_code_and_label():
 
 
 def test_build_url_puts_every_argument_in_the_path_in_order():
-    url = build_url(API_KEY, request_for())
+    url = COLLECTOR.build_url(request_for())
     segments = url.removeprefix("https://ecos.bok.or.kr/api/StatisticSearch/").split("/")
 
     assert segments[0] == API_KEY.get_secret_value()
@@ -205,9 +204,9 @@ def test_request_rejects_an_unlisted_series_and_a_reversed_period():
         EcosRequest(series=SERIES, observation_start=date(2026, 8, 6), observation_end=date(2026, 7, 31))
 
 
-def test_build_url_requires_an_api_key():
+def test_the_collector_requires_an_api_key():
     with pytest.raises(ValueError, match="API key"):
-        build_url(SecretStr(""), request_for())
+        EcosCollector(SecretStr(""))
 
 
 def test_request_and_response_are_frozen_so_a_retry_cannot_mutate_them():
@@ -310,10 +309,10 @@ def test_fetch_preserves_retry_after_for_rate_limit(monkeypatch):
     def raise_429(url, timeout):
         raise HTTPError(url, 429, "rate limited", {"Retry-After": "60"}, None)
 
-    monkeypatch.setattr("modules.collectors.ecos.urlopen", raise_429)
+    monkeypatch.setattr("modules.collectors.indicator.ecos.urlopen", raise_429)
 
     with pytest.raises(EcosHTTPError) as raised:
-        fetch_series(API_KEY, request_for())
+        COLLECTOR.fetch_series(request_for())
 
     assert raised.value.status == 429
     # URL 경로에 인증키가 들어 있다. 예외 메시지가 그걸 실어 나르면 안 된다.
@@ -323,7 +322,7 @@ def test_fetch_preserves_retry_after_for_rate_limit(monkeypatch):
 def test_store_writes_the_raw_response_once_and_upserts_every_observation():
     connection = FakeConnection()
 
-    assert store_observations(connection, response_for()) == 2
+    assert COLLECTOR.store_observations(connection, response_for()) == 2
 
     statements = [statement for statement, _ in connection.recorded_cursor.calls]
     assert len(statements) == 3
@@ -335,7 +334,7 @@ def test_store_writes_the_raw_response_once_and_upserts_every_observation():
 def test_store_records_lineage_and_collection_state_on_the_source_record():
     connection = FakeConnection()
 
-    store_observations(connection, response_for())
+    COLLECTOR.store_observations(connection, response_for())
 
     source_type, source, source_key, started_at, completed_at, status, record_count, payload, metadata = (
         connection.recorded_cursor.calls[0][1]
@@ -362,7 +361,7 @@ def test_store_records_lineage_and_collection_state_on_the_source_record():
 def test_store_links_each_observation_to_the_stored_source_record():
     connection = FakeConnection()
 
-    store_observations(connection, response_for())
+    COLLECTOR.store_observations(connection, response_for())
 
     provider, series_id, observation_date, value, unit, source_record_id = connection.recorded_cursor.calls[1][1]
 
@@ -378,7 +377,7 @@ def test_store_keeps_the_source_record_for_a_period_without_observations():
     # 조회했지만 값이 없는 구간과 아직 조회하지 않은 구간은 구분돼야 한다.
     connection = FakeConnection()
 
-    assert store_observations(connection, response_for(body=result_payload("INFO-200"))) == 0
+    assert COLLECTOR.store_observations(connection, response_for(body=result_payload("INFO-200"))) == 0
 
     statements = [statement for statement, _ in connection.recorded_cursor.calls]
     assert len(statements) == 1
@@ -390,7 +389,7 @@ def test_store_writes_nothing_when_the_payload_is_broken():
     connection = FakeConnection()
 
     with pytest.raises(EcosPayloadError):
-        store_observations(connection, response_for(body=b'{"StatisticSearch": "nope"}'))
+        COLLECTOR.store_observations(connection, response_for(body=b'{"StatisticSearch": "nope"}'))
 
     assert connection.recorded_cursor.calls == []
 
@@ -399,7 +398,7 @@ def test_store_writes_nothing_when_ecos_rejects_the_request():
     connection = FakeConnection()
 
     with pytest.raises(EcosResultError):
-        store_observations(connection, response_for(body=result_payload("ERROR-600", "DB 연결 오류")))
+        COLLECTOR.store_observations(connection, response_for(body=result_payload("ERROR-600", "DB 연결 오류")))
 
     assert connection.recorded_cursor.calls == []
 
@@ -407,7 +406,9 @@ def test_store_writes_nothing_when_ecos_rejects_the_request():
 def test_store_repeats_the_same_upsert_for_a_rerun_of_the_same_period():
     first, second = FakeConnection(), FakeConnection()
 
-    assert store_observations(first, response_for()) == store_observations(second, response_for()) == 2
+    assert (
+        COLLECTOR.store_observations(first, response_for()) == COLLECTOR.store_observations(second, response_for()) == 2
+    )
     assert [statement for statement, _ in first.recorded_cursor.calls] == [
         statement for statement, _ in second.recorded_cursor.calls
     ]

@@ -8,7 +8,7 @@
 불러도 판단력이 생기지 않고 오히려 미완성 당일 값을 확정치처럼 보이게 한다. 그래서 다음
 영업일 아침에 한 번만 돈다.
 
-수집 규칙은 `modules/collectors/kis_positioning.py`에 있다.
+수집 규칙은 `modules/collectors/market/kis_positioning.py`에 있다.
 
 ## 다섯 호출이 각자 다른 날짜 규칙을 쓴다
 
@@ -68,22 +68,11 @@ from modules.collectors.kis import (
     KisResultError,
     access_token,
 )
-from modules.collectors.kis_positioning import (
+from modules.collectors.market.kis_positioning import (
     RANKING_UNIVERSES,
+    KisPositioningCollector,
     LendingMarket,
     PositioningStock,
-    fetch_credit_balance,
-    fetch_credit_ranking,
-    fetch_lending,
-    fetch_market_funds,
-    fetch_market_lending,
-    fetch_short_sale,
-    store_credit_balance,
-    store_credit_ranking,
-    store_lending,
-    store_market_funds,
-    store_market_lending,
-    store_short_sale,
 )
 from modules.market_session import krx_open_day
 from modules.period import (
@@ -173,32 +162,30 @@ def kis_market_positioning_daily():
         _skip_when_closed(datetime.now(UTC).astimezone(KST_TIMEZONE).date())
 
         app_key, app_secret = _credentials()
-        token = access_token(Variable, app_key, app_secret)
+        collector = KisPositioningCollector(access_token(Variable, app_key, app_secret), app_key, app_secret)
 
         # 호출 하나가 트랜잭션 하나다. 앞의 성공을 뒤의 실패가 되돌리지 않는다.
         jobs: list[tuple[str, Any, Any]] = [
             (
                 "market_funds",
-                lambda: fetch_market_funds(token, app_key, app_secret, observation_end),
-                store_market_funds,
+                lambda: collector.fetch_market_funds(observation_end),
+                collector.store_market_funds,
             ),
         ]
         # 시장 단위 값. 종목 둘만 보면 놓치는 축이라 함께 받는다.
         jobs += [
             (
                 f"credit_ranking:{universe}",
-                lambda universe=universe: fetch_credit_ranking(token, app_key, app_secret, universe),
-                store_credit_ranking,
+                lambda universe=universe: collector.fetch_credit_ranking(universe),
+                collector.store_credit_ranking,
             )
             for universe, _ in RANKING_UNIVERSES
         ]
         jobs += [
             (
                 f"market_lending:{market.value}",
-                lambda market=market: fetch_market_lending(
-                    token, app_key, app_secret, market, observation_start, observation_end
-                ),
-                store_market_lending,
+                lambda market=market: collector.fetch_market_lending(market, observation_start, observation_end),
+                collector.store_market_lending,
             )
             for market in LendingMarket
         ]
@@ -206,24 +193,18 @@ def kis_market_positioning_daily():
             jobs += [
                 (
                     f"credit_balance:{stock.value}",
-                    lambda stock=stock: fetch_credit_balance(
-                        token, app_key, app_secret, stock, observation_start, observation_end
-                    ),
-                    store_credit_balance,
+                    lambda stock=stock: collector.fetch_credit_balance(stock, observation_start, observation_end),
+                    collector.store_credit_balance,
                 ),
                 (
                     f"short_sale:{stock.value}",
-                    lambda stock=stock: fetch_short_sale(
-                        token, app_key, app_secret, stock, observation_start, observation_end
-                    ),
-                    store_short_sale,
+                    lambda stock=stock: collector.fetch_short_sale(stock, observation_start, observation_end),
+                    collector.store_short_sale,
                 ),
                 (
                     f"lending:{stock.value}",
-                    lambda stock=stock: fetch_lending(
-                        token, app_key, app_secret, stock, observation_start, observation_end
-                    ),
-                    store_lending,
+                    lambda stock=stock: collector.fetch_lending(stock, observation_start, observation_end),
+                    collector.store_lending,
                 ),
             ]
 

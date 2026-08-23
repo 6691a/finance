@@ -5,8 +5,8 @@ from modules.collectors.boe import GiltSeries
 from modules.collectors.ecb import EuroYieldSeries
 from modules.collectors.ecb_irs import MATURITY_MONTHS as CONVERGENCE_MATURITY_MONTHS
 from modules.collectors.ecb_irs import ConvergenceSeries
-from modules.collectors.ecos import MarketRateSeries
-from modules.collectors.fred import MACRO_SERIES, TREASURY_SERIES
+from modules.collectors.indicator.ecos import MarketRateSeries
+from modules.collectors.indicator.fred import MACRO_SERIES, TREASURY_SERIES
 from modules.collectors.mof import JgbSeries
 from tests.helpers import NO_REVISION_REASON, head_sql, revision_files
 

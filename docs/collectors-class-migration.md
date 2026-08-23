@@ -88,37 +88,28 @@ airflow/modules/collectors/
 | `collectors/document/naver_research.py` | `NaverResearchCollector` | 2026-08-22 |
 | `collectors/kis_overseas_index.py` | `KisOverseasIndexCollector` | 2026-08-22 (폴더 이동은 아직) |
 | `collectors/market/kis_investor_flow.py` | `KisInvestorFlowCollector` | 2026-08-22 |
+| `collectors/indicator/fred.py` | `FredCollector` | 2026-08-23 |
+| `collectors/indicator/ecos.py` | `EcosCollector` | 2026-08-23 |
+| `collectors/calendar/kis_market_calendar.py` | `KisMarketCalendarCollector` | 2026-08-23 |
+| `collectors/document/dart.py` | `DartCollector` | 2026-08-23 |
+| `collectors/market/kis_positioning.py` | `KisPositioningCollector` | 2026-08-23 |
+| `collectors/kis.py` | `KisQuoteCollector` | 2026-08-23 (전송층과 Enum이 같이 있어 폴더 이동은 아직) |
 
-### 1단계 — 자격 증명을 인자로 도는 수집기 (남은 6모듈)
+### 1단계 — 자격 증명을 인자로 도는 수집기 (완료, 2026-08-23)
 
-규칙이 정확히 겨냥한 것이고 이득이 가장 크다. 처음 8모듈 중 `kis_overseas_index`와
-`kis_investor_flow`는 끝났다.
+규칙이 정확히 겨냥한 것이고 이득이 가장 컸다. 8모듈 전부 클래스다. DAG 호출 지점 47개에서
+자격 증명 인자가 사라졌고 SQL은 한 글자도 바뀌지 않았다.
 
-| 모듈 | 줄 | 새 클래스 | 생성자 | 클래스로 들어가는 것 |
-| --- | --- | --- | --- | --- |
-| `collectors/kis.py` | 1298 | `KisQuoteCollector` | token·app_key·app_secret | `fetch_bars`·`fetch_index_bars`·`fetch_index_price`·`fetch_stock_bars`·`store_bars`·`store_stock_bars`·`store_market_movement` |
-| `collectors/kis_positioning.py` | 971 | `KisPositioningCollector` | 〃 | `_call` + `fetch_*` 6개 + `store_*` 6개 |
-| `collectors/kis_market_calendar.py` | 482 | `KisMarketCalendarCollector` | 〃 | `_paged`·`fetch_domestic_calendar`·`fetch_overseas_settlement`·`store_domestic`·`store_overseas` |
-| `collectors/dart.py` | 822 | `DartCollector` | api_key | `_get`·`fetch_disclosures`·`fetch_provisional`·`fetch_financials`·`store_disclosures`·`store_earnings` |
-| `collectors/ecos.py` | 440 | `EcosCollector` | api_key | `build_url`·`fetch_series`·`store_observations` |
-| `collectors/fred.py` | 338 | `FredCollector` | api_key | `build_url`·`fetch_series`·`store_observations` |
-
-모듈 함수로 남는 것: `expiry_date`·`front_contract`·`parse_bars`·`parse_market_movement`·
+모듈 함수로 남긴 것: `expiry_date`·`front_contract`·`parse_bars`·`parse_market_movement`·
 `parse_observations`·`parse_financials`·`parse_provisional`·`us_session_date`·
 `fold_us_settlement`·`normalized_report_name`·`is_provisional`·`periodic_report`·
 `pending_earnings`·`session_days`와 `_day`·`_decimal`·`_int`·`_text` 계열 전부.
-`kis.py`에는 `send_get`·`issue_token`·`access_token`·`TokenStore` Protocol이 남는다.
+`kis.py`에는 `send_get`·`issue_token`·`access_token`·`TokenStore` Protocol이 남았다.
+`dart.py`의 전송 `_get`도 같은 이유로 모듈 함수다 — 클래스의 `_call`이 키를 붙여 그 위를 감싼다.
 
-**순서**: `kis_overseas_index`(fetch 하나)로 모양을 굳혔다. `kis.py`(1298줄)를 마지막에 한다.
-모듈 하나가 커밋 하나다.
-
-남은 DAG 쪽 호출 지점: `kis_quote_intraday` 12, `market_calendar_daily` 8,
-`kis_market_positioning_daily` 8, `kis_stock_minute_bars_daily` 3.
-`dart_disclosure_intraday`의 `_extract(api_key, disclosure)`와 `fred_*`·`ecos_*`의 태스크
-매핑 인자에서도 키가 빠진다. **스케줄·재시도·실패 판정은 건드리지 않는다.**
-
-테스트는 8파일 ~3,950줄이 영향받는다. 대부분 호출 표현 치환이고,
-`tests/collectors/test_kis_analyst_opinion.py`가 클래스 형태 테스트의 기준이다.
+`kis.py`만 루트에 있다. 전송층과 Enum(`DomesticFuture`·`DomesticIndex`·`DomesticStock`·
+`StockExchange`)을 모든 KIS 수집기와 DAG이 import하므로, `KisQuoteCollector`를 `market/`로
+떼어내는 것은 3단계 폴더 이동에서 전송층 분리와 함께 정한다.
 
 ### 2단계 — 연결·기준 시각·레지스트리를 도는 흐름 코드
 

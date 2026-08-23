@@ -1,6 +1,6 @@
 """DAG 객체 자체를 봐야만 알 수 있는 것만 검증한다.
 
-수집 규칙은 `modules/collectors/kis_positioning.py`에 있고 `tests/collectors/`가 덮는다.
+수집 규칙은 `modules/collectors/market/kis_positioning.py`에 있고 `tests/collectors/`가 덮는다.
 """
 
 from dags import kis_market_positioning_daily

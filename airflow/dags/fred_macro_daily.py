@@ -1,11 +1,11 @@
 """FRED 미국 월간 거시지표 수집 DAG.
 
 `fred_treasury_daily`와 같은 수집기를 쓰고 대상만 다르다. 소비자물가지수, 생산자물가지수,
-소매판매 셋이며 `modules.collectors.fred.MACRO_SERIES`가 정한다.
+소매판매, 실업률, 비농업고용 다섯이며 `modules.collectors.indicator.fred.MACRO_SERIES`가 정한다.
 
 ## 왜 국채 DAG에 합치지 않나
 
-**되돌아볼 구간이 다르다.** 국채는 매일 발표되므로 7일이면 충분하지만, 이 셋은 월간이고
+**되돌아볼 구간이 다르다.** 국채는 매일 발표되므로 7일이면 충분하지만, 이들은 월간이고
 발표가 한 달 넘게 늦다. 7월 CPI는 8월 중순에 나온다. 7일 창으로 물으면 아직 발표되지 않은
 이번 달만 묻게 되어 매번 0건이 온다. 그래서 `LOOKBACK_DAYS_MACRO`가 190일(약 6개월)이다.
 정정도 흔해서 지난 발표를 다시 읽는 값어치가 있다. `ecb_convergence_monthly`가 같은 이유로
@@ -53,13 +53,12 @@ from airflow.providers.postgres.hooks.postgres import PostgresHook
 from airflow.sdk import Param, dag, get_current_context, task
 from pydantic import SecretStr
 
-from modules.collectors.fred import (
+from modules.collectors.indicator.fred import (
     MACRO_SERIES,
+    FredCollector,
     FredHTTPError,
     FredPayloadError,
     FredRequest,
-    fetch_series,
-    store_observations,
 )
 from modules.period import (
     LOOKBACK_DAYS_PARAM,
@@ -136,9 +135,10 @@ def fred_macro_daily():
         api_key = os.environ.get("FRED_API_KEY")
         if not api_key:
             raise AirflowFailException("FRED_API_KEY is required")
+        collector = FredCollector(SecretStr(api_key))
 
         try:
-            response = fetch_series(SecretStr(api_key), request)
+            response = collector.fetch_series(request)
         except FredHTTPError as error:
             if error.status in UNRECOVERABLE_STATUSES:
                 raise AirflowFailException(str(error)) from error
@@ -149,7 +149,7 @@ def fred_macro_daily():
         with closing(PostgresHook(postgres_conn_id=CONNECTION_ID).get_conn()) as connection:
             try:
                 with atomic(connection):
-                    count = store_observations(connection, response)
+                    count = collector.store_observations(connection, response)
             except FredPayloadError as error:
                 # 관측일이 그 달 1일이 아닌 경우도 여기로 온다. 재시도해도 같은 응답이다.
                 raise AirflowFailException(str(error)) from error

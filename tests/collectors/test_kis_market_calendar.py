@@ -9,28 +9,26 @@ from sqlalchemy import Table
 
 from apps.models.market import MarketSession
 from apps.models.raw import SourceRecord
-from modules.collectors import kis_market_calendar
-from modules.collectors.kis import KisPayloadError, KisResultError
-from modules.collectors.kis_market_calendar import (
+from modules.collectors.calendar import kis_market_calendar
+from modules.collectors.calendar.kis_market_calendar import (
     MARKET_SESSION_DOMESTIC_UPSERT,
     MARKET_SESSION_SETTLEMENT_UPDATE,
     MAX_PAGES,
     SOURCE_RECORD_INSERT,
     DomesticFetch,
     KisCursorError,
+    KisMarketCalendarCollector,
     OverseasFetch,
     OverseasRow,
-    fetch_domestic_calendar,
-    fetch_overseas_settlement,
     fold_us_settlement,
-    store_domestic,
-    store_overseas,
 )
+from modules.collectors.kis import KisPayloadError, KisResultError
 
 SOURCE_RECORD_ID = 7
 TOKEN = SecretStr("token")
 APP_KEY = SecretStr("key")
 APP_SECRET = SecretStr("secret")
+COLLECTOR = KisMarketCalendarCollector(TOKEN, APP_KEY, APP_SECRET)
 STARTED_AT = datetime(2026, 8, 12, 22, 0, tzinfo=UTC)
 COMPLETED_AT = datetime(2026, 8, 12, 22, 0, 5, tzinfo=UTC)
 
@@ -200,7 +198,7 @@ def test_domestic_fetch_converts_flags_and_dates(monkeypatch):
     pages = [(body([domestic_row("20260812"), domestic_row("20260815", open_day="N")]), "D")]
     monkeypatch.setattr(kis_market_calendar, "send_get", fake_send_get(pages))
 
-    fetch = fetch_domestic_calendar(TOKEN, APP_KEY, APP_SECRET, date(2026, 8, 12))
+    fetch = COLLECTOR.fetch_domestic_calendar(date(2026, 8, 12))
 
     assert fetch.page_count == 1
     assert [day.session_date for day in fetch.days] == [date(2026, 8, 12), date(2026, 8, 15)]
@@ -217,7 +215,7 @@ def test_domestic_fetch_joins_every_page(monkeypatch):
     send = fake_send_get(pages)
     monkeypatch.setattr(kis_market_calendar, "send_get", send)
 
-    fetch = fetch_domestic_calendar(TOKEN, APP_KEY, APP_SECRET, date(2026, 8, 12))
+    fetch = COLLECTOR.fetch_domestic_calendar(date(2026, 8, 12))
 
     assert fetch.page_count == 3
     assert len(fetch.days) == 3
@@ -231,7 +229,7 @@ def test_domestic_fetch_fails_when_the_cursor_stops_moving(monkeypatch):
     monkeypatch.setattr(kis_market_calendar, "send_get", fake_send_get(pages))
 
     with pytest.raises(KisCursorError, match="same continuation cursor"):
-        fetch_domestic_calendar(TOKEN, APP_KEY, APP_SECRET, date(2026, 8, 12))
+        COLLECTOR.fetch_domestic_calendar(date(2026, 8, 12))
 
 
 def test_domestic_fetch_stops_at_the_page_cap(monkeypatch):
@@ -240,7 +238,7 @@ def test_domestic_fetch_stops_at_the_page_cap(monkeypatch):
     send = fake_send_get(pages)
     monkeypatch.setattr(kis_market_calendar, "send_get", send)
 
-    fetch = fetch_domestic_calendar(TOKEN, APP_KEY, APP_SECRET, date(2026, 8, 12))
+    fetch = COLLECTOR.fetch_domestic_calendar(date(2026, 8, 12))
 
     assert fetch.page_count == MAX_PAGES
     assert len(send.sent) == MAX_PAGES
@@ -251,7 +249,7 @@ def test_unknown_flag_fails_instead_of_being_stored(monkeypatch):
     monkeypatch.setattr(kis_market_calendar, "send_get", fake_send_get([(body([row]), "D")]))
 
     with pytest.raises(KisPayloadError, match="opnd_yn"):
-        fetch_domestic_calendar(TOKEN, APP_KEY, APP_SECRET, date(2026, 8, 12))
+        COLLECTOR.fetch_domestic_calendar(date(2026, 8, 12))
 
 
 def test_result_code_failure_is_raised(monkeypatch):
@@ -259,7 +257,7 @@ def test_result_code_failure_is_raised(monkeypatch):
     monkeypatch.setattr(kis_market_calendar, "send_get", fake_send_get([(payload, "D")]))
 
     with pytest.raises(KisResultError) as error:
-        fetch_domestic_calendar(TOKEN, APP_KEY, APP_SECRET, date(2026, 8, 12))
+        COLLECTOR.fetch_domestic_calendar(date(2026, 8, 12))
 
     assert error.value.code == "1"
 
@@ -277,7 +275,7 @@ def domestic_fetch(days: tuple[str, ...] = ("20260812",), open_day: str = "Y") -
 def test_store_domestic_writes_the_kis_verdict():
     connection = FakeConnection()
 
-    count = store_domestic(connection, domestic_fetch(("20260812", "20260815"), open_day="N"))
+    count = COLLECTOR.store_domestic(connection, domestic_fetch(("20260812", "20260815"), open_day="N"))
 
     assert count == 2
     upserts = [
@@ -299,7 +297,7 @@ def test_store_domestic_writes_the_kis_verdict():
 def test_store_domestic_keeps_the_raw_payload_out_of_the_lineage():
     connection = FakeConnection()
 
-    store_domestic(connection, domestic_fetch(("20260812",)))
+    COLLECTOR.store_domestic(connection, domestic_fetch(("20260812",)))
 
     statement, parameters = connection.recorded_cursor.calls[0]
     assert "INSERT INTO source_record" in statement
@@ -357,7 +355,7 @@ def test_missing_us_rows_leave_the_verdict_alone(caplog):
     connection = FakeConnection()
     fetch = overseas_fetch([overseas_row("01", "일본", abbreviation="JP")])
 
-    settlement = store_overseas(connection, fetch)
+    settlement = COLLECTOR.store_overseas(connection, fetch)
 
     assert settlement is None
     statements = [statement for statement, _ in connection.recorded_cursor.calls]
@@ -368,7 +366,7 @@ def test_missing_us_rows_leave_the_verdict_alone(caplog):
 def test_empty_overseas_response_updates_nothing():
     connection = FakeConnection()
 
-    settlement = store_overseas(connection, overseas_fetch([]))
+    settlement = COLLECTOR.store_overseas(connection, overseas_fetch([]))
 
     assert settlement is None
     assert [statement for statement, _ in connection.recorded_cursor.calls if "UPDATE" in statement] == []
@@ -378,7 +376,7 @@ def test_store_overseas_updates_only_the_settlement_columns():
     connection = FakeConnection()
     fetch = overseas_fetch([overseas_row("01", "나스닥"), overseas_row("02", "뉴욕거래소")])
 
-    settlement = store_overseas(connection, fetch)
+    settlement = COLLECTOR.store_overseas(connection, fetch)
 
     assert settlement is not None
     updates = [
@@ -396,7 +394,7 @@ def test_overseas_fetch_keeps_the_country_name(monkeypatch):
     rows = [overseas_row("02", "뉴욕거래소")]
     monkeypatch.setattr(kis_market_calendar, "send_get", fake_send_get([(body(rows), "D")]))
 
-    fetch = fetch_overseas_settlement(TOKEN, APP_KEY, APP_SECRET, date(2026, 8, 12))
+    fetch = COLLECTOR.fetch_overseas_settlement(date(2026, 8, 12))
 
     assert fetch.rows[0].country_name == "미국"
     assert fetch.rows[0].local_settlement_date == date(2026, 8, 13)

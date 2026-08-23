@@ -69,21 +69,17 @@ from airflow.providers.postgres.hooks.postgres import PostgresHook
 from airflow.sdk import Param, dag, get_current_context, task
 from pydantic import SecretStr
 
-from modules.collectors.dart import (
+from modules.collectors.document.dart import (
     STATUS_RATE_LIMIT,
+    DartCollector,
     DartCompany,
     DartHTTPError,
     DartPayloadError,
     DartStatusError,
     Disclosure,
-    fetch_disclosures,
-    fetch_financials,
-    fetch_provisional,
     is_provisional,
     pending_earnings,
     periodic_report,
-    store_disclosures,
-    store_earnings,
 )
 from modules.utility import CONNECTION_ID, KST_TIMEZONE, UNRECOVERABLE_STATUSES, atomic
 
@@ -93,11 +89,11 @@ LOOKBACK_DAYS = 7
 LOOKBACK_DAYS_PARAM = "lookback_days"
 
 
-def _api_key() -> SecretStr:
+def _collector() -> DartCollector:
     key = os.environ.get("DART_API_KEY")
     if not key:
         raise AirflowFailException("DART_API_KEY is required")
-    return SecretStr(key)
+    return DartCollector(SecretStr(key))
 
 
 def _lookback_days() -> int:
@@ -150,7 +146,7 @@ def _classify(error: DartHTTPError | DartStatusError) -> None:
 def dart_disclosure_intraday():
     @task(task_display_name="공시 목록")
     def collect_disclosures() -> int:
-        api_key = _api_key()
+        collector = _collector()
         end_date = datetime.now(UTC).astimezone(KST_TIMEZONE).date()
         begin_date = end_date - timedelta(days=_lookback_days() - 1)
 
@@ -158,7 +154,7 @@ def dart_disclosure_intraday():
         failures: list[str] = []
         for company in DartCompany:
             try:
-                fetch = fetch_disclosures(api_key, company, begin_date, end_date)
+                fetch = collector.fetch_disclosures(company, begin_date, end_date)
             except (DartHTTPError, DartStatusError) as error:
                 # 한 회사가 실패해도 다른 회사는 저장한다.
                 _classify(error)
@@ -173,7 +169,7 @@ def dart_disclosure_intraday():
             with closing(_connection()) as connection:
                 try:
                     with atomic(connection):
-                        stored += store_disclosures(connection, fetch)
+                        stored += collector.store_disclosures(connection, fetch)
                 except DartPayloadError as error:
                     raise AirflowFailException(str(error)) from error
 
@@ -185,7 +181,7 @@ def dart_disclosure_intraday():
 
     @task(task_display_name="실적 추출")
     def extract_earnings() -> int:
-        api_key = _api_key()
+        collector = _collector()
         since = datetime.now(UTC).astimezone(KST_TIMEZONE).date() - timedelta(days=_lookback_days() - 1)
 
         connection = _connection()
@@ -196,12 +192,12 @@ def dart_disclosure_intraday():
 
         stored = 0
         for disclosure in waiting:
-            fetch = _extract(api_key, disclosure)
+            fetch = _extract(collector, disclosure)
             if fetch is None:
                 continue
 
             with closing(_connection()) as connection, atomic(connection):
-                stored += store_earnings(connection, fetch)
+                stored += collector.store_earnings(connection, fetch)
 
             logger.info(
                 "Stored %s %s metrics from %s (%s)",
@@ -215,7 +211,7 @@ def dart_disclosure_intraday():
     collect_disclosures() >> extract_earnings()
 
 
-def _extract(api_key: SecretStr, disclosure: Disclosure):
+def _extract(collector: DartCollector, disclosure: Disclosure):
     """공시 하나에서 실적을 뽑는다. 대상이 아니거나 아직 준비 전이면 `None`.
 
     **한 공시의 실패가 나머지를 막지 않는다.** 그 공시는 다음 run의 재시도 목록에 그대로
@@ -223,9 +219,9 @@ def _extract(api_key: SecretStr, disclosure: Disclosure):
     """
     try:
         if is_provisional(disclosure.report_name):
-            return fetch_provisional(api_key, disclosure)
+            return collector.fetch_provisional(disclosure)
         if periodic_report(disclosure.report_name) is not None:
-            return fetch_financials(api_key, disclosure)
+            return collector.fetch_financials(disclosure)
     except (DartHTTPError, DartStatusError) as error:
         _classify(error)
         logger.warning("%s earnings extraction failed: %s", disclosure.rcept_no, error)

@@ -1,7 +1,7 @@
 # 개발 문서 4 — 미국 현물 지수 마감 분봉(KIS)과 미국장 브리핑 섹션 분리
 
 > 작성 기준: 2026-08-22  
-> 상태: 미구현 기능의 확정 실행 계획  
+> 상태: 구현 완료(2026-08-22). 수집기는 `KisOverseasIndexCollector` 클래스다(2026-08-23)  
 > 대상: S&P500(`SPX`)·나스닥 종합(`COMP`) 현물 마감 분봉 수집, `slack_us_market_briefing` 표 분리  
 > 의존: `quote_symbol` 마스터, `index_bar`, `market_session`, `modules/briefing/market.py`  
 > 산출물: `airflow/modules/collectors/kis_overseas_index.py`, `airflow/dags/kis_overseas_index_close.py`,

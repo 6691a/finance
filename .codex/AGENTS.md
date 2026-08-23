@@ -93,7 +93,7 @@ uv run ruff check apps airflow migrations tests
 - 함수로 두는 것: 파싱·정규화·계산처럼 감쌀 상태가 없는 것, 그 클래스의 관심사가 아닌 조회(`watched_stocks`). 클래스 안이 읽기 좋으면 `@staticmethod`.
 - 데이터 모양은 언제나 Pydantic 모델이다. 수집기 클래스 안에 중첩하지 않는다.
 - **감쌀 상태가 없는 것을 클래스로 만들지 않는다.** 메서드가 전부 `@staticmethod`면 그건 모듈이다.
-- 수집기 17모듈 중 넷만 전환했다. 목표 폴더 구조(도메인별 `market/`·`document/`·`indicator/`·`calendar/`·`analyst/`)와 단계별 순서는 `docs/collectors-class-migration.md`에 있다. **새 수집기는 처음부터 그 형태로 쓴다.**
+- 자격 증명을 쥐는 수집기 10모듈은 클래스로 옮겼다(2026-08-23). 흐름 코드(2단계)와 폴더 이동(3단계)이 남았다. 목표 폴더 구조(도메인별 `market/`·`document/`·`indicator/`·`calendar/`·`analyst/`)와 단계별 순서는 `docs/collectors-class-migration.md`에 있다. **새 수집기는 처음부터 그 형태로 쓴다.**
 
 ## 수집기 작성 규칙
 

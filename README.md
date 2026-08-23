@@ -248,7 +248,7 @@ import 뿌리는 `airflow/`입니다. DAG는 배포와 같은 이름으로 `from
 - API 키는 `SecretStr`로 받습니다. URL에 키가 들어가므로 예외 메시지와 로그에 URL을 넣지 않습니다. 키는 Git에서 제외된 `compose/local/airflow/.env`의 `FRED_API_KEY`로만 주입합니다.
 - 외부 오류는 재시도 가능 여부로 나눕니다. HTTP 상태는 `FredHTTPError`, 형식 오류는 `FredPayloadError`, 연결 실패는 `ConnectionError`입니다. 판단은 DAG가 합니다.
 
-제공처가 FRED처럼 얌전하지 않을 때 더 필요한 규칙은 [airflow/modules/collectors/ecos.py](airflow/modules/collectors/ecos.py)에 있습니다.
+제공처가 FRED처럼 얌전하지 않을 때 더 필요한 규칙은 [airflow/modules/collectors/indicator/ecos.py](airflow/modules/collectors/indicator/ecos.py)에 있습니다.
 
 - **실패를 HTTP 상태로 알리지 않는 API는 본문 코드를 담는 예외를 따로 둡니다.** ECOS는 인증 실패도 데이터 없음도 HTTP 200에 `{"RESULT": {"CODE": ...}}`로 답합니다. 수집기는 그 코드를 `EcosResultError`에 담아 올리고 해석하지 않습니다. 재시도 여부는 DAG가 정합니다.
 - **잘못된 식별자에 정상 응답이 오면 식별자를 Enum으로 좁힙니다.** ECOS는 없는 항목코드에도 데이터 없음과 같은 `INFO-200`으로 답해서, 오타가 조용한 0건이 됩니다. `MarketRateSeries`가 요청 전에 막습니다.

@@ -9,6 +9,9 @@
 원본이고, 여기 SQL의 컬럼 이름은 `tests/collectors/test_ecos.py`가 그 모델 metadata와
 대조한다.
 
+인증키는 `EcosCollector`가 쥔다. 항목·구간처럼 호출마다 바뀌는 것은 메서드 인자고,
+파싱(`parse_observations`)은 키도 연결도 보지 않아 모듈 함수로 둔다.
+
 `fred.py`와 같은 테이블에 쌓지만 API의 성질이 달라 다음 세 가지를 따로 다룬다.
 
 - **오류가 HTTP 상태로 오지 않는다.** ECOS는 인증 실패도 데이터 없음도 HTTP 200에
@@ -271,57 +274,6 @@ class EcosResponse(BaseModel):
         return self.request.series_id
 
 
-def build_url(api_key: SecretStr, request: EcosRequest) -> str:
-    """호출 URL. 반환값에 인증키가 들어가므로 로그나 예외 메시지에 넣지 않는다.
-
-    ECOS는 질의 문자열이 아니라 경로 조각으로 인자를 받는다. 순서는
-    `인증키/형식/언어/시작건수/종료건수/통계표/주기/시작일자/종료일자/항목코드`다.
-    """
-    if not api_key.get_secret_value():
-        raise ValueError("ECOS API key is required")
-
-    return "/".join(
-        (
-            ECOS_URL,
-            quote(api_key.get_secret_value(), safe=""),
-            "json",
-            "kr",
-            "1",
-            str(MAX_ROWS_PER_REQUEST),
-            STAT_CODE,
-            CYCLE,
-            request.observation_start.strftime("%Y%m%d"),
-            request.observation_end.strftime("%Y%m%d"),
-            request.item_code,
-        )
-    )
-
-
-def fetch_series(api_key: SecretStr, request: EcosRequest) -> EcosResponse:
-    url = build_url(api_key, request)
-    started_at = datetime.now(UTC)
-    try:
-        with urlopen(url, timeout=REQUEST_TIMEOUT_SECONDS) as response:
-            body = response.read()
-            status = response.status
-    # `from None`은 여기서 의도적이다. URL에 인증키가 들어 있고 `HTTPError`는 그 URL을
-    # `filename`에 담는다. 체인을 남기면 Sentry나 Airflow 로그가 원인 예외를 붙잡을 때
-    # 키가 함께 실린다. fred 수집기가 같은 이유로 같은 처리를 한다.
-    except HTTPError as error:
-        raise EcosHTTPError(error.code, error.headers.get("Retry-After")) from None
-    except URLError as error:
-        # 타임아웃과 DNS·연결 실패는 재시도 가능한 오류로 올린다.
-        raise ConnectionError(f"ECOS request failed: {error.reason}") from None
-
-    return EcosResponse(
-        request=request,
-        body=body,
-        status=status,
-        started_at=started_at,
-        completed_at=datetime.now(UTC),
-    )
-
-
 def parse_observations(body: bytes, request: EcosRequest) -> tuple[EcosObservation, ...]:
     """유효 관측값만 뽑는다.
 
@@ -379,62 +331,120 @@ SOURCE_RECORD_INSERT = read_sql("postgres", "source_record", "insert.sql")
 OBSERVATION_UPSERT = read_sql("postgres", "indicator_observation", "upsert.sql")
 
 
-def store_observations(connection: Connection, response: EcosResponse) -> int:
-    """원본 1건과 유효 관측값을 저장하고 정규화한 관측값 수를 돌려준다.
+class EcosCollector:
+    """ECOS 수집기. 인증키를 쥐고 계열마다 조회·저장한다.
 
-    파싱을 먼저 해서 형식 오류면 아무 것도 쓰지 않는다. `(provider, series_id,
-    observation_date)`가 멱등 키라서 같은 기간을 다시 수집해도 행이 늘지 않고 최신 값으로
-    갱신된다. `series_id`는 제공처 안에서만 고유하므로 이 수집기의 `provider`는 항상
-    `SOURCE`다.
-
-    관측값이 0건이어도 `source_record`는 남긴다. 휴장일 구간을 실제로 조회했다는 사실이
-    없으면 아직 수집하지 않은 구간과 구분되지 않는다.
-
-    ORM 대신 문자열 SQL을 쓴다. Airflow 이미지에는 SQLAlchemy와 이 프로젝트의 DB 설정이
-    없기 때문이다. 컬럼 이름은 `tests/collectors/test_ecos.py`가 모델 metadata와 맞춰 둔다.
+    한 실행이 객체 하나다. 키는 이 객체가 사는 동안 안 변하는 값이라 생성자가 받고, 항목과
+    구간은 `EcosRequest`로 호출마다 들어온다. 파싱은 밖에 둔다(`parse_observations`).
     """
-    observations = parse_observations(response.body, response.request)
-    request_metadata = json.dumps(
-        {
-            "http_status": response.status,
-            # 저장하는 `series_id`는 읽을 수 있는 ID다. 그 값이 ECOS의 어느 시계열에서 왔는지는
-            # 통계표 코드와 항목코드가 있어야 되짚을 수 있으므로 여기 남긴다.
-            "stat_code": STAT_CODE,
-            "item_code": response.request.item_code,
-            "item_name": response.request.series.label,
-            "cycle": CYCLE,
-            "source_unit_name": SOURCE_UNIT_NAME,
-            "observation_start": response.request.observation_start.isoformat(),
-            "observation_end": response.request.observation_end.isoformat(),
-        }
-    )
 
-    with connection.cursor() as cursor:
-        cursor.execute(
-            SOURCE_RECORD_INSERT,
+    def __init__(self, api_key: SecretStr) -> None:
+        if not api_key.get_secret_value():
+            raise ValueError("ECOS API key is required")
+        self._api_key = api_key
+
+    def build_url(self, request: EcosRequest) -> str:
+        """호출 URL. 반환값에 인증키가 들어가므로 로그나 예외 메시지에 넣지 않는다.
+
+        ECOS는 질의 문자열이 아니라 경로 조각으로 인자를 받는다. 순서는
+        `인증키/형식/언어/시작건수/종료건수/통계표/주기/시작일자/종료일자/항목코드`다.
+        """
+        return "/".join(
             (
-                "api",
-                SOURCE,
-                response.series_id,
-                response.started_at,
-                response.completed_at,
-                "succeeded",
-                len(observations),
-                response.body.decode("utf-8"),
-                request_metadata,
-            ),
+                ECOS_URL,
+                quote(self._api_key.get_secret_value(), safe=""),
+                "json",
+                "kr",
+                "1",
+                str(MAX_ROWS_PER_REQUEST),
+                STAT_CODE,
+                CYCLE,
+                request.observation_start.strftime("%Y%m%d"),
+                request.observation_end.strftime("%Y%m%d"),
+                request.item_code,
+            )
         )
-        source_record_id = cursor.fetchone()[0]
-        for observation in observations:
+
+    def fetch_series(self, request: EcosRequest) -> EcosResponse:
+        url = self.build_url(request)
+        started_at = datetime.now(UTC)
+        try:
+            with urlopen(url, timeout=REQUEST_TIMEOUT_SECONDS) as response:
+                body = response.read()
+                status = response.status
+        # `from None`은 여기서 의도적이다. URL에 인증키가 들어 있고 `HTTPError`는 그 URL을
+        # `filename`에 담는다. 체인을 남기면 Sentry나 Airflow 로그가 원인 예외를 붙잡을 때
+        # 키가 함께 실린다. fred 수집기가 같은 이유로 같은 처리를 한다.
+        except HTTPError as error:
+            raise EcosHTTPError(error.code, error.headers.get("Retry-After")) from None
+        except URLError as error:
+            # 타임아웃과 DNS·연결 실패는 재시도 가능한 오류로 올린다.
+            raise ConnectionError(f"ECOS request failed: {error.reason}") from None
+
+        return EcosResponse(
+            request=request,
+            body=body,
+            status=status,
+            started_at=started_at,
+            completed_at=datetime.now(UTC),
+        )
+
+    def store_observations(self, connection: Connection, response: EcosResponse) -> int:
+        """원본 1건과 유효 관측값을 저장하고 정규화한 관측값 수를 돌려준다.
+
+        파싱을 먼저 해서 형식 오류면 아무 것도 쓰지 않는다. `(provider, series_id,
+        observation_date)`가 멱등 키라서 같은 기간을 다시 수집해도 행이 늘지 않고 최신 값으로
+        갱신된다. `series_id`는 제공처 안에서만 고유하므로 이 수집기의 `provider`는 항상
+        `SOURCE`다.
+
+        관측값이 0건이어도 `source_record`는 남긴다. 휴장일 구간을 실제로 조회했다는 사실이
+        없으면 아직 수집하지 않은 구간과 구분되지 않는다.
+
+        ORM 대신 문자열 SQL을 쓴다. Airflow 이미지에는 SQLAlchemy와 이 프로젝트의 DB 설정이
+        없기 때문이다. 컬럼 이름은 `tests/collectors/test_ecos.py`가 모델 metadata와 맞춰 둔다.
+        """
+        observations = parse_observations(response.body, response.request)
+        request_metadata = json.dumps(
+            {
+                "http_status": response.status,
+                # 저장하는 `series_id`는 읽을 수 있는 ID다. 그 값이 ECOS의 어느 시계열에서 왔는지는
+                # 통계표 코드와 항목코드가 있어야 되짚을 수 있으므로 여기 남긴다.
+                "stat_code": STAT_CODE,
+                "item_code": response.request.item_code,
+                "item_name": response.request.series.label,
+                "cycle": CYCLE,
+                "source_unit_name": SOURCE_UNIT_NAME,
+                "observation_start": response.request.observation_start.isoformat(),
+                "observation_end": response.request.observation_end.isoformat(),
+            }
+        )
+
+        with connection.cursor() as cursor:
             cursor.execute(
-                OBSERVATION_UPSERT,
+                SOURCE_RECORD_INSERT,
                 (
+                    "api",
                     SOURCE,
                     response.series_id,
-                    observation.observation_date,
-                    observation.value,
-                    SERIES_UNIT,
-                    source_record_id,
+                    response.started_at,
+                    response.completed_at,
+                    "succeeded",
+                    len(observations),
+                    response.body.decode("utf-8"),
+                    request_metadata,
                 ),
             )
-    return len(observations)
+            source_record_id = cursor.fetchone()[0]
+            for observation in observations:
+                cursor.execute(
+                    OBSERVATION_UPSERT,
+                    (
+                        SOURCE,
+                        response.series_id,
+                        observation.observation_date,
+                        observation.value,
+                        SERIES_UNIT,
+                        source_record_id,
+                    ),
+                )
+        return len(observations)

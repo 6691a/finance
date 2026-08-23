@@ -214,7 +214,7 @@ DAG가 쓰는 코드는 **위치는 Airflow를, 규칙은 백엔드를** 따른�
 - 허용 값이 정해진 필드는 validator로 막는다(예: 시계열 ID는 `TREASURY_SERIES` 안의 값만).
 - 제공처가 잘못된 식별자에도 정상 응답으로 답하면 식별자를 Enum으로 좁혀 요청 전에 막는다.
   ECOS는 없는 항목코드에도 데이터 없음(`INFO-200`)으로 답해서 오타가 조용한 0건이 된다.
-  `airflow/modules/collectors/ecos.py`의 `MarketRateSeries`가 그 예다.
+  `airflow/modules/collectors/indicator/ecos.py`의 `MarketRateSeries`가 그 예다.
 - API 키는 `SecretStr`로 받는다. URL에 키가 들어가므로 예외 메시지와 로그에 URL을 넣지 않는다.
   ECOS는 질의 문자열이 아니라 URL 경로에 키를 받는데 규칙은 같다. 반대로 인증이 없는 제공처는
   URL을 그대로 남긴다(`mof.py`, `boe.py`, `ecb.py`). 감출 게 없는데 감추면 디버깅만 어려워진다.

@@ -1,7 +1,7 @@
 """ECOS 국내 시장금리 일별 수집 DAG.
 
 시계열마다 태스크를 하나씩 매핑한다. 하나가 실패해도 나머지는 저장되고, 재시도도 실패한
-시계열만 다시 호출한다. 수집 대상은 `modules.collectors.ecos.MarketRateSeries`가 정한다
+시계열만 다시 호출한다. 수집 대상은 `modules.collectors.indicator.ecos.MarketRateSeries`가 정한다
 (현재 `KTB2Y`, `KTB3Y`, `KTB10Y`, `KTB30Y`, `CD91D`). 시계열을 늘려도 이 파일은 바뀌지 않는다.
 
 한국은행 통계표 `1.3.2.1. 시장금리(일별)`(817Y002)을 주기 `D`로 조회한다. 미국 국채를
@@ -104,14 +104,13 @@ from airflow.providers.postgres.hooks.postgres import PostgresHook
 from airflow.sdk import Param, dag, get_current_context, task
 from pydantic import SecretStr
 
-from modules.collectors.ecos import (
+from modules.collectors.indicator.ecos import (
     MARKET_RATE_SERIES,
+    EcosCollector,
     EcosHTTPError,
     EcosPayloadError,
     EcosRequest,
     EcosResultError,
-    fetch_series,
-    store_observations,
 )
 from modules.period import (
     LOOKBACK_DAYS,
@@ -191,9 +190,10 @@ def ecos_market_rate_daily():
         api_key = os.environ.get("ECOS_API_KEY")
         if not api_key:
             raise AirflowFailException("ECOS_API_KEY is required")
+        collector = EcosCollector(SecretStr(api_key))
 
         try:
-            response = fetch_series(SecretStr(api_key), request)
+            response = collector.fetch_series(request)
         except EcosHTTPError as error:
             if error.status in UNRECOVERABLE_STATUSES:
                 raise AirflowFailException(str(error)) from error
@@ -204,7 +204,7 @@ def ecos_market_rate_daily():
         with closing(PostgresHook(postgres_conn_id=CONNECTION_ID).get_conn()) as connection:
             try:
                 with atomic(connection):
-                    count = store_observations(connection, response)
+                    count = collector.store_observations(connection, response)
             except EcosResultError as error:
                 if is_unrecoverable_result(error.code):
                     raise AirflowFailException(str(error)) from error

@@ -113,7 +113,7 @@ def test_the_ranking_table_shows_one_universe_and_its_latest_snapshot(dashboard)
 
 
 def test_the_universe_choices_match_what_the_collector_requests(dashboard):
-    from modules.collectors.kis_positioning import RANKING_UNIVERSES
+    from modules.collectors.market.kis_positioning import RANKING_UNIVERSES
 
     variable = next(v for v in dashboard["templating"]["list"] if v["name"] == "universe")
 

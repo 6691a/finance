@@ -17,9 +17,9 @@ from apps.models.market import (
     KrxStockShortSaleDaily,
 )
 from apps.models.raw import SourceRecord
-from modules.collectors import kis_positioning
 from modules.collectors.kis import KisPayloadError, KisResultError
-from modules.collectors.kis_positioning import (
+from modules.collectors.market import kis_positioning
+from modules.collectors.market.kis_positioning import (
     CREDIT_BALANCE_UPSERT,
     CREDIT_RANKING_DELETE_STALE,
     CREDIT_RANKING_UPSERT,
@@ -30,26 +30,16 @@ from modules.collectors.kis_positioning import (
     RANKING_UNIVERSES,
     SHORT_SALE_UPSERT,
     SOURCE_RECORD_INSERT,
+    KisPositioningCollector,
     LendingMarket,
     PositioningStock,
-    fetch_credit_balance,
-    fetch_credit_ranking,
-    fetch_lending,
-    fetch_market_funds,
-    fetch_market_lending,
-    fetch_short_sale,
-    store_credit_balance,
-    store_credit_ranking,
-    store_lending,
-    store_market_funds,
-    store_market_lending,
-    store_short_sale,
 )
 
 SOURCE_RECORD_ID = 31
 APP_KEY = SecretStr("key")
 APP_SECRET = SecretStr("secret")
 TOKEN = SecretStr("token")
+COLLECTOR = KisPositioningCollector(TOKEN, APP_KEY, APP_SECRET)
 SAMSUNG = PositioningStock.SAMSUNG_ELECTRONICS
 
 # 2026-08-13 실측 응답을 줄인 것이다. 필드 이름과 공백 패딩·소수점 표기는 그대로다.
@@ -262,7 +252,7 @@ def test_stock_codes_match_the_dart_collector():
 def test_credit_balance_keeps_trade_date_and_settlement_date_apart(monkeypatch):
     monkeypatch.setattr(kis_positioning, "send_get", fake_send_get(body(output=[CREDIT_ROW])))
 
-    fetch = fetch_credit_balance(TOKEN, APP_KEY, APP_SECRET, SAMSUNG, date(2026, 8, 1), date(2026, 8, 12))
+    fetch = COLLECTOR.fetch_credit_balance(SAMSUNG, date(2026, 8, 1), date(2026, 8, 12))
 
     row = fetch.rows[0]
     # 거래일이 자연키이고 결제일은 값이다. 둘을 바꿔 저장하면 추이가 이틀씩 밀린다.
@@ -277,7 +267,7 @@ def test_credit_balance_requests_a_settlement_date_past_the_window(monkeypatch):
     monkeypatch.setattr(kis_positioning, "send_get", send)
 
     # 과거 구간이라 오늘로 잘리지 않는다.
-    fetch_credit_balance(TOKEN, APP_KEY, APP_SECRET, SAMSUNG, date(2026, 1, 2), date(2026, 1, 31))
+    COLLECTOR.fetch_credit_balance(SAMSUNG, date(2026, 1, 2), date(2026, 1, 31))
 
     # 입력이 결제일이라 거래일 구간 끝보다 뒤를 요청해야 그 거래일 행이 들어온다.
     assert send.sent[0]["query"]["FID_INPUT_DATE_1"] == "20260214"
@@ -288,7 +278,7 @@ def test_credit_balance_never_requests_a_future_settlement_date(monkeypatch):
     monkeypatch.setattr(kis_positioning, "send_get", send)
     today = datetime.now(UTC).date()
 
-    fetch_credit_balance(TOKEN, APP_KEY, APP_SECRET, SAMSUNG, today - timedelta(days=7), today)
+    COLLECTOR.fetch_credit_balance(SAMSUNG, today - timedelta(days=7), today)
 
     # padding 을 더하면 미래가 된다. 그때는 오늘로 자른다.
     assert send.sent[0]["query"]["FID_INPUT_DATE_1"] == today.strftime("%Y%m%d")
@@ -298,7 +288,7 @@ def test_credit_balance_drops_rows_outside_the_trade_window(monkeypatch):
     older = CREDIT_ROW | {"deal_date": "20260701", "stlm_date": "20260703"}
     monkeypatch.setattr(kis_positioning, "send_get", fake_send_get(body(output=[CREDIT_ROW, older])))
 
-    fetch = fetch_credit_balance(TOKEN, APP_KEY, APP_SECRET, SAMSUNG, date(2026, 8, 1), date(2026, 8, 12))
+    fetch = COLLECTOR.fetch_credit_balance(SAMSUNG, date(2026, 8, 1), date(2026, 8, 12))
 
     assert [row.trade_date for row in fetch.rows] == [date(2026, 8, 10)]
     assert fetch.metadata["returned"] == 2
@@ -308,7 +298,7 @@ def test_credit_balance_drops_rows_outside_the_trade_window(monkeypatch):
 def test_ranking_reads_the_standard_date_from_the_later_field(monkeypatch):
     monkeypatch.setattr(kis_positioning, "send_get", fake_send_get(body(output1=[RANKING_HEAD], output2=[RANKING_ROW])))
 
-    fetch = fetch_credit_ranking(TOKEN, APP_KEY, APP_SECRET)
+    fetch = COLLECTOR.fetch_credit_ranking()
 
     # stnd_date2 가 기준일이고 stnd_date1 이 비교일이다. 초판 문서가 반대로 적었다.
     assert fetch.metadata["standard_date"] == "2026-08-12"
@@ -321,7 +311,7 @@ def test_ranking_numbers_rows_from_the_array_order(monkeypatch):
         kis_positioning, "send_get", fake_send_get(body(output1=[RANKING_HEAD], output2=[RANKING_ROW, second]))
     )
 
-    fetch = fetch_credit_ranking(TOKEN, APP_KEY, APP_SECRET)
+    fetch = COLLECTOR.fetch_credit_ranking()
 
     # 응답에 순번 필드가 없다(실측). 건수를 상수로 박지도 않는다.
     assert [row.rank for row in fetch.rows] == [1, 2]
@@ -335,7 +325,7 @@ def test_ranking_accepts_codes_with_letters(monkeypatch):
     warrant = RANKING_ROW | {"mksc_shrn_iscd": "0126Z0", "hts_kor_isnm": "어떤 증서"}
     monkeypatch.setattr(kis_positioning, "send_get", fake_send_get(body(output1=[RANKING_HEAD], output2=[warrant])))
 
-    fetch = fetch_credit_ranking(TOKEN, APP_KEY, APP_SECRET)
+    fetch = COLLECTOR.fetch_credit_ranking()
 
     assert fetch.rows[0].stock_code == "0126Z0"
 
@@ -346,7 +336,7 @@ def test_ranking_rejects_malformed_codes(monkeypatch, code):
     monkeypatch.setattr(kis_positioning, "send_get", fake_send_get(body(output1=[RANKING_HEAD], output2=[bad])))
 
     with pytest.raises(KisPayloadError, match="malformed stock code"):
-        fetch_credit_ranking(TOKEN, APP_KEY, APP_SECRET)
+        COLLECTOR.fetch_credit_ranking()
 
 
 def test_ranking_rejects_an_empty_snapshot(monkeypatch):
@@ -354,7 +344,7 @@ def test_ranking_rejects_an_empty_snapshot(monkeypatch):
     monkeypatch.setattr(kis_positioning, "send_get", fake_send_get(body(output1=[RANKING_HEAD], output2=[])))
 
     with pytest.raises(KisPayloadError, match="no rows"):
-        fetch_credit_ranking(TOKEN, APP_KEY, APP_SECRET)
+        COLLECTOR.fetch_credit_ranking()
 
 
 def test_ranking_rejects_duplicated_stock_codes(monkeypatch):
@@ -365,7 +355,7 @@ def test_ranking_rejects_duplicated_stock_codes(monkeypatch):
     )
 
     with pytest.raises(KisPayloadError, match="duplicated"):
-        fetch_credit_ranking(TOKEN, APP_KEY, APP_SECRET)
+        COLLECTOR.fetch_credit_ranking()
 
 
 def test_ranking_rejects_unordered_dates(monkeypatch):
@@ -373,13 +363,13 @@ def test_ranking_rejects_unordered_dates(monkeypatch):
     monkeypatch.setattr(kis_positioning, "send_get", fake_send_get(body(output1=[swapped], output2=[RANKING_ROW])))
 
     with pytest.raises(KisPayloadError, match="not ordered"):
-        fetch_credit_ranking(TOKEN, APP_KEY, APP_SECRET)
+        COLLECTOR.fetch_credit_ranking()
 
 
 def test_market_funds_uses_the_response_date_and_skips_the_odd_change_rate(monkeypatch):
     monkeypatch.setattr(kis_positioning, "send_get", fake_send_get(body(output=[FUNDS_ROW])))
 
-    fetch = fetch_market_funds(TOKEN, APP_KEY, APP_SECRET, date(2026, 8, 12))
+    fetch = COLLECTOR.fetch_market_funds(date(2026, 8, 12))
 
     row = fetch.rows[0]
     # 요청일이 아니라 응답의 bsop_date 로 저장한다.
@@ -393,7 +383,7 @@ def test_short_sale_reads_output2_only(monkeypatch):
     quote = {"stck_prpr": "269500", "acml_vol": "14908315"}
     monkeypatch.setattr(kis_positioning, "send_get", fake_send_get(body(output1=quote, output2=[SHORT_SALE_ROW])))
 
-    fetch = fetch_short_sale(TOKEN, APP_KEY, APP_SECRET, SAMSUNG, date(2026, 8, 1), date(2026, 8, 12))
+    fetch = COLLECTOR.fetch_short_sale(SAMSUNG, date(2026, 8, 1), date(2026, 8, 12))
 
     row = fetch.rows[0]
     assert row.business_date == date(2026, 8, 12)
@@ -406,7 +396,7 @@ def test_lending_asks_for_the_stock_division_not_the_market(monkeypatch):
     send = fake_send_get(body(output1=[LENDING_ROW]))
     monkeypatch.setattr(kis_positioning, "send_get", send)
 
-    fetch = fetch_lending(TOKEN, APP_KEY, APP_SECRET, SAMSUNG, date(2026, 8, 1), date(2026, 8, 12))
+    fetch = COLLECTOR.fetch_lending(SAMSUNG, date(2026, 8, 1), date(2026, 8, 12))
 
     # 1을 보내면 코스피 전체 숫자가 종목 행에 들어간다(실측).
     assert LENDING_STOCK_DIVISION == "3"
@@ -420,22 +410,22 @@ def test_lending_asks_for_the_stock_division_not_the_market(monkeypatch):
 @pytest.mark.parametrize(
     ("fetcher", "payload"),
     [
-        (fetch_short_sale, body(output2=[SHORT_SALE_ROW | {"stck_bsop_date": "20261231"}])),
-        (fetch_lending, body(output1=[LENDING_ROW | {"bsop_date": "20261231"}])),
+        (COLLECTOR.fetch_short_sale, body(output2=[SHORT_SALE_ROW | {"stck_bsop_date": "20261231"}])),
+        (COLLECTOR.fetch_lending, body(output1=[LENDING_ROW | {"bsop_date": "20261231"}])),
     ],
 )
 def test_rows_after_the_requested_end_are_rejected(monkeypatch, fetcher, payload):
     monkeypatch.setattr(kis_positioning, "send_get", fake_send_get(payload))
 
     with pytest.raises(KisPayloadError, match="returned rows after"):
-        fetcher(TOKEN, APP_KEY, APP_SECRET, SAMSUNG, date(2026, 8, 1), date(2026, 8, 12))
+        fetcher(SAMSUNG, date(2026, 8, 1), date(2026, 8, 12))
 
 
 def test_result_code_failures_are_raised(monkeypatch):
     monkeypatch.setattr(kis_positioning, "send_get", fake_send_get(body(rt_cd="1", msg1="권한이 없습니다")))
 
     with pytest.raises(KisResultError) as error:
-        fetch_market_funds(TOKEN, APP_KEY, APP_SECRET, date(2026, 8, 12))
+        COLLECTOR.fetch_market_funds(date(2026, 8, 12))
 
     assert error.value.code == "1"
 
@@ -444,15 +434,15 @@ def test_bad_numbers_fail_instead_of_being_stored(monkeypatch):
     monkeypatch.setattr(kis_positioning, "send_get", fake_send_get(body(output=[CREDIT_ROW | {"acml_vol": "abc"}])))
 
     with pytest.raises(KisPayloadError, match="acml_vol"):
-        fetch_credit_balance(TOKEN, APP_KEY, APP_SECRET, SAMSUNG, date(2026, 8, 1), date(2026, 8, 12))
+        COLLECTOR.fetch_credit_balance(SAMSUNG, date(2026, 8, 1), date(2026, 8, 12))
 
 
 def test_store_credit_balance_writes_the_row_and_its_lineage(monkeypatch):
     monkeypatch.setattr(kis_positioning, "send_get", fake_send_get(body(output=[CREDIT_ROW])))
-    fetch = fetch_credit_balance(TOKEN, APP_KEY, APP_SECRET, SAMSUNG, date(2026, 8, 1), date(2026, 8, 12))
+    fetch = COLLECTOR.fetch_credit_balance(SAMSUNG, date(2026, 8, 1), date(2026, 8, 12))
     connection = FakeConnection()
 
-    assert store_credit_balance(connection, fetch) == 1
+    assert COLLECTOR.store_credit_balance(connection, fetch) == 1
     statement, parameters = connection.recorded_cursor.calls[0]
     assert "INSERT INTO source_record" in statement
     assert parameters[1:3] == ("kis", "daily_credit_balance")
@@ -476,10 +466,10 @@ def test_store_ranking_removes_slots_past_the_last_rank(monkeypatch):
             )
         ),
     )
-    fetch = fetch_credit_ranking(TOKEN, APP_KEY, APP_SECRET)
+    fetch = COLLECTOR.fetch_credit_ranking()
     connection = FakeConnection()
 
-    assert store_credit_ranking(connection, fetch) == 2
+    assert COLLECTOR.store_credit_ranking(connection, fetch) == 2
     deletes = [
         parameters
         for statement, parameters in connection.recorded_cursor.calls
@@ -491,32 +481,33 @@ def test_store_ranking_removes_slots_past_the_last_rank(monkeypatch):
 
 
 @pytest.mark.parametrize(
-    ("fetcher", "storer", "payload", "table", "count"),
+    ("dataset", "payload", "table", "count"),
     [
-        (fetch_market_funds, store_market_funds, body(output=[FUNDS_ROW]), "krx_market_funds_daily", 1),
-        (fetch_short_sale, store_short_sale, body(output2=[SHORT_SALE_ROW]), "krx_stock_short_sale_daily", 1),
-        (fetch_lending, store_lending, body(output1=[LENDING_ROW]), "krx_stock_securities_lending_daily", 1),
+        ("market_funds", body(output=[FUNDS_ROW]), "krx_market_funds_daily", 1),
+        ("short_sale", body(output2=[SHORT_SALE_ROW]), "krx_stock_short_sale_daily", 1),
+        ("lending", body(output1=[LENDING_ROW]), "krx_stock_securities_lending_daily", 1),
     ],
 )
-def test_each_dataset_stores_one_row_per_business_day(monkeypatch, fetcher, storer, payload, table, count):
+def test_each_dataset_stores_one_row_per_business_day(monkeypatch, dataset, payload, table, count):
     monkeypatch.setattr(kis_positioning, "send_get", fake_send_get(payload))
-    if fetcher is fetch_market_funds:
-        fetch = fetcher(TOKEN, APP_KEY, APP_SECRET, date(2026, 8, 12))
+    fetcher = getattr(COLLECTOR, f"fetch_{dataset}")
+    if dataset == "market_funds":
+        fetch = fetcher(date(2026, 8, 12))
     else:
-        fetch = fetcher(TOKEN, APP_KEY, APP_SECRET, SAMSUNG, date(2026, 8, 1), date(2026, 8, 12))
+        fetch = fetcher(SAMSUNG, date(2026, 8, 1), date(2026, 8, 12))
     connection = FakeConnection()
 
-    assert storer(connection, fetch) == count
+    assert getattr(COLLECTOR, f"store_{dataset}")(connection, fetch) == count
     assert len(rows_for(connection.recorded_cursor, table)) == count
 
 
 def test_empty_daily_responses_leave_only_a_lineage_record(monkeypatch):
     """휴장일이나 미발표일의 0건은 실패가 아니다. 조회했다는 사실만 남긴다."""
     monkeypatch.setattr(kis_positioning, "send_get", fake_send_get(body(output2=[])))
-    fetch = fetch_short_sale(TOKEN, APP_KEY, APP_SECRET, SAMSUNG, date(2026, 8, 1), date(2026, 8, 12))
+    fetch = COLLECTOR.fetch_short_sale(SAMSUNG, date(2026, 8, 1), date(2026, 8, 12))
     connection = FakeConnection()
 
-    assert store_short_sale(connection, fetch) == 0
+    assert COLLECTOR.store_short_sale(connection, fetch) == 0
     assert rows_for(connection.recorded_cursor, "krx_stock_short_sale_daily") == []
     assert "INSERT INTO source_record" in connection.recorded_cursor.calls[0][0]
 
@@ -525,7 +516,7 @@ def test_market_funds_metadata_records_the_returned_window(monkeypatch):
     second = FUNDS_ROW | {"bsop_date": "20260810"}
     monkeypatch.setattr(kis_positioning, "send_get", fake_send_get(body(output=[FUNDS_ROW, second])))
 
-    fetch = fetch_market_funds(TOKEN, APP_KEY, APP_SECRET, date(2026, 8, 12))
+    fetch = COLLECTOR.fetch_market_funds(date(2026, 8, 12))
 
     # 한 응답이 100영업일이라 어느 구간이 왔는지 계보에 남겨야 재현할 수 있다.
     assert fetch.metadata["first_date"] == "2026-08-11"
@@ -536,7 +527,7 @@ def test_market_funds_metadata_records_the_returned_window(monkeypatch):
 def test_started_and_completed_times_are_utc(monkeypatch):
     monkeypatch.setattr(kis_positioning, "send_get", fake_send_get(body(output=[FUNDS_ROW])))
 
-    fetch = fetch_market_funds(TOKEN, APP_KEY, APP_SECRET, date(2026, 8, 12))
+    fetch = COLLECTOR.fetch_market_funds(date(2026, 8, 12))
 
     assert fetch.started_at.tzinfo is not None
     assert fetch.started_at.astimezone(UTC) <= fetch.completed_at.astimezone(UTC)
@@ -548,7 +539,7 @@ def test_market_lending_asks_for_the_market_division(monkeypatch):
     send = fake_send_get(body(output1=[LENDING_ROW]))
     monkeypatch.setattr(kis_positioning, "send_get", send)
 
-    fetch = fetch_market_lending(TOKEN, APP_KEY, APP_SECRET, LendingMarket.KOSDAQ, date(2026, 8, 1), date(2026, 8, 12))
+    fetch = COLLECTOR.fetch_market_lending(LendingMarket.KOSDAQ, date(2026, 8, 1), date(2026, 8, 12))
 
     assert send.sent[0]["query"]["MRKT_DIV_CLS_CODE"] == "2"
     assert fetch.market_code == "KOSDAQ"
@@ -563,10 +554,10 @@ def test_market_lending_has_no_total_row():
 
 def test_store_market_lending_writes_the_market_code(monkeypatch):
     monkeypatch.setattr(kis_positioning, "send_get", fake_send_get(body(output1=[LENDING_ROW])))
-    fetch = fetch_market_lending(TOKEN, APP_KEY, APP_SECRET, LendingMarket.KOSPI, date(2026, 8, 1), date(2026, 8, 12))
+    fetch = COLLECTOR.fetch_market_lending(LendingMarket.KOSPI, date(2026, 8, 1), date(2026, 8, 12))
     connection = FakeConnection()
 
-    assert store_market_lending(connection, fetch) == 1
+    assert COLLECTOR.store_market_lending(connection, fetch) == 1
     upsert = rows_for(connection.recorded_cursor, "krx_market_securities_lending_daily")[0]
     assert upsert[0] == "KOSPI"
     assert upsert[1] == date(2026, 8, 12)
@@ -578,7 +569,7 @@ def test_ranking_can_ask_for_each_universe(monkeypatch, universe, label):
     send = fake_send_get(body(output1=[RANKING_HEAD], output2=[RANKING_ROW]))
     monkeypatch.setattr(kis_positioning, "send_get", send)
 
-    fetch = fetch_credit_ranking(TOKEN, APP_KEY, APP_SECRET, universe)
+    fetch = COLLECTOR.fetch_credit_ranking(universe)
 
     assert send.sent[0]["query"]["FID_INPUT_ISCD"] == universe
     # 저장하는 모집단은 우리가 보낸 값이다. 응답 헤더의 bstp_cls_code 는 다른 체계다.

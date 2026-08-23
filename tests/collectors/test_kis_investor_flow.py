@@ -196,7 +196,7 @@ def test_the_slot_is_part_of_the_stock_natural_key():
 def test_stock_codes_match_the_other_collectors():
     """공시·포지션과 한 키로 이으려면 세 수집기의 종목 코드가 같아야 한다."""
     from modules.collectors.document.dart import DartCompany
-    from modules.collectors.kis_positioning import PositioningStock
+    from modules.collectors.market.kis_positioning import PositioningStock
 
     codes = {stock.value for stock in InvestorFlowStock}
     assert codes == {company.value for company in DartCompany}

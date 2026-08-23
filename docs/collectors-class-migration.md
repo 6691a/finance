@@ -92,8 +92,9 @@ airflow/modules/collectors/
 | `collectors/indicator/ecos.py` | `EcosCollector` | 2026-08-23 |
 | `collectors/calendar/kis_market_calendar.py` | `KisMarketCalendarCollector` | 2026-08-23 |
 | `collectors/document/dart.py` | `DartCollector` | 2026-08-23 |
+| `collectors/market/kis_positioning.py` | `KisPositioningCollector` | 2026-08-23 |
 
-### 1단계 — 자격 증명을 인자로 도는 수집기 (남은 2모듈)
+### 1단계 — 자격 증명을 인자로 도는 수집기 (남은 1모듈)
 
 규칙이 정확히 겨냥한 것이고 이득이 가장 크다. 처음 8모듈 중 `kis_overseas_index`와
 `kis_investor_flow`는 끝났다.
@@ -101,7 +102,6 @@ airflow/modules/collectors/
 | 모듈 | 줄 | 새 클래스 | 생성자 | 클래스로 들어가는 것 |
 | --- | --- | --- | --- | --- |
 | `collectors/kis.py` | 1298 | `KisQuoteCollector` | token·app_key·app_secret | `fetch_bars`·`fetch_index_bars`·`fetch_index_price`·`fetch_stock_bars`·`store_bars`·`store_stock_bars`·`store_market_movement` |
-| `collectors/kis_positioning.py` | 971 | `KisPositioningCollector` | 〃 | `_call` + `fetch_*` 6개 + `store_*` 6개 |
 
 모듈 함수로 남는 것: `expiry_date`·`front_contract`·`parse_bars`·`parse_market_movement`·
 `parse_observations`·`parse_financials`·`parse_provisional`·`us_session_date`·
@@ -112,8 +112,7 @@ airflow/modules/collectors/
 **순서**: `kis_overseas_index`(fetch 하나)로 모양을 굳혔다. `kis.py`(1298줄)를 마지막에 한다.
 모듈 하나가 커밋 하나다.
 
-남은 DAG 쪽 호출 지점: `kis_quote_intraday` 12, `kis_market_positioning_daily` 8,
-`kis_stock_minute_bars_daily` 3. **스케줄·재시도·실패 판정은 건드리지 않는다.**
+남은 DAG 쪽 호출 지점: `kis_quote_intraday` 12, `kis_stock_minute_bars_daily` 3. **스케줄·재시도·실패 판정은 건드리지 않는다.**
 
 테스트는 8파일 ~3,950줄이 영향받는다. 대부분 호출 표현 치환이고,
 `tests/collectors/test_kis_analyst_opinion.py`가 클래스 형태 테스트의 기준이다.

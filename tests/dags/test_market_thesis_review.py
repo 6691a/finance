@@ -39,6 +39,12 @@ def test_retries_give_the_readiness_guard_room_to_wait():
     assert DAG.default_args["retry_delay"] == timedelta(minutes=10)
 
 
+def test_only_the_build_has_a_task_timeout():
+    """채점·해설은 밀린 날짜를 따라잡느라 길어질 수 있어 울타리를 두지 않는다."""
+    assert DAG.task_dict["build_thesis"].execution_timeout == thesis_common.BUILD_TIMEOUT
+    assert DAG.task_dict["narrate_followups"].execution_timeout is None
+
+
 def test_the_dag_carries_its_display_metadata():
     assert DAG.dag_display_name.startswith("🧠")
     assert DAG.description

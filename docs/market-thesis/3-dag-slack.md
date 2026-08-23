@@ -40,6 +40,9 @@ SCHEDULE = MultipleCronTriggerTimetable(
   돌려도 장중 정보로 아침 예측을 덮지 않는다(event-time cutoff까지, README 1절).
 - DAG 인자: `max_active_runs=1`, `default_args={"retries": 3, "retry_delay": timedelta(minutes=10)}`.
   재시도 셋은 readiness guard가 선행 DAG의 지연을 기다리는 수단이다.
+- `build_thesis`만 `execution_timeout=thesis_common.BUILD_TIMEOUT`(30분)이다. 요청 타임아웃은
+  모델 호출 하나만 막고 한 빌드는 모델을 여러 번(왕복 3 + 답변 + 교정) 부르므로 태스크
+  울타리가 따로 있어야 한다. 채점·해설은 밀린 날짜를 따라잡느라 길어질 수 있어 두지 않는다.
 
 ## 2. 태스크 — `build_thesis >> grade_followups >> narrate_followups >> notify_slack`
 

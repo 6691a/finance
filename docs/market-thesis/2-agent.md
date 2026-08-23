@@ -85,7 +85,7 @@ DB 연결과 **기준 시각 `as_of_at`**을 들고 읽기 전용 툴 13개를 �
   이것이 보장하는 것은 event-time cutoff까지다(README 1절).
 - **상한은 코드 상수로 강제한다.** 모델이 인자를 넘겨도 잘라서 실행한다:
   `1 <= hours <= 72`, `0 <= min_score <= 100`, 툴 호출당 결과 ≤ 20건, 항목당
-  `new_facts`·`reason` 합쳐 ≤ 600자, 실행당 tool call 총 ≤ 12회(왕복 4 × 회당 3),
+  `new_facts`·`reason` 합쳐 ≤ 600자, 실행당 tool call 총 ≤ 12회(왕복 3 × 회당 4),
   실행당 툴 결과 누적 ≤ 24,000자. 넘는 호출은 빈 결과가 아니라 "상한 초과" `ToolMessage`로
   돌려 모델이 알게 한다.
 
@@ -142,7 +142,9 @@ investigate → (tool_calls 있으면) tools → investigate → … → answer 
 
 - `investigate`: `llm.invoke(model, messages, tools=toolbox.tools)`. 스키마 없음.
 - `tools`: tool_call마다 Toolbox 실행, `ToolMessage`로 대화에 추가. 왕복 상한
-  `MAX_TOOL_ROUNDS = 4` — 넘으면 조사를 끝내고 답변으로 넘어간다.
+  `MAX_TOOL_ROUNDS = 3` — 넘으면 조사를 끝내고 답변으로 넘어간다. 왕복 하나가 모델 호출
+  하나라 이 값이 빌드 한 번의 길이를 정한다. 바깥 울타리는 태스크의 `execution_timeout`
+  (`thesis_common.BUILD_TIMEOUT` 30분)이다.
 - `answer`: 툴을 빼고 `response_format` 강제. 스키마 미지원 제공처는 검증 폴백
   (`UnsupportedResponseFormat` → 스키마 없이 재호출 + Pydantic 검증).
 - `repair`: 1회. 목록 밖 subject·ref만 남았거나 JSON이 깨졌을 때. 두 번째 실패는

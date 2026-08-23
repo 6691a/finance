@@ -82,7 +82,7 @@ from modules.utility import KST_TIMEZONE
     tags=["thesis", "llm", "market", "korea"],
 )
 def market_thesis_review():
-    @task(task_display_name="추론 생성")
+    @task(task_display_name="추론 생성", execution_timeout=thesis_common.BUILD_TIMEOUT)
     def build_thesis() -> dict[str, Any]:
         return thesis_review.build()
 

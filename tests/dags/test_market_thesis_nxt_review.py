@@ -102,6 +102,7 @@ def test_the_tasks_run_in_one_line():
 def test_retries_give_the_readiness_guard_room_to_wait():
     assert DAG.default_args["retries"] == 3
     assert DAG.default_args["retry_delay"] == timedelta(minutes=10)
+    assert DAG.task_dict["build_thesis"].execution_timeout == thesis_common.BUILD_TIMEOUT
 
 
 def test_the_dag_carries_its_display_metadata():
@@ -263,7 +264,7 @@ def test_run_hands_build_and_store_every_argument_it_requires(monkeypatch):
         received.update(kwargs)
         return 2
 
-    monkeypatch.setattr(thesis_nxt_review, "krx_open_day", lambda connection, run_date: True)
+    monkeypatch.setattr(thesis_common, "skip_unless_open", lambda conn, run_date: None)
     monkeypatch.setattr(NxtAfterHoursReview, "check_ready", lambda self: None)
     monkeypatch.setattr(NxtAfterHoursReview, "observed_state", lambda self: {"session": "2026-08-21"})
     monkeypatch.setattr(NxtAfterHoursReview, "targets", property(lambda self: ()))

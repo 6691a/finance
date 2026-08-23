@@ -48,7 +48,6 @@ from airflow.sdk import get_current_context
 from pydantic import AwareDatetime, BaseModel, ConfigDict
 
 from modules import thesis_common
-from modules.market_session import krx_open_day
 from modules.sql import read_sql
 from modules.utility import KST_TIMEZONE
 
@@ -67,11 +66,6 @@ AFTER_HOURS_OPEN = time(15, 30)
 AFTER_HOURS_CLOSE = time(20, 0)
 
 AFTER_HOURS_STATE = read_sql("postgres", "stock_bar", "select_nxt_after_hours.sql")
-
-SETTLED_CLOSE_COUNT = (
-    "SELECT count(DISTINCT stock_code) FROM stock_investor_trade_daily "
-    "WHERE provider = 'kis' AND business_date = %s AND stock_code = ANY(%s)"
-)
 
 
 def as_of(run_date: date) -> datetime:
@@ -184,10 +178,7 @@ class NxtAfterHoursReview:
                 f"NXT bars for {self._run_date} are all provisional; the REST backfill has not run"
             )
 
-        with self._connection.cursor() as cursor:
-            cursor.execute(SETTLED_CLOSE_COUNT, (self._run_date, self.watched))
-            if cursor.fetchone()[0] < len(self.watched):
-                raise thesis_common.ThesisNotReady(f"settled closes for {self._run_date} are not all in yet")
+        thesis_common.require_settled_closes(self._connection, self._run_date, self.watched)
 
     def observed_state(self) -> dict[str, Any]:
         """프롬프트에 주는 관측 상태. 정규장·애프터마켓·지수 맥락 셋이다.
@@ -225,12 +216,7 @@ class NxtAfterHoursReview:
         """휴장 판정 → readiness guard → 관측 상태 → LLM → 저장. 저장한 행 수를 준다."""
         from modules import thesis as market_thesis
 
-        # 휴장 판정은 **모르면 돌린다.** 달력을 아직 못 채웠다는 이유로 진짜 거래일을
-        # 빠뜨리는 것이 휴장일에 한 번 더 부르는 것보다 나쁘다. NXT 달력은 따로 없어
-        # KRX 것을 본다(`market_session`에 NXT market_code가 없다).
-        if krx_open_day(self._connection, self._run_date) is False:
-            raise AirflowSkipException(f"KRX is closed on {self._run_date}")
-
+        thesis_common.skip_unless_open(self._connection, self._run_date)
         self.check_ready()
         return thesis_common.build_and_store(
             self._connection,

@@ -17,11 +17,10 @@ from contextlib import closing
 from datetime import UTC, date, datetime, time
 from typing import Any
 
-from airflow.exceptions import AirflowFailException, AirflowSkipException
+from airflow.exceptions import AirflowFailException
 from airflow.sdk import get_current_context
 
 from modules import thesis_common
-from modules.market_session import krx_open_day
 from modules.utility import KST_TIMEZONE
 
 logger = logging.getLogger(__name__)
@@ -46,14 +45,8 @@ def check_ready(conn: Any, run_date: date, watched: list[str]) -> None:
     확정 종가는 `kis_investor_trade_daily`가 18:10에, 지수 마감 봉은 `kis_quote_intraday`가
     16:00까지 채운다. 둘 다 없으면 채점도 관측 상태도 설 수 없다.
     """
+    thesis_common.require_settled_closes(conn, run_date, watched)
     with conn.cursor() as cursor:
-        cursor.execute(
-            "SELECT count(DISTINCT stock_code) FROM stock_investor_trade_daily "
-            "WHERE provider = 'kis' AND business_date = %s AND stock_code = ANY(%s)",
-            (run_date, watched),
-        )
-        if cursor.fetchone()[0] < len(watched):
-            raise thesis_common.ThesisNotReady(f"settled closes for {run_date} are not all in yet")
         cursor.execute(
             "SELECT count(*) FROM index_bar WHERE provider = 'kis' AND bar_at = %s AND symbol = ANY(%s)",
             (as_of(run_date), GUARD_INDEX_SYMBOLS),
@@ -80,10 +73,7 @@ def build() -> dict[str, Any]:
     dag_run_id = str(context["dag_run"].run_id)
 
     with closing(thesis_common.connection()) as conn:
-        # 휴장 판정은 **모르면 돌린다.** 달력을 아직 못 채웠다는 이유로 진짜 거래일을
-        # 빠뜨리는 것이 휴장일에 한 번 더 부르는 것보다 나쁘다.
-        if krx_open_day(conn, run_date) is False:
-            raise AirflowSkipException(f"KRX is closed on {run_date}")
+        thesis_common.skip_unless_open(conn, run_date)
 
         targets = market_thesis.subjects(conn)
         watched = [s.code for s in targets if s.kind is market_thesis.ThesisSubjectKind.STOCK]

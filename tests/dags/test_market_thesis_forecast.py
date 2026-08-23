@@ -9,7 +9,7 @@ from datetime import UTC, date, datetime, timedelta
 from typing import Any, Self
 
 import pytest
-from airflow.exceptions import AirflowFailException
+from airflow.exceptions import AirflowFailException, AirflowSkipException
 
 from dags import market_thesis_forecast as dag_module
 from modules import thesis_common, thesis_forecast
@@ -45,6 +45,11 @@ def test_retries_give_the_readiness_guard_room_to_wait():
     # 재시도 셋은 선행 DAG의 지연을 기다리는 수단이다.
     assert DAG.default_args["retries"] == 3
     assert DAG.default_args["retry_delay"] == timedelta(minutes=10)
+
+
+def test_a_build_cannot_run_past_the_open():
+    """요청 타임아웃은 모델 호출 하나만 막는다. 빌드 전체의 울타리는 태스크 타임아웃이다."""
+    assert DAG.task_dict["build_thesis"].execution_timeout == timedelta(minutes=30)
 
 
 def test_the_dag_carries_its_display_metadata():
@@ -108,6 +113,25 @@ def test_the_guard_passes_when_assessment_kept_up():
     connection = FakeConnection([(AS_OF - timedelta(minutes=5),)])
 
     thesis_forecast.check_ready(connection, AS_OF)
+
+
+# --- 세 슬롯이 함께 쓰는 guard (`thesis_common`) ----------------------------------
+
+
+def test_a_closed_day_is_skipped_not_failed():
+    with pytest.raises(AirflowSkipException, match="KRX is closed"):
+        thesis_common.skip_unless_open(FakeConnection([(False,)]), date(2026, 8, 15))
+
+
+@pytest.mark.parametrize("row", [(True,), None])
+def test_an_open_or_unknown_day_runs(row):
+    """달력을 아직 못 채웠으면(`None`) 돌린다. 진짜 거래일을 빠뜨리는 쪽이 더 나쁘다."""
+    thesis_common.skip_unless_open(FakeConnection([row]), date(2026, 8, 21))
+
+
+def test_missing_settled_closes_wait_instead_of_skipping():
+    with pytest.raises(thesis_common.ThesisNotReady, match="settled closes"):
+        thesis_common.require_settled_closes(FakeConnection([(1,)]), date(2026, 8, 21), ["005930", "000660"])
 
 
 def test_a_quiet_hour_passes_only_when_collection_is_alive():

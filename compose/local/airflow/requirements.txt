@@ -13,7 +13,7 @@
 # `apache-airflow-providers-postgres>=7.0.1`에 constraints는 `==6.8.0`이었다.
 # 이름만 적어 두면 constraints가 고른 버전이 들어간다.
 
-# modules/collectors/hana.py: scrapling.fetchers.Fetcher와 curl_cffi.curl.CurlError.
+# modules/collectors/documents.py: scrapling.fetchers.Fetcher와 curl_cffi.curl.CurlError.
 # curl_cffi는 scrapling 기본 의존성이 아니라 fetchers extra에 들어 있다.
 scrapling[fetchers]>=0.4.12
 

@@ -1,12 +1,13 @@
 # 경제 문서 LLM 평가 워크플로우
 
-`document_assessment_hourly`는 Airflow 태스크 안에서 두 개의 LangGraph를 실행하고,
+`document_assessment_hourly`는 `dedup >> evaluate` 두 태스크다. `evaluate`가 두 개의 LangGraph를 실행하고,
 LangChain의 `ChatOpenAI`로 gpt-5.6-luna를 호출한다.
 
 ```mermaid
 flowchart TD
     subgraph AIRFLOW["Airflow · document_assessment_hourly"]
-        TIMER(["매시 25분 실행"]) --> EVALUATE["evaluate 단일 태스크"]
+        TIMER(["매시 25분 실행"]) --> DEDUP["dedup<br/>같은 기사를 대표에 연결"]
+        DEDUP -- "all_done · 실패해도 진행" --> EVALUATE["evaluate"]
         EVALUATE --> SETTINGS["환경 설정 로드<br/>관점 · 최대 동시 실행 수"]
         SETTINGS --> LOAD["DB 조회<br/>평가 대상 문서 · 허용 태그 후보"]
         LOAD --> HAS_DOCUMENTS{"대기 문서가 있는가?"}

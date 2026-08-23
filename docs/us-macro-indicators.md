@@ -1,8 +1,8 @@
-# 미국 거시지표(CPI·PPI·소매판매) 수집 설계
+# 미국 거시지표(CPI·PPI·소매판매·고용) 수집 설계
 
 - 날짜: 2026-08-16
-- 상태: 초안
-- 범위: FRED에서 미국 월간 거시지표 세 계열을 `indicator_observation`에 편입
+- 상태: 구현 완료. 고용 2계열은 2026-08-18에 추가(시드 `d8a4c1f27b93`)
+- 범위: FRED에서 미국 월간 거시지표 다섯 계열을 `indicator_observation`에 편입
 
 ## 1. 왜 필요한가
 
@@ -42,6 +42,8 @@ FRED `series` 엔드포인트로 2026-08-16에 확인한 값이다.
 | `CPI_M` | `CPIAUCSL` | `Index 1982-1984=100` | `price_index` | 1947-01 ~ |
 | `PPI_M` | `PPIFIS` | `Index Nov 2009=100` | `price_index` | 2009-11 ~ |
 | `RETAIL_SALES_M` | `RSAFS` | `Millions of Dollars` | `activity` | 1992-01 ~ |
+| `UNEMPLOYMENT_M` | `UNRATE` | `Percent` | `activity` | 1948-01 ~ |
+| `NONFARM_PAYROLL_M` | `PAYEMS` | `Thousands of Persons` | `activity` | 1939-01 ~ |
 
 전부 미국·월간·계절조정이고 관측일이 그 달 1일로 온다(7월 CPI = `2026-07-01`).
 
@@ -174,15 +176,14 @@ LEFT JOIN indicator_series s ON s.provider = o.provider AND s.series_id = o.seri
 
 ## 6. 안 하는 것
 
-- **Grafana 대시보드** — 이 값의 소비자는 화면이 아니라 리포트 쪽 계산이다. 세 계열로 화면을
+- **Grafana 대시보드** — 이 값의 소비자는 화면이 아니라 리포트 쪽 계산이다. 다섯 계열로 화면을
   만들 값어치가 없다. 계열이 늘면 그때 만든다.
 - **한국 CPI·PPI** — ECOS는 `STAT_CODE`와 `CYCLE`이 모듈 상수로 일별 표에 고정돼 있고 응답
   파서가 `YYYYMMDD` 8자리를 강제한다. 월간 경로를 새로 여는 일이라 별도 과제다.
 - **전년 대비 변화율 저장** — 레벨만 둔다. 변화율은 계산된다.
-- **BLS 직접 수집** — FRED가 BLS 값을 중계하고 API 하나로 셋이 다 온다. 발표 시각을 분 단위로
+- **BLS 직접 수집** — FRED가 BLS 값을 중계하고 API 하나로 다섯이 다 온다. 발표 시각을 분 단위로
   봐야 할 때 그때 BLS를 붙인다.
-- **고용지표(실업률·비농업고용)** — 같은 방식으로 붙일 수 있지만 이번 범위 밖이다. 계열 두 줄과
-  시드 두 줄이면 된다.
+- ~~고용지표(실업률·비농업고용)~~ — 2026-08-18에 붙였다. 계열 두 줄과 시드 두 줄이었다.
 
 ## 7. 검증
 

@@ -90,8 +90,9 @@ airflow/modules/collectors/
 | `collectors/market/kis_investor_flow.py` | `KisInvestorFlowCollector` | 2026-08-22 |
 | `collectors/indicator/fred.py` | `FredCollector` | 2026-08-23 |
 | `collectors/indicator/ecos.py` | `EcosCollector` | 2026-08-23 |
+| `collectors/calendar/kis_market_calendar.py` | `KisMarketCalendarCollector` | 2026-08-23 |
 
-### 1단계 — 자격 증명을 인자로 도는 수집기 (남은 4모듈)
+### 1단계 — 자격 증명을 인자로 도는 수집기 (남은 3모듈)
 
 규칙이 정확히 겨냥한 것이고 이득이 가장 크다. 처음 8모듈 중 `kis_overseas_index`와
 `kis_investor_flow`는 끝났다.
@@ -100,7 +101,6 @@ airflow/modules/collectors/
 | --- | --- | --- | --- | --- |
 | `collectors/kis.py` | 1298 | `KisQuoteCollector` | token·app_key·app_secret | `fetch_bars`·`fetch_index_bars`·`fetch_index_price`·`fetch_stock_bars`·`store_bars`·`store_stock_bars`·`store_market_movement` |
 | `collectors/kis_positioning.py` | 971 | `KisPositioningCollector` | 〃 | `_call` + `fetch_*` 6개 + `store_*` 6개 |
-| `collectors/kis_market_calendar.py` | 482 | `KisMarketCalendarCollector` | 〃 | `_paged`·`fetch_domestic_calendar`·`fetch_overseas_settlement`·`store_domestic`·`store_overseas` |
 | `collectors/dart.py` | 822 | `DartCollector` | api_key | `_get`·`fetch_disclosures`·`fetch_provisional`·`fetch_financials`·`store_disclosures`·`store_earnings` |
 
 모듈 함수로 남는 것: `expiry_date`·`front_contract`·`parse_bars`·`parse_market_movement`·
@@ -112,8 +112,7 @@ airflow/modules/collectors/
 **순서**: `kis_overseas_index`(fetch 하나)로 모양을 굳혔다. `kis.py`(1298줄)를 마지막에 한다.
 모듈 하나가 커밋 하나다.
 
-남은 DAG 쪽 호출 지점: `kis_quote_intraday` 12, `market_calendar_daily` 8,
-`kis_market_positioning_daily` 8, `kis_stock_minute_bars_daily` 3.
+남은 DAG 쪽 호출 지점: `kis_quote_intraday` 12, `kis_market_positioning_daily` 8, `kis_stock_minute_bars_daily` 3.
 `dart_disclosure_intraday`의 `_extract(api_key, disclosure)`에서도 키가 빠진다. **스케줄·재시도·실패 판정은 건드리지 않는다.**
 
 테스트는 8파일 ~3,950줄이 영향받는다. 대부분 호출 표현 치환이고,

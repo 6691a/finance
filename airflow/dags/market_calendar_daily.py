@@ -73,18 +73,15 @@ from airflow.providers.postgres.hooks.postgres import PostgresHook
 from airflow.sdk import Param, Variable, dag, get_current_context, task
 from pydantic import SecretStr
 
+from modules.collectors.calendar.kis_market_calendar import (
+    KisCursorError,
+    KisMarketCalendarCollector,
+)
 from modules.collectors.kis import (
     KisHTTPError,
     KisPayloadError,
     KisResultError,
     access_token,
-)
-from modules.collectors.kis_market_calendar import (
-    KisCursorError,
-    fetch_domestic_calendar,
-    fetch_overseas_settlement,
-    store_domestic,
-    store_overseas,
 )
 from modules.collectors.nyse_calendar import (
     NyseParseError,
@@ -128,17 +125,24 @@ def _requested_date(parameter: str) -> date:
     return reference.astimezone(KST_TIMEZONE).date()
 
 
-def _fetch_with_retry(call, app_key: SecretStr, app_secret: SecretStr, token: SecretStr):
-    """401이면 토큰을 한 번만 재발급하고 다시 시도한다."""
+def _fetch_with_retry(call, collector: KisMarketCalendarCollector, app_key: SecretStr, app_secret: SecretStr):
+    """401이면 토큰을 한 번만 재발급하고 다시 시도한다.
+
+    토큰은 수집기 객체가 사는 동안 안 변하므로 재발급은 객체를 다시 만드는 것이다.
+    """
     try:
-        return call(token)
+        return call(collector)
     except KisHTTPError as error:
         if error.status in KIS_UNRECOVERABLE_STATUSES:
             raise AirflowFailException(str(error)) from error
         if error.status != 401:
             raise
         logger.warning("KIS returned 401; reissuing the token once")
-        return call(_cached_token(app_key, app_secret, force=True))
+        return call(_collector(app_key, app_secret, force=True))
+
+
+def _collector(app_key: SecretStr, app_secret: SecretStr, force: bool = False) -> KisMarketCalendarCollector:
+    return KisMarketCalendarCollector(_cached_token(app_key, app_secret, force=force), app_key, app_secret)
 
 
 def _store(store, *arguments: Any) -> Any:
@@ -184,19 +188,16 @@ def market_calendar_daily():
     def domestic_holiday() -> int:
         base_date = _requested_date(BASE_DATE_PARAM)
         app_key, app_secret = _credentials()
-        token = _cached_token(app_key, app_secret)
+        collector = _collector(app_key, app_secret)
 
         try:
             fetch = _fetch_with_retry(
-                lambda active: fetch_domestic_calendar(active, app_key, app_secret, base_date),
-                app_key,
-                app_secret,
-                token,
+                lambda active: active.fetch_domestic_calendar(base_date), collector, app_key, app_secret
             )
         except (KisCursorError, KisResultError) as error:
             raise AirflowFailException(str(error)) from error
 
-        count = _store(store_domestic, fetch)
+        count = _store(collector.store_domestic, fetch)
         logger.info(
             "Stored %s KRX session days from %s over %s page(s)",
             count,
@@ -221,19 +222,16 @@ def market_calendar_daily():
     def overseas_settlement() -> int:
         trade_date = _requested_date(TRADE_DATE_PARAM)
         app_key, app_secret = _credentials()
-        token = _cached_token(app_key, app_secret)
+        collector = _collector(app_key, app_secret)
 
         try:
             fetch = _fetch_with_retry(
-                lambda active: fetch_overseas_settlement(active, app_key, app_secret, trade_date),
-                app_key,
-                app_secret,
-                token,
+                lambda active: active.fetch_overseas_settlement(trade_date), collector, app_key, app_secret
             )
         except (KisCursorError, KisResultError) as error:
             raise AirflowFailException(str(error)) from error
 
-        settlement = _store(store_overseas, fetch)
+        settlement = _store(collector.store_overseas, fetch)
         if settlement is None:
             # 주말·미래·미국 휴장이 모두 여기 온다. 판정은 NYSE가 이미 갖고 있다.
             logger.info("No US settlement row for %s; left the NYSE verdict alone", trade_date)

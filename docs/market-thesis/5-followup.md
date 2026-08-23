@@ -173,10 +173,13 @@ select_pending_grades.sql  →  T+N 등락률 조회  →  classify_outcome / br
   `post_close` 리뷰에도 붙인다. 장후 리뷰는 "오늘 이래서 움직였다"는 **인과 주장**이라
   며칠 뒤 보도로 검증할 값어치가 오히려 크다. `post_close` 대상은 채점 넷이 NULL인 채로
   `thesis_outcome` 행이 새로 생긴다(1절).
+- **호출은 (지평, 슬롯)마다 하나다**(2026-08-23). `NarrativeTarget`이 `run_slot`을 들고
+  `narrate_followups`가 슬롯별로 나눠 부른다. 프롬프트 첫 줄이 슬롯 하나를 전제하고, 응답을
+  `subject_code`로 대상에 되돌리는데 같은 날 장전·장후가 같은 대상을 갖기 때문이다. 그 전에는
+  `PRE_OPEN`이 고정돼 장후 추론이 해설을 한 번도 못 받고 매일 다시 집혔다.
 - **`post_nxt_close`는 빠진다**(2026-08-22). NXT 애프터마켓 리뷰는 해설 루프에 아직 넣지
-  않았다 — 넣으려면 `NarrativeTarget`이 슬롯을 들고 슬롯마다 호출을 나눠야 한다
-  (`FollowupNarrator`의 프롬프트 첫 줄이 슬롯 하나를 전제한다). 그래서
-  `select_pending_narratives.sql`이 슬롯을 **열거한다**. **`select_backlog.sql`의
+  않았다. 넣으려면 `select_pending_narratives.sql`과 `select_backlog.sql`의 슬롯 목록에 더하면
+  된다 — 그래서 두 SQL이 슬롯을 **열거한다**. **`select_backlog.sql`의
   `unnarrated` FILTER가 같은 목록을 봐야 한다** — 어긋나면 해설을 안 만드는 슬롯이 영영
   밀림으로 잡혀 ops 브리핑이 매일 거짓 경보를 낸다
   ([7-nxt-review.md](7-nxt-review.md) 3절).

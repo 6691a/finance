@@ -5,8 +5,8 @@
 -- 검증할 값어치가 크다.
 --
 -- **post_nxt_close는 뺀다**(2026-08-22). NXT 애프터마켓 리뷰는 해설 루프에 아직 넣지
--- 않았다 — 넣으려면 `NarrativeTarget`이 슬롯을 들고 슬롯마다 호출을 나눠야 한다
--- (`FollowupNarrator`의 프롬프트 첫 줄이 슬롯 하나를 전제한다). 슬롯을 열거하는 것은
+-- 않았다. 넣으려면 여기와 `select_backlog.sql`의 목록에 더하면 된다 — 부르는 쪽은
+-- `run_slot` 컬럼으로 슬롯마다 호출을 나눈다(2026-08-23). 슬롯을 열거하는 것은
 -- `select_pending_grades.sql`이 pre_open을 리터럴로 적는 것과 같은 형태다.
 --
 -- **`select_backlog.sql`의 unnarrated FILTER가 같은 목록을 봐야 한다.** 어긋나면 한쪽은

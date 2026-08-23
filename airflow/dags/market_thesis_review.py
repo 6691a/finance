@@ -28,7 +28,7 @@ T+0·1·3·5로 채점하고, T+1·3·5에는 사후 해설과 판정을 붙인�
 - `build_thesis` — 오늘 세션을 해석한다. 관측 상태(SQL) → LLM → 저장
 - `grade_followups` — 지평 T+0·1·3·5의 미채점 예측을 채점한다. **LLM 없음.**
   날짜 상한이 없어 리뷰가 실패했던 날의 것도 여기서 회수된다
-- `narrate_followups` — T+1·3·5에 사후 해설과 판정을 붙인다. 지평마다 호출 하나다
+- `narrate_followups` — T+1·3·5에 사후 해설과 판정을 붙인다. (지평, 원 추론의 슬롯)마다 호출 하나다
 - `notify_slack` — 오늘 리뷰를 보낸다. LLM을 다시 부르지 않는다
 
 `narrate_followups`가 실패해도 `grade_followups`의 채점은 이미 커밋돼 있다. 다음 실행이

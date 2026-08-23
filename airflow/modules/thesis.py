@@ -2084,6 +2084,9 @@ class NarrativeTarget(BaseModel):
     model_config = ConfigDict(frozen=True)
 
     thesis_id: int
+    # 원 추론의 슬롯. 한 날짜에 같은 대상의 장전·장후 추론이 둘 다 있어 `subject_code`만으로는
+    # 어느 추론인지 모른다. 해설 호출은 슬롯마다 따로 한다(`FollowupNarrator.run`).
+    run_slot: RunSlot
     subject: Subject
     prob_up: Decimal
     prob_down: Decimal
@@ -2269,14 +2272,23 @@ class FollowupNarrator:
         self,
         *,
         run_date: date,
-        run_slot: RunSlot,
         horizon_days: int,
         as_of_at: datetime,
         targets: Sequence[NarrativeTarget],
     ) -> tuple[NarrativeDraft, ...]:
-        """해설들. 두 번째도 실패하면 `ThesisError`를 올린다."""
+        """해설들. 두 번째도 실패하면 `ThesisError`를 올린다.
+
+        **한 호출은 슬롯 하나다.** 프롬프트 첫 줄이 슬롯을 전제하고, 응답은 `subject_code`로
+        대상을 찾는데 같은 날 장전·장후 추론이 같은 대상을 갖는다. 슬롯이 섞이면 한쪽이
+        다른 쪽의 해설을 받고 나머지는 영영 미해설로 남는다. 슬롯은 대상에서 읽는다 —
+        부르는 쪽이 따로 넘기면 어긋날 수 있다(2026-08-23까지 `PRE_OPEN` 고정이었다).
+        """
         if not targets:
             return ()
+        slots = {target.run_slot for target in targets}
+        if len(slots) != 1:
+            raise ThesisError(f"narration targets span {len(slots)} slots; call once per slot: {sorted(slots)}")
+        (run_slot,) = slots
         state: NarrativeState = {
             "messages": self.build_messages(
                 run_date=run_date,
@@ -2294,7 +2306,7 @@ class FollowupNarrator:
             state,
             config={
                 "run_name": "narrate_followups",
-                "metadata": {"horizon_days": horizon_days, "variant": self.variant.value},
+                "metadata": {"horizon_days": horizon_days, "run_slot": run_slot.value, "variant": self.variant.value},
             },
         )
         drafts = final.get("drafts")
@@ -2462,6 +2474,7 @@ def pending_narratives(
     return tuple(
         NarrativeTarget(
             thesis_id=row[0],
+            run_slot=RunSlot(row[2]),
             subject=Subject(kind=row[3], code=row[4], label=row[5]),
             prob_up=row[6],
             prob_down=row[7],

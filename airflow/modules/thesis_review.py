@@ -131,7 +131,11 @@ def grade_followups() -> int:
 
 
 def narrate_followups(built: dict[str, Any]) -> int:
-    """지평마다 해설과 판정을 붙인다. 지평마다 LLM 호출 하나다."""
+    """지평마다 해설과 판정을 붙인다. (지평, 원 추론의 슬롯)마다 LLM 호출 하나다.
+
+    슬롯을 나누는 이유는 `FollowupNarrator.run`에 있다 — 같은 날 장전·장후 추론이 같은
+    대상을 가져 한 호출에 섞으면 응답을 대상에 되돌릴 수 없다.
+    """
     from modules import thesis as market_thesis
     from modules.llm import LlmError, RetryableLlmError, model_name, thesis_model
 
@@ -145,45 +149,41 @@ def narrate_followups(built: dict[str, Any]) -> int:
             origin = thesis_common.origin_day(conn, run_date, horizon)
             if origin is None:
                 continue
-            targets = market_thesis.pending_narratives(conn, run_date=origin, horizon_days=horizon)
-            if not targets:
-                continue
+            pending = market_thesis.pending_narratives(conn, run_date=origin, horizon_days=horizon)
             as_of_at = thesis_common.close_at(run_date)
-            toolbox = market_thesis.ThesisToolbox(
-                conn,
-                as_of_at=as_of_at,
-                macro_window_start=thesis_common.close_at(origin),
-                watched_codes=[t.subject.code for t in targets],
-                subject_codes=[t.subject.code for t in targets],
-            )
-            narrator = market_thesis.FollowupNarrator(model, toolbox)
-            try:
-                drafts = narrator.run(
-                    run_date=origin,
-                    run_slot=market_thesis.RunSlot.PRE_OPEN,
+            for run_slot in market_thesis.RunSlot:
+                targets = tuple(t for t in pending if t.run_slot is run_slot)
+                if not targets:
+                    continue
+                toolbox = market_thesis.ThesisToolbox(
+                    conn,
+                    as_of_at=as_of_at,
+                    macro_window_start=thesis_common.close_at(origin),
+                    watched_codes=[t.subject.code for t in targets],
+                    subject_codes=[t.subject.code for t in targets],
+                )
+                narrator = market_thesis.FollowupNarrator(model, toolbox)
+                try:
+                    drafts = narrator.run(run_date=origin, horizon_days=horizon, as_of_at=as_of_at, targets=targets)
+                except market_thesis.ThesisError as error:
+                    # 그 (지평, 슬롯)만 없던 것으로 남는다. 다음 실행이 다시 집는다.
+                    logger.warning("T+%s %s narration failed for %s: %s", horizon, run_slot.value, origin, error)
+                    continue
+                except LlmError as error:
+                    if isinstance(error, RetryableLlmError):
+                        raise
+                    raise AirflowFailException(str(error)) from error
+
+                written += market_thesis.store_narratives(
+                    conn,
                     horizon_days=horizon,
                     as_of_at=as_of_at,
-                    targets=targets,
+                    dag_run_id=dag_run_id,
+                    drafts=drafts,
+                    registry=toolbox.registry,
+                    llm_model=model_name(model),
+                    prompt_revision=narrator.prompt_revision,
                 )
-            except market_thesis.ThesisError as error:
-                # 그 지평만 없던 것으로 남는다. 다음 실행이 다시 집는다.
-                logger.warning("T+%s narration failed for %s: %s", horizon, origin, error)
-                continue
-            except LlmError as error:
-                if isinstance(error, RetryableLlmError):
-                    raise
-                raise AirflowFailException(str(error)) from error
-
-            written += market_thesis.store_narratives(
-                conn,
-                horizon_days=horizon,
-                as_of_at=as_of_at,
-                dag_run_id=dag_run_id,
-                drafts=drafts,
-                registry=toolbox.registry,
-                llm_model=model_name(model),
-                prompt_revision=narrator.prompt_revision,
-            )
     logger.info("wrote %s narratives", written)
     return written
 

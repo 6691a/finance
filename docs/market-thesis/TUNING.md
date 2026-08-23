@@ -251,6 +251,7 @@ ops 브리핑의 **추론 적체** 한 줄. **여기서 즉시 대응하는 것�
 | 2026-08-21 | DAG 구조 | `market_thesis_analysis` 하나 → `market_thesis_forecast`·`market_thesis_review` 둘 | — (슬롯이 `logical_date`의 시각에서 나와 수동 실행이 벽시계로 떨어졌다) | 모드로 갈리던 함수도 `thesis_common`·`thesis_forecast`·`thesis_review`로 나눴다 |
 | 2026-08-21 | 툴 개수 | 4 → 11 | 국채 349행·수급 490행·시장폭 748행이 모델에게 안 보이고 있었다 | 운영 DB 실행으로 결함 둘을 잡았다(공매도 당일 0행, 국내 지수 일봉 부재) |
 | 2026-08-22 | `THESIS_TIMEOUT_SECONDS` | 900 → 1800 | **없다.** 900에서 죽은 실행은 아직 없고, 툴이 11개로 늘어 왕복이 길어질 것을 보고 미리 올렸다 | 이 표의 규칙("본 숫자가 없는 행은 기억이다")을 어기는 행이라 그 사실을 적어 둔다. 실제 소요 분포를 보고 되돌릴 후보다 |
+| 2026-08-23 | 해설 호출 단위 | 지평마다 하나(슬롯 `PRE_OPEN` 고정) → (지평, 슬롯)마다 하나 | — (코드 읽기로 잡았다. 응답을 `subject_code`로 대상에 되돌리는데 같은 날 장전·장후가 같은 대상이라 장후 추론은 해설을 한 번도 못 받았다) | 해설 LLM 호출이 날마다 최대 3 → 6으로 는다. 장후 해설이 실제로 쌓이는지는 `SELECT t.run_slot, count(o.narrative) FROM thesis t JOIN thesis_outcome o ON o.thesis_id = t.id GROUP BY 1`로 본다 — `post_close`가 0이면 안 풀린 것이다 |
 | 2026-08-23 | `MAX_TOOL_ROUNDS` / `build_thesis` `execution_timeout` | 4 → 3 / (없음) → 30분 | **없다.** 요청 타임아웃 1800초 × 호출 최대 7번이면 한 시도가 3시간 넘게 갈 수 있는데 태스크 울타리가 없었다 | 왕복을 하나 줄여 호출 최대 6번으로, 태스크에 30분 울타리를 둔다. `MAX_TOOL_CALLS` 12는 그대로라 한 왕복에 여러 툴을 묶어 부르면 보는 양은 같다. 재시도 셋 유지 |
 
 ---

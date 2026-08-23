@@ -49,6 +49,7 @@ from modules.thesis import (
     existing_theses,
     normalize_probabilities,
     past_theses,
+    pending_narratives,
     render_blocks,
     render_text,
     store_narratives,
@@ -1639,6 +1640,7 @@ REVIEW_AS_OF = datetime(2026, 8, 24, 6, 30, tzinfo=UTC)
 def narrative_target(code: str = "KOSPI", **overrides: Any) -> NarrativeTarget:
     values: dict[str, Any] = {
         "thesis_id": 11 if code == "KOSPI" else 12,
+        "run_slot": RunSlot.PRE_OPEN,
         "subject": next(s for s in SUBJECTS if s.code == code),
         "prob_up": Decimal("0.6200"),
         "prob_down": Decimal("0.2300"),
@@ -1676,7 +1678,6 @@ def narrator(model: ScriptedModel, connection: FakeConnection, *, include_outcom
 def run_narrator(built: FollowupNarrator, targets: tuple[NarrativeTarget, ...] | None = None) -> Any:
     return built.run(
         run_date=date(2026, 8, 21),
-        run_slot=RunSlot.PRE_OPEN,
         horizon_days=1,
         as_of_at=REVIEW_AS_OF,
         targets=targets if targets is not None else (narrative_target(),),
@@ -1743,7 +1744,6 @@ def test_a_verdict_with_evidence_survives():
 
     drafts = built.run(
         run_date=date(2026, 8, 21),
-        run_slot=RunSlot.PRE_OPEN,
         horizon_days=1,
         as_of_at=REVIEW_AS_OF,
         targets=(narrative_target(),),
@@ -1751,6 +1751,36 @@ def test_a_verdict_with_evidence_survives():
 
     assert drafts[0].verdict is ThesisVerdict.CONTRADICTED
     assert drafts[0].evidence_refs == ("document:7",)
+
+
+def test_the_prompt_names_the_slot_the_targets_came_from():
+    """2026-08-23까지 장후 리뷰의 해설도 "장전 전망에 쓴 추론"이라고 모델에게 말했다."""
+    model = scripted(narrative_message(narrative_payload()))
+    built = narrator(model, FakeConnection())
+
+    built.run(
+        run_date=date(2026, 8, 21),
+        horizon_days=1,
+        as_of_at=REVIEW_AS_OF,
+        targets=(narrative_target(run_slot=RunSlot.POST_CLOSE),),
+    )
+
+    prompt = model.calls[0][1].content
+    assert prompt.startswith("2026-08-21 장후 리뷰에 쓴 추론을")
+    assert "장전" not in prompt
+
+
+def test_a_narration_call_refuses_mixed_slots():
+    """같은 날 장전·장후 추론이 같은 대상을 갖는다. 섞이면 응답을 대상에 되돌릴 수 없다."""
+    built = narrator(scripted(), FakeConnection())
+
+    with pytest.raises(ThesisError, match="span 2 slots"):
+        built.run(
+            run_date=date(2026, 8, 21),
+            horizon_days=1,
+            as_of_at=REVIEW_AS_OF,
+            targets=(narrative_target(), narrative_target(run_slot=RunSlot.POST_CLOSE, thesis_id=21)),
+        )
 
 
 def test_unresolved_needs_no_evidence():
@@ -1884,6 +1914,19 @@ def test_pending_narratives_covers_both_slots():
     assert "LEFT JOIN thesis_outcome" in query
     assert "outcome.narrative IS NULL" in query
     assert "run_slot = 'pre_open'" not in query
+
+
+def test_pending_narratives_carry_their_slot():
+    """같은 대상의 장전·장후 행이 함께 온다. 슬롯이 없으면 부르는 쪽이 둘을 가를 수 없다."""
+
+    def row(thesis_id: int, slot: str) -> tuple:
+        return (thesis_id, date(2026, 8, 21), slot, "index", "KOSPI", "코스피", 0.6, 0.3, 0.1, "u", "d", "f", None, None, None)
+
+    connection = FakeConnection({"select_by_run": [row(11, "post_close"), row(12, "pre_open")]})
+
+    targets = pending_narratives(connection, run_date=date(2026, 8, 21), horizon_days=1)
+
+    assert [(t.thesis_id, t.run_slot) for t in targets] == [(11, RunSlot.POST_CLOSE), (12, RunSlot.PRE_OPEN)]
 
 
 def test_the_after_hours_query_isolates_the_nxt_evening():

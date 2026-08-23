@@ -89,10 +89,12 @@ FLAT_THRESHOLD_PCT: dict[int, Decimal] = {
     5: Decimal("0.7"),
 }
 
-# 조사 왕복 상한. 넘으면 조사를 끝내고 답변 단계로 넘어간다.
-MAX_TOOL_ROUNDS = 4
+# 조사 왕복 상한. 넘으면 조사를 끝내고 답변 단계로 넘어간다. 왕복 하나가 모델 호출 하나라
+# 이 값이 빌드 한 번의 길이를 정한다(`thesis_common.BUILD_TIMEOUT`이 그 바깥 울타리다).
+MAX_TOOL_ROUNDS = 3
 
-# 실행당 tool call 총 상한(왕복 4 × 회당 3). 모델이 같은 툴을 반복해 부르는 것을 막는다.
+# 실행당 tool call 총 상한(왕복 3 × 회당 4). 모델이 같은 툴을 반복해 부르는 것을 막는다.
+# 왕복을 줄여도 이 값은 두어, 한 왕복에 여러 툴을 묶어 부르면 전처럼 많이 볼 수 있다.
 MAX_TOOL_CALLS = 12
 
 # 실행당 툴 결과 누적 문자 상한. 넘으면 그 뒤 호출을 거절한다 — 컨텍스트가 근거로 가득 차면
@@ -2082,6 +2084,9 @@ class NarrativeTarget(BaseModel):
     model_config = ConfigDict(frozen=True)
 
     thesis_id: int
+    # 원 추론의 슬롯. 한 날짜에 같은 대상의 장전·장후 추론이 둘 다 있어 `subject_code`만으로는
+    # 어느 추론인지 모른다. 해설 호출은 슬롯마다 따로 한다(`FollowupNarrator.run`).
+    run_slot: RunSlot
     subject: Subject
     prob_up: Decimal
     prob_down: Decimal
@@ -2162,7 +2167,7 @@ Brier 점수로 따로 잰다. 네가 답할 것은 **이유가 맞았는가**�
 출력 형식:
 {{"narratives": [{{"subject_code": "", "narrative": "", "verdict": "unresolved", "evidence_refs": []}}]}}"""
 
-NARRATIVE_INSTRUCTION = """{run_date} 장{slot_label}에 쓴 추론을 {horizon_days}영업일 뒤에 되돌아본다.
+NARRATIVE_INSTRUCTION = """{run_date} {slot_label}에 쓴 추론을 {horizon_days}영업일 뒤에 되돌아본다.
 
 기준 시각(이 시각 이후의 정보는 너에게 주어지지 않는다): {as_of_at}
 
@@ -2238,7 +2243,7 @@ class FollowupNarrator:
             HumanMessage(
                 NARRATIVE_INSTRUCTION.format(
                     run_date=run_date.isoformat(),
-                    slot_label="전" if run_slot is RunSlot.PRE_OPEN else "후",
+                    slot_label=SLOT_LABELS[run_slot],
                     horizon_days=horizon_days,
                     as_of_at=kst_label(as_of_at),
                     targets="\n\n".join(self._render_target(target) for target in targets),
@@ -2267,14 +2272,23 @@ class FollowupNarrator:
         self,
         *,
         run_date: date,
-        run_slot: RunSlot,
         horizon_days: int,
         as_of_at: datetime,
         targets: Sequence[NarrativeTarget],
     ) -> tuple[NarrativeDraft, ...]:
-        """해설들. 두 번째도 실패하면 `ThesisError`를 올린다."""
+        """해설들. 두 번째도 실패하면 `ThesisError`를 올린다.
+
+        **한 호출은 슬롯 하나다.** 프롬프트 첫 줄이 슬롯을 전제하고, 응답은 `subject_code`로
+        대상을 찾는데 같은 날 장전·장후 추론이 같은 대상을 갖는다. 슬롯이 섞이면 한쪽이
+        다른 쪽의 해설을 받고 나머지는 영영 미해설로 남는다. 슬롯은 대상에서 읽는다 —
+        부르는 쪽이 따로 넘기면 어긋날 수 있다(2026-08-23까지 `PRE_OPEN` 고정이었다).
+        """
         if not targets:
             return ()
+        slots = {target.run_slot for target in targets}
+        if len(slots) != 1:
+            raise ThesisError(f"narration targets span {len(slots)} slots; call once per slot: {sorted(slots)}")
+        (run_slot,) = slots
         state: NarrativeState = {
             "messages": self.build_messages(
                 run_date=run_date,
@@ -2292,7 +2306,7 @@ class FollowupNarrator:
             state,
             config={
                 "run_name": "narrate_followups",
-                "metadata": {"horizon_days": horizon_days, "variant": self.variant.value},
+                "metadata": {"horizon_days": horizon_days, "run_slot": run_slot.value, "variant": self.variant.value},
             },
         )
         drafts = final.get("drafts")
@@ -2460,6 +2474,7 @@ def pending_narratives(
     return tuple(
         NarrativeTarget(
             thesis_id=row[0],
+            run_slot=RunSlot(row[2]),
             subject=Subject(kind=row[3], code=row[4], label=row[5]),
             prob_up=row[6],
             prob_down=row[7],

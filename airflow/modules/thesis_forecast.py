@@ -9,11 +9,9 @@ from contextlib import closing
 from datetime import UTC, date, datetime, time, timedelta
 from typing import Any
 
-from airflow.exceptions import AirflowSkipException
 from airflow.sdk import get_current_context
 
 from modules import thesis_common
-from modules.market_session import krx_open_day
 from modules.utility import KST_TIMEZONE
 
 logger = logging.getLogger(__name__)
@@ -76,11 +74,7 @@ def build() -> dict[str, Any]:
     dag_run_id = str(context["dag_run"].run_id)
 
     with closing(thesis_common.connection()) as conn:
-        # 휴장 판정은 **모르면 돌린다.** 달력을 아직 못 채웠다는 이유로 진짜 거래일을
-        # 빠뜨리는 것이 휴장일에 한 번 더 부르는 것보다 나쁘다.
-        if krx_open_day(conn, run_date) is False:
-            raise AirflowSkipException(f"KRX is closed on {run_date}")
-
+        thesis_common.skip_unless_open(conn, run_date)
         check_ready(conn, as_of_at)
 
         targets = market_thesis.subjects(conn)

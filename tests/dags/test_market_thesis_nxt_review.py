@@ -4,6 +4,7 @@
 여기 남은 것은 태스크 그래프, 이 슬롯의 시각 계산, 그리고 `NxtAfterHoursReview`다.
 """
 
+import inspect
 from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 from typing import Any, Self
@@ -101,6 +102,7 @@ def test_the_tasks_run_in_one_line():
 def test_retries_give_the_readiness_guard_room_to_wait():
     assert DAG.default_args["retries"] == 3
     assert DAG.default_args["retry_delay"] == timedelta(minutes=10)
+    assert DAG.task_dict["build_thesis"].execution_timeout == thesis_common.BUILD_TIMEOUT
 
 
 def test_the_dag_carries_its_display_metadata():
@@ -244,3 +246,36 @@ def test_a_stock_without_a_settled_close_is_left_out_not_zeroed():
     state = NxtAfterHoursReview(connection, run_date=RUN_DATE).observed_state()
 
     assert state["after_hours"] == {}
+
+
+# --- run() ---------------------------------------------------------------------
+
+
+def test_run_hands_build_and_store_every_argument_it_requires(monkeypatch):
+    """`run()`이 넘기는 kwargs를 `build_and_store`의 시그니처에 묶는다.
+
+    2026-08-23에 형제 브랜치 둘을 합치며 `past`가 필수 인자로 생겼는데 이 호출은 그것을
+    모른 채 합쳐져 매 실행 `TypeError`였다. 충돌 없이 합쳐진 자리라 테스트만이 잡는다.
+    """
+    signature = inspect.signature(thesis_common.build_and_store)
+    received: dict[str, Any] = {}
+
+    def fake_build_and_store(conn: Any, **kwargs: Any) -> int:
+        received.update(kwargs)
+        return 2
+
+    monkeypatch.setattr(thesis_common, "skip_unless_open", lambda conn, run_date: None)
+    monkeypatch.setattr(NxtAfterHoursReview, "check_ready", lambda self: None)
+    monkeypatch.setattr(NxtAfterHoursReview, "observed_state", lambda self: {"session": "2026-08-21"})
+    monkeypatch.setattr(NxtAfterHoursReview, "targets", property(lambda self: ()))
+    monkeypatch.setattr(thesis_common, "build_and_store", fake_build_and_store)
+
+    written = NxtAfterHoursReview(FakeConnection([]), run_date=RUN_DATE).run(dag_run_id="manual__1")
+
+    assert written == 2
+    # 필수 인자가 빠지면 여기서 `TypeError`다.
+    signature.bind(FakeConnection([]), **received)
+    assert received["run_slot"].value == "post_nxt_close"
+    assert received["as_of_at"] == thesis_nxt_review.as_of(RUN_DATE)
+    # 리뷰는 해석이라 과거 예측 성적을 싣지 않는다. 장후 리뷰와 같다.
+    assert received["past"] == {}

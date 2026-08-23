@@ -15,6 +15,10 @@
 **시각은 전제이지 보장이 아니다.** 선행 DAG에 재시도가 있어 그 시각을 넘길 수 있다.
 그래서 `build_thesis` 안에 readiness guard가 있고 이 DAG도 재시도를 셋 갖는다.
 
+`build_thesis`는 `execution_timeout` 30분(`thesis_common.BUILD_TIMEOUT`)이다. 요청 타임아웃은
+모델 호출 하나만 막고 한 빌드는 모델을 여러 번 부르므로, 이것이 없으면 느린 실행이 개장을
+한참 넘겨도 Airflow는 기다린다.
+
 ## 왜 리뷰와 DAG를 나눴나 (2026-08-21)
 
 전에는 `market_thesis_analysis` 하나가 `logical_date`의 시각으로 슬롯을 판정했다
@@ -85,7 +89,7 @@ from modules.utility import KST_TIMEZONE
     tags=["thesis", "llm", "market", "korea"],
 )
 def market_thesis_forecast():
-    @task(task_display_name="추론 생성")
+    @task(task_display_name="추론 생성", execution_timeout=thesis_common.BUILD_TIMEOUT)
     def build_thesis() -> dict[str, Any]:
         return thesis_forecast.build()
 

@@ -342,6 +342,9 @@ CHECK 문자열과 두 enum의 일치를 강제한다.
   나눠야 한다.
 - **NXT 휴장 캘린더** — `market_session`에 NXT market_code가 없다. NXT 달력이 KRX와 다른
   날이 실제로 생기면 그때 만든다. 지금은 `krx_open_day` 하나를 본다.
-- **`thesis_review.narrate_followups`의 `RunSlot.PRE_OPEN` 하드코딩** — 이미 `post_close`
-  추론의 해설 프롬프트를 "장전에 쓴 추론"으로 라벨링하고 있는 **기존 결함**이다. 이 단계는
-  새 슬롯이 그 경로에 들어가지 않게만 막는다. 별건으로 푼다.
+- ~~**`thesis_review.narrate_followups`의 `RunSlot.PRE_OPEN` 하드코딩**~~ — 2026-08-23에
+  풀었다. `NarrativeTarget`이 `run_slot`을 들고 `narrate_followups`가 (지평, 슬롯)마다 호출을
+  나눈다. `FollowupNarrator.run`은 대상에서 슬롯을 읽고 섞이면 `ThesisError`다. 결함은
+  라벨만이 아니었다 — 응답을 `subject_code`로 대상에 되돌리는데 같은 날 장전·장후가 같은
+  대상을 가져, 장후 추론은 해설을 **한 번도 받지 못한 채** 매일 다시 집혔다. 이제 이 슬롯을
+  해설 루프에 넣으려면 두 SQL의 슬롯 목록에 `post_nxt_close`를 더하면 된다.

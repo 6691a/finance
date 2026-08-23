@@ -17,11 +17,10 @@ from contextlib import closing
 from datetime import UTC, date, datetime, time
 from typing import Any
 
-from airflow.exceptions import AirflowFailException, AirflowSkipException
+from airflow.exceptions import AirflowFailException
 from airflow.sdk import get_current_context
 
 from modules import thesis_common
-from modules.market_session import krx_open_day
 from modules.utility import KST_TIMEZONE
 
 logger = logging.getLogger(__name__)
@@ -46,14 +45,8 @@ def check_ready(conn: Any, run_date: date, watched: list[str]) -> None:
     확정 종가는 `kis_investor_trade_daily`가 18:10에, 지수 마감 봉은 `kis_quote_intraday`가
     16:00까지 채운다. 둘 다 없으면 채점도 관측 상태도 설 수 없다.
     """
+    thesis_common.require_settled_closes(conn, run_date, watched)
     with conn.cursor() as cursor:
-        cursor.execute(
-            "SELECT count(DISTINCT stock_code) FROM stock_investor_trade_daily "
-            "WHERE provider = 'kis' AND business_date = %s AND stock_code = ANY(%s)",
-            (run_date, watched),
-        )
-        if cursor.fetchone()[0] < len(watched):
-            raise thesis_common.ThesisNotReady(f"settled closes for {run_date} are not all in yet")
         cursor.execute(
             "SELECT count(*) FROM index_bar WHERE provider = 'kis' AND bar_at = %s AND symbol = ANY(%s)",
             (as_of(run_date), GUARD_INDEX_SYMBOLS),
@@ -80,10 +73,7 @@ def build() -> dict[str, Any]:
     dag_run_id = str(context["dag_run"].run_id)
 
     with closing(thesis_common.connection()) as conn:
-        # 휴장 판정은 **모르면 돌린다.** 달력을 아직 못 채웠다는 이유로 진짜 거래일을
-        # 빠뜨리는 것이 휴장일에 한 번 더 부르는 것보다 나쁘다.
-        if krx_open_day(conn, run_date) is False:
-            raise AirflowSkipException(f"KRX is closed on {run_date}")
+        thesis_common.skip_unless_open(conn, run_date)
 
         targets = market_thesis.subjects(conn)
         watched = [s.code for s in targets if s.kind is market_thesis.ThesisSubjectKind.STOCK]
@@ -141,9 +131,13 @@ def grade_followups() -> int:
 
 
 def narrate_followups(built: dict[str, Any]) -> int:
-    """지평마다 해설과 판정을 붙인다. 지평마다 LLM 호출 하나다."""
+    """지평마다 해설과 판정을 붙인다. (지평, 원 추론의 슬롯)마다 LLM 호출 하나다.
+
+    슬롯을 나누는 이유는 `FollowupNarrator.run`에 있다 — 같은 날 장전·장후 추론이 같은
+    대상을 가져 한 호출에 섞으면 응답을 대상에 되돌릴 수 없다.
+    """
     from modules import thesis as market_thesis
-    from modules.llm import LlmError, model_name, thesis_model
+    from modules.llm import LlmError, RetryableLlmError, model_name, thesis_model
 
     run_date = date.fromisoformat(built["run_date"])
     dag_run_id = str(get_current_context()["dag_run"].run_id)
@@ -155,45 +149,41 @@ def narrate_followups(built: dict[str, Any]) -> int:
             origin = thesis_common.origin_day(conn, run_date, horizon)
             if origin is None:
                 continue
-            targets = market_thesis.pending_narratives(conn, run_date=origin, horizon_days=horizon)
-            if not targets:
-                continue
+            pending = market_thesis.pending_narratives(conn, run_date=origin, horizon_days=horizon)
             as_of_at = thesis_common.close_at(run_date)
-            toolbox = market_thesis.ThesisToolbox(
-                conn,
-                as_of_at=as_of_at,
-                macro_window_start=thesis_common.close_at(origin),
-                watched_codes=[t.subject.code for t in targets],
-                subject_codes=[t.subject.code for t in targets],
-            )
-            narrator = market_thesis.FollowupNarrator(model, toolbox)
-            try:
-                drafts = narrator.run(
-                    run_date=origin,
-                    run_slot=market_thesis.RunSlot.PRE_OPEN,
+            for run_slot in market_thesis.RunSlot:
+                targets = tuple(t for t in pending if t.run_slot is run_slot)
+                if not targets:
+                    continue
+                toolbox = market_thesis.ThesisToolbox(
+                    conn,
+                    as_of_at=as_of_at,
+                    macro_window_start=thesis_common.close_at(origin),
+                    watched_codes=[t.subject.code for t in targets],
+                    subject_codes=[t.subject.code for t in targets],
+                )
+                narrator = market_thesis.FollowupNarrator(model, toolbox)
+                try:
+                    drafts = narrator.run(run_date=origin, horizon_days=horizon, as_of_at=as_of_at, targets=targets)
+                except market_thesis.ThesisError as error:
+                    # 그 (지평, 슬롯)만 없던 것으로 남는다. 다음 실행이 다시 집는다.
+                    logger.warning("T+%s %s narration failed for %s: %s", horizon, run_slot.value, origin, error)
+                    continue
+                except LlmError as error:
+                    if isinstance(error, RetryableLlmError):
+                        raise
+                    raise AirflowFailException(str(error)) from error
+
+                written += market_thesis.store_narratives(
+                    conn,
                     horizon_days=horizon,
                     as_of_at=as_of_at,
-                    targets=targets,
+                    dag_run_id=dag_run_id,
+                    drafts=drafts,
+                    registry=toolbox.registry,
+                    llm_model=model_name(model),
+                    prompt_revision=narrator.prompt_revision,
                 )
-            except market_thesis.ThesisError as error:
-                # 그 지평만 없던 것으로 남는다. 다음 실행이 다시 집는다.
-                logger.warning("T+%s narration failed for %s: %s", horizon, origin, error)
-                continue
-            except LlmError as error:
-                if type(error).__name__ == "RetryableLlmError":
-                    raise
-                raise AirflowFailException(str(error)) from error
-
-            written += market_thesis.store_narratives(
-                conn,
-                horizon_days=horizon,
-                as_of_at=as_of_at,
-                dag_run_id=dag_run_id,
-                drafts=drafts,
-                registry=toolbox.registry,
-                llm_model=model_name(model),
-                prompt_revision=narrator.prompt_revision,
-            )
     logger.info("wrote %s narratives", written)
     return written
 

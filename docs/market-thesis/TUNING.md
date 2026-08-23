@@ -89,7 +89,7 @@ GROUP BY run_date, run_slot
 ORDER BY run_date DESC, run_slot;
 ```
 
-**B. `tool_rounds` 분포** — 값이 `MAX_TOOL_ROUNDS`(4)에 붙어 있으면 상한이 조사를 자르고
+**B. `tool_rounds` 분포** — 값이 `MAX_TOOL_ROUNDS`(3)에 붙어 있으면 상한이 조사를 자르고
 있다는 뜻이다. 1~2에 몰려 있으면 상한이 놀고 있다.
 
 ```sql
@@ -144,13 +144,14 @@ GROUP BY run_slot;
 | `PREFETCHED_PAST_THESES` | 5 | `thesis.py` | 도입 전후 지평별 Brier 추이 | 장전 프롬프트에 미리 싣는 과거 추론 수. **효과가 관측되지 않으면 0으로 끈다**([5-followup.md](5-followup.md) 5절) — 절은 `(없음)`이 되고 `thesis_precedent` 엣지도 안 남는다. `past_theses` 툴은 그대로다. 분기 판단 |
 | 툴 개수 | 11 | 같은 곳 | **어떤 툴을 실제로 부르는지**와 `tool_rounds` 분포 | 한 번도 안 불리는 툴은 뺀다(문맥만 먹는다). 반대로 상한에 붙어 있으면 왕복을 늘린다. **서브 에이전트로 나누는 것은 여기서 판단한다** — 아래 참고 |
 | `verdict` 값 셋 | `supported`/`contradicted`/`unresolved` | `analysis.py` + CHECK | `contradicted` 비율 | 60% 위가 유지되면 "반박"과 "다른 원인 지목"을 가를지 본다. **지금은 안 가른다** |
-| `MAX_TOOL_ROUNDS` / `MAX_TOOL_CALLS` / `MAX_TOOL_RESULT_CHARS` | 4 / 12 / 24,000 | `thesis.py` | 쿼리 B의 분포 | 상한에 붙어 있으면 올린다. **값이 인자 모델(`RecentDocumentsArgs` 등)의 `Field(description=...)`에 f-string으로 실려 프롬프트가 자동으로 따라간다** |
+| `MAX_TOOL_ROUNDS` / `MAX_TOOL_CALLS` / `MAX_TOOL_RESULT_CHARS` | 3 / 12 / 24,000 | `thesis.py` | 쿼리 B의 분포 | 상한에 붙어 있으면 올린다. **값이 인자 모델(`RecentDocumentsArgs` 등)의 `Field(description=...)`에 f-string으로 실려 프롬프트가 자동으로 따라간다** |
 | `PROMPT_VERSION` / `NARRATIVE_PROMPT_VERSION` | `"1"` / `"1"` | `thesis.py` | — | 프롬프트를 고치면 올린다. 올린 뒤 28일은 ops 창이 두 판에 걸친다 |
 | `THESIS_WINDOW_DAYS` | 28 | `ops.py` | — | 판을 올린 직후엔 짧게 줄여 새 판만 본다 |
 | 스케줄 | 08:35 / 20:30 KST | `market_thesis_forecast.py` / `market_thesis_review.py` | 쿼리 C + readiness 재시도 | 재시도가 잦으면 늦춘다. 08:35는 문서 평가(매시 25분) 뒤, 20:30은 확정 종가(18:10) 뒤라는 제약이 있다 |
 | `ASSESSMENT_LAG` | 20분 | 같은 파일 | 같은 것 | 평가가 정상인데 guard가 막으면 늘린다 |
 | `thesis_model()` | `grok-4.6` | `llm.py` | 분기 Brier | 교체는 `PROMPT_VERSION`과 **함께** 올린다(1절 넷째) |
 | `THESIS_TIMEOUT_SECONDS` | 1800 | `llm.py` | 타임아웃 실패 건수 | 2026-08-21 첫 실행이 300초에서 죽어 900으로, 툴이 11개로 늘면서 2026-08-22에 1800으로 올렸다. **1800은 관측이 아니라 예방이다** — 900에서 죽은 실행은 아직 없다. 다음 실행들의 실제 소요를 보고 되돌릴 여지가 있다. 또 걸리면 툴 상한(`MAX_TOOL_ROUNDS`)을 먼저 의심한다 — 왕복이 늘수록 한 요청이 길어진다. 문서 태깅의 `REQUEST_TIMEOUT_SECONDS`(300)는 따로다 |
+| `BUILD_TIMEOUT` | 30분 | `thesis_common.py` | `build_thesis`의 `AirflowTaskTimeout` 건수와 성공 실행의 소요 분포 | 요청 타임아웃의 바깥 울타리. 한 빌드는 모델을 최대 왕복 3 + 답변 + 교정 = 6번 부른다. 장전이 09:00 개장 전에 닿아야 해서 이 값이고, 걸리면 `MAX_TOOL_ROUNDS`를 먼저 의심한다. 재시도 셋은 그대로라 최악 4회 × (30 + 10)분이다 |
 | `SLACK_EVIDENCE_LIMIT` | 3 | `thesis.py` | 사람 눈 | 줄이 길어 안 읽히면 줄인다 |
 
 ---
@@ -250,6 +251,8 @@ ops 브리핑의 **추론 적체** 한 줄. **여기서 즉시 대응하는 것�
 | 2026-08-21 | DAG 구조 | `market_thesis_analysis` 하나 → `market_thesis_forecast`·`market_thesis_review` 둘 | — (슬롯이 `logical_date`의 시각에서 나와 수동 실행이 벽시계로 떨어졌다) | 모드로 갈리던 함수도 `thesis_common`·`thesis_forecast`·`thesis_review`로 나눴다 |
 | 2026-08-21 | 툴 개수 | 4 → 11 | 국채 349행·수급 490행·시장폭 748행이 모델에게 안 보이고 있었다 | 운영 DB 실행으로 결함 둘을 잡았다(공매도 당일 0행, 국내 지수 일봉 부재) |
 | 2026-08-22 | `THESIS_TIMEOUT_SECONDS` | 900 → 1800 | **없다.** 900에서 죽은 실행은 아직 없고, 툴이 11개로 늘어 왕복이 길어질 것을 보고 미리 올렸다 | 이 표의 규칙("본 숫자가 없는 행은 기억이다")을 어기는 행이라 그 사실을 적어 둔다. 실제 소요 분포를 보고 되돌릴 후보다 |
+| 2026-08-23 | 해설 호출 단위 | 지평마다 하나(슬롯 `PRE_OPEN` 고정) → (지평, 슬롯)마다 하나 | — (코드 읽기로 잡았다. 응답을 `subject_code`로 대상에 되돌리는데 같은 날 장전·장후가 같은 대상이라 장후 추론은 해설을 한 번도 못 받았다) | 해설 LLM 호출이 날마다 최대 3 → 6으로 는다. 장후 해설이 실제로 쌓이는지는 `SELECT t.run_slot, count(o.narrative) FROM thesis t JOIN thesis_outcome o ON o.thesis_id = t.id GROUP BY 1`로 본다 — `post_close`가 0이면 안 풀린 것이다 |
+| 2026-08-23 | `MAX_TOOL_ROUNDS` / `build_thesis` `execution_timeout` | 4 → 3 / (없음) → 30분 | **없다.** 요청 타임아웃 1800초 × 호출 최대 7번이면 한 시도가 3시간 넘게 갈 수 있는데 태스크 울타리가 없었다 | 왕복을 하나 줄여 호출 최대 6번으로, 태스크에 30분 울타리를 둔다. `MAX_TOOL_CALLS` 12는 그대로라 한 왕복에 여러 툴을 묶어 부르면 보는 양은 같다. 재시도 셋 유지 |
 
 ---
 

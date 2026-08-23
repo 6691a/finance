@@ -24,11 +24,12 @@ from contextlib import closing
 from datetime import UTC, date, datetime, time, timedelta
 from typing import Any
 
-from airflow.exceptions import AirflowFailException
+from airflow.exceptions import AirflowFailException, AirflowSkipException
 from airflow.providers.postgres.hooks.postgres import PostgresHook
 from airflow.sdk import Param
 from pydantic import SecretStr
 
+from modules.market_session import krx_open_day
 from modules.slack import SlackError, post_message
 from modules.utility import CONNECTION_ID, KST_TIMEZONE
 
@@ -42,13 +43,47 @@ CALENDAR_DAY_PATTERN = re.compile(r"\d{4}-\d{2}-\d{2}")
 # KRX 정규장 마감(KST). 장후 슬롯의 기준 시각이자 지평 채점의 기준 시각이다.
 CLOSE_TIME = time(15, 30)
 
-# 두 DAG가 같은 재시도 정책을 쓴다. 재시도 셋은 readiness guard가 선행 DAG의 지연을
+# 세 DAG가 같은 재시도 정책을 쓴다. 재시도 셋은 readiness guard가 선행 DAG의 지연을
 # 기다리는 수단이다.
 DEFAULT_ARGS: dict[str, Any] = {"retries": 3, "retry_delay": timedelta(minutes=10)}
+
+# 추론 생성 태스크 한 번의 상한. 요청 하나의 타임아웃(`llm.THESIS_TIMEOUT_SECONDS`)은 모델
+# 호출 한 번만 막고, 한 빌드는 조사 왕복(`thesis.MAX_TOOL_ROUNDS`+1)과 답변·교정까지 모델을
+# 여러 번 부른다. 이것이 없으면 느린 실행이 몇 시간을 끌어도 Airflow는 기다린다. 장전 전망은
+# 08:35에 시작해 09:00 개장 전에 닿아야 하므로 이 값이 그 쪽 기준이다. 재시도는 그대로 셋이다.
+BUILD_TIMEOUT = timedelta(minutes=30)
+
+SETTLED_CLOSE_COUNT = (
+    "SELECT count(DISTINCT stock_code) FROM stock_investor_trade_daily "
+    "WHERE provider = 'kis' AND business_date = %s AND stock_code = ANY(%s)"
+)
 
 
 class ThesisNotReady(RuntimeError):
     """선행 DAG의 데이터가 아직 없다. 재시도하면 풀릴 수 있다."""
+
+
+def skip_unless_open(conn: Any, run_date: date) -> None:
+    """휴장일이면 `AirflowSkipException`. 세 슬롯이 같은 판정을 쓴다.
+
+    휴장 판정은 **모르면 돌린다.** 달력을 아직 못 채웠다는 이유로 진짜 거래일을 빠뜨리는
+    것이 휴장일에 한 번 더 부르는 것보다 나쁘다. NXT 달력은 따로 없어 KRX 것을 본다
+    (`market_session`에 NXT market_code가 없다).
+    """
+    if krx_open_day(conn, run_date) is False:
+        raise AirflowSkipException(f"KRX is closed on {run_date}")
+
+
+def require_settled_closes(conn: Any, run_date: date, watched: Sequence[str]) -> None:
+    """감시 종목 전부의 확정 종가가 들어왔는지 본다. 장후·애프터마켓 슬롯의 분모다.
+
+    확정 종가는 `kis_investor_trade_daily`가 18:10에 채운다. 하나라도 빠지면
+    `ThesisNotReady` — 기다리면 풀리는 것이라 skip이 아니다.
+    """
+    with conn.cursor() as cursor:
+        cursor.execute(SETTLED_CLOSE_COUNT, (run_date, list(watched)))
+        if cursor.fetchone()[0] < len(watched):
+            raise ThesisNotReady(f"settled closes for {run_date} are not all in yet")
 
 
 def run_date_param() -> dict[str, Param]:
@@ -181,7 +216,7 @@ def build_and_store(
     덮어쓰면 최초 판단이 사라진다.
     """
     from modules import thesis as market_thesis
-    from modules.llm import LlmError, model_name, thesis_model
+    from modules.llm import LlmError, RetryableLlmError, model_name, thesis_model
 
     stored = market_thesis.existing_theses(conn, run_date=run_date, run_slot=run_slot)
     if stored:
@@ -208,7 +243,7 @@ def build_and_store(
         raise AirflowFailException(str(error)) from error
     except LlmError as error:
         # 재시도할 값어치가 있는 것은 그대로 올린다. 판단은 여기서 한다.
-        if type(error).__name__ == "RetryableLlmError":
+        if isinstance(error, RetryableLlmError):
             raise
         raise AirflowFailException(str(error)) from error
 

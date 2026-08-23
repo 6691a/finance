@@ -1,6 +1,6 @@
 """DAG 객체 자체를 봐야만 알 수 있는 것만 검증한다.
 
-파싱과 저장 규칙은 `modules/collectors/dart.py`에 있고 `tests/collectors/test_dart.py`가 덮는다.
+파싱과 저장 규칙은 `modules/collectors/document/dart.py`에 있고 `tests/collectors/test_dart.py`가 덮는다.
 """
 
 from dags import dart_disclosure_intraday

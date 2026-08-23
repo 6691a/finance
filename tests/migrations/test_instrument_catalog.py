@@ -7,7 +7,7 @@
 
 import pytest
 
-from modules.collectors.dart import DartCompany
+from modules.collectors.document.dart import DartCompany
 from modules.collectors.kis_positioning import PositioningStock
 from tests.helpers import NO_REVISION_REASON, head_sql, revision_files
 

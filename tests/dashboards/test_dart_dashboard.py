@@ -36,7 +36,7 @@ def test_uid_and_variables_stay_put(dashboard):
 
 
 def test_the_two_companies_match_the_collector(dashboard):
-    from modules.collectors.dart import DartCompany
+    from modules.collectors.document.dart import DartCompany
 
     company = next(v for v in dashboard["templating"]["list"] if v["name"] == "company")
 

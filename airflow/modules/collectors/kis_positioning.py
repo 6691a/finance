@@ -142,7 +142,7 @@ class PositioningStock(StrEnum):
     `disclosure_event.stock_code`와 같은 체계라 공시와 포지션을 한 키로 잇는다. 내부 이름
     (`SAMSUNG_ELECTRONICS` 같은 것)을 새로 만들지 않는 이유가 그것이다.
 
-    `modules.collectors.dart.DartCompany`와 값이 같아야 하고
+    `modules.collectors.document.dart.DartCompany`와 값이 같아야 하고
     `tests/collectors/test_kis_positioning.py`가 둘을 대조한다. 여기서 그 모듈을 import하지
     않는 것은 수집기끼리 엮이지 않게 하기 위해서다.
     """

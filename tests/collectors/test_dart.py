@@ -12,27 +12,25 @@ from sqlalchemy import Table
 
 from apps.models.market import DisclosureEvent, EarningsFact
 from apps.models.raw import SourceRecord
-from modules.collectors import dart
-from modules.collectors.dart import (
+from modules.collectors.document import dart
+from modules.collectors.document.dart import (
     DISCLOSURE_EVENT_UPSERT,
     EARNINGS_FACT_UPSERT,
     SOURCE_RECORD_INSERT,
+    DartCollector,
     DartCompany,
     DartPayloadError,
     DartStatusError,
     Disclosure,
     DisclosureFetch,
-    fetch_disclosures,
-    fetch_provisional,
     is_provisional,
     parse_financials,
     parse_provisional,
     periodic_report,
-    store_disclosures,
-    store_earnings,
 )
 
 API_KEY = SecretStr("key")
+COLLECTOR = DartCollector(API_KEY)
 SOURCE_RECORD_ID = 21
 STARTED_AT = datetime(2026, 8, 12, 22, 0, tzinfo=UTC)
 COMPLETED_AT = datetime(2026, 8, 12, 22, 0, 2, tzinfo=UTC)
@@ -261,7 +259,7 @@ def test_company_codes_match_the_verified_mapping():
 def test_disclosure_list_strips_padding_and_parses_the_date(monkeypatch):
     monkeypatch.setattr(dart, "_get", fake_get([list_body([LIST_ROW])]))
 
-    fetch = fetch_disclosures(API_KEY, DartCompany.SAMSUNG_ELECTRONICS, date(2026, 7, 24), date(2026, 7, 30))
+    fetch = COLLECTOR.fetch_disclosures(DartCompany.SAMSUNG_ELECTRONICS, date(2026, 7, 24), date(2026, 7, 30))
 
     disclosure = fetch.disclosures[0]
     assert disclosure.report_name == "연결재무제표기준영업(잠정)실적(공정공시)"
@@ -273,7 +271,7 @@ def test_disclosure_list_strips_padding_and_parses_the_date(monkeypatch):
 def test_no_data_status_is_zero_rows_not_a_failure(monkeypatch):
     monkeypatch.setattr(dart, "_get", fake_get([list_body([], status="013")]))
 
-    fetch = fetch_disclosures(API_KEY, DartCompany.SK_HYNIX, date(2026, 7, 24), date(2026, 7, 30))
+    fetch = COLLECTOR.fetch_disclosures(DartCompany.SK_HYNIX, date(2026, 7, 24), date(2026, 7, 30))
 
     assert fetch.disclosures == ()
 
@@ -282,7 +280,7 @@ def test_other_statuses_are_raised(monkeypatch):
     monkeypatch.setattr(dart, "_get", fake_get([list_body([], status="020")]))
 
     with pytest.raises(DartStatusError) as error:
-        fetch_disclosures(API_KEY, DartCompany.SK_HYNIX, date(2026, 7, 24), date(2026, 7, 30))
+        COLLECTOR.fetch_disclosures(DartCompany.SK_HYNIX, date(2026, 7, 24), date(2026, 7, 30))
 
     assert error.value.code == "020"
 
@@ -291,7 +289,7 @@ def test_disclosure_list_follows_every_page(monkeypatch):
     get = fake_get([list_body([LIST_ROW], total_page=2, total_count=2), list_body([LIST_ROW], total_page=2)])
     monkeypatch.setattr(dart, "_get", get)
 
-    fetch = fetch_disclosures(API_KEY, DartCompany.SAMSUNG_ELECTRONICS, date(2026, 7, 24), date(2026, 7, 30))
+    fetch = COLLECTOR.fetch_disclosures(DartCompany.SAMSUNG_ELECTRONICS, date(2026, 7, 24), date(2026, 7, 30))
 
     assert fetch.page_count == 2
     assert len(fetch.disclosures) == 2
@@ -360,7 +358,7 @@ def test_amended_filing_reads_the_content_table_not_the_summary(monkeypatch):
     monkeypatch.setattr(dart, "_get", fake_get([document_zip(amended_xml())]))
     disclosure = Disclosure.from_payload(LIST_ROW | {"report_nm": "[기재정정]연결재무제표기준영업(잠정)실적(공정공시)"})
 
-    fetch = fetch_provisional(API_KEY, disclosure)
+    fetch = COLLECTOR.fetch_provisional(disclosure)
 
     assert fetch is not None
     revenue = next(value for value in fetch.values if value.metric == "revenue" and value.amount_basis == "period")
@@ -373,7 +371,7 @@ def test_missing_document_is_not_a_failure(monkeypatch):
     body = b"<result><status>014</status><message>\xed\x8c\x8c\xec\x9d\xbc\xec\x9d\xb4 \xec\x97\x86\xec\x8a\xb5\xeb\x8b\x88\xeb\x8b\xa4</message></result>"
     monkeypatch.setattr(dart, "_get", fake_get([body]))
 
-    assert fetch_provisional(API_KEY, Disclosure.from_payload(LIST_ROW)) is None
+    assert COLLECTOR.fetch_provisional(Disclosure.from_payload(LIST_ROW)) is None
 
 
 def test_financials_pick_accounts_by_id_not_by_name():
@@ -413,7 +411,7 @@ def test_store_disclosures_writes_one_lineage_record_and_keeps_detected_at():
         completed_at=COMPLETED_AT,
     )
 
-    assert store_disclosures(connection, fetch, DETECTED_AT) == 1
+    assert COLLECTOR.store_disclosures(connection, fetch, DETECTED_AT) == 1
     statement, parameters = connection.recorded_cursor.calls[0]
     assert "INSERT INTO source_record" in statement
     assert parameters[1:3] == ("dart", "disclosure_list")
@@ -428,11 +426,11 @@ def test_store_disclosures_writes_one_lineage_record_and_keeps_detected_at():
 
 def test_store_earnings_writes_one_row_per_metric(monkeypatch):
     monkeypatch.setattr(dart, "_get", fake_get([document_zip(provisional_xml())]))
-    fetch = fetch_provisional(API_KEY, Disclosure.from_payload(LIST_ROW))
+    fetch = COLLECTOR.fetch_provisional(Disclosure.from_payload(LIST_ROW))
     assert fetch is not None
     connection = FakeConnection()
 
-    stored = store_earnings(connection, fetch)
+    stored = COLLECTOR.store_earnings(connection, fetch)
 
     upserts = [
         parameters

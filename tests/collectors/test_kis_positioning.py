@@ -253,7 +253,7 @@ def test_every_upsert_matches_its_model(statement, model):
 
 def test_stock_codes_match_the_dart_collector():
     """공시와 포지션을 한 키로 이으려면 두 수집기의 종목 코드가 같아야 한다."""
-    from modules.collectors.dart import DartCompany
+    from modules.collectors.document.dart import DartCompany
 
     assert {stock.value for stock in PositioningStock} == {company.value for company in DartCompany}
     assert {stock.label for stock in PositioningStock} == {company.label for company in DartCompany}

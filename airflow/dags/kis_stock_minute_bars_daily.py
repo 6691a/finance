@@ -4,7 +4,7 @@
 종목의 가격 움직임과 겹칠 시계열이 없었다. 외국인이 파는 5분에 주가가 어떻게 됐는지 화면에서
 볼 수 없다는 뜻이다. 이 DAG가 그 칸을 채운다.
 
-수집 규칙은 `modules/collectors/kis.py`의 `fetch_stock_bars`에 있다.
+수집 규칙은 `modules/collectors/kis.py`의 `KisQuoteCollector.fetch_stock_bars`에 있다.
 
 ## 장중이 아니라 마감 후에 받는다
 
@@ -72,11 +72,10 @@ from modules.collectors.kis import (
     DomesticStock,
     KisHTTPError,
     KisPayloadError,
+    KisQuoteCollector,
     KisResultError,
     StockExchange,
     access_token,
-    fetch_stock_bars,
-    store_stock_bars,
 )
 from modules.sql import read_sql
 from modules.utility import CONNECTION_ID, KIS_UNRECOVERABLE_STATUSES, KST_TIMEZONE
@@ -186,7 +185,7 @@ def kis_stock_minute_bars_daily():
         days = requested_days(params)
 
         app_key, app_secret = _credentials()
-        token = access_token(Variable, app_key, app_secret)
+        collector = KisQuoteCollector(access_token(Variable, app_key, app_secret), app_key, app_secret)
 
         stored = 0
         failures: list[str] = []
@@ -209,7 +208,7 @@ def kis_stock_minute_bars_daily():
                     name = f"{stock.value}:{exchange.value}:{target.isoformat()}"
 
                     try:
-                        fetch = fetch_stock_bars(token, app_key, app_secret, stock, target, base, exchange)
+                        fetch = collector.fetch_stock_bars(stock, target, base, exchange)
                     except KisHTTPError as error:
                         if error.status in KIS_UNRECOVERABLE_STATUSES:
                             raise AirflowFailException(f"{name}: {error}") from error
@@ -231,7 +230,7 @@ def kis_stock_minute_bars_daily():
 
                     connection = _connection()
                     try:
-                        rows = store_stock_bars(connection, fetch)
+                        rows = collector.store_stock_bars(connection, fetch)
                         connection.commit()
                     except Exception:
                         connection.rollback()

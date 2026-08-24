@@ -75,6 +75,8 @@ TOOL_DISCLOSURES = read_sql("postgres", "disclosure_event", "select_recent.sql")
 TOOL_WINDOW_CHANGES = read_sql("postgres", "quote_bar", "select_window_changes.sql")
 TOOL_US_CLOSE = read_sql("postgres", "quote_bar", "select_thesis_us_close.sql")
 TOOL_ANALYST_OPINIONS = read_sql("postgres", "stock_analyst_opinion", "select_thesis_recent.sql")
+TOOL_EVENT_SURPRISES = read_sql("postgres", "stock_event_outcome", "select_thesis_recent.sql")
+TOOL_EVENT_EXPECTATIONS = read_sql("postgres", "stock_event_claim", "select_thesis_pending.sql")
 PAST_THESES = read_sql("postgres", "thesis", "select_past_with_outcomes.sql")
 PENDING_NARRATIVES = read_sql("postgres", "thesis_outcome", "select_pending_narratives.sql")
 THESIS_BACKLOG = read_sql("postgres", "thesis_outcome", "select_backlog.sql")
@@ -604,6 +606,12 @@ def _statement_key(statement: str) -> str:
         return "daily_history"
     if "FROM krx_stock_short_sale_daily" in query:
         return "short_and_credit"
+    # 기대치 조회가 "판정이 아직 없는" 조건으로 `stock_event_outcome`을 품고 있다.
+    # 판정 조회보다 먼저 본다 — 순서가 바뀌면 기대치가 판정 결과를 받는다.
+    if "FROM stock_event_claim" in query:
+        return "event_expectations"
+    if "FROM stock_event_outcome" in query:
+        return "event_outcomes"
     if "FROM thesis_evidence" in query:
         return "evidence_select"
     if "FROM thesis" in query:
@@ -1066,6 +1074,7 @@ def test_the_tool_schema_is_derived_from_the_code_not_hand_written():
         "daily_history",
         "short_and_credit",
         "analyst_opinions",
+        "event_surprises",
     }
 
     schema = by_name["recent_documents"].args_schema.model_json_schema()
@@ -1107,6 +1116,7 @@ def test_every_tool_window_ends_at_the_slot_time():
         ("daily_history", {"symbol": "KOSPI", "days": 10}),
         ("short_and_credit", {}),
         ("analyst_opinions", {"ticker": "005930"}),
+        ("event_surprises", {"ticker": "005930"}),
     ):
         connection.calls.clear()
         box.run(name, arguments)
@@ -1180,6 +1190,83 @@ def test_the_opinion_query_joins_the_report_by_stock_broker_and_day():
     assert "document_instrument" not in query
     # 창의 끝은 여기서도 기준 시각이다.
     assert query.count("as_of_at") >= 2
+
+
+# --- 8단계(2026-08-24) 이벤트 기대 대비 발표 ------------------------------------
+
+
+def test_event_surprises_refuses_a_stock_outside_the_watch_list_without_touching_the_database():
+    """`analyst_opinions`와 같다. 모델이 아무 종목이나 조회하며 문맥을 채우게 두지 않는다."""
+    connection = FakeConnection()
+    box = toolbox(connection)
+
+    with pytest.raises(ToolLimitExceeded, match="추적 종목 밖") as error:
+        box.run("event_surprises", {"ticker": "003550"})
+
+    assert "005930" in str(error.value)
+    assert connection.calls == []
+
+
+def test_event_surprises_gives_both_judged_outcomes_and_pending_expectations():
+    """발표된 것의 판정과, 아직 안 나온 것의 기준선을 함께 준다. 문맥 툴이라 인용하지 않는다."""
+    outcomes = [
+        (
+            "shareholder_return",
+            "2026",
+            "total_return_amount",
+            Decimal("9500000000000.00"),
+            4,
+            Decimal("8000000000000.00"),
+            Decimal("-15.7895"),
+            "miss",
+            datetime(2026, 8, 22, 8, 0, tzinfo=UTC),
+        )
+    ]
+    pending = [
+        (
+            "earnings",
+            "2026Q3",
+            "operating_profit",
+            Decimal("12000000000000.00"),
+            3,
+            datetime(2026, 8, 20, 0, 0, tzinfo=UTC),
+        )
+    ]
+    connection = FakeConnection({"event_outcomes": outcomes, "event_expectations": pending})
+    box = toolbox(connection)
+
+    reply = json.loads(box.run("event_surprises", {"ticker": "005930"}))
+
+    assert reply["stock_code"] == "005930"
+    (judged,) = reply["outcomes"]
+    assert judged["verdict"] == "miss"
+    # 금액은 원 단위 그대로다. 자릿수를 줄여 주면 모델이 조·억을 헷갈린다.
+    assert judged["actual_value"] == 8000000000000.0
+    assert judged["expectation_count"] == 4
+    (upcoming,) = reply["pending_expectations"]
+    assert upcoming["period_key"] == "2026Q3"
+    assert upcoming["expected_value"] == 12000000000000.0
+    # 문맥 툴이다 — 인용할 ref는 발표 문서에 있고 그건 recent_documents가 준다.
+    assert box.registry == {}
+
+
+def test_the_pending_expectation_query_excludes_events_that_were_already_judged():
+    """판정이 난 이벤트의 기대치를 "아직 안 나온 것"으로 주면 모델이 이미 지난 일을 예고로 읽는다."""
+    query = body(TOOL_EVENT_EXPECTATIONS)
+
+    assert "claim_kind = 'expectation'" in query
+    assert "NOT EXISTS" in query
+    assert "FROM stock_event_outcome AS outcome" in query
+    # 같은 증권사의 옛 기대가 중앙값을 끌지 않게 주체별 최신만 센다.
+    assert "DISTINCT ON (claim.event_type, claim.period_key, claim.metric, claim.broker)" in query
+
+
+def test_the_surprise_query_cuts_by_when_the_judgment_landed_not_when_it_was_announced():
+    """`announced_at`으로 자르면 아직 판정하지 않은 발표가 판정된 것처럼 보인다."""
+    query = body(TOOL_EVENT_SURPRISES)
+
+    assert "created_at <= %(as_of_at)s" in query
+    assert "announced_at <= " not in query
 
 
 def test_macro_indicators_reports_rate_moves_in_basis_points():
@@ -1920,7 +2007,23 @@ def test_pending_narratives_carry_their_slot():
     """같은 대상의 장전·장후 행이 함께 온다. 슬롯이 없으면 부르는 쪽이 둘을 가를 수 없다."""
 
     def row(thesis_id: int, slot: str) -> tuple:
-        return (thesis_id, date(2026, 8, 21), slot, "index", "KOSPI", "코스피", 0.6, 0.3, 0.1, "u", "d", "f", None, None, None)
+        return (
+            thesis_id,
+            date(2026, 8, 21),
+            slot,
+            "index",
+            "KOSPI",
+            "코스피",
+            0.6,
+            0.3,
+            0.1,
+            "u",
+            "d",
+            "f",
+            None,
+            None,
+            None,
+        )
 
     connection = FakeConnection({"select_by_run": [row(11, "post_close"), row(12, "pre_open")]})
 

@@ -398,6 +398,9 @@ DAILY_HISTORY_SYMBOLS = read_sql("postgres", "quote_daily", "select_thesis_symbo
 SHORT_AND_CREDIT = read_sql("postgres", "krx_stock_short_sale_daily", "select_thesis_latest.sql")
 # 6단계(2026-08-22). 증권사 투자의견·목표주가. 리포트 본문은 `recent_documents`가 문서로 준다.
 ANALYST_OPINIONS = read_sql("postgres", "stock_analyst_opinion", "select_thesis_recent.sql")
+# 8단계(2026-08-24). 기대 대비 발표 판정과, 아직 발표되지 않은 이벤트의 대표 기대치.
+EVENT_SURPRISES = read_sql("postgres", "stock_event_outcome", "select_thesis_recent.sql")
+EVENT_EXPECTATIONS = read_sql("postgres", "stock_event_claim", "select_thesis_pending.sql")
 
 # 툴 인자는 **Pydantic 모델로 선언한다.** JSON Schema는 LangChain이 뽑는다 — 손으로 쓴
 # `{"type": "function", ...}` dict는 제공처 wire format이라 이름·타입이 코드와 어긋나도
@@ -519,6 +522,12 @@ class AnalystOpinionsArgs(ToolArgs):
     )
 
 
+class EventSurprisesArgs(ToolArgs):
+    ticker: str = Field(
+        description="추적 종목 코드 6자리(예: 005930). 추적 목록 밖이면 거절하고 쓸 수 있는 목록을 돌려준다."
+    )
+
+
 TOOL_DESCRIPTIONS: dict[str, str] = {
     "recent_documents": (
         "최근 평가된 경제 문서 중 가치 점수가 높은 것들. 제목, 발행 시각, 방향, 점수, "
@@ -577,6 +586,14 @@ TOOL_DESCRIPTIONS: dict[str, str] = {
         "의견과 직전 의견을 비교해 읽는다. 같은 증권사가 같은 날 낸 리포트가 수집돼 있으면 그 요약이 "
         "reason에 함께 온다 — 왜 그 목표가인지가 거기 있다. 인용할 ref가 붙은 리포트 전문은 "
         "recent_documents가 naver_research_* 문서로 준다."
+    ),
+    "event_surprises": (
+        "추적 종목 하나의 이벤트가 시장 기대에 부합했나. 둘을 준다. "
+        "outcomes는 이미 발표된 이벤트의 판정이다 — 기대치, 실제 발표값, 어긋난 정도(퍼센트), "
+        "beat(상회)/meet(부합)/miss(미달), 발표 시각. **주가는 절대 수치가 아니라 기대 대비로 "
+        "움직인다** — 좋은 실적도 기대에 못 미치면 떨어진다. "
+        "pending_expectations는 아직 발표되지 않은 이벤트의 대표 기대치다. 오늘 발표가 나오면 "
+        "그 숫자가 기준선이다. 금액은 전부 원 단위다."
     ),
 }
 
@@ -715,6 +732,12 @@ class ThesisToolbox:
                 name="analyst_opinions",
                 description=TOOL_DESCRIPTIONS["analyst_opinions"],
                 args_schema=AnalystOpinionsArgs,
+            ),
+            StructuredTool.from_function(
+                func=self._tool_event_surprises,
+                name="event_surprises",
+                description=TOOL_DESCRIPTIONS["event_surprises"],
+                args_schema=EventSurprisesArgs,
             ),
         ]
 
@@ -975,6 +998,29 @@ class ThesisToolbox:
             }
         )
 
+    def _tool_event_surprises(self, ticker: str) -> str:
+        """종목 하나의 기대 대비 발표 판정과, 아직 발표되지 않은 이벤트의 기대치.
+
+        문맥 툴이라 레지스트리에 넣지 않는다. `thesis_evidence.evidence_kind`가 셋으로 닫혀
+        있고, 인용이 필요하면 발표 문서 자체를 `recent_documents`로 인용하면 된다.
+
+        추적 목록 밖 종목은 거절한다(`analyst_opinions`와 같은 처리).
+        """
+        self._charge()
+        code = str(ticker or "").strip()
+        if code not in self._watched_codes:
+            raise ToolLimitExceeded(f"추적 종목 밖이다: {code!r}. 쓸 수 있는 것은 {sorted(self._watched_codes)}")
+        parameters = {"stock_code": code, "as_of_at": self._as_of_at, "limit": MAX_TOOL_RESULTS}
+        outcomes = self._fetch(EVENT_SURPRISES, parameters)
+        pending = self._fetch(EVENT_EXPECTATIONS, parameters)
+        return self._body(
+            {
+                "stock_code": code,
+                "outcomes": [_surprise_detail(row) for row in outcomes],
+                "pending_expectations": [_pending_expectation_detail(row) for row in pending],
+            }
+        )
+
     def _snapshot_window(self) -> dict[str, Any]:
         """장중 스냅샷 툴의 창. 끝은 `as_of_at`, 시작은 거기서 `SNAPSHOT_LOOKBACK`만큼 앞."""
         return {"window_start": self._as_of_at - SNAPSHOT_LOOKBACK, "as_of_at": self._as_of_at}
@@ -1174,6 +1220,33 @@ def _opinion_detail(row: Sequence[Any]) -> dict[str, Any]:
     if reason:
         detail["reason"] = str(reason)[:MAX_OPINION_REASON_CHARS]
     return detail
+
+
+def _surprise_detail(row: Sequence[Any]) -> dict[str, Any]:
+    """기대 대비 발표 판정 한 건. 금액은 원 단위 그대로 준다 — 모델이 자릿수를 바꾸지 않게."""
+    return {
+        "event_type": row[0],
+        "period_key": row[1],
+        "metric": row[2],
+        "expected_value": _number(row[3]),
+        "expectation_count": row[4],
+        "actual_value": _number(row[5]),
+        "surprise_pct": _number(row[6]),
+        "verdict": row[7],
+        "announced_at": row[8],
+    }
+
+
+def _pending_expectation_detail(row: Sequence[Any]) -> dict[str, Any]:
+    """아직 발표되지 않은 이벤트의 대표 기대치. 발표가 나오면 이 숫자가 기준선이다."""
+    return {
+        "event_type": row[0],
+        "period_key": row[1],
+        "metric": row[2],
+        "expected_value": _number(row[3]),
+        "expectation_count": row[4],
+        "latest_stated_at": row[5],
+    }
 
 
 def _macro_detail(row: Sequence[Any]) -> dict[str, Any]:

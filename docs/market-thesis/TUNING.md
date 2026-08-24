@@ -142,7 +142,7 @@ GROUP BY run_slot;
 | `NarrativeVariant` 기본 | `INFORMED` | `thesis.py`, `FollowupNarrator.__init__` | 분기 Brier + `verdict` 분포 | 노트북 재실행으로 재검증. `BLIND`가 남아 있어 되돌리기가 인자 하나다 |
 | `HORIZON_DAYS` | `(0,1,3,5)` | `thesis.py` `HORIZON_DAYS`·`NARRATED_HORIZON_DAYS`, `ops.py` `THESIS_HORIZONS`, DB CHECK — **네 곳** | LLM 호출 비용 | 비용이 문제면 **해설만** T+5 하나로 줄인다. 채점은 SQL이라 공짜다. 네 곳을 같은 커밋에서 만진다 |
 | `PREFETCHED_PAST_THESES` | 5 | `thesis.py` | 도입 전후 지평별 Brier 추이 | 장전 프롬프트에 미리 싣는 과거 추론 수. **효과가 관측되지 않으면 0으로 끈다**([5-followup.md](5-followup.md) 5절) — 절은 `(없음)`이 되고 `thesis_precedent` 엣지도 안 남는다. `past_theses` 툴은 그대로다. 분기 판단 |
-| 툴 개수 | 11 | 같은 곳 | **어떤 툴을 실제로 부르는지**와 `tool_rounds` 분포 | 한 번도 안 불리는 툴은 뺀다(문맥만 먹는다). 반대로 상한에 붙어 있으면 왕복을 늘린다. **서브 에이전트로 나누는 것은 여기서 판단한다** — 아래 참고 |
+| 툴 개수 | 14 | 같은 곳 | **어떤 툴을 실제로 부르는지**와 `tool_rounds` 분포 | 한 번도 안 불리는 툴은 뺀다(문맥만 먹는다). 반대로 상한에 붙어 있으면 왕복을 늘린다. **서브 에이전트로 나누는 것은 여기서 판단한다** — 아래 참고 |
 | `verdict` 값 셋 | `supported`/`contradicted`/`unresolved` | `analysis.py` + CHECK | `contradicted` 비율 | 60% 위가 유지되면 "반박"과 "다른 원인 지목"을 가를지 본다. **지금은 안 가른다** |
 | `MAX_TOOL_ROUNDS` / `MAX_TOOL_CALLS` / `MAX_TOOL_RESULT_CHARS` | 3 / 12 / 24,000 | `thesis.py` | 쿼리 B의 분포 | 상한에 붙어 있으면 올린다. **값이 인자 모델(`RecentDocumentsArgs` 등)의 `Field(description=...)`에 f-string으로 실려 프롬프트가 자동으로 따라간다** |
 | `PROMPT_VERSION` / `NARRATIVE_PROMPT_VERSION` | `"1"` / `"1"` | `thesis.py` | — | 프롬프트를 고치면 올린다. 올린 뒤 28일은 ops 창이 두 판에 걸친다 |
@@ -153,6 +153,9 @@ GROUP BY run_slot;
 | `THESIS_TIMEOUT_SECONDS` | 1800 | `llm.py` | 타임아웃 실패 건수 | 2026-08-21 첫 실행이 300초에서 죽어 900으로, 툴이 11개로 늘면서 2026-08-22에 1800으로 올렸다. **1800은 관측이 아니라 예방이다** — 900에서 죽은 실행은 아직 없다. 다음 실행들의 실제 소요를 보고 되돌릴 여지가 있다. 또 걸리면 툴 상한(`MAX_TOOL_ROUNDS`)을 먼저 의심한다 — 왕복이 늘수록 한 요청이 길어진다. 문서 태깅의 `REQUEST_TIMEOUT_SECONDS`(300)는 따로다 |
 | `BUILD_TIMEOUT` | 30분 | `thesis_common.py` | `build_thesis`의 `AirflowTaskTimeout` 건수와 성공 실행의 소요 분포 | 요청 타임아웃의 바깥 울타리. 한 빌드는 모델을 최대 왕복 3 + 답변 + 교정 = 6번 부른다. 장전이 09:00 개장 전에 닿아야 해서 이 값이고, 걸리면 `MAX_TOOL_ROUNDS`를 먼저 의심한다. 재시도 셋은 그대로라 최악 4회 × (30 + 10)분이다 |
 | `SLACK_EVIDENCE_LIMIT` | 3 | `thesis.py` | 사람 눈 | 줄이 길어 안 읽히면 줄인다 |
+| `MEET_BAND_PCT` | `5.0` | `expectation.py` | `stock_event_outcome.verdict` 분포 | 기대 대비 발표를 `meet`로 볼 폭(퍼센트). **실측이 아니라 시작값이다** — `meet`가 사실상 없거나 대부분이면 그 폭이 틀린 것이다. `FLAT_THRESHOLD_PCT`와 같은 성격이고 판단 시점도 같다(+4주) |
+| 추출 `PROMPT_VERSION` | `"1"` | `expectation.py` | 버림 로그의 사유 분포 | 프롬프트를 고치면 올린다. **올리면 이미 뽑은 문서가 전부 재추출 대상이 된다** — `document.prompt_version`과 같은 장치다. 버림 사유가 한 유형에 몰리면 프롬프트 예시를 보강할지 `StockEventType`을 늘릴지를 그 로그가 정한다 |
+| 추출 `DEFAULT_BATCH_SIZE` | 50 | `expectation.py` | 대상 문서 백로그 | 대상이 종목 태그 문서뿐이라 지금 물량에서는 남는다. watched가 크게 늘면 이 값과 대상 조건(`value_score` 하한 추가)이 손잡이다 |
 
 ---
 
@@ -207,6 +210,12 @@ ops 브리핑의 **추론 적체** 한 줄. **여기서 즉시 대응하는 것�
 - **4단계 Neo4j** — prod 인스턴스가 선행 조건이고 이 저장소 밖 작업이다. 외부 리뷰 2회
   모두 보류를 권했고 사용자 결정으로 넣었다. **+4주에 유지 여부를 다시 본다**
   ([4-graph.md](4-graph.md)).
+- **8단계 이벤트 기대치** — 구현됐다(2026-08-24, [8-expectation.md](8-expectation.md)).
+  운영 관측 셋: ① 추출 버림 로그의 사유 분포 — 한 유형에 몰리면 프롬프트 예시나
+  `StockEventType`을 늘린다. ② `verdict` 분포 — `meet`가 사실상 없거나 대부분이면
+  `MEET_BAND_PCT`를 조정한다(3절). ③ 실제값 주장 불일치로 판정이 보류되는 빈도 —
+  잦은 이벤트 유형은 `metric` 정의를 쪼개는 신호다. 컨센서스 수집기(4단계)는 출처
+  실측부터이고, 그것이 붙으면 대표 기대치가 중앙값에서 컨센서스로 바뀐다.
 - **6단계 애널리스트** — 구현됐다(2026-08-22, [6-analyst.md](6-analyst.md)). 남은 것은
   운영 관측이다: ① 08:05~08:35 사이에 올라오는 모닝 리포트는 당일 장전에 안 든다 — 수집
   주기를 앞당길지는 실측 뒤(평가 DAG도 같이 당겨야 하고 LLM 비용이 따라온다). ②
@@ -214,9 +223,11 @@ ops 브리핑의 **추론 적체** 한 줄. **여기서 즉시 대응하는 것�
   ③ 첫 실행 백로그(6 × 30건 평가)가 뉴스 평가를 밀면 `document_assessment_hourly`를
   `batch_size`를 키워 수동 트리거한다.
 - **새 툴** — 2026-08-21에 일곱을 열어 11개가 됐고, 2026-08-22에 `us_market_close`와
-  `analyst_opinions`가 붙어 13개다([2-agent.md](2-agent.md)). **툴 수가 tool call 상한(12)을
-  넘었다.** 모델이 툴마다 한 번씩도 못 부른다는 뜻이라, 상한에 붙는 실행이 보이면
-  `MAX_TOOL_CALLS`부터 올린다. 남은 후보는 `earnings_fact`(지금 6행뿐)다.
+  `analyst_opinions`가 붙어 13개, 2026-08-24에 `event_surprises`가 붙어 14개다
+  ([2-agent.md](2-agent.md)). **툴 수가 tool call 상한(12)을 넘었다.** 모델이 툴마다 한
+  번씩도 못 부른다는 뜻이라, 상한에 붙는 실행이 보이면 `MAX_TOOL_CALLS`부터 올린다.
+  남은 후보는 `earnings_fact`(지금 6행뿐)인데, 실적 숫자는 `event_surprises`가 기대와
+  함께 주므로 그 툴이 실제로 불리는지를 먼저 본다.
   **금리는 퍼센트 변화가 아니라 bp 차이로 준다** —
   `BASIS_POINT_KINDS`와 `BASIS_POINT_INDICATOR_KINDS`가 그 규칙을 안다. 웹 검색은 출처를
   통제할 수 없어 별도 결정 전까지 안 넣는다.

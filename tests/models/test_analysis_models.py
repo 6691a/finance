@@ -149,3 +149,113 @@ def test_airflow_and_backend_agree_on_the_direction_vocabulary():
 
     # Airflow는 apps/를 보지 못해 값을 한 벌 더 든다. 중복은 허용하되 여기서 대조한다.
     assert {member.value for member in AirflowDirection} == {member.value for member in BackendDirection}
+
+
+# --- 8단계(2026-08-24) 이벤트 기대치 -------------------------------------------
+
+
+def test_event_models_are_exported_for_autogenerate():
+    from apps import models
+
+    # __all__에 없으면 Alembic autogenerate가 모델을 보지 못한다(프로젝트 규칙).
+    for name in ("StockEventClaim", "StockEventExtraction", "StockEventOutcome"):
+        assert name in models.__all__
+
+
+def test_event_tables_follow_the_search_path():
+    from apps.models.analysis import StockEventClaim, StockEventExtraction, StockEventOutcome
+
+    for model in (StockEventClaim, StockEventExtraction, StockEventOutcome):
+        assert model.__table__.schema is None
+        assert model.__table__.info == {"database": "default", "managed": True}
+
+
+def test_the_event_enums_match_their_check_constraints():
+    from apps.models.analysis import (
+        StockEventClaim,
+        StockEventClaimKind,
+        StockEventMetric,
+        StockEventOutcome,
+        StockEventType,
+        SurpriseVerdict,
+    )
+
+    checks = {
+        constraint.name: str(constraint.sqltext)
+        for table in (StockEventClaim.__table__, StockEventOutcome.__table__)
+        for constraint in table.constraints
+        if isinstance(constraint, CheckConstraint)
+    }
+
+    for member in StockEventType:
+        assert f"'{member.value}'" in checks["ck_stock_event_claim_event_type"]
+    for member in StockEventClaimKind:
+        assert f"'{member.value}'" in checks["ck_stock_event_claim_kind"]
+    for member in StockEventMetric:
+        assert f"'{member.value}'" in checks["ck_stock_event_claim_metric"]
+        assert f"'{member.value}'" in checks["ck_stock_event_outcome_metric"]
+    for member in SurpriseVerdict:
+        assert f"'{member.value}'" in checks["ck_stock_event_outcome_verdict"]
+
+
+def test_the_event_enum_columns_are_not_native_postgres_enums():
+    from apps.models.analysis import StockEventClaim, StockEventOutcome
+
+    for table, column in (
+        (StockEventClaim.__table__, "event_type"),
+        (StockEventClaim.__table__, "claim_kind"),
+        (StockEventOutcome.__table__, "verdict"),
+    ):
+        kind = table.c[column].type
+        assert isinstance(kind, SqlEnum)
+        # native enum은 값 추가·삭제 마이그레이션 비용이 커서 쓰지 않는다(프로젝트 규칙).
+        assert kind.native_enum is False
+
+
+def test_the_earnings_metrics_are_shared_with_the_earnings_fact_table():
+    """판정이 `earnings_fact`를 대응표 없이 조인한다. 값이 갈리면 그 조인이 조용히 0행이 된다."""
+    from apps.models.analysis import EVENT_METRICS, StockEventType
+    from apps.models.market import EarningsMetric
+
+    assert {metric.value for metric in EVENT_METRICS[StockEventType.EARNINGS]} == {
+        member.value for member in EarningsMetric
+    }
+
+
+def test_a_judgment_is_written_once_and_never_updated():
+    """첫 성공본 불변. 판정을 고치는 컬럼(상태·재판정 표시)을 두지 않는다."""
+    from apps.models.analysis import StockEventOutcome
+
+    names = {column.name for column in StockEventOutcome.__table__.columns}
+
+    assert not names & {"status", "superseded_by", "revised_at", "revision"}
+    for column in ("expected_value", "actual_value", "surprise_pct", "verdict", "announced_at", "actual_ref"):
+        assert StockEventOutcome.__table__.c[column].nullable is False
+
+
+def test_the_claim_source_columns_are_both_optional_but_guarded_by_a_check():
+    from apps.models.analysis import StockEventClaim
+
+    columns = StockEventClaim.__table__.c
+    assert columns["document_id"].nullable is True
+    assert columns["source_record_id"].nullable is True
+    checks = {
+        constraint.name
+        for constraint in StockEventClaim.__table__.constraints
+        if isinstance(constraint, CheckConstraint)
+    }
+    assert "ck_stock_event_claim_source_xor" in checks
+
+
+def test_the_extraction_ledger_keeps_one_row_per_document():
+    from apps.models.analysis import StockEventExtraction
+
+    unique_columns = {
+        tuple(column.name for column in constraint.columns)
+        for constraint in StockEventExtraction.__table__.constraints
+        if isinstance(constraint, UniqueConstraint)
+    }
+
+    assert ("document_id",) in unique_columns
+    # 주장 0건도 남는다 — "뽑았는데 없었다"와 "아직 안 뽑았다"를 가른다.
+    assert StockEventExtraction.__table__.c["claim_count"].nullable is False

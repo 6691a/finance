@@ -850,11 +850,12 @@ INDEX_DAILY_CONTINUE_FLAGS = frozenset({"M", "F"})
 INDEX_DAILY_MAX_PAGES = 10
 # 페이지 사이 대기. 달력 수집기의 PAGE_DELAY_SECONDS와 같은 이유다.
 INDEX_DAILY_PAGE_DELAY_SECONDS = 0.5
-# 한 응답에 오는 최대 봉 수(KIS 기간별 차트 공통 상한, 실측 전 가정). **응답이 이만큼 가득
-# 찼는데 tr_cont가 없으면 조용히 잘린 것이다** — 확정 수급 일별 API가 그 행태다(연속조회
-# 없이 30거래일로 잘림, kis_investor_flow 실측). 그때는 가장 오래된 날짜 하루 전으로 창을
-# 옮겨 다시 받는다. 짧은 응답은 구간을 다 준 것이므로 걷지 않는다.
-INDEX_DAILY_FULL_PAGE_ROWS = 100
+# 한 응답에 오는 최대 봉 수(2026-08-24 실측: 200달력일을 요청해도 tr_cont 없이 50봉만 온다).
+# **응답이 이만큼 가득 찼는데 tr_cont가 없으면 조용히 잘린 것이다** — 확정 수급 일별 API가
+# 그 행태다(연속조회 없이 30거래일로 잘림, kis_investor_flow 실측). 그때는 가장 오래된 날짜
+# 하루 전으로 창을 옮겨 다시 받는다. 짧은 응답은 구간을 다 준 것이므로 걷지 않는다.
+# 이 값이 실제보다 크면 잘림을 못 알아채고 조용히 짧은 구간만 저장한다.
+INDEX_DAILY_FULL_PAGE_ROWS = 50
 
 
 class KisDailyIndexRow(BaseModel):

@@ -63,6 +63,7 @@ NYSE 페이지는 3년치를 미리 고시한다.
 
 import logging
 import os
+from collections.abc import Callable
 from contextlib import closing
 from datetime import date, timedelta
 from typing import Any
@@ -145,8 +146,12 @@ def _collector(app_key: SecretStr, app_secret: SecretStr, force: bool = False) -
     return KisMarketCalendarCollector(_cached_token(app_key, app_secret, force=force), app_key, app_secret)
 
 
-def _store(store, *arguments: Any) -> Any:
-    """저장 한 번을 한 트랜잭션으로 감싼다."""
+def _store[Stored](store: Callable[..., Stored], *arguments: Any) -> Stored:
+    """저장 한 번을 한 트랜잭션으로 감싼다.
+
+    위임 대상 셋의 반환이 갈린다 — `store_domestic`·`store_calendar`는 저장 건수(`int`)이고
+    `store_overseas`는 `UsSettlement | None`이다. 그래서 구체 타입이 아니라 `TypeVar`다.
+    """
     with closing(PostgresHook(postgres_conn_id=CONNECTION_ID).get_conn()) as connection:
         try:
             with atomic(connection):

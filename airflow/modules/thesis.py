@@ -59,7 +59,33 @@ from modules import llm, technical
 from modules.llm import UnsupportedResponseFormat
 from modules.schema import SchemaError, json_object, response_format
 from modules.sql import read_sql
-from modules.thesis_state import NxtObservedState, ObservedState, PastOutcome, PastThesis
+from modules.thesis_state import NxtObservedState, ObservedState, PastOutcome, PastThesis, SignalObservation
+from modules.thesis_tools import (
+    AnalystOpinionsPayload,
+    AvailableSymbolRow,
+    DailyBarRow,
+    DailyHistoryEmptyPayload,
+    DailyHistoryPayload,
+    DisclosureDetail,
+    DocumentDetail,
+    EventSurprisesPayload,
+    EvidenceDetail,
+    IndicatorDetail,
+    IndicatorPayload,
+    MacroDetail,
+    MarketBreadthRow,
+    MarketFlowRow,
+    MarketFundsRow,
+    OpinionDetail,
+    PendingExpectationDetail,
+    ShortCreditRow,
+    SignalDetail,
+    StockFlowEstimateRow,
+    StockFlowPayload,
+    StockFlowSettledRow,
+    SurpriseDetail,
+    UsCloseDetail,
+)
 from modules.utility import KST_TIMEZONE, atomic
 
 logger = logging.getLogger(__name__)
@@ -356,7 +382,7 @@ class Evidence(BaseModel):
     ref: str
     title: str
     url: str | None = None
-    detail: dict[str, Any] = Field(default_factory=dict)
+    detail: EvidenceDetail
 
 
 def evidence_ref(kind: ThesisEvidenceKind, identifier: str) -> str:
@@ -841,11 +867,11 @@ class ThesisToolbox:
         )
         as_basis_points = chosen in BASIS_POINT_INDICATOR_KINDS
         return self._body(
-            {
-                "kind": chosen,
-                "unit_note": "변화는 bp다" if as_basis_points else "변화는 값 그대로다",
-                "series": [_indicator_row(row, as_basis_points=as_basis_points) for row in rows],
-            }
+            IndicatorPayload(
+                kind=chosen,
+                unit_note="변화는 bp다" if as_basis_points else "변화는 값 그대로다",
+                series=tuple(_indicator_row(row, as_basis_points=as_basis_points) for row in rows),
+            )
         )
 
     def _tool_market_investor_flows(self) -> str:
@@ -853,16 +879,15 @@ class ThesisToolbox:
         rows = self._fetch(MARKET_FLOWS, self._snapshot_window())
         return self._body(
             [
-                {
-                    "market_code": row[0],
-                    "observed_at": row[1],
-                    "foreign_net_buy_amount": _number(row[2]),
-                    "institution_net_buy_amount": _number(row[3]),
-                    "individual_net_buy_amount": _number(row[4]),
-                    "pension_fund_net_buy_qty": _number(row[5]),
-                    "investment_trust_net_buy_qty": _number(row[6]),
-                    "amount_unit": "백만원",
-                }
+                MarketFlowRow(
+                    market_code=row[0],
+                    observed_at=row[1],
+                    foreign_net_buy_amount=_number(row[2]),
+                    institution_net_buy_amount=_number(row[3]),
+                    individual_net_buy_amount=_number(row[4]),
+                    pension_fund_net_buy_qty=_number(row[5]),
+                    investment_trust_net_buy_qty=_number(row[6]),
+                )
                 for row in rows
             ]
         )
@@ -872,15 +897,15 @@ class ThesisToolbox:
         rows = self._fetch(MARKET_BREADTH, self._snapshot_window())
         return self._body(
             [
-                {
-                    "symbol": row[0],
-                    "observed_at": row[1],
-                    "rising": row[2],
-                    "unchanged": row[3],
-                    "falling": row[4],
-                    "upper_limit": row[5],
-                    "lower_limit": row[6],
-                }
+                MarketBreadthRow(
+                    symbol=row[0],
+                    observed_at=row[1],
+                    rising=row[2],
+                    unchanged=row[3],
+                    falling=row[4],
+                    upper_limit=row[5],
+                    lower_limit=row[6],
+                )
                 for row in rows
             ]
         )
@@ -897,36 +922,35 @@ class ThesisToolbox:
             {"stock_codes": self._watched_codes, "as_of_at": self._as_of_at},
         )
         return self._body(
-            {
-                "settled": [
-                    {
-                        "stock_code": row[0],
-                        "business_date": row[1],
-                        "close_price": _number(row[2]),
-                        "volume": _number(row[3]),
-                        "foreign_net_buy_qty": _number(row[4]),
-                        "institution_net_buy_qty": _number(row[5]),
-                        "individual_net_buy_qty": _number(row[6]),
-                        "foreign_net_buy_amount": _number(row[7]),
-                        "institution_net_buy_amount": _number(row[8]),
-                        "individual_net_buy_amount": _number(row[9]),
-                    }
+            StockFlowPayload(
+                settled=tuple(
+                    StockFlowSettledRow(
+                        stock_code=row[0],
+                        business_date=row[1],
+                        close_price=_number(row[2]),
+                        volume=_number(row[3]),
+                        foreign_net_buy_qty=_number(row[4]),
+                        institution_net_buy_qty=_number(row[5]),
+                        individual_net_buy_qty=_number(row[6]),
+                        foreign_net_buy_amount=_number(row[7]),
+                        institution_net_buy_amount=_number(row[8]),
+                        individual_net_buy_amount=_number(row[9]),
+                    )
                     for row in settled
-                ],
-                "intraday_estimate": [
-                    {
-                        "stock_code": row[0],
-                        "business_date": row[1],
-                        "source_time_code": row[2],
-                        "collected_at": row[3],
-                        "foreign_net_buy_qty": _number(row[4]),
-                        "institution_net_buy_qty": _number(row[5]),
-                        "total_net_buy_qty": _number(row[6]),
-                    }
+                ),
+                intraday_estimate=tuple(
+                    StockFlowEstimateRow(
+                        stock_code=row[0],
+                        business_date=row[1],
+                        source_time_code=row[2],
+                        collected_at=row[3],
+                        foreign_net_buy_qty=_number(row[4]),
+                        institution_net_buy_qty=_number(row[5]),
+                        total_net_buy_qty=_number(row[6]),
+                    )
                     for row in estimates
-                ],
-                "note": "settled는 마감 뒤 확정값, intraday_estimate는 장중 추정값이다. 둘은 어긋날 수 있다",
-            }
+                ),
+            )
         )
 
     def _tool_market_funds(self, days: int) -> str:
@@ -935,16 +959,16 @@ class ThesisToolbox:
         rows = self._fetch(MARKET_FUNDS, {"as_of_at": self._as_of_at, "days": span})
         return self._body(
             [
-                {
-                    "business_date": row[0],
-                    "index_close": _number(row[1]),
-                    "index_change": _number(row[2]),
-                    "customer_deposit": _number(row[3]),
-                    "customer_deposit_change": _number(row[4]),
-                    "credit_loan_balance": _number(row[5]),
-                    "unsettled_amount": _number(row[6]),
-                    "turnover_ratio": _number(row[7]),
-                }
+                MarketFundsRow(
+                    business_date=row[0],
+                    index_close=_number(row[1]),
+                    index_change=_number(row[2]),
+                    customer_deposit=_number(row[3]),
+                    customer_deposit_change=_number(row[4]),
+                    credit_loan_balance=_number(row[5]),
+                    unsettled_amount=_number(row[6]),
+                    turnover_ratio=_number(row[7]),
+                )
                 for row in rows
             ]
         )
@@ -972,39 +996,39 @@ class ThesisToolbox:
         if not rows:
             available = self._fetch(DAILY_HISTORY_SYMBOLS, {"as_of_at": self._as_of_at})
             return self._body(
-                {
-                    "symbol": wanted,
-                    "bars": [],
-                    "technical_snapshot": None,
-                    "note": f"{wanted}의 일봉이 없다. 아래 심볼만 일봉을 갖는다",
-                    "available_symbols": [{"symbol": row[0], "label": row[1], "kind": row[2]} for row in available],
-                }
+                DailyHistoryEmptyPayload(
+                    symbol=wanted,
+                    note=f"{wanted}의 일봉이 없다. 아래 심볼만 일봉을 갖는다",
+                    available_symbols=tuple(
+                        AvailableSymbolRow(symbol=row[0], label=row[1], kind=row[2]) for row in available
+                    ),
+                )
             )
         snapshot = _technical_snapshot(wanted, rows)
         signals = self._recent_signals(wanted)
         return self._body(
-            {
-                "symbol": wanted,
-                "bars": [
-                    {
-                        "label": row[2],
-                        "kind": row[3],
-                        "country": row[4],
-                        "business_date": row[5],
-                        "open": _number(row[6]),
-                        "high": _number(row[7]),
-                        "low": _number(row[8]),
-                        "close": _number(row[9]),
-                        "volume": _number(row[10]),
-                    }
+            DailyHistoryPayload(
+                symbol=wanted,
+                bars=tuple(
+                    DailyBarRow(
+                        label=row[2],
+                        kind=row[3],
+                        country=row[4],
+                        business_date=row[5],
+                        open=_number(row[6]),
+                        high=_number(row[7]),
+                        low=_number(row[8]),
+                        close=_number(row[9]),
+                        volume=_number(row[10]),
+                    )
                     for row in rows[:span]
-                ],
-                "technical_snapshot": None if snapshot is None else snapshot.model_dump(mode="json"),
-                "recent_signals": signals,
-            }
+                ),
+                technical_snapshot=snapshot,
+                recent_signals=tuple(signals),
+            )
         )
 
-    def _recent_signals(self, symbol: str) -> list[dict[str, Any]]:
+    def _recent_signals(self, symbol: str) -> list[SignalObservation]:
         """이 심볼의 최근 매매 신호. **각 항목은 인용할 수 있는 근거다.**
 
         지표(`technical_snapshot`)와 달리 레지스트리에 넣는다. 신호는 행 ID를 가진 사건이고,
@@ -1029,17 +1053,17 @@ class ThesisToolbox:
                 title=f"{symbol} {SIGNAL_LABELS.get((kind, direction), f'{kind} {direction}')} ({row[2]})",
                 # 사건은 링크할 곳이 없다. 매크로 변화와 같다.
                 url=None,
-                detail={
-                    "symbol": symbol,
-                    "signal_date": str(row[2]),
-                    "kind": kind,
-                    "direction": direction,
-                    "close": _number(row[5]),
-                    "rsi14": _number(row[6]),
-                    "volume_ratio20": _number(row[7]),
-                },
+                detail=SignalDetail(
+                    symbol=symbol,
+                    signal_date=str(row[2]),
+                    kind=kind,
+                    direction=direction,
+                    close=_number(row[5]),
+                    rsi14=_number(row[6]),
+                    volume_ratio20=_number(row[7]),
+                ),
             )
-            signals.append({"ref": ref, "signal_date": str(row[2]), "kind": kind, "direction": direction})
+            signals.append(SignalObservation(ref=ref, signal_date=row[2], kind=kind, direction=direction))
         return signals
 
     def _tool_short_and_credit(self) -> str:
@@ -1050,19 +1074,19 @@ class ThesisToolbox:
         )
         return self._body(
             [
-                {
-                    "stock_code": row[0],
-                    "label": row[1],
-                    "business_date": row[2],
-                    "short_sale_quantity": _number(row[3]),
-                    "short_sale_volume_ratio": _number(row[4]),
-                    "short_sale_amount": _number(row[5]),
-                    "lending_balance_quantity": _number(row[6]),
-                    "lending_balance_change_quantity": _number(row[7]),
-                    "credit_loan_balance_quantity": _number(row[8]),
-                    "credit_loan_balance_amount": _number(row[9]),
-                    "credit_loan_balance_rate": _number(row[10]),
-                }
+                ShortCreditRow(
+                    stock_code=row[0],
+                    label=row[1],
+                    business_date=row[2],
+                    short_sale_quantity=_number(row[3]),
+                    short_sale_volume_ratio=_number(row[4]),
+                    short_sale_amount=_number(row[5]),
+                    lending_balance_quantity=_number(row[6]),
+                    lending_balance_change_quantity=_number(row[7]),
+                    credit_loan_balance_quantity=_number(row[8]),
+                    credit_loan_balance_amount=_number(row[9]),
+                    credit_loan_balance_rate=_number(row[10]),
+                )
                 for row in rows
             ]
         )
@@ -1083,10 +1107,10 @@ class ThesisToolbox:
             {"stock_code": code, "as_of_at": self._as_of_at, "limit": MAX_TOOL_RESULTS},
         )
         return self._body(
-            {
-                "stock_code": code,
-                "opinions": [_opinion_detail(row) for row in rows],
-            }
+            AnalystOpinionsPayload(
+                stock_code=code,
+                opinions=tuple(_opinion_detail(row) for row in rows),
+            )
         )
 
     def _tool_event_surprises(self, ticker: str) -> str:
@@ -1105,11 +1129,11 @@ class ThesisToolbox:
         outcomes = self._fetch(EVENT_SURPRISES, parameters)
         pending = self._fetch(EVENT_EXPECTATIONS, parameters)
         return self._body(
-            {
-                "stock_code": code,
-                "outcomes": [_surprise_detail(row) for row in outcomes],
-                "pending_expectations": [_pending_expectation_detail(row) for row in pending],
-            }
+            EventSurprisesPayload(
+                stock_code=code,
+                outcomes=tuple(_surprise_detail(row) for row in outcomes),
+                pending_expectations=tuple(_pending_expectation_detail(row) for row in pending),
+            )
         )
 
     def _snapshot_window(self) -> dict[str, Any]:
@@ -1121,9 +1145,18 @@ class ThesisToolbox:
             cursor.execute(statement, parameters)
             return list(cursor.fetchall())
 
-    def _body(self, payload: Any) -> str:
-        """근거를 만들지 않는 툴의 반환. 문자 예산만 단다."""
-        body = json.dumps(payload, ensure_ascii=False, default=str)
+    def _body(self, payload: BaseModel | Sequence[BaseModel]) -> str:
+        """근거를 만들지 않는 툴의 반환. 문자 예산만 단다.
+
+        **`default=str`을 쓰지 않는다.** 모델이 `date`·`Decimal`을 정확히 바꾸므로 어느 칸이
+        언제 문자열이 됐는지가 모델 선언에 남는다.
+        """
+        data = (
+            payload.model_dump(mode="json")
+            if isinstance(payload, BaseModel)
+            else [item.model_dump(mode="json") for item in payload]
+        )
+        body = json.dumps(data, ensure_ascii=False)
         self._chars += len(body)
         return body
 
@@ -1206,13 +1239,13 @@ class ThesisToolbox:
                 ref=evidence_ref(ThesisEvidenceKind.DISCLOSURE, row[0]),
                 title=f"{row[2]} {row[3]}",
                 url=DART_VIEWER_URL.format(rcept_no=row[0]),
-                detail={
-                    "stock_code": row[1],
-                    "company_name": row[2],
-                    "report_name": row[3],
-                    "receipt_date": row[4].isoformat(),
-                    "detected_at": row[5].isoformat(),
-                },
+                detail=DisclosureDetail(
+                    stock_code=row[1],
+                    company_name=row[2],
+                    report_name=row[3],
+                    receipt_date=row[4].isoformat(),
+                    detected_at=row[5].isoformat(),
+                ),
             )
             for row in rows
         ]
@@ -1259,14 +1292,19 @@ class ThesisToolbox:
 
 
 def _tool_row(item: Evidence) -> dict[str, Any]:
-    """모델에게 보이는 모양. `ref`가 인용 키라 항상 첫 칸이다."""
-    row: dict[str, Any] = {"ref": item.ref, "title": item.title, **item.detail}
+    """모델에게 보이는 모양. `ref`가 인용 키라 항상 첫 칸이다.
+
+    **여기만 dict를 만든다.** `Evidence`의 머리 세 칸과 상세를 한 단으로 펴는 자리라
+    모델 하나로 표현할 수 없고, 상세 종류마다 모델을 두면 머리 세 칸을 다섯 번 베끼게 된다.
+    Slack 블록·JSON Schema와 같은 wire 조립 경계다.
+    """
+    row: dict[str, Any] = {"ref": item.ref, "title": item.title, **item.detail.model_dump(mode="json")}
     if item.url:
         row["url"] = item.url
     return row
 
 
-def _document_detail(row: Sequence[Any]) -> dict[str, Any]:
+def _document_detail(row: Sequence[Any]) -> DocumentDetail:
     """문서 한 건이 모델에게 보여 줄 값.
 
     `new_facts`와 `reason`을 함께 준다. 제목·점수만 주면 이유 문장을 쓸 재료가 없어 모델이
@@ -1281,89 +1319,89 @@ def _document_detail(row: Sequence[Any]) -> dict[str, Any]:
             break
         kept.append(fact)
         budget -= len(fact)
-    return {
-        "source": row[3],
-        "published_at": row[4].isoformat() if row[4] else None,
-        "value_score": row[5],
-        "direction": row[6],
-        "new_facts": kept,
-        "reason": reason[:MAX_ITEM_DETAIL_CHARS],
-        "tickers": list(row[9] or ()),
-    }
+    return DocumentDetail(
+        source=row[3],
+        published_at=row[4].isoformat() if row[4] else None,
+        value_score=row[5],
+        direction=row[6],
+        new_facts=tuple(kept),
+        reason=reason[:MAX_ITEM_DETAIL_CHARS],
+        tickers=tuple(row[9] or ()),
+    )
 
 
-def _opinion_detail(row: Sequence[Any]) -> dict[str, Any]:
+def _opinion_detail(row: Sequence[Any]) -> OpinionDetail:
     """투자의견 한 건. 같은 증권사·같은 날 리포트 요약이 있으면 사유로 함께 준다.
 
     KIS는 숫자만 주고 왜 그 의견인지는 안 준다. 사유가 없으면 모델이 목표가 숫자만 보고
     이유를 지어낸다. 요약은 길어서 자른다 — 스무 건이 컨텍스트를 다 먹으면 안 된다.
     """
-    detail: dict[str, Any] = {
-        "business_date": row[0],
-        "broker_name": row[1],
-        "opinion": row[2],
-        "previous_opinion": row[3],
-        "target_price": _number(row[4]),
-        "previous_close": _number(row[5]),
-        "gap_rate": _number(row[6]),
-    }
     reason = row[7] if len(row) > 7 else None
-    if reason:
-        detail["reason"] = str(reason)[:MAX_OPINION_REASON_CHARS]
-    return detail
+    return OpinionDetail(
+        business_date=row[0],
+        broker_name=row[1],
+        opinion=row[2],
+        previous_opinion=row[3],
+        target_price=_number(row[4]),
+        previous_close=_number(row[5]),
+        gap_rate=_number(row[6]),
+        reason=str(reason)[:MAX_OPINION_REASON_CHARS] if reason else None,
+    )
 
 
-def _surprise_detail(row: Sequence[Any]) -> dict[str, Any]:
+def _surprise_detail(row: Sequence[Any]) -> SurpriseDetail:
     """기대 대비 발표 판정 한 건. 금액은 원 단위 그대로 준다 — 모델이 자릿수를 바꾸지 않게."""
-    return {
-        "event_type": row[0],
-        "period_key": row[1],
-        "metric": row[2],
-        "expected_value": _number(row[3]),
-        "expectation_count": row[4],
-        "actual_value": _number(row[5]),
-        "surprise_pct": _number(row[6]),
-        "verdict": row[7],
-        "announced_at": row[8],
-    }
+    return SurpriseDetail(
+        event_type=row[0],
+        period_key=row[1],
+        metric=row[2],
+        expected_value=_number(row[3]),
+        expectation_count=row[4],
+        actual_value=_number(row[5]),
+        surprise_pct=_number(row[6]),
+        verdict=row[7],
+        announced_at=row[8],
+    )
 
 
-def _pending_expectation_detail(row: Sequence[Any]) -> dict[str, Any]:
+def _pending_expectation_detail(row: Sequence[Any]) -> PendingExpectationDetail:
     """아직 발표되지 않은 이벤트의 대표 기대치. 발표가 나오면 이 숫자가 기준선이다."""
-    return {
-        "event_type": row[0],
-        "period_key": row[1],
-        "metric": row[2],
-        "expected_value": _number(row[3]),
-        "expectation_count": row[4],
-        "latest_stated_at": row[5],
-    }
+    return PendingExpectationDetail(
+        event_type=row[0],
+        period_key=row[1],
+        metric=row[2],
+        expected_value=_number(row[3]),
+        expectation_count=row[4],
+        latest_stated_at=row[5],
+    )
 
 
-def _macro_detail(row: Sequence[Any]) -> dict[str, Any]:
+def _macro_detail(row: Sequence[Any]) -> MacroDetail:
     """심볼 하나의 창 변화.
 
     **금리는 퍼센트가 아니라 bp로 준다.** 4.65→4.70을 `+1.08%`로 주면 모델이 급등으로 읽는다
     (`briefing/market.py`의 `QUOTED_KINDS`와 같은 이유).
     """
     kind, first_close, last_close = row[3], row[5], row[6]
-    detail: dict[str, Any] = {
-        "kind": kind,
-        "country": row[4],
-        "first_close": float(first_close),
-        "last_close": float(last_close),
-        "window_start": row[7].isoformat(),
-        "window_end": row[8].isoformat(),
-        "bar_count": row[9],
-    }
-    if kind in BASIS_POINT_KINDS:
-        detail["change_bp"] = round(float(last_close - first_close) * 100, 1)
-    elif first_close:
-        detail["change_pct"] = round(float((last_close - first_close) / first_close) * 100, 2)
-    return detail
+    basis_points = kind in BASIS_POINT_KINDS
+    return MacroDetail(
+        kind=kind,
+        country=row[4],
+        first_close=float(first_close),
+        last_close=float(last_close),
+        window_start=row[7].isoformat(),
+        window_end=row[8].isoformat(),
+        bar_count=row[9],
+        change_bp=round(float(last_close - first_close) * 100, 1) if basis_points else None,
+        change_pct=(
+            round(float((last_close - first_close) / first_close) * 100, 2)
+            if not basis_points and first_close
+            else None
+        ),
+    )
 
 
-def _us_close_detail(row: Sequence[Any]) -> dict[str, Any]:
+def _us_close_detail(row: Sequence[Any]) -> UsCloseDetail:
     """심볼 하나의 마감 값. 비교 대상은 창의 첫 봉이 아니라 **전일 정규장 종가**다.
 
     시각은 `closed_at_kst` 한 칸이고 이름이 시간대를 밝힌다. 다른 툴의 시각 칸은 UTC라
@@ -1371,17 +1409,19 @@ def _us_close_detail(row: Sequence[Any]) -> dict[str, Any]:
     정하는 데 쓰므로 표시 시간대로 준다(`kst_label`).
     """
     kind, close, previous_close = row[3], row[4], row[5]
-    detail: dict[str, Any] = {
-        "kind": kind,
-        "close": float(close),
-        "previous_close": float(previous_close),
-        "closed_at_kst": kst_label(row[6]),
-    }
-    if kind in BASIS_POINT_KINDS:
-        detail["change_bp"] = round(float(close - previous_close) * 100, 1)
-    elif previous_close:
-        detail["change_pct"] = round(float((close - previous_close) / previous_close) * 100, 2)
-    return detail
+    basis_points = kind in BASIS_POINT_KINDS
+    return UsCloseDetail(
+        kind=kind,
+        close=float(close),
+        previous_close=float(previous_close),
+        closed_at_kst=kst_label(row[6]),
+        change_bp=round(float(close - previous_close) * 100, 1) if basis_points else None,
+        change_pct=(
+            round(float((close - previous_close) / previous_close) * 100, 2)
+            if not basis_points and previous_close
+            else None
+        ),
+    )
 
 
 def _change_label(kind: str, first_close: Decimal, last_close: Decimal) -> str:
@@ -1424,20 +1464,19 @@ def _technical_snapshot(subject_code: str, rows: Sequence[Sequence[Any]]) -> tec
     )
 
 
-def _number(value: Any) -> Any:
+def _number(value: Decimal | float | None) -> float | None:
     """`Decimal`을 JSON이 읽는 수로 바꾼다. `None`은 그대로 둔다.
 
     **0으로 채우지 않는다.** 결측(아직 안 들어온 값)과 실제 0은 다른 뜻이고, 모델이
     "순매수 0"을 관측으로 읽으면 없는 사실을 근거로 쓴다.
+
+    숫자가 아닌 것이 오면 `TypeError`로 죽는다. 예전에는 `date`도 그대로 통과시켜서
+    "숫자 칸"이라고 적힌 자리에 날짜가 실릴 수 있었다.
     """
-    if value is None:
-        return None
-    if isinstance(value, Decimal):
-        return float(value)
-    return value
+    return None if value is None else float(value)
 
 
-def _indicator_row(row: Sequence[Any], *, as_basis_points: bool) -> dict[str, Any]:
+def _indicator_row(row: Sequence[Any], *, as_basis_points: bool) -> IndicatorDetail:
     """지표 계열 하나의 최신값과 직전값 대비 변화.
 
     **금리는 bp로 준다.** 4.65에서 4.70으로 가는 것은 `+1.08%`가 아니라 `+5bp`다
@@ -1446,25 +1485,25 @@ def _indicator_row(row: Sequence[Any], *, as_basis_points: bool) -> dict[str, An
     직전값이 없으면 `change`를 만들지 않는다. 첫 관측을 0 변화로 꾸미지 않기 위해서다.
     """
     value, previous = row[9], row[10]
-    detail: dict[str, Any] = {
-        "provider": row[0],
-        "series_id": row[1],
-        "country": row[2],
-        "country_name": row[3],
-        "label": row[4],
-        "maturity_months": row[6],
-        "unit": row[7],
-        "observation_date": row[8],
-        "value": _number(value),
-        "previous_date": row[11],
-        "previous_value": _number(previous),
-    }
+    change: float | None = None
     if value is not None and previous is not None:
         difference = Decimal(value) - Decimal(previous)
-        detail["change_bp" if as_basis_points else "change"] = (
-            round(float(difference) * 100, 1) if as_basis_points else round(float(difference), 4)
-        )
-    return detail
+        change = round(float(difference) * 100, 1) if as_basis_points else round(float(difference), 4)
+    return IndicatorDetail(
+        provider=row[0],
+        series_id=row[1],
+        country=row[2],
+        country_name=row[3],
+        label=row[4],
+        maturity_months=row[6],
+        unit=row[7],
+        observation_date=row[8],
+        value=_number(value),
+        previous_date=row[11],
+        previous_value=_number(previous),
+        change_bp=change if as_basis_points else None,
+        change=None if as_basis_points else change,
+    )
 
 
 def _clamp_int(value: Any, low: int, high: int, fallback: int) -> int:
@@ -2115,7 +2154,7 @@ def _store_evidence(
                 item.ref,
                 item.title,
                 item.url,
-                json.dumps(item.detail, ensure_ascii=False, default=str),
+                json.dumps(item.detail.model_dump(mode="json"), ensure_ascii=False),
                 rank,
                 claim.direction.value if claim else None,
                 claim.mechanism if claim else None,

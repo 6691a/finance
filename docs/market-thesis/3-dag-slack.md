@@ -66,7 +66,9 @@ SCHEDULE = MultipleCronTriggerTimetable(
    2. **기존 행 확인** — `thesis/select_by_run.sql`에 (run_date, run_slot) 행이 있으면 LLM을
       부르지 않고 그 행들로 넘어간다(첫 성공본 불변, [2-agent.md](2-agent.md) 5절).
    3. 관측 상태 계산(SQL) → ThesisBuilder 실행 → `store_theses`(insert, 한 트랜잭션).
-   XCom으로 `{run_date, slot, written}`을 넘긴다. 뒤 세 태스크가 슬롯을 그것으로 판정한다.
+   XCom으로 `{run_date, slot, written}`을 넘긴다. 이걸 읽는 것은 `notify_slack`(`run_date`와
+   `slot`)과 `narrate_followups`(`run_date`만) 둘이다. `written`은 UI에서 보는 값이고 코드가
+   읽지 않는다.
    **채점은 여기서 하지 않는다** — `grade_followups`가 한다.
 2. `grade_followups`: **장후에만 돈다. LLM 없음.** `thesis_outcome/select_pending_grades.sql`
    (미채점 (추론, 지평) 전부, 날짜 제한 없음) → 지평별 목표 영업일

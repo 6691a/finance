@@ -173,10 +173,10 @@ uv run ruff check apps airflow migrations tests
 - **JSON으로 바꾸는 것은 경계에서 한 번뿐이다.** `model_dump(mode="json")`을 프롬프트 조립과 DB 저장 자리에서만 부른다. 중간 층은 모델을 그대로 들고 간다. `json.dumps(..., default=str)`로 때우지 않는다 — `date`가 조용히 문자열이 되는 자리가 늘어난다.
 - **`dict[str, 모델]`은 괜찮다.** 키가 심볼·종목코드처럼 열린 값이면 매핑이 맞는 모양이다. 금지하는 것은 값이 `Any`인 매핑이다.
 - **키와 값이 층을 섞으면 한 단 내린다.** `{"as_of_date": ..., "KOSPI": {...}}`는 모델로 표현할 수 없다. `{"as_of_date": ..., "subjects": {"KOSPI": {...}}}`로 만든다.
-- **모델을 두는 곳은 그 값을 만드는 모듈이다.** 단 그 모듈이 LangChain·Airflow를 import하는데 다른 모듈도 같은 모델을 봐야 하면 무거운 의존성이 없는 모듈로 따로 뺀다(`thesis_state.py`가 그 예다).
+- **모델을 두는 곳은 그 값을 만드는 모듈이다.** 단 그 모듈이 LangChain·Airflow를 import하는데 다른 모듈도 같은 모델을 봐야 하면 무거운 의존성이 없는 모듈로 따로 뺀다(`thesis_state.py`가 그 예다). 소비자가 하나뿐이어도 그 모듈이 이미 크면 따로 뺀다(`thesis_tools.py`).
 - 테스트도 모델로 넘긴다. 픽스처가 맨 dict면 프롬프트에 실릴 키가 테스트에서만 존재할 수 있다.
 
-**아직 dict를 돌려주는 코드가 남아 있다.** 전환 계획은 [docs/pydantic-return-migration.md](../docs/pydantic-return-migration.md)에 있다. **새 코드는 처음부터 모델로 쓴다.**
+**wire 조립 경계는 예외다.** Slack 블록, LangGraph 노드 반환, JSON Schema, 검증 전 외부 응답 파싱, 그리고 모델을 JSON으로 펴는 자리(`thesis._tool_row`·`_body`)는 dict로 둔다. 그 dict는 제공처 규격이거나 모델을 JSON으로 바꾸는 경계 그 자체라 모델로 감싸면 같은 검증이 두 번이 된다. 그 밖의 도메인 값은 **처음부터 모델로 쓴다.**
 
 ### 그 밖의 타입 규칙
 

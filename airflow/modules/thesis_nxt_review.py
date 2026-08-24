@@ -41,7 +41,7 @@ import logging
 from contextlib import closing
 from datetime import UTC, date, datetime, time
 from decimal import Decimal
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from airflow.exceptions import AirflowSkipException
 from airflow.sdk import get_current_context
@@ -49,8 +49,13 @@ from pydantic import AwareDatetime, BaseModel, ConfigDict
 
 from modules import thesis_common
 from modules.sql import read_sql
-from modules.thesis_state import AfterHoursObservation, NxtObservedState
+from modules.thesis_state import AfterHoursObservation, NxtObservedState, ThesisRunResult
 from modules.utility import KST_TIMEZONE
+
+if TYPE_CHECKING:
+    # 런타임 import는 못 한다 — `modules.thesis`가 LangChain을 끌고 와서 DagBag 30초
+    # 타임아웃에 걸린다(`thesis_common` docstring). `TYPE_CHECKING`은 런타임에 안 돈다.
+    from modules.thesis import Subject
 
 logger = logging.getLogger(__name__)
 
@@ -132,10 +137,10 @@ class NxtAfterHoursReview:
         self._connection = connection
         self._run_date = run_date
         self._bars: tuple[AfterHoursBar, ...] | None = None
-        self._targets: tuple[Any, ...] | None = None
+        self._targets: tuple[Subject, ...] | None = None
 
     @property
-    def targets(self) -> tuple[Any, ...]:
+    def targets(self) -> tuple["Subject", ...]:
         """이번 실행의 추론 대상. **종목뿐이다** — NXT에 지수가 없다(모듈 docstring)."""
         if self._targets is None:
             from modules import thesis as market_thesis
@@ -240,7 +245,7 @@ class NxtAfterHoursReview:
         )
 
 
-def build() -> dict[str, Any]:
+def build() -> ThesisRunResult:
     """Airflow 태스크 진입점. 컨텍스트를 읽어 리뷰 하나를 돌린다."""
     context = get_current_context()
     run_date = thesis_common.resolve_run_date(context)
@@ -248,4 +253,4 @@ def build() -> dict[str, Any]:
 
     with closing(thesis_common.connection()) as conn:
         written = NxtAfterHoursReview(conn, run_date=run_date).run(dag_run_id=dag_run_id)
-    return {"run_date": run_date.isoformat(), "slot": SLOT, "written": written}
+    return ThesisRunResult(run_date=run_date, slot=SLOT, written=written)

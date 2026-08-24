@@ -354,12 +354,14 @@ DAG가 쓰는 코드는 **위치는 Airflow를, 규칙은 백엔드를** 따른�
 - **모델을 두는 곳은 그 값을 만드는 모듈이다.** 단 그 모듈이 LangChain·Airflow를 import하는데
   다른 모듈도 같은 모델을 봐야 하면, 무거운 의존성이 없는 모듈로 따로 뺀다
   (`thesis_state.py`가 그 예다 — `thesis.py`는 LangChain, `thesis_common.py`는 Airflow를
-  import해서 서로를 모듈 수준에서 import할 수 없다).
+  import해서 서로를 모듈 수준에서 import할 수 없다). 소비자가 하나뿐이어도 그 모듈이 이미
+  크면 따로 뺀다(`thesis_tools.py`의 툴 응답 모델 스무 개가 그 예다).
 - **테스트도 모델로 넘긴다.** 픽스처가 맨 dict면 프롬프트에 실릴 키가 테스트에서만 존재할 수 있다.
 
-**아직 dict를 돌려주는 코드가 남아 있다.** 전환 계획은
-[docs/pydantic-return-migration.md](../docs/pydantic-return-migration.md)에 있다.
-**새 코드는 처음부터 모델로 쓴다.**
+**wire 조립 경계는 예외다.** Slack 블록, LangGraph 노드 반환, JSON Schema, 검증 전
+외부 응답 파싱, 그리고 모델을 JSON으로 펴는 자리(`thesis._tool_row`·`_body`)는 dict로 둔다.
+그 dict는 제공처 규격이거나 모델을 JSON으로 바꾸는 경계 그 자체라 모델로 감싸면 같은 검증이
+두 번이 된다. 그 밖의 도메인 값은 **처음부터 모델로 쓴다.**
 
 ### 그 밖의 타입 규칙
 

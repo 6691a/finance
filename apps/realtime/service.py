@@ -87,6 +87,18 @@ IDLE_POLL_SECONDS = 30.0
 
 DEFAULT_HEARTBEAT_PATH = Path("/tmp/kis-realtime-heartbeat.json")
 
+# 연결 하나가 세는 것. heartbeat 파일과 세션 종료 시 `source_record.metadata` 둘이 이 키
+# 집합을 그대로 펼치므로 시작값을 한 곳에 둔다. `HeartbeatExtra`가 같은 이름을 필드로 갖는다.
+SESSION_COUNTERS: dict[str, int] = {
+    "frames": 0,
+    "data_frames": 0,
+    "contract_errors": 0,
+    "quarantined": 0,
+    "stored_bars": 0,
+    "skipped_no_previous_close": 0,
+    "out_of_session_ticks": 0,
+}
+
 
 class DomesticStock(StrEnum):
     """분봉을 받을 개별 종목. 값이 한국거래소 6자리 코드다.
@@ -208,6 +220,29 @@ def issue_approval_key(rest_domain: str, app_key: SecretStr, app_secret: SecretS
     return SecretStr(key)
 
 
+class HeartbeatExtra(BaseModel):
+    """heartbeat 상태 파일에 실리는 연결 하나의 카운터.
+
+    **카운터 dict를 그대로 펼치던 자리다.** 키 집합이 코드 어디에도 안 남아서, 테스트가
+    두 칸짜리 dict를 넣어도 아무 일도 일어나지 않았다(실제 클로저가 한 번도 안 돌았다).
+
+    카운터 자체는 `run_connection` 안에서 `+=`로 갱신되므로 dict로 둔다. 모양이 남아야
+    하는 것은 **밖으로 나가는 값**이다.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    session_id: str
+    frames: int
+    data_frames: int
+    contract_errors: int
+    quarantined: int
+    stored_bars: int
+    skipped_no_previous_close: int
+    out_of_session_ticks: int
+    late_ticks: int
+
+
 class Subscription(BaseModel):
     """구독 채널 하나. 같은 연결에 다른 문서의 채널이 더 실릴 수 있다."""
 
@@ -263,7 +298,7 @@ async def _flush_timer(
     previous_closes: Mapping[str, Decimal],
     delay_seconds: float,
     counters: dict[str, int],
-    heartbeat_extra: Callable[[], dict[str, Any]],
+    heartbeat_extra: Callable[[], HeartbeatExtra],
     heartbeat: Heartbeat,
     clock: Callable[[], datetime] = lambda: datetime.now(UTC),
     sleeper: Callable[[float], Coroutine[Any, Any, None]] = asyncio.sleep,
@@ -301,7 +336,7 @@ async def _flush_timer(
             )
         if rows:
             counters["stored_bars"] += await repository.store_bars(rows)
-        heartbeat.update(heartbeat.state, **heartbeat_extra())
+        heartbeat.update(heartbeat.state, **heartbeat_extra().model_dump(mode="json"))
 
 
 async def _watchdog(
@@ -334,15 +369,7 @@ async def run_connection(
     """
     session_id = uuid.uuid4().hex
     started_at = datetime.now(UTC)
-    counters: dict[str, int] = {
-        "frames": 0,
-        "data_frames": 0,
-        "contract_errors": 0,
-        "quarantined": 0,
-        "stored_bars": 0,
-        "skipped_no_previous_close": 0,
-        "out_of_session_ticks": 0,
-    }
+    counters = dict(SESSION_COUNTERS)
     heartbeat.update("connecting", session_id=session_id)
 
     source_record_id = await repository.open_session(started_at, {"session_id": session_id, "interval": "1m"})
@@ -407,8 +434,8 @@ async def run_connection(
             aggregator.mark_connected(datetime.now(UTC))
             heartbeat.update("ready" if len(active) == len(registry) else "degraded", session_id=session_id)
 
-            def heartbeat_extra() -> dict[str, Any]:
-                return {"session_id": session_id, **counters, "late_ticks": aggregator.late_tick_count}
+            def heartbeat_extra() -> HeartbeatExtra:
+                return HeartbeatExtra(session_id=session_id, **counters, late_ticks=aggregator.late_tick_count)
 
             async with asyncio.TaskGroup() as tasks:
                 tasks.create_task(

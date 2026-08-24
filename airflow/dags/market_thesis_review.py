@@ -84,7 +84,8 @@ from modules.utility import KST_TIMEZONE
 def market_thesis_review():
     @task(task_display_name="추론 생성", execution_timeout=thesis_common.BUILD_TIMEOUT)
     def build_thesis() -> dict[str, Any]:
-        return thesis_review.build()
+        # XCom 경계다. Airflow가 Pydantic 모델을 어떻게 직렬화하는지에 기대지 않는다.
+        return thesis_review.build().model_dump(mode="json")
 
     @task(task_display_name="지평별 채점")
     def grade_followups() -> int:

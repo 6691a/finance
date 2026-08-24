@@ -40,6 +40,7 @@ from modules.thesis_state import (
     StockObservation,
     TechnicalObservation,
     TechnicalState,
+    ThesisRunResult,
 )
 from modules.utility import CONNECTION_ID, KST_TIMEZONE
 
@@ -420,8 +421,9 @@ def notify_slack(built: dict[str, Any]) -> str:
     from modules import thesis as market_thesis
 
     token, channel = slack_settings()
-    run_date = date.fromisoformat(built["run_date"])
-    run_slot = market_thesis.RunSlot(built["slot"])
+    result = ThesisRunResult.model_validate(built)
+    run_date = result.run_date
+    run_slot = market_thesis.RunSlot(result.slot)
 
     with closing(connection()) as conn:
         theses = market_thesis.existing_theses(conn, run_date=run_date, run_slot=run_slot)

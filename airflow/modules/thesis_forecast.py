@@ -98,7 +98,7 @@ def build() -> dict[str, Any]:
             as_of_at=as_of_at,
             macro_window_start=macro_window_start(conn, run_date),
             targets=targets,
-            observed=thesis_common.observed_state(conn, market_thesis, session, targets),
+            observed=thesis_common.observed_state(conn, market_thesis, session, targets, as_of_at=as_of_at),
             past=past,
             dag_run_id=dag_run_id,
         )

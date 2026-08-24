@@ -87,7 +87,7 @@ def build() -> dict[str, Any]:
             as_of_at=as_of_at,
             macro_window_start=macro_window_start(run_date),
             targets=targets,
-            observed=thesis_common.observed_state(conn, market_thesis, run_date, targets),
+            observed=thesis_common.observed_state(conn, market_thesis, run_date, targets, as_of_at=as_of_at),
             # 장후는 예측이 아니라 해석이다. 과거 예측 성적을 실어 줄 자리가 아니다.
             past={},
             dag_run_id=dag_run_id,

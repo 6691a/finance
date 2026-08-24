@@ -31,11 +31,26 @@ from pydantic import SecretStr
 
 from modules.market_session import krx_open_day
 from modules.slack import SlackError, post_message
+from modules.thesis_state import (
+    IndexObservation,
+    NxtObservedState,
+    ObservedState,
+    PastThesis,
+    SignalObservation,
+    StockObservation,
+    TechnicalObservation,
+    TechnicalState,
+)
 from modules.utility import CONNECTION_ID, KST_TIMEZONE
 
 logger = logging.getLogger(__name__)
 
 RUN_DATE_PARAM = "run_date"
+
+# 관측 상태에 싣는 신호의 창과 개수. 툴(90일)보다 짧다 — 관측 상태는 "지금 상태"고 툴은
+# "이력"이다. 개수를 묶는 이유는 프롬프트가 사건 목록으로 채워지지 않게 하기 위해서다.
+SIGNAL_STATE_DAYS = 30
+MAX_STATE_SIGNALS = 3
 
 # 달력 하루만 받는다. ISO 주 표기(2026-W32)와 기본형(20260821)을 걸러 내는 그물이다.
 CALENDAR_DAY_PATTERN = re.compile(r"\d{4}-\d{2}-\d{2}")
@@ -159,16 +174,31 @@ def origin_day(conn: Any, target_day: date, horizon_days: int) -> date | None:
     return row[0] if row else None
 
 
-def observed_state(conn: Any, market_thesis: Any, session: date | None, targets: Any) -> dict[str, Any]:
+def observed_state(
+    conn: Any,
+    market_thesis: Any,
+    session: date | None,
+    targets: Any,
+    *,
+    as_of_at: datetime | None = None,
+) -> ObservedState:
     """프롬프트에 주는 관측 상태. **전부 SQL이 계산한다.**
 
     **어느 세션을 볼지는 부르는 쪽이 정한다.** 장후는 당일, 장전은 전 영업일이고 그 판단은
     각자의 모듈에 있다. 여기서는 받은 날짜의 마감값만 읽는다. 채점과 같은 원본을 본다.
+
+    `as_of_at`을 주면 기술적 관측(`technical`)을 함께 싣는다. 추론 대상이 곧 지표 대상이라
+    툴로만 두면 모델이 호출 상한 중 대상 수만큼을 같은 조회에 쓰거나 아예 안 본다
+    (기술지표 문서 14.1절). 이력과 대상 밖 심볼은 그대로 `daily_history` 툴 몫이다.
+
+    **맨 dict가 아니라 모델을 돌려준다.** 이 값은 프롬프트와 JSONB 컬럼 둘로 나가므로 키
+    오타가 조용히 살아남으면 안 된다(`thesis_state` 모듈 docstring).
     """
     if session is None:
-        return {"session": None, "index": {}, "stock": {}}
+        return ObservedState()
 
-    state: dict[str, Any] = {"session": session.isoformat(), "index": {}, "stock": {}}
+    index: dict[str, IndexObservation] = {}
+    stock: dict[str, StockObservation] = {}
     index_codes = [s.code for s in targets if s.kind is market_thesis.ThesisSubjectKind.INDEX]
     stock_codes = [s.code for s in targets if s.kind is market_thesis.ThesisSubjectKind.STOCK]
     with conn.cursor() as cursor:
@@ -179,18 +209,131 @@ def observed_state(conn: Any, market_thesis: Any, session: date | None, targets:
         )
         for symbol, close, previous in cursor.fetchall():
             if previous:
-                state["index"][symbol] = {
-                    "close": float(close),
-                    "return_pct": round(float((close - previous) / previous) * 100, 2),
-                }
+                index[symbol] = IndexObservation(
+                    close=float(close),
+                    return_pct=round(float((close - previous) / previous) * 100, 2),
+                )
         cursor.execute(
             "SELECT stock_code, close_price FROM stock_investor_trade_daily "
             "WHERE provider = 'kis' AND business_date = %s AND stock_code = ANY(%s)",
             (session, stock_codes),
         )
         for code, close in cursor.fetchall():
-            state["stock"][code] = {"close": float(close)}
-    return state
+            stock[code] = StockObservation(close=float(close))
+
+    technical = (
+        TechnicalState()
+        if as_of_at is None
+        else technical_state(conn, [target.code for target in targets], as_of_at=as_of_at)
+    )
+    return ObservedState(session=session, index=index, stock=stock, technical=technical)
+
+
+def technical_state(conn: Any, subject_codes: Sequence[str], *, as_of_at: datetime) -> TechnicalState:
+    """추론 대상의 기술적 관측. 지표 다섯 칸과 최근 신호다(문서 14.1절).
+
+    **절대값이 아니라 비율로 준다.** `sma20=3160.2`를 주면 모델이 종가와 비교하는 계산을
+    해야 하고, 그 계산은 틀릴 수 있다. 절대값이 필요하면 `daily_history` 툴이 있다.
+
+    지표를 못 내는 대상은 `None`이다. 빈 dict나 0으로 채우면 모델이 "지표가 중립"으로 읽는다.
+
+    슬롯으로 갈리지 않는다 — 세션과 기준 시각은 부르는 쪽이 이미 정해서 넘겼다.
+    """
+    from modules import technical
+    from modules.thesis import (
+        DAILY_HISTORY,
+        DOMESTIC_MAX_DAILY_CHANGE_PCT,
+        RECENT_SIGNALS,
+        ThesisEvidenceKind,
+        evidence_ref,
+    )
+
+    codes = list(subject_codes)
+    if not codes:
+        return TechnicalState()
+
+    with conn.cursor() as cursor:
+        cursor.execute(
+            DAILY_HISTORY,
+            {
+                "symbols": codes,
+                # 대상은 부르는 쪽이 이미 정했다. watched를 다시 끌어오면 추론하지 않는
+                # 종목의 지표가 프롬프트에 실린다.
+                "include_watched": False,
+                "as_of_at": as_of_at,
+                "limit": technical.TECHNICAL_LOOKBACK_BARS,
+            },
+        )
+        rows = list(cursor.fetchall())
+
+        # 신호는 대상마다 따로 묻는다. 추론 툴과 **같은 SQL**이라 cutoff 규칙이 어긋날 수
+        # 없고, 대상이 두셋뿐이라 왕복을 아끼려고 파일을 하나 더 만들 값어치가 없다.
+        signals: dict[str, tuple[SignalObservation, ...]] = {}
+        for code in codes:
+            cursor.execute(
+                RECENT_SIGNALS,
+                {
+                    "symbol": code,
+                    "since_date": (as_of_at - timedelta(days=SIGNAL_STATE_DAYS)).date(),
+                    "as_of_at": as_of_at,
+                    "limit": MAX_STATE_SIGNALS,
+                },
+            )
+            signals[code] = tuple(
+                SignalObservation(
+                    # 인용할 수 있게 ref를 붙인다. 툴이 준 ref와 같은 모양이다.
+                    ref=evidence_ref(ThesisEvidenceKind.TECHNICAL_SIGNAL, str(row[0])),
+                    signal_date=row[2],
+                    kind=str(row[3]),
+                    direction=str(row[4]),
+                )
+                for row in cursor.fetchall()
+            )
+
+    grouped: dict[str, list[Any]] = {}
+    for row in rows:
+        grouped.setdefault(str(row[1]), []).append(row)
+
+    subjects: dict[str, TechnicalObservation | None] = {}
+    as_of_dates = []
+    for code in codes:
+        subject_rows = grouped.get(code)
+        if not subject_rows:
+            subjects[code] = None
+            continue
+        ascending = list(reversed(subject_rows))
+        snapshot = technical.summarize(
+            code,
+            str(ascending[0][2] or code),
+            [
+                technical.DailyBar(
+                    business_date=row[5],
+                    open=float(row[6]),
+                    high=float(row[7]),
+                    low=float(row[8]),
+                    close=float(row[9]),
+                    volume=None if row[10] is None else int(row[10]),
+                )
+                for row in ascending
+            ],
+            max_abs_daily_change_pct=DOMESTIC_MAX_DAILY_CHANGE_PCT,
+        )
+        if snapshot is None:
+            subjects[code] = None
+            continue
+        as_of_dates.append(snapshot.as_of_date)
+        subjects[code] = TechnicalObservation(
+            close_vs_sma20_pct=round((snapshot.close / snapshot.sma20 - 1) * 100, 2),
+            sma20_vs_sma60_pct=round((snapshot.sma20 / snapshot.sma60 - 1) * 100, 2),
+            rsi14=round(snapshot.rsi14, 1),
+            macd_histogram=round(snapshot.macd_histogram, 2),
+            volume_ratio20=None if snapshot.volume_ratio20 is None else round(snapshot.volume_ratio20, 2),
+            recent_signals=signals.get(code, ()),
+        )
+
+    # 사건 이름(골든크로스 등)을 여기서 붙이지 않는다. 모델은 kind·direction을 그대로 읽고,
+    # 사람이 읽는 표기는 Slack 표와 툴 근거 제목이 갖는다.
+    return TechnicalState(as_of_date=max(as_of_dates) if as_of_dates else None, subjects=subjects)
 
 
 def build_and_store(
@@ -201,8 +344,8 @@ def build_and_store(
     as_of_at: datetime,
     macro_window_start: datetime,
     targets: Any,
-    observed: dict[str, Any],
-    past: Mapping[str, Sequence[Mapping[str, Any]]],
+    observed: ObservedState | NxtObservedState,
+    past: Mapping[str, Sequence[PastThesis]],
     dag_run_id: str,
 ) -> int:
     """추론을 만들고 저장한다. 저장한 행 수를 준다.
@@ -258,7 +401,7 @@ def build_and_store(
         observed_state=observed,
         llm_model=model_name(model),
         tool_rounds=rounds,
-        precedents={code: [int(row["id"]) for row in rows] for code, rows in past.items()},
+        precedents={code: [row.id for row in rows] for code, rows in past.items()},
     )
     logger.info("stored %s theses for %s %s (%s tool rounds)", len(rows), run_date, run_slot.value, rounds)
     return len(rows)

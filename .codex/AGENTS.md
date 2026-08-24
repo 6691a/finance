@@ -163,6 +163,23 @@ uv run ruff check apps airflow migrations tests
 
 ## 타입 모델링 규칙
 
+### 함수가 돌려주는 데이터 모양은 Pydantic 모델이다
+
+**`dict[str, Any]`·`list[dict]`·`Mapping[str, Any]`를 반환 타입으로 쓰지 않는다.** 모듈 경계를 넘는 값은 모델로 선언한다. 이유는 셋이다. 키 오타가 런타임까지 살아 있고(프롬프트나 JSONB로 나가는 값이면 아무도 못 잡는다), 부르는 쪽이 무슨 키를 기대해도 되는지 코드에 안 남고, pyrefly가 대신 볼 수 있는 것을 사람이 보게 된다.
+
+기준 구현은 `airflow/modules/thesis_state.py`(`ObservedState`·`TechnicalState`·`PastThesis`)와 `airflow/modules/technical.py`(`DailyBar`·`TechnicalSnapshot`·`SignalEvent`)다.
+
+- 모델은 `ConfigDict(frozen=True)`다. 재시도 경로에서 값이 바뀌면 원본과 저장값이 어긋난다.
+- **JSON으로 바꾸는 것은 경계에서 한 번뿐이다.** `model_dump(mode="json")`을 프롬프트 조립과 DB 저장 자리에서만 부른다. 중간 층은 모델을 그대로 들고 간다. `json.dumps(..., default=str)`로 때우지 않는다 — `date`가 조용히 문자열이 되는 자리가 늘어난다.
+- **`dict[str, 모델]`은 괜찮다.** 키가 심볼·종목코드처럼 열린 값이면 매핑이 맞는 모양이다. 금지하는 것은 값이 `Any`인 매핑이다.
+- **키와 값이 층을 섞으면 한 단 내린다.** `{"as_of_date": ..., "KOSPI": {...}}`는 모델로 표현할 수 없다. `{"as_of_date": ..., "subjects": {"KOSPI": {...}}}`로 만든다.
+- **모델을 두는 곳은 그 값을 만드는 모듈이다.** 단 그 모듈이 LangChain·Airflow를 import하는데 다른 모듈도 같은 모델을 봐야 하면 무거운 의존성이 없는 모듈로 따로 뺀다(`thesis_state.py`가 그 예다).
+- 테스트도 모델로 넘긴다. 픽스처가 맨 dict면 프롬프트에 실릴 키가 테스트에서만 존재할 수 있다.
+
+**아직 dict를 돌려주는 코드가 남아 있다.** 전환 계획은 [docs/pydantic-return-migration.md](../docs/pydantic-return-migration.md)에 있다. **새 코드는 처음부터 모델로 쓴다.**
+
+### 그 밖의 타입 규칙
+
 - 값의 종류가 정해진 상태·분류 필드는 일반 `str` 대신 Python `StrEnum`과 SQLAlchemy `Enum`을 사용한다.
 - SQLAlchemy `Enum`은 `native_enum=False, length=20, values_callable=...` 형태로 선언한다. PostgreSQL native enum은 값 추가·삭제 마이그레이션 비용이 커서 쓰지 않는다.
 - Enum 컬럼에는 허용 값을 제한하는 데이터베이스 `CHECK` 제약을 함께 둔다.

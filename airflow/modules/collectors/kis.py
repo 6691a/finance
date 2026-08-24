@@ -48,6 +48,7 @@ from collections.abc import Mapping, Sequence
 from datetime import UTC, date, datetime, time, timedelta
 from decimal import Decimal, InvalidOperation
 from enum import StrEnum
+from time import sleep as wait_seconds
 from typing import Any, Protocol, Self
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlencode
@@ -836,6 +837,118 @@ INDEX_BAR_UPSERT = read_sql("postgres", "index_bar", "upsert.sql")
 INDEX_FUTURE_BAR_UPSERT = read_sql("postgres", "index_future_bar", "upsert.sql")
 STOCK_BAR_UPSERT = read_sql("postgres", "stock_bar", "upsert.sql")
 MARKET_MOVEMENT_UPSERT = read_sql("postgres", "market_movement_snapshot", "upsert.sql")
+INDEX_DAILY_UPSERT = read_sql("postgres", "index_daily", "upsert.sql")
+
+# 지수 일봉(국내주식업종기간별시세). 기술지표 계산의 원천이다
+# (docs/market-technical-indicators.md 4절).
+INDEX_DAILY_PATH = "/uapi/domestic-stock/v1/quotations/inquire-daily-indexchartprice"
+INDEX_DAILY_TR_ID = "FHKUP03500100"
+INDEX_DAILY_SOURCE_KEY = "inquire_daily_indexchartprice"
+# 연속조회 여부는 응답 헤더 `tr_cont`로 온다. 달력 수집기와 같은 값이다.
+INDEX_DAILY_CONTINUE_FLAGS = frozenset({"M", "F"})
+# 한 심볼에 허용하는 최대 장 수. 200달력일 구간이 이 안에 들어오지 않으면 계약이 깨진 것이다.
+INDEX_DAILY_MAX_PAGES = 10
+# 페이지 사이 대기. 달력 수집기의 PAGE_DELAY_SECONDS와 같은 이유다.
+INDEX_DAILY_PAGE_DELAY_SECONDS = 0.5
+# 한 응답에 오는 최대 봉 수(KIS 기간별 차트 공통 상한, 실측 전 가정). **응답이 이만큼 가득
+# 찼는데 tr_cont가 없으면 조용히 잘린 것이다** — 확정 수급 일별 API가 그 행태다(연속조회
+# 없이 30거래일로 잘림, kis_investor_flow 실측). 그때는 가장 오래된 날짜 하루 전으로 창을
+# 옮겨 다시 받는다. 짧은 응답은 구간을 다 준 것이므로 걷지 않는다.
+INDEX_DAILY_FULL_PAGE_ROWS = 100
+
+
+class KisDailyIndexRow(BaseModel):
+    """지수 일봉 `output2` 한 건. 값은 전부 문자열이고 공백 패딩이 붙는다."""
+
+    model_config = ConfigDict(frozen=True, extra="ignore")
+
+    business_date: str = Field(alias="stck_bsop_date")
+    open: str = Field(alias="bstp_nmix_oprc")
+    high: str = Field(alias="bstp_nmix_hgpr")
+    low: str = Field(alias="bstp_nmix_lwpr")
+    close: str = Field(alias="bstp_nmix_prpr")
+    volume: str = Field(alias="acml_vol")
+
+
+class DailyIndexBar(BaseModel):
+    """정규화한 지수 일봉 1건."""
+
+    model_config = ConfigDict(frozen=True)
+
+    business_date: date
+    open: Decimal
+    high: Decimal
+    low: Decimal
+    close: Decimal
+    volume: int = Field(ge=0)
+
+    @field_validator("open", "high", "low", "close")
+    @classmethod
+    def require_positive_and_finite(cls, value: Decimal) -> Decimal:
+        if not value.is_finite() or value <= 0:
+            raise ValueError("index daily price must be a finite positive number")
+        return value
+
+    @model_validator(mode="after")
+    def require_a_consistent_range(self) -> Self:
+        if self.high < max(self.open, self.close, self.low):
+            raise ValueError("high must be at least open, close, and low")
+        if self.low > min(self.open, self.close, self.high):
+            raise ValueError("low must be at most open, close, and high")
+        return self
+
+
+class DailyIndexFetch(BaseModel):
+    """한 지수·한 구간의 일봉 수집 결과. `bars`는 거래일 오름차순이다."""
+
+    model_config = ConfigDict(frozen=True)
+
+    symbol: str
+    start_date: date
+    end_date: date
+    bars: tuple[DailyIndexBar, ...]
+    page_count: int
+    started_at: AwareDatetime
+    completed_at: AwareDatetime
+
+
+def _daily_index_rows(body: bytes) -> tuple[KisDailyIndexRow, ...]:
+    """일봉 응답 본문을 검증해 원시 행을 꺼낸다. `rt_cd`가 0이 아니면 `KisResultError`다."""
+    try:
+        payload = json.loads(body)
+    except json.JSONDecodeError as error:
+        raise KisPayloadError(f"KIS returned a non-JSON index daily body: {error}") from None
+    if not isinstance(payload, dict):
+        raise KisPayloadError("KIS returned an index daily body that is not an object")
+
+    code = str(payload.get("rt_cd", ""))
+    if code != "0":
+        raise KisResultError(code, str(payload.get("msg1", "")).strip())
+
+    output = payload.get("output2")
+    if not isinstance(output, list):
+        raise KisPayloadError("KIS index daily response has no output2 list")
+    try:
+        return tuple(KisDailyIndexRow.model_validate(row) for row in output)
+    except ValidationError as error:
+        raise KisPayloadError("KIS index daily row is malformed") from error
+
+
+def _daily_index_bar(row: KisDailyIndexRow) -> DailyIndexBar:
+    raw_date = row.business_date.strip()
+    if not re.fullmatch(r"\d{8}", raw_date):
+        raise KisPayloadError(f"KIS index daily date is malformed: {raw_date!r}")
+    try:
+        return DailyIndexBar(
+            business_date=date(int(raw_date[:4]), int(raw_date[4:6]), int(raw_date[6:])),
+            open=Decimal(row.open.strip()),
+            high=Decimal(row.high.strip()),
+            low=Decimal(row.low.strip()),
+            close=Decimal(row.close.strip()),
+            volume=int(row.volume.strip()),
+        )
+    except (InvalidOperation, ValueError, ValidationError) as error:
+        raise KisPayloadError(f"KIS index daily bar is malformed: {error}") from None
 
 
 class SymbolOutcome(BaseModel):
@@ -1301,3 +1414,128 @@ class KisQuoteCollector:
                 ],
             )
         return len(movements), tuple(outcomes)
+
+    def fetch_index_daily(
+        self,
+        index: DomesticIndex,
+        start_date: date,
+        end_date: date,
+        *,
+        sleep: float = INDEX_DAILY_PAGE_DELAY_SECONDS,
+    ) -> DailyIndexFetch:
+        """한 지수의 확정 일봉을 구간으로 받는다.
+
+        페이지 이어받기는 두 행태를 다 다룬다(문서 4.1절). 응답 헤더 `tr_cont`가 `M`/`F`면
+        같은 구간을 `N`으로 다시 묻고, 헤더 없이 가득 찬 응답이 오면 가장 오래된 날짜 하루
+        전으로 창을 옮긴다. 마지막 장까지 받고도 남았으면 부분 저장 대신 실패시킨다 —
+        잘린 구간은 지표 계산 창에 구멍을 남긴다.
+        """
+        started_at = datetime.now(UTC)
+        seen: dict[date, DailyIndexBar] = {}
+        window_end = end_date
+        tr_cont = ""
+        page_count = 0
+
+        for page_count in range(1, INDEX_DAILY_MAX_PAGES + 1):
+            body, _, headers = send_get(
+                self._token,
+                self._app_key,
+                self._app_secret,
+                INDEX_DAILY_PATH,
+                INDEX_DAILY_TR_ID,
+                {
+                    "FID_COND_MRKT_DIV_CODE": "U",  # U = 업종. 분봉 조회와 같은 구분이다
+                    "FID_INPUT_ISCD": index.index_code,
+                    "FID_INPUT_DATE_1": start_date.strftime("%Y%m%d"),
+                    "FID_INPUT_DATE_2": window_end.strftime("%Y%m%d"),
+                    "FID_PERIOD_DIV_CODE": "D",
+                },
+                tr_cont,
+            )
+            rows = _daily_index_rows(body)
+            for row in rows:
+                bar = _daily_index_bar(row)
+                if not start_date <= bar.business_date <= end_date:
+                    raise KisPayloadError(
+                        f"KIS gave a bar outside the requested span: {bar.business_date} for {index.value}"
+                    )
+                if bar.business_date in seen:
+                    raise KisPayloadError(f"KIS gave a duplicate date {bar.business_date} for {index.value}")
+                seen[bar.business_date] = bar
+
+            if headers.get("tr_cont", "") in INDEX_DAILY_CONTINUE_FLAGS:
+                tr_cont = "N"
+                wait_seconds(sleep)
+                continue
+            if not rows:
+                break
+            oldest = min(seen)
+            if len(rows) < INDEX_DAILY_FULL_PAGE_ROWS or oldest <= start_date:
+                break
+            # 가득 찼는데 이어받기 표식이 없다 — 조용히 잘린 응답이다. 창을 뒤로 옮긴다.
+            window_end = oldest - timedelta(days=1)
+            tr_cont = ""
+            wait_seconds(sleep)
+        else:
+            raise KisPayloadError(f"KIS still had more to give after {INDEX_DAILY_MAX_PAGES} pages for {index.value}")
+
+        if not seen:
+            raise KisPayloadError(f"KIS returned no daily bars for {index.value} between {start_date} and {end_date}")
+
+        return DailyIndexFetch(
+            symbol=index.value,
+            start_date=start_date,
+            end_date=end_date,
+            bars=tuple(seen[day] for day in sorted(seen)),
+            page_count=page_count,
+            started_at=started_at,
+            completed_at=datetime.now(UTC),
+        )
+
+    def store_index_daily(self, connection: Connection, fetch: DailyIndexFetch) -> int:
+        """한 지수·한 구간의 일봉을 저장한다. 겹치는 날짜는 확정값으로 갱신된다."""
+        with connection.cursor() as cursor:
+            cursor.execute(
+                SOURCE_RECORD_INSERT,
+                (
+                    "api",
+                    SOURCE,
+                    INDEX_DAILY_SOURCE_KEY,
+                    fetch.started_at,
+                    fetch.completed_at,
+                    "succeeded",
+                    len(fetch.bars),
+                    # 원본은 남기지 않는다. 어느 구간을 몇 장으로 받았는지면 재현에 충분하다.
+                    None,
+                    json.dumps(
+                        {
+                            "symbol": fetch.symbol,
+                            "start_date": fetch.start_date.isoformat(),
+                            "end_date": fetch.end_date.isoformat(),
+                            "page_count": fetch.page_count,
+                            "bar_count": len(fetch.bars),
+                        },
+                        ensure_ascii=False,
+                    ),
+                ),
+            )
+            source_record_id = cursor.fetchone()[0]
+            execute_upserts(
+                cursor,
+                INDEX_DAILY_UPSERT,
+                [
+                    (
+                        SOURCE,
+                        fetch.symbol,
+                        bar.business_date,
+                        bar.open,
+                        bar.high,
+                        bar.low,
+                        bar.close,
+                        bar.volume,
+                        source_record_id,
+                    )
+                    for bar in fetch.bars
+                ],
+            )
+        return len(fetch.bars)

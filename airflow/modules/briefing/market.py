@@ -24,6 +24,7 @@ from typing import Any, Protocol, Self
 from pendulum import timezone
 from pydantic import AwareDatetime, BaseModel, ConfigDict
 
+from modules import technical
 from modules.briefing import blocks
 from modules.sql import read_sql
 from modules.utility import KST_TIMEZONE
@@ -43,6 +44,28 @@ SPREAD_PAIRS = read_sql("postgres", "indicator_observation", "select_spread_pair
 
 INTRADAY_SERIES = read_sql("postgres", "quote_bar", "select_intraday_series.sql")
 DOMESTIC_STOCK_SERIES = read_sql("postgres", "stock_bar", "select_intraday_series.sql")
+
+# 기술지표는 추론 툴과 같은 조회를 쓴다. 지수는 여기 이름으로, 종목은 watched 목록으로 온다.
+TECHNICAL_HISTORY = read_sql("postgres", "technical", "select_history.sql")
+RECENT_SIGNALS = read_sql("postgres", "technical_signal", "select_recent.sql")
+TECHNICAL_INDEXES: tuple[str, ...] = ("KOSPI", "KOSDAQ")
+
+# 표에 실을 신호의 나이 상한. 달력일이다 — 표시용 칸이라 하루 이틀 경계가 흔들려도 읽는
+# 사람의 판단이 달라지지 않는다. 채점(문서 12.6절)은 반대로 영업일로 센다.
+SIGNAL_LOOKBACK = timedelta(days=30)
+
+# 사건 이름. `매수`·`매도` 낱말을 쓰지 않는다 — 표는 무슨 일이 있었는지만 말하고
+# 그것이 좋은 신호였는지는 사후 수익률이 답한다.
+SIGNAL_LABELS: dict[tuple[str, str], str] = {
+    ("sma_cross", "up"): "골든크로스",
+    ("sma_cross", "down"): "데드크로스",
+    ("macd_cross", "up"): "MACD↑",
+    ("macd_cross", "down"): "MACD↓",
+    ("rsi_reversal", "up"): "RSI 과매도 탈출",
+    ("rsi_reversal", "down"): "RSI 과매수 이탈",
+}
+# 국내 종목의 하루 가격제한폭보다 큰 단절은 분할·병합이나 원천 이상을 의심한다(문서 5.1절).
+DOMESTIC_MAX_DAILY_CHANGE_PCT = 35.0
 
 US_EASTERN = timezone("America/New_York")
 
@@ -327,6 +350,22 @@ class RateSpread(BaseModel):
     observed_on: date
 
 
+class RecentSignal(BaseModel):
+    """대상 하나의 가장 최근 매매 신호. **사건이지 판정이 아니다.**"""
+
+    model_config = ConfigDict(frozen=True)
+
+    symbol: str
+    signal_date: date
+    kind: str
+    direction: str
+
+    @property
+    def label(self) -> str:
+        """표에 찍는 사건 이름. 모르는 조합은 원본 값을 그대로 보인다."""
+        return SIGNAL_LABELS.get((self.kind, self.direction), f"{self.kind} {self.direction}")
+
+
 class MarketSummary(BaseModel):
     """두 리포트가 함께 쓰는 집계 결과. 시각은 전부 UTC다."""
 
@@ -342,6 +381,8 @@ class MarketSummary(BaseModel):
     funds: MarketFundsSnapshot | None = None
     short_positions: tuple[StockShortPositionSnapshot, ...] = ()
     spreads: tuple[RateSpread, ...] = ()
+    technicals: tuple[technical.TechnicalSnapshot, ...] = ()
+    signals: tuple[RecentSignal, ...] = ()
 
 
 class ChartSeries(BaseModel):
@@ -484,6 +525,13 @@ def collect_summary(connection: Connection, now: datetime) -> MarketSummary:
         ),
     )
     spreads = _rate_spreads(connection, (now - RATE_LOOKBACK).date())
+    technicals = _technicals(connection, now)
+    signals = _fetch(
+        connection,
+        RECENT_SIGNALS,
+        {"since_date": (now - SIGNAL_LOOKBACK).astimezone(KST_TIMEZONE).date()},
+        lambda row: RecentSignal(symbol=row[0], signal_date=row[1], kind=row[2], direction=row[3]),
+    )
 
     return MarketSummary(
         generated_at=now,
@@ -496,7 +544,57 @@ def collect_summary(connection: Connection, now: datetime) -> MarketSummary:
         funds=funds,
         short_positions=short_positions,
         spreads=spreads,
+        technicals=technicals,
+        signals=signals,
     )
+
+
+def _technicals(connection: Connection, now: datetime) -> tuple[technical.TechnicalSnapshot, ...]:
+    """지수와 watched 종목의 기술지표. 조회 한 번으로 전부 받아 대상별로 계산한다.
+
+    지표를 못 내는 대상은 결과에서 빠진다. **0으로 채우지 않는다** — 표에 줄이 없는 것이
+    "아직 표본이 모자라다"를 말하는 방법이다.
+    """
+    with connection.cursor() as cursor:
+        cursor.execute(
+            TECHNICAL_HISTORY,
+            {
+                "symbols": list(TECHNICAL_INDEXES),
+                "include_watched": True,
+                "as_of_at": now,
+                "limit": technical.TECHNICAL_LOOKBACK_BARS,
+            },
+        )
+        rows = list(cursor.fetchall())
+
+    grouped: dict[str, list[Any]] = {}
+    for row in rows:
+        grouped.setdefault(row[1], []).append(row)
+
+    snapshots = []
+    for symbol, subject_rows in grouped.items():
+        # 조회는 최신순이고 계산기는 오름차순을 받는다.
+        ascending = list(reversed(subject_rows))
+        bars = [
+            technical.DailyBar(
+                business_date=row[5],
+                open=float(row[6]),
+                high=float(row[7]),
+                low=float(row[8]),
+                close=float(row[9]),
+                volume=None if row[10] is None else int(row[10]),
+            )
+            for row in ascending
+        ]
+        snapshot = technical.summarize(
+            symbol,
+            str(ascending[0][2] or symbol),
+            bars,
+            max_abs_daily_change_pct=DOMESTIC_MAX_DAILY_CHANGE_PCT,
+        )
+        if snapshot is not None:
+            snapshots.append(snapshot)
+    return tuple(snapshots)
 
 
 def collect_chart_series(
@@ -634,6 +732,7 @@ def render_blocks(
             blocks.header(f"🌅 한국장 프리마켓 브리핑 · {blocks.timestamp(local)}"),
             *_quote_section("국내 종목(프리마켓)", _domestic_stocks(summary)),
             *_chart_section(chart_files, chart_error),
+            *_technical_section(summary),
             *_quote_section("환율(실시간·장외)", _fx_quotes(summary)),
             *_market_funds_section(summary),
             *_short_position_section(summary),
@@ -644,6 +743,7 @@ def render_blocks(
             blocks.header(f"📈 한국장 브리핑 · {blocks.timestamp(local)} · {session_state(summary.generated_at)}"),
             *_quote_section("국내 지수·선물", _korea_quotes(summary)),
             *_chart_section(chart_files, chart_error),
+            *_technical_section(summary),
             *_quote_section("장중 해외", _intraday_overseas(summary)),
             *_quote_section("환율(실시간·장외)", _fx_quotes(summary)),
             *_flow_section(summary),
@@ -692,7 +792,13 @@ def _scope_quotes(summary: MarketSummary, scope: MarketScope) -> tuple[QuoteChan
     return _korea_quotes(summary)
 
 
-def _fetch(connection: Connection, statement: str, parameters: tuple, build: Callable[[Any], Any]) -> tuple:
+def _fetch(
+    connection: Connection,
+    statement: str,
+    parameters: tuple | dict[str, Any],
+    build: Callable[[Any], Any],
+) -> tuple:
+    """psycopg는 위치(tuple)와 이름(dict) 파라미터를 둘 다 받는다. 문장이 쓰는 쪽을 그대로 넘긴다."""
     with connection.cursor() as cursor:
         cursor.execute(statement, parameters)
         return tuple(build(row) for row in cursor.fetchall())
@@ -869,6 +975,49 @@ def _market_funds_section(summary: MarketSummary) -> list[dict[str, Any]]:
         ("미수금", f"{funds.unsettled_amount:,.0f}", _signed_amount(funds.unsettled_change), stamp),
     ]
     return blocks.table_section("증시자금(억원)", ("구분", "잔고", "전일 대비", "기준"), rows)
+
+
+def _technical_section(summary: MarketSummary) -> list[dict[str, Any]]:
+    """확정 일봉 기술지표. **수치와 기준일만 말한다.**
+
+    상승·하락·매수·매도 같은 판정 열을 두지 않는다. 방향은 `thesis`가 확률로 내고 채점을
+    받는다. 여기서 판정을 흉내 내면 채점 없는 신호가 브리핑에 실린다.
+    """
+    if not summary.technicals:
+        return []
+    latest = {signal.symbol: signal for signal in summary.signals}
+    rows = [
+        (
+            snapshot.label,
+            _ratio_percent(snapshot.close, snapshot.sma20),
+            _ratio_percent(snapshot.sma20, snapshot.sma60),
+            f"{snapshot.rsi14:.1f}",
+            f"{snapshot.macd_histogram:+,.2f}",
+            "-" if snapshot.volume_ratio20 is None else f"{snapshot.volume_ratio20:.2f}x",
+            _signal_label(latest.get(snapshot.subject_code)),
+            f"{snapshot.as_of_date:%m/%d}",
+        )
+        for snapshot in summary.technicals
+    ]
+    return blocks.table_section(
+        "기술적 관측(확정 일봉)",
+        ("대상", "종가/SMA20", "SMA20/SMA60", "RSI14", "MACD hist", "거래량/20일", "신호", "기준"),
+        rows,
+    )
+
+
+def _signal_label(signal: RecentSignal | None) -> str:
+    """사건 이름과 발생일. 최근 창에 아무 것도 없으면 `-`다."""
+    if signal is None:
+        return "-"
+    return f"{signal.label} {signal.signal_date:%m/%d}"
+
+
+def _ratio_percent(numerator: float, denominator: float) -> str:
+    """`(왼쪽 / 오른쪽 - 1) × 100`. 이동평균 위인지 아래인지를 한 칸으로 읽는다."""
+    if denominator == 0:
+        return "-"
+    return f"{(numerator / denominator - 1) * 100:+.2f}%"
 
 
 def _short_position_section(summary: MarketSummary) -> list[dict[str, Any]]:

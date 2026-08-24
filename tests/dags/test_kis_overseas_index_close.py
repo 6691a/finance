@@ -105,3 +105,26 @@ def test_the_session_date_is_the_new_york_date():
 
     assert kis_overseas_index_close.us_session_date(moment) == date(2026, 8, 24)
     assert kis_overseas_index_close.us_session_date(moment) == market.us_session_date(moment)
+
+
+def test_the_session_date_comes_from_the_run_not_the_wall_clock(monkeypatch):
+    # KST 토 07:30 인터벌 = UTC 금 22:30 = 뉴욕 금 18:30. 그 run이 월요일 오후에 돌아도 금요일 세션이다.
+    interval_end = datetime(2026, 8, 21, 22, 30, tzinfo=UTC)
+
+    class FakeRun:
+        run_after = datetime(2026, 8, 24, 22, 30, tzinfo=UTC)
+
+    monkeypatch.setattr(
+        kis_overseas_index_close,
+        "get_current_context",
+        lambda: {"data_interval_end": interval_end, "dag_run": FakeRun()},
+    )
+    assert kis_overseas_index_close._session_date() == date(2026, 8, 21)
+
+    # data interval이 없는 수동 run은 run_after로 떨어진다.
+    monkeypatch.setattr(
+        kis_overseas_index_close,
+        "get_current_context",
+        lambda: {"data_interval_end": None, "dag_run": FakeRun()},
+    )
+    assert kis_overseas_index_close._session_date() == date(2026, 8, 24)

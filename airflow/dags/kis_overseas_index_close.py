@@ -27,6 +27,9 @@ KST 월요일 아침에는 직전 미국 세션이 없다. 미국 휴장일은 `
 기대한 세션 날짜(뉴욕 기준)와 대조해 다르면 실패시킨다. 묵은 봉을 오늘 것처럼 저장하는
 것보다 멈추는 편이 낫다.
 
+**기대 세션은 벽시계가 아니라 이 run의 `data_interval_end`에서 나온다.** 수동 run처럼
+data interval이 없으면 `dag_run.run_after`를 쓴다.
+
 ## 실패와 재시도
 
 | 상황 | 처리 |
@@ -47,13 +50,13 @@ KST 월요일 아침에는 직전 미국 세션이 없다. 미국 휴장일은 `
 import logging
 import os
 from contextlib import closing
-from datetime import UTC, date, datetime, timedelta
+from datetime import date, timedelta
 from typing import Any
 
 import pendulum
 from airflow.exceptions import AirflowFailException, AirflowSkipException
 from airflow.providers.postgres.hooks.postgres import PostgresHook
-from airflow.sdk import Variable, dag, task
+from airflow.sdk import Variable, dag, get_current_context, task
 from pydantic import SecretStr
 
 from modules.collectors.kis import KisHTTPError, KisPayloadError, KisResultError, access_token
@@ -82,6 +85,19 @@ def _credentials() -> tuple[SecretStr, SecretStr]:
 def _cached_token(app_key: SecretStr, app_secret: SecretStr, force: bool = False) -> SecretStr:
     """`kis_quote_intraday`와 같은 캐시를 쓴다. 저장소를 고르는 일만 여기 있다."""
     return access_token(Variable, app_key, app_secret, force=force)
+
+
+def _session_date() -> date:
+    """이 run이 기대하는 미국 세션 날짜. 기준 시각은 벽시계가 아니라 이 run의 시각이다.
+
+    `data_interval_end`가 없는 수동 run은 `dag_run.run_after`를 쓴다. `datetime.now`를 쓰면
+    DAG을 켤 때 Airflow가 만드는 직전 인터벌 run이 그 인터벌 대신 지금 시각으로 세션을 잡아,
+    아직 끝나지 않은 세션을 기대하며 죽는다(2026-08-24 관측: 토요일 인터벌 run이 KST 월요일
+    오후에 돌면서 월요일 세션을 기대했다).
+    """
+    context = get_current_context()
+    reference = context.get("data_interval_end") or context["dag_run"].run_after
+    return us_session_date(reference)
 
 
 def _connection() -> Any:
@@ -135,7 +151,7 @@ def _fetch_with_retry(
 def kis_overseas_index_close():
     @task(task_display_name="미국 지수 마감 1분봉")
     def collect() -> int:
-        session_date = us_session_date(datetime.now(UTC))
+        session_date = _session_date()
         _skip_when_closed(session_date)
 
         app_key, app_secret = _credentials()

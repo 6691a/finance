@@ -527,7 +527,7 @@ async def test_flush_timer_stores_bars_after_the_delay(tmp_path):
     aggregator.mark_connected(datetime(2026, 8, 18, 9, 0, 0, tzinfo=KST))
     aggregator.add(tick(minute=2, second=10))
     repository = FakeRepository()
-    counters = {"stored_bars": 0, "skipped_no_previous_close": 0}
+    counters = dict(service.SESSION_COUNTERS)
     heartbeat = heartbeat_module.Heartbeat(tmp_path / "heartbeat.json")
     now = datetime(2026, 8, 18, 9, 2, 40, tzinfo=KST).astimezone(UTC)
     slept: list[float] = []
@@ -545,7 +545,7 @@ async def test_flush_timer_stores_bars_after_the_delay(tmp_path):
             {"005930": Decimal(150000)},
             3.0,
             counters,
-            dict,
+            lambda: service.HeartbeatExtra(session_id="s1", **counters, late_ticks=0),
             heartbeat,
             clock=lambda: now,
             sleeper=sleeper,
@@ -569,7 +569,7 @@ async def test_flush_timer_skips_series_without_a_previous_close(tmp_path):
     aggregator = MinuteAggregator()
     aggregator.add(tick(minute=2))
     repository = FakeRepository()
-    counters = {"stored_bars": 0, "skipped_no_previous_close": 0}
+    counters = dict(service.SESSION_COUNTERS)
     heartbeat = heartbeat_module.Heartbeat(tmp_path / "heartbeat.json")
 
     async def sleeper(seconds: float) -> None:
@@ -584,7 +584,7 @@ async def test_flush_timer_skips_series_without_a_previous_close(tmp_path):
             {},
             3.0,
             counters,
-            dict,
+            lambda: service.HeartbeatExtra(session_id="s1", **counters, late_ticks=0),
             heartbeat,
             clock=lambda: datetime(2026, 8, 18, 9, 2, 40, tzinfo=KST).astimezone(UTC),
             sleeper=sleeper,
@@ -637,3 +637,24 @@ def test_healthcheck_flags_a_stale_heartbeat(tmp_path):
 
     later = datetime.now(UTC) + timedelta(seconds=heartbeat_module.HEARTBEAT_STALE_SECONDS + 1)
     assert heartbeat_module.healthcheck(path, now=later) == 1
+
+
+def test_heartbeat_extra_covers_every_session_counter():
+    """카운터를 늘리고 모델을 안 고치면 heartbeat 파일에서 그 값이 조용히 빠진다."""
+    fields = set(service.HeartbeatExtra.model_fields)
+
+    assert set(service.SESSION_COUNTERS) <= fields
+    assert fields == set(service.SESSION_COUNTERS) | {"session_id", "late_ticks"}
+
+
+def test_heartbeat_file_carries_the_whole_counter_set(tmp_path):
+    """예전에는 `**counters`가 그대로 펼쳐져 키 집합이 코드 어디에도 안 남았다."""
+    path = tmp_path / "heartbeat.json"
+    heartbeat = heartbeat_module.Heartbeat(path)
+    extra = service.HeartbeatExtra(session_id="s1", **service.SESSION_COUNTERS, late_ticks=2)
+
+    heartbeat.update("ready", **extra.model_dump(mode="json"))
+
+    payload = json.loads(path.read_text())
+    assert set(payload) == set(service.HeartbeatExtra.model_fields) | {"state", "written_at"}
+    assert payload["late_ticks"] == 2

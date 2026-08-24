@@ -15,7 +15,8 @@
 import logging
 from contextlib import closing
 from datetime import UTC, date, datetime, time
-from typing import Any
+from decimal import Decimal
+from typing import TYPE_CHECKING, Any
 
 from airflow.exceptions import AirflowFailException
 from airflow.sdk import get_current_context
@@ -23,6 +24,11 @@ from airflow.sdk import get_current_context
 from modules import thesis_common
 from modules.thesis_state import ThesisRunResult
 from modules.utility import KST_TIMEZONE
+
+if TYPE_CHECKING:
+    # 런타임 import는 못 한다 — `modules.thesis`가 LangChain을 끌고 와서 DagBag 30초
+    # 타임아웃에 걸린다(`thesis_common` docstring). `TYPE_CHECKING`은 런타임에 안 돈다.
+    from modules import thesis as market_thesis_types
 
 logger = logging.getLogger(__name__)
 
@@ -189,7 +195,12 @@ def narrate_followups(built: dict[str, Any]) -> int:
     return written
 
 
-def _horizon_return(conn: Any, market_thesis: Any, item: Any, target_day: date) -> Any:
+def _horizon_return(
+    conn: Any,
+    market_thesis: Any,
+    item: "market_thesis_types.PendingGrade",
+    target_day: date,
+) -> Decimal | None:
     """지평 하나의 누적 등락률. 종목은 확정 종가, 지수는 마감 봉을 본다."""
     if item.subject_kind is market_thesis.ThesisSubjectKind.STOCK:
         returns = market_thesis.horizon_returns(

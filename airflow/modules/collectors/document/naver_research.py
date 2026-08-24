@@ -50,7 +50,6 @@ URL이 모두 그것으로 정해진다. 함수로 두면 세 단계가 `source`
 import json
 import logging
 from datetime import UTC, date, datetime
-from typing import Any
 from urllib.parse import urljoin
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
@@ -252,7 +251,9 @@ class NaverResearchCollector:
         return cls(source).fetch()
 
     @classmethod
-    def enrich_listing(cls, connection: Connection, source: FeedSource, items: tuple[FeedItem, ...]) -> Any:
+    def enrich_listing(
+        cls, connection: Connection, source: FeedSource, items: tuple[FeedItem, ...]
+    ) -> tuple[FeedItem, ...]:
         return cls(source).enrich(connection, items)
 
 

@@ -266,6 +266,26 @@ class DisclosureFetch(BaseModel):
     completed_at: datetime
 
 
+class StatementScope(StrEnum):
+    """재무제표 범위. 연결과 별도를 합치거나 서로 대체하지 않는다.
+
+    `apps/models/market.py`의 같은 이름 Enum과 값이 같아야 한다. Airflow 트리는 `apps/`를
+    보지 못해 한 벌을 더 두고, `tests/collectors/test_dart.py`가 둘을 대조한다.
+    """
+
+    CFS = "CFS"
+    OFS = "OFS"
+
+
+class ProvisionalMeta(BaseModel):
+    """잠정실적 원문을 어떻게 읽었는지. `source_record.metadata`로 남아 재현의 근거가 된다."""
+
+    model_config = ConfigDict(frozen=True)
+
+    unit_multiplier: str
+    statement_scope: StatementScope
+
+
 class EarningsValue(BaseModel):
     """실적 한 칸. `earnings_fact` 한 행이 된다."""
 
@@ -413,7 +433,7 @@ def _period_ends(cells: list[str]) -> dict[str, date]:
     return ends
 
 
-def parse_provisional(xml: str) -> tuple[tuple[EarningsValue, ...], dict[str, Any]]:
+def parse_provisional(xml: str) -> tuple[tuple[EarningsValue, ...], ProvisionalMeta]:
     """잠정실적 원문에서 세 지표를 읽는다.
 
     표를 **id로 집는다.** 정정 공시에는 정정 요약 표(`XFormD8_*`)가 앞에 붙어 있어서
@@ -469,7 +489,7 @@ def parse_provisional(xml: str) -> tuple[tuple[EarningsValue, ...], dict[str, An
     if not values:
         raise DartPayloadError("provisional document produced no metrics")
 
-    return tuple(values), {"unit_multiplier": str(multiplier), "statement_scope": scope}
+    return tuple(values), ProvisionalMeta(unit_multiplier=str(multiplier), statement_scope=scope)
 
 
 def parse_financials(payload: dict[str, Any], period_end: date, scope: str) -> tuple[EarningsValue, ...]:
@@ -676,7 +696,7 @@ class DartCollector:
                 "file_name": names[0],
                 # 같은 접수번호의 첨부가 바뀌면 이 해시가 달라진다.
                 "sha256": hashlib.sha256(raw).hexdigest(),
-                **metadata,
+                **metadata.model_dump(mode="json"),
             },
             started_at=started_at,
             completed_at=datetime.now(UTC),

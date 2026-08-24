@@ -11,6 +11,7 @@ from pydantic import SecretStr
 from sqlalchemy import Table
 
 from apps.models.market import DisclosureEvent, EarningsFact
+from apps.models.market import StatementScope as ModelStatementScope
 from apps.models.raw import SourceRecord
 from modules.collectors.document import dart
 from modules.collectors.document.dart import (
@@ -312,7 +313,8 @@ def test_report_classification():
 def test_provisional_reads_period_and_cumulative_rows():
     values, metadata = parse_provisional(provisional_xml())
 
-    assert metadata == {"unit_multiplier": "100000000", "statement_scope": "CFS"}
+    # `source_record.metadata`로 나가는 JSON 모양이 바뀌지 않아야 한다.
+    assert metadata.model_dump(mode="json") == {"unit_multiplier": "100000000", "statement_scope": "CFS"}
     revenue = {value.amount_basis: value for value in values if value.metric == "revenue"}
     # 억원 단위를 원으로 정규화한다.
     assert revenue["period"].current_amount == Decimal(1714995) * 100_000_000
@@ -440,3 +442,22 @@ def test_store_earnings_writes_one_row_per_metric(monkeypatch):
     assert stored == len(upserts) == 6  # 지표 3 × 기간 기준 2
     assert {row[2] for row in upserts} == {"provisional"}
     assert {row[1] for row in upserts} == {"20260730800077"}
+
+
+def test_the_collector_statement_scope_matches_the_backend_enum():
+    """Airflow 트리는 `apps/`를 보지 못해 Enum을 한 벌 더 둔다. 값이 갈리면 안 된다."""
+    assert {scope.value for scope in dart.StatementScope} == {scope.value for scope in ModelStatementScope}
+
+
+def test_the_provisional_source_record_metadata_keeps_its_five_keys(monkeypatch):
+    """`source_record.metadata`로 나가는 JSON이다. 키가 늘거나 줄면 재현 근거가 달라진다."""
+    monkeypatch.setattr(dart, "_get", fake_get([document_zip(provisional_xml())]))
+
+    fetch = COLLECTOR.fetch_provisional(Disclosure.from_payload(LIST_ROW))
+
+    assert fetch is not None
+    assert set(fetch.metadata) == {"rcept_no", "file_name", "sha256", "unit_multiplier", "statement_scope"}
+    assert fetch.metadata["statement_scope"] == "CFS"
+    assert fetch.metadata["unit_multiplier"] == "100000000"
+    # jsonb 컬럼으로 그대로 들어간다. Enum 인스턴스가 남아 있으면 json.dumps가 죽는다.
+    assert json.dumps(fetch.metadata, ensure_ascii=False)

@@ -57,6 +57,7 @@ from modules.thesis import (
     store_theses,
 )
 from modules.thesis_state import IndexObservation, ObservedState, StockObservation
+from modules.thesis_tools import DocumentDetail, MacroDetail
 
 THESIS_INSERT = read_sql("postgres", "thesis", "insert.sql")
 THESIS_SELECT_BY_RUN = read_sql("postgres", "thesis", "select_by_run.sql")
@@ -811,7 +812,7 @@ def test_rate_changes_are_reported_in_basis_points_not_percent():
 
     item = box.registry["macro_change:US10Y"]
     # 4.65 -> 4.70은 "+1.08%"가 아니라 "+5bp"다. 퍼센트로 주면 모델이 급등으로 읽는다.
-    assert item.detail["change_bp"] == pytest.approx(5.0)
+    assert item.detail.change_bp == pytest.approx(5.0)
     assert "change_pct" not in item.detail
     assert "bp" in body_text
 
@@ -824,11 +825,11 @@ def test_us_close_is_measured_against_the_previous_session_close():
     body_text = box.run("us_market_close", {})
 
     item = box.registry["macro_change:SP500@close"]
-    assert item.detail["close"] == pytest.approx(7674.37)
-    assert item.detail["previous_close"] == pytest.approx(7641.16)
-    assert item.detail["change_pct"] == pytest.approx(0.43, abs=0.01)
+    assert item.detail.close == pytest.approx(7674.37)
+    assert item.detail.previous_close == pytest.approx(7641.16)
+    assert item.detail.change_pct == pytest.approx(0.43, abs=0.01)
     # 시각 칸은 이름이 시간대를 밝힌다. 모델이 "어느 날 장이었나"를 이 값으로 정한다.
-    assert item.detail["closed_at_kst"].endswith("KST")
+    assert item.detail.closed_at_kst.endswith("KST")
     assert "마감" in body_text
 
 
@@ -839,7 +840,7 @@ def test_us_close_rates_are_reported_in_basis_points():
     box.run("us_market_close", {})
 
     item = box.registry["macro_change:US10Y@close"]
-    assert item.detail["change_bp"] == pytest.approx(5.0)
+    assert item.detail.change_bp == pytest.approx(5.0)
     assert "change_pct" not in item.detail
 
 
@@ -857,8 +858,8 @@ def test_us_close_refs_do_not_overwrite_the_window_change_of_the_same_symbol():
     box.run("us_market_close", {})
 
     assert set(box.registry) == {"macro_change:SP500_FUT", "macro_change:SP500_FUT@close"}
-    assert box.registry["macro_change:SP500_FUT"].detail["change_pct"] == pytest.approx(1.0)
-    assert box.registry["macro_change:SP500_FUT@close"].detail["change_pct"] == pytest.approx(2.02, abs=0.01)
+    assert box.registry["macro_change:SP500_FUT"].detail.change_pct == pytest.approx(1.0)
+    assert box.registry["macro_change:SP500_FUT@close"].detail.change_pct == pytest.approx(2.02, abs=0.01)
 
 
 def test_non_rate_changes_are_reported_in_percent():
@@ -868,7 +869,7 @@ def test_non_rate_changes_are_reported_in_percent():
     box.run("macro_changes", {})
 
     item = box.registry["macro_change:SP500_FUT"]
-    assert item.detail["change_pct"] == pytest.approx(1.0)
+    assert item.detail.change_pct == pytest.approx(1.0)
     assert "change_bp" not in item.detail
 
 
@@ -881,9 +882,9 @@ def test_a_long_document_is_trimmed_so_one_item_cannot_eat_the_context():
     box.run("recent_documents", {"hours": 6, "min_score": 0})
 
     detail = box.registry["document:1"].detail
-    spent = len(detail["reason"]) + sum(len(fact) for fact in detail["new_facts"])
+    spent = len(detail.reason) + sum(len(fact) for fact in detail.new_facts)
     assert spent <= MAX_ITEM_DETAIL_CHARS
-    assert len(detail["new_facts"]) < len(facts)
+    assert len(detail.new_facts) < len(facts)
 
 
 def test_an_unknown_tool_name_is_refused_without_touching_the_database():
@@ -1548,7 +1549,7 @@ def test_the_snapshot_is_not_evidence_but_signals_are():
     assert item.kind is ThesisEvidenceKind.TECHNICAL_SIGNAL
     assert "골든크로스" in item.title
     assert item.url is None
-    assert item.detail["direction"] == "up"
+    assert item.detail.direction == "up"
 
 
 def test_recent_signals_come_with_the_daily_history():
@@ -2417,7 +2418,18 @@ def test_the_airflow_horizons_match_the_backend_lists():
 
 def test_evidence_refs_are_built_from_the_kind_itself():
     item = Evidence(
-        kind=ThesisEvidenceKind.MACRO_CHANGE, ref=evidence_ref(ThesisEvidenceKind.MACRO_CHANGE, "US10Y"), title="x"
+        kind=ThesisEvidenceKind.MACRO_CHANGE,
+        ref=evidence_ref(ThesisEvidenceKind.MACRO_CHANGE, "US10Y"),
+        title="x",
+        detail=MacroDetail(
+            kind="rate",
+            country="US",
+            first_close=4.65,
+            last_close=4.70,
+            window_start="2026-08-20T22:30:00+00:00",
+            window_end="2026-08-21T00:00:00+00:00",
+            bar_count=2,
+        ),
     )
 
     assert item.ref == "macro_change:US10Y"
@@ -2759,7 +2771,10 @@ def test_narrative_citations_leave_direction_and_mechanism_empty():
     connection = FakeConnection()
     registry = {
         "document:7": Evidence(
-            kind=ThesisEvidenceKind.DOCUMENT, ref=evidence_ref(ThesisEvidenceKind.DOCUMENT, "7"), title="t"
+            kind=ThesisEvidenceKind.DOCUMENT,
+            ref=evidence_ref(ThesisEvidenceKind.DOCUMENT, "7"),
+            title="t",
+            detail=DocumentDetail(source="naver"),
         )
     }
 
@@ -2786,3 +2801,349 @@ def test_narrative_citations_leave_direction_and_mechanism_empty():
     # 해설의 인용은 "어느 쪽으로 썼나"가 없다. CHECK가 쌍을 강제하므로 둘 다 NULL이어야 들어간다.
     assert rows[0][-2:] == (None, None)
     assert rows[0][1] == 1
+
+
+# ---------------------------------------------------------------------------
+# 툴 응답 모양 고정
+#
+# 상세 dict를 모델로 옮기면서 키가 하나라도 늘거나 줄면 프롬프트와
+# `thesis_evidence.detail`이 조용히 달라진다. 모델을 쓰면 `null` 칸이 새로 생기기 쉬워서
+# 특히 그렇다. 아래가 그 사실을 글자로 붙잡는다.
+# ---------------------------------------------------------------------------
+
+
+def test_every_evidence_detail_keeps_its_stored_key_set():
+    """`thesis_evidence.detail`은 이미 쌓인 행이 있다. 종류마다 키 집합을 못박는다."""
+    connection = FakeConnection(
+        {
+            "documents": [document_row()],
+            "disclosures": [disclosure_row()],
+            "macro": [macro_row("US10Y", "rate", "4.65", "4.70")],
+            "us_close": [us_close_row()],
+            "daily_history": [daily_history_row(date(2026, 8, 21), 3160.2)],
+            "recent_signals": [signal_row()],
+        }
+    )
+    box = toolbox(connection)
+
+    box.run("recent_documents", {"hours": 6, "min_score": 0})
+    box.run("recent_disclosures", {"hours": 6})
+    box.run("macro_changes", {})
+    box.run("us_market_close", {})
+    box.run("daily_history", {"symbol": "KOSPI", "days": 5})
+
+    stored = {ref: set(item.detail.model_dump(mode="json")) for ref, item in box.registry.items()}
+    assert stored == {
+        "document:1": {
+            "source",
+            "published_at",
+            "value_score",
+            "direction",
+            "new_facts",
+            "reason",
+            "tickers",
+        },
+        "disclosure:20260821000123": {
+            "stock_code",
+            "company_name",
+            "report_name",
+            "receipt_date",
+            "detected_at",
+        },
+        # 금리라 `change_bp`만 있고 `change_pct`는 키째 없다.
+        "macro_change:US10Y": {
+            "kind",
+            "country",
+            "first_close",
+            "last_close",
+            "window_start",
+            "window_end",
+            "bar_count",
+            "change_bp",
+        },
+        "macro_change:SP500@close": {
+            "kind",
+            "close",
+            "previous_close",
+            "closed_at_kst",
+            "change_pct",
+        },
+        "technical_signal:1042": {
+            "symbol",
+            "signal_date",
+            "kind",
+            "direction",
+            "close",
+            "rsi14",
+            "volume_ratio20",
+        },
+    }
+
+
+def context_tool_connection() -> FakeConnection:
+    """문맥 툴 아홉을 한 번씩 돌리기 위한 행 한 벌. 열 순서는 각 SQL 파일이 정한다."""
+    return FakeConnection(
+        {
+            "indicators": [indicator_row(Decimal("4.70"), Decimal("4.65"))],
+            "market_flows": [
+                (
+                    "KOSPI",
+                    datetime(2026, 8, 21, 5, 0, tzinfo=UTC),
+                    Decimal(-1200),
+                    Decimal(800),
+                    Decimal(400),
+                    Decimal(120),
+                    Decimal(-30),
+                )
+            ],
+            "breadth": [("KOSPI", datetime(2026, 8, 21, 5, 0, tzinfo=UTC), 500, 80, 380, 3, 1)],
+            "stock_flows": [
+                (
+                    "005930",
+                    date(2026, 8, 21),
+                    Decimal(231000),
+                    Decimal(12_000_000),
+                    Decimal(-5000),
+                    Decimal(3000),
+                    Decimal(2000),
+                    Decimal(-1_155_000_000),
+                    Decimal(693_000_000),
+                    Decimal(462_000_000),
+                )
+            ],
+            "stock_flow_estimates": [
+                (
+                    "005930",
+                    date(2026, 8, 21),
+                    "1130",
+                    datetime(2026, 8, 21, 2, 30, tzinfo=UTC),
+                    Decimal(-3000),
+                    Decimal(1500),
+                    Decimal(-1500),
+                )
+            ],
+            "market_funds": [
+                (
+                    date(2026, 8, 21),
+                    Decimal("3160.20"),
+                    Decimal("12.40"),
+                    Decimal(58_000_000),
+                    Decimal(1_200_000),
+                    Decimal(20_000_000),
+                    Decimal(3_000_000),
+                    Decimal("0.85"),
+                )
+            ],
+            "short_and_credit": [
+                (
+                    "005930",
+                    "삼성전자",
+                    date(2026, 8, 20),
+                    Decimal(120_000),
+                    Decimal("1.20"),
+                    Decimal(27_720_000_000),
+                    Decimal(900_000),
+                    Decimal(-12_000),
+                    Decimal(450_000),
+                    Decimal(103_950_000_000),
+                    Decimal("0.31"),
+                )
+            ],
+            "analyst_opinions": [
+                (date(2026, 8, 10), "키움", "BUY", "BUY", Decimal(350000), Decimal(231000), Decimal("-34.00"), "사유")
+            ],
+            "event_outcomes": [
+                (
+                    "earnings",
+                    "2026Q2",
+                    "operating_profit",
+                    Decimal(12_000),
+                    3,
+                    Decimal(13_000),
+                    Decimal("8.33"),
+                    "beat",
+                    datetime(2026, 8, 22, 8, 0, tzinfo=UTC),
+                )
+            ],
+            "event_expectations": [
+                (
+                    "earnings",
+                    "2026Q3",
+                    "operating_profit",
+                    Decimal(14_000),
+                    2,
+                    datetime(2026, 8, 20, 0, 0, tzinfo=UTC),
+                )
+            ],
+            "daily_history": [daily_history_row(date(2026, 8, 21), 3160.2)],
+            "recent_signals": [signal_row()],
+        }
+    )
+
+
+def test_every_context_tool_keeps_its_body_key_set():
+    """`_body`로만 나가는 툴 아홉. 프롬프트에 실리는 칸이 늘거나 줄면 여기서 죽는다."""
+    box = toolbox(context_tool_connection())
+
+    indicators = json.loads(box.run("macro_indicators", {"kind": "government_bond"}))
+    flows = json.loads(box.run("market_investor_flows", {}))
+    breadth = json.loads(box.run("market_breadth", {}))
+    stock_flows = json.loads(box.run("stock_investor_flows", {"days": 5}))
+    funds = json.loads(box.run("market_funds", {"days": 10}))
+    history = json.loads(box.run("daily_history", {"symbol": "KOSPI", "days": 5}))
+    short_credit = json.loads(box.run("short_and_credit", {}))
+    opinions = json.loads(box.run("analyst_opinions", {"ticker": "005930"}))
+    surprises = json.loads(box.run("event_surprises", {"ticker": "005930"}))
+
+    assert set(indicators) == {"kind", "unit_note", "series"}
+    assert set(indicators["series"][0]) == {
+        "provider",
+        "series_id",
+        "country",
+        "country_name",
+        "label",
+        "maturity_months",
+        "unit",
+        "observation_date",
+        "value",
+        "previous_date",
+        "previous_value",
+        "change_bp",
+    }
+    assert set(flows[0]) == {
+        "market_code",
+        "observed_at",
+        "foreign_net_buy_amount",
+        "institution_net_buy_amount",
+        "individual_net_buy_amount",
+        "pension_fund_net_buy_qty",
+        "investment_trust_net_buy_qty",
+        "amount_unit",
+    }
+    assert set(breadth[0]) == {
+        "symbol",
+        "observed_at",
+        "rising",
+        "unchanged",
+        "falling",
+        "upper_limit",
+        "lower_limit",
+    }
+    assert set(stock_flows) == {"settled", "intraday_estimate", "note"}
+    assert set(stock_flows["settled"][0]) == {
+        "stock_code",
+        "business_date",
+        "close_price",
+        "volume",
+        "foreign_net_buy_qty",
+        "institution_net_buy_qty",
+        "individual_net_buy_qty",
+        "foreign_net_buy_amount",
+        "institution_net_buy_amount",
+        "individual_net_buy_amount",
+    }
+    assert set(stock_flows["intraday_estimate"][0]) == {
+        "stock_code",
+        "business_date",
+        "source_time_code",
+        "collected_at",
+        "foreign_net_buy_qty",
+        "institution_net_buy_qty",
+        "total_net_buy_qty",
+    }
+    assert set(funds[0]) == {
+        "business_date",
+        "index_close",
+        "index_change",
+        "customer_deposit",
+        "customer_deposit_change",
+        "credit_loan_balance",
+        "unsettled_amount",
+        "turnover_ratio",
+    }
+    assert set(history) == {"symbol", "bars", "technical_snapshot", "recent_signals"}
+    assert set(history["bars"][0]) == {
+        "label",
+        "kind",
+        "country",
+        "business_date",
+        "open",
+        "high",
+        "low",
+        "close",
+        "volume",
+    }
+    assert set(history["recent_signals"][0]) == {"ref", "signal_date", "kind", "direction"}
+    assert set(short_credit[0]) == {
+        "stock_code",
+        "label",
+        "business_date",
+        "short_sale_quantity",
+        "short_sale_volume_ratio",
+        "short_sale_amount",
+        "lending_balance_quantity",
+        "lending_balance_change_quantity",
+        "credit_loan_balance_quantity",
+        "credit_loan_balance_amount",
+        "credit_loan_balance_rate",
+    }
+    assert set(opinions) == {"stock_code", "opinions"}
+    assert set(opinions["opinions"][0]) == {
+        "business_date",
+        "broker_name",
+        "opinion",
+        "previous_opinion",
+        "target_price",
+        "previous_close",
+        "gap_rate",
+        "reason",
+    }
+    assert set(surprises) == {"stock_code", "outcomes", "pending_expectations"}
+    assert set(surprises["outcomes"][0]) == {
+        "event_type",
+        "period_key",
+        "metric",
+        "expected_value",
+        "expectation_count",
+        "actual_value",
+        "surprise_pct",
+        "verdict",
+        "announced_at",
+    }
+    assert set(surprises["pending_expectations"][0]) == {
+        "event_type",
+        "period_key",
+        "metric",
+        "expected_value",
+        "expectation_count",
+        "latest_stated_at",
+    }
+
+
+def test_no_daily_history_gives_a_different_shape_than_an_empty_one():
+    """빈 배열만 주면 모델이 "이력이 없다"가 아니라 "움직임이 없었다"로 읽는다.
+
+    그래서 없을 때는 `recent_signals` 칸 자체가 없고 `note`와 `available_symbols`가 붙는다.
+    """
+    connection = FakeConnection({"daily_history": [], "daily_history_symbols": [("KOSPI", "코스피", "index")]})
+    box = toolbox(connection)
+
+    payload = json.loads(box.run("daily_history", {"symbol": "없는심볼", "days": 5}))
+
+    assert set(payload) == {"symbol", "bars", "technical_snapshot", "note", "available_symbols"}
+    assert set(payload["available_symbols"][0]) == {"symbol", "label", "kind"}
+
+
+def test_tool_timestamps_are_iso_8601_not_python_str():
+    """`default=str`이 있던 때는 `"2026-08-21 05:00:00+00:00"`이 실렸다.
+
+    같은 payload의 다른 시각 칸은 이미 `isoformat()`이었으므로 한 표기로 모은다.
+    날짜만 있는 칸은 두 방식의 결과가 같아 이 변화가 닿지 않는다.
+    """
+    box = toolbox(context_tool_connection())
+
+    (row,) = json.loads(box.run("market_breadth", {}))
+    settled = json.loads(box.run("stock_investor_flows", {"days": 5}))["settled"][0]
+
+    assert row["observed_at"] == "2026-08-21T05:00:00Z"
+    assert settled["business_date"] == "2026-08-21"

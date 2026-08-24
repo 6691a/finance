@@ -116,7 +116,9 @@ class FakeCursor:
         self.calls.append((statement, parameters))
 
     def fetchall(self) -> list[tuple]:
-        return self.results.pop(0)
+        # 결과를 다 쓰면 빈 목록이다. 조회가 하나 늘 때마다 모든 테스트의 픽스처를 늘리지
+        # 않으려는 것이고, "그 조회에 행이 없었다"는 실제로 일어나는 상태이기도 하다.
+        return self.results.pop(0) if self.results else []
 
 
 class FakeConnection:
@@ -690,3 +692,211 @@ def test_queries_name_columns_that_exist(statement: str, table: Table, columns: 
 
 def _block_text(blocks) -> str:
     return json.dumps(blocks, ensure_ascii=False)
+
+
+# --- 기술적 관측 (docs/market-technical-indicators.md 7.2절) --------------------
+
+
+def technical_history_rows() -> list[tuple]:
+    """`technical/select_history.sql` 결과. 두 대상의 최신순 일봉을 한 응답에 담는다."""
+    rows = []
+    for symbol, label, kind, base in (("KOSPI", "코스피", "index", 3000.0), ("005930", "삼성전자", "equity", 70000.0)):
+        cursor = date(2026, 1, 5)
+        made = 0
+        while made < 120:
+            if cursor.weekday() < 5:
+                close = Decimal(str(base + made + 1))
+                rows.append(
+                    (
+                        "kis",
+                        symbol,
+                        label,
+                        kind,
+                        "KR",
+                        cursor,
+                        close,
+                        close,
+                        close,
+                        close,
+                        1000 + made,
+                    )
+                )
+                made += 1
+            cursor += timedelta(days=1)
+    return list(reversed(rows))
+
+
+SIGNAL_ROWS = [
+    ("KOSPI", date(2026, 6, 17), "sma_cross", "up"),
+    ("005930", date(2026, 6, 15), "macd_cross", "down"),
+]
+
+
+def summary_with_technicals(
+    now: datetime = MIDDAY,
+    technical_rows: list[tuple] | None = None,
+    signal_rows: list[tuple] | None = None,
+):
+    connection = FakeConnection(
+        QUOTE_ROWS,
+        DOMESTIC_STOCK_ROWS,
+        RATE_ROWS,
+        FLOW_ROWS,
+        STOCK_FLOW_ROWS,
+        STOCK_TRADE_ROWS,
+        MOVEMENT_ROWS,
+        FUNDS_ROWS,
+        SHORT_POSITION_ROWS,
+        SPREAD_ROWS,
+        technical_history_rows() if technical_rows is None else technical_rows,
+        SIGNAL_ROWS if signal_rows is None else signal_rows,
+    )
+    return market.collect_summary(connection, now)
+
+
+def test_the_technical_query_asks_for_the_watched_stocks_too():
+    """watched 종목이 늘어도 브리핑 코드를 바꾸지 않는다."""
+    connection = FakeConnection(
+        QUOTE_ROWS,
+        DOMESTIC_STOCK_ROWS,
+        RATE_ROWS,
+        FLOW_ROWS,
+        STOCK_FLOW_ROWS,
+        STOCK_TRADE_ROWS,
+        MOVEMENT_ROWS,
+        FUNDS_ROWS,
+        SHORT_POSITION_ROWS,
+        SPREAD_ROWS,
+        technical_history_rows(),
+    )
+    market.collect_summary(connection, MIDDAY)
+
+    statement, parameters = next(
+        (statement, parameters)
+        for cursor in connection.cursors
+        for statement, parameters in cursor.calls
+        if "WITH requested AS" in statement
+    )
+    assert parameters["symbols"] == list(market.TECHNICAL_INDEXES)
+    assert parameters["include_watched"] is True
+    assert "instrument" in statement
+
+
+def test_technicals_are_computed_per_subject():
+    technicals = {snapshot.subject_code: snapshot for snapshot in summary_with_technicals().technicals}
+
+    assert set(technicals) == {"KOSPI", "005930"}
+    assert technicals["KOSPI"].label == "코스피"
+    assert technicals["KOSPI"].observations == 120
+    assert technicals["005930"].sma20 > technicals["005930"].sma60
+
+
+def test_the_korea_report_shows_the_technical_table():
+    rendered = market.render_blocks(summary_with_technicals(), MarketScope.KOREA)
+    text = _block_text(rendered)
+
+    assert "기술적 관측" in text
+    assert "SMA20/SMA60" in text
+    assert "RSI14" in text
+    # 판정 열은 두지 않는다. 표는 수치와 기준일만 말한다.
+    table = json.dumps(_technical_table_rows(rendered), ensure_ascii=False)
+    assert "매수" not in table
+    assert "매도" not in table
+    assert "상승" not in table
+
+
+def test_the_preopen_report_shows_the_technical_table():
+    rendered = market.render_blocks(summary_with_technicals(MORNING), MarketScope.KOREA_PREOPEN)
+
+    assert "기술적 관측" in _block_text(rendered)
+
+
+def test_the_us_report_has_no_technical_table():
+    """미국장 리포트는 국내 지표를 그리지 않는다."""
+    rendered = market.render_blocks(summary_with_technicals(MORNING), MarketScope.US)
+
+    assert "기술적 관측" not in _block_text(rendered)
+
+
+def test_no_snapshot_drops_the_whole_table():
+    """짧은 표본을 0으로 채우지 않는다. 표 자체가 없어야 그것이 드러난다."""
+    rendered = market.render_blocks(summary_with_technicals(technical_rows=[]), MarketScope.KOREA)
+
+    assert "기술적 관측" not in _block_text(rendered)
+
+
+def _technical_table_rows(rendered) -> list[list[str]]:
+    """"기술적 관측" 섹션 바로 뒤 table 블록의 셀 값."""
+    for index, block in enumerate(rendered):
+        if block.get("type") == "section" and "기술적 관측" in json.dumps(block, ensure_ascii=False):
+            return [[cell["text"] for cell in row] for row in rendered[index + 1]["rows"]]
+    raise AssertionError("기술적 관측 표가 없다")
+
+
+def test_a_missing_volume_ratio_shows_a_dash():
+    """거래량 비율을 못 내면 1.00x로 꾸미지 않는다."""
+    rows = [row[:10] + (None,) for row in technical_history_rows()]
+    rendered = market.render_blocks(summary_with_technicals(technical_rows=rows), MarketScope.KOREA)
+
+    header, *body_rows = _technical_table_rows(rendered)
+    column = header.index("거래량/20일")
+    assert {row[column] for row in body_rows} == {"-"}
+
+
+def test_the_table_shows_ratios_and_the_reference_day():
+    rendered = market.render_blocks(summary_with_technicals(), MarketScope.KOREA)
+
+    header, *body_rows = _technical_table_rows(rendered)
+    assert header == ["대상", "종가/SMA20", "SMA20/SMA60", "RSI14", "MACD hist", "거래량/20일", "신호", "기준"]
+    row = next(row for row in body_rows if row[0] == "코스피")
+    assert row[1].endswith("%")
+    assert row[3].replace(".", "").isdigit()
+    # 기준은 그 대상의 마지막 확정 일봉 날짜다. 브리핑 시각이 아니다.
+    latest = max(snapshot.as_of_date for snapshot in summary_with_technicals().technicals)
+    assert row[-1] == f"{latest:%m/%d}"
+
+
+def test_the_signal_column_names_the_event_not_a_verdict():
+    rendered = market.render_blocks(summary_with_technicals(), MarketScope.KOREA)
+
+    header, *body_rows = _technical_table_rows(rendered)
+    column = header.index("신호")
+    by_label = {row[0]: row[column] for row in body_rows}
+    assert by_label["코스피"] == "골든크로스 06/17"
+    assert by_label["삼성전자"] == "MACD↓ 06/15"
+
+
+def test_no_recent_signal_shows_a_dash():
+    """신호가 없는 것과 신호를 못 낸 것을 같은 칸으로 말한다. 빈칸으로 두지 않는다."""
+    rendered = market.render_blocks(summary_with_technicals(signal_rows=[]), MarketScope.KOREA)
+
+    header, *body_rows = _technical_table_rows(rendered)
+    column = header.index("신호")
+    assert {row[column] for row in body_rows} == {"-"}
+
+
+def test_the_signal_window_is_asked_for_in_days():
+    connection = FakeConnection(
+        QUOTE_ROWS,
+        DOMESTIC_STOCK_ROWS,
+        RATE_ROWS,
+        FLOW_ROWS,
+        STOCK_FLOW_ROWS,
+        STOCK_TRADE_ROWS,
+        MOVEMENT_ROWS,
+        FUNDS_ROWS,
+        SHORT_POSITION_ROWS,
+        SPREAD_ROWS,
+        technical_history_rows(),
+        SIGNAL_ROWS,
+    )
+    market.collect_summary(connection, MIDDAY)
+
+    statement, parameters = next(
+        (statement, parameters)
+        for cursor in connection.cursors
+        for statement, parameters in cursor.calls
+        if "FROM technical_signal" in statement
+    )
+    assert parameters["since_date"] == (MIDDAY - market.SIGNAL_LOOKBACK).astimezone(market.KST_TIMEZONE).date()
+    assert "DISTINCT ON (symbol)" in statement

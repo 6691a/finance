@@ -10,6 +10,7 @@ from sqlalchemy import Table
 
 from apps.models.analysis import Thesis, ThesisEvidence, ThesisOutcome, ThesisPrecedent
 from modules.sql import read_sql
+from modules.technical import TECHNICAL_LOOKBACK_BARS
 from modules.thesis import (
     DART_VIEWER_URL,
     FLAT_THRESHOLD_PCT,
@@ -55,6 +56,7 @@ from modules.thesis import (
     store_narratives,
     store_theses,
 )
+from modules.thesis_state import IndexObservation, ObservedState, StockObservation
 
 THESIS_INSERT = read_sql("postgres", "thesis", "insert.sql")
 THESIS_SELECT_BY_RUN = read_sql("postgres", "thesis", "select_by_run.sql")
@@ -590,6 +592,14 @@ def _statement_key(statement: str) -> str:
     if "FROM quote_bar" in query:
         # 둘 다 quote_bar를 읽는다. 마감 쿼리만 previous_close를 고른다.
         return "us_close" if "previous_close" in query else "macro"
+    # 기술지표 조회는 두 원천을 UNION해서 `FROM stock_investor_trade_daily`와 `FROM quote_daily`를
+    # 둘 다 품는다. 그 둘보다 먼저 보지 않으면 수급 조회 결과를 받는다.
+    if "WITH requested AS" in query:
+        return "daily_history"
+    if "WITH available AS" in query:
+        return "daily_history_symbols"
+    if "FROM technical_signal" in query:
+        return "recent_signals"
     if "FROM indicator_observation" in query:
         return "indicators"
     if "FROM market_investor_flow_snapshot" in query:
@@ -602,8 +612,6 @@ def _statement_key(statement: str) -> str:
         return "stock_flow_estimates"
     if "FROM krx_market_funds_daily" in query:
         return "market_funds"
-    if "FROM quote_daily" in query:
-        return "daily_history"
     if "FROM krx_stock_short_sale_daily" in query:
         return "short_and_credit"
     # 기대치 조회가 "판정이 아직 없는" 조건으로 `stock_event_outcome`을 품고 있다.
@@ -954,7 +962,13 @@ SUBJECTS = (
     Subject(kind=ThesisSubjectKind.INDEX, code="KOSPI", label="코스피"),
     Subject(kind=ThesisSubjectKind.STOCK, code="000660", label="SK하이닉스"),
 )
-OBSERVED = {"KOSPI": {"prev_return_pct": -2.1}}
+# 관측 상태의 모양은 `thesis_state`가 정한다. 맨 dict를 넘기면 프롬프트에 실릴 키가
+# 테스트에서만 존재할 수 있다.
+OBSERVED = ObservedState(
+    session=date(2026, 8, 20),
+    index={"KOSPI": IndexObservation(close=3150.0, return_pct=-2.1)},
+    stock={"005930": StockObservation(close=71500.0)},
+)
 
 
 class ScriptedModel:
@@ -1341,11 +1355,7 @@ def test_short_and_credit_excludes_the_current_business_day():
 
 
 def test_daily_history_says_which_symbols_have_bars_when_it_finds_none():
-    """빈 배열만 주면 모델이 "이력이 없다"가 아니라 "움직임이 없었다"로 읽는다.
-
-    2026-08-21 실측: `quote_daily`에 KOSPI·KOSDAQ 일봉이 없다. 국내 지수는 분봉만
-    수집하고 일봉 테이블에는 해외 지수만 들어 있다.
-    """
+    """빈 배열만 주면 모델이 "이력이 없다"가 아니라 "움직임이 없었다"로 읽는다."""
     connection = FakeConnection({"daily_history": []})
     box = toolbox(connection)
 
@@ -1354,6 +1364,233 @@ def test_daily_history_says_which_symbols_have_bars_when_it_finds_none():
     assert payload["bars"] == []
     assert "KOSPI" in payload["note"]
     assert "available_symbols" in payload
+
+
+# --- 기술지표 (docs/market-technical-indicators.md 7.1절) ----------------------
+
+
+def daily_history_row(
+    business_date: date,
+    close: float,
+    *,
+    symbol: str = "KOSPI",
+    provider: str = "kis",
+    label: str = "코스피",
+    kind: str = "index",
+    country: str = "KR",
+    volume: int | None = 1000,
+) -> tuple:
+    """`technical/select_history.sql` 한 행. 조회는 최신순이라 부르는 쪽이 뒤집는다."""
+    return (
+        provider,
+        symbol,
+        label,
+        kind,
+        country,
+        business_date,
+        Decimal(str(close)),
+        Decimal(str(close * 1.01)),
+        Decimal(str(close * 0.99)),
+        Decimal(str(close)),
+        volume,
+    )
+
+
+def rising_history(count: int = 120, base: float = 0.0, **row_options) -> list[tuple]:
+    """최신순 일봉. 종가가 `base + 1 .. base + count`로 올라간다.
+
+    `base=0`이 문서 5.3절의 고정 벡터다. 국내 대상에는 큰 `base`를 준다 — 1에서 2로 가는
+    +100%는 35% 단절 guard에 걸려 지표가 나오지 않는다.
+    """
+    rows = []
+    cursor = date(2026, 1, 5)
+    made = 0
+    while made < count:
+        if cursor.weekday() < 5:
+            rows.append(daily_history_row(cursor, base + made + 1, **row_options))
+            made += 1
+        cursor += timedelta(days=1)
+    return list(reversed(rows))
+
+
+def test_daily_history_reads_both_sources_through_one_query():
+    connection = FakeConnection({"daily_history": rising_history()})
+    box = toolbox(connection)
+
+    box.run("daily_history", {"symbol": "KOSPI", "days": 10})
+
+    statement, parameters = connection.calls[0]
+    query = body(statement)
+    # 지수는 뷰에서, 국내 종목은 확정 수급 테이블에서 온다. 한쪽만 보면 종목이 빠진다.
+    assert "FROM quote_daily" in query
+    assert "FROM stock_investor_trade_daily" in query
+    # KIS equity를 뷰 쪽에서 빼지 않으면 같은 종목이 두 번 들어온다.
+    assert "NOT (daily.provider = 'kis' AND symbol.kind = 'equity')" in query
+    assert parameters["symbols"] == ["KOSPI"]
+    assert parameters["include_watched"] is False
+    # 지표 계산에 쓸 만큼 받되 모델에게 보여 주는 건 요청한 days뿐이다.
+    assert parameters["limit"] == TECHNICAL_LOOKBACK_BARS
+
+
+def test_daily_history_returns_the_snapshot_next_to_the_raw_bars():
+    # 문서 5.3절의 고정 벡터(종가 1..120). 해외 심볼이라 국내 단절 guard를 타지 않는다.
+    rows = rising_history(symbol="SP500_FUT", provider="yahoo", country="US", kind="index_future", label="S&P500 선물")
+    connection = FakeConnection({"daily_history": rows})
+    box = toolbox(connection)
+
+    payload = json.loads(box.run("daily_history", {"symbol": "SP500_FUT", "days": 10}))
+
+    assert len(payload["bars"]) == 10
+    # 원시 봉은 기존처럼 최신순이고 키도 그대로다.
+    assert payload["bars"][0]["close"] > payload["bars"][-1]["close"]
+    assert set(payload["bars"][0]) == {
+        "label",
+        "kind",
+        "country",
+        "business_date",
+        "open",
+        "high",
+        "low",
+        "close",
+        "volume",
+    }
+    snapshot = payload["technical_snapshot"]
+    assert snapshot["observations"] == 120
+    assert snapshot["sma20"] == pytest.approx(110.5)
+    assert snapshot["sma60"] == pytest.approx(90.5)
+    assert snapshot["macd"] == pytest.approx(7.0)
+    assert snapshot["macd_histogram"] == pytest.approx(0.0)
+    assert snapshot["rsi14"] == pytest.approx(100.0)
+
+
+def test_daily_history_omits_the_snapshot_when_the_sample_is_short():
+    """지표를 못 내는 것과 원시 봉이 없는 것은 다르다. 봉은 그대로 준다."""
+    connection = FakeConnection({"daily_history": rising_history(30)})
+    box = toolbox(connection)
+
+    payload = json.loads(box.run("daily_history", {"symbol": "KOSPI", "days": 10}))
+
+    assert payload["technical_snapshot"] is None
+    assert len(payload["bars"]) == 10
+
+
+def domestic_history(count: int = 120) -> list[tuple]:
+    """국내 종목의 실제 가격대에 가까운 최신순 일봉."""
+    return rising_history(count, base=70_000.0, symbol="005930", kind="equity", label="삼성전자")
+
+
+def test_a_domestic_series_gets_a_snapshot():
+    connection = FakeConnection({"daily_history": domestic_history()})
+    box = toolbox(connection)
+
+    payload = json.loads(box.run("daily_history", {"symbol": "005930", "days": 5}))
+
+    assert payload["technical_snapshot"]["observations"] == 120
+
+
+def test_a_domestic_price_gap_hides_the_snapshot():
+    """분할·병합이나 원천 이상이 의심되면 이동평균을 그대로 보여 주지 않는다."""
+    broken = domestic_history()
+    # 최신순이라 인덱스 0이 마지막 봉이다. 하루 만에 반토막 난 모양을 만든다.
+    gap_row = list(broken[40])
+    gap_row[9] = Decimal(35000)
+    gap_row[6] = Decimal(35000)
+    broken[40] = tuple(gap_row)
+    connection = FakeConnection({"daily_history": broken})
+    box = toolbox(connection)
+
+    payload = json.loads(box.run("daily_history", {"symbol": "005930", "days": 5}))
+
+    assert payload["technical_snapshot"] is None
+    assert len(payload["bars"]) == 5
+
+
+def test_a_foreign_series_is_not_held_to_the_domestic_gap_guard():
+    """환율·해외 지수는 가격제한폭이 없어 같은 잣대를 댈 수 없다."""
+    rows = rising_history(symbol="USDKRW", provider="yahoo", country="US", kind="fx", label="원달러")
+    payload = json.loads(toolbox(FakeConnection({"daily_history": rows})).run("daily_history", {"symbol": "USDKRW"}))
+
+    assert payload["technical_snapshot"] is not None
+
+
+def signal_row(
+    signal_id: int = 1042,
+    *,
+    symbol: str = "005930",
+    signal_date: date = date(2026, 8, 19),
+    kind: str = "sma_cross",
+    direction: str = "up",
+) -> tuple:
+    return (
+        signal_id,
+        symbol,
+        signal_date,
+        kind,
+        direction,
+        Decimal(71500),
+        Decimal("61.30"),
+        Decimal("1.1200"),
+    )
+
+
+def test_the_snapshot_is_not_evidence_but_signals_are():
+    """지표는 문맥이라 인용할 수 없고, 신호는 사건이라 인용할 수 있다.
+
+    "신호를 근거로 쓴 추론이 안 쓴 추론보다 나았나"를 재려면 인용이 엣지로 남아야 한다.
+    """
+    connection = FakeConnection({"daily_history": domestic_history(), "recent_signals": [signal_row()]})
+    box = toolbox(connection)
+
+    box.run("daily_history", {"symbol": "005930", "days": 10})
+
+    assert list(box.registry) == ["technical_signal:1042"]
+    item = box.registry["technical_signal:1042"]
+    assert item.kind is ThesisEvidenceKind.TECHNICAL_SIGNAL
+    assert "골든크로스" in item.title
+    assert item.url is None
+    assert item.detail["direction"] == "up"
+
+
+def test_recent_signals_come_with_the_daily_history():
+    connection = FakeConnection(
+        {
+            "daily_history": domestic_history(),
+            "recent_signals": [signal_row(), signal_row(1041, kind="macd_cross", direction="down")],
+        }
+    )
+    box = toolbox(connection)
+
+    payload = json.loads(box.run("daily_history", {"symbol": "005930", "days": 10}))
+
+    assert payload["recent_signals"] == [
+        {"ref": "technical_signal:1042", "signal_date": "2026-08-19", "kind": "sma_cross", "direction": "up"},
+        {"ref": "technical_signal:1041", "signal_date": "2026-08-19", "kind": "macd_cross", "direction": "down"},
+    ]
+
+
+def test_the_signal_query_ends_at_the_slot_time():
+    """신호는 마감 뒤 계산된다. `signal_date`로만 걸면 장후 슬롯이 당일 신호를 본 것으로 읽는다."""
+    connection = FakeConnection({"daily_history": domestic_history(), "recent_signals": []})
+    box = toolbox(connection)
+
+    box.run("daily_history", {"symbol": "005930", "days": 10})
+
+    statement, parameters = next(
+        (statement, parameters) for statement, parameters in connection.calls if "FROM technical_signal" in statement
+    )
+    assert parameters["as_of_at"] == AS_OF
+    assert parameters["symbol"] == "005930"
+    assert "created_at <= %(as_of_at)s" in body(statement)
+
+
+def test_no_signals_is_an_empty_list_not_a_missing_key():
+    connection = FakeConnection({"daily_history": domestic_history(), "recent_signals": []})
+    box = toolbox(connection)
+
+    payload = json.loads(box.run("daily_history", {"symbol": "005930", "days": 10}))
+
+    assert payload["recent_signals"] == []
+    assert box.registry == {}
 
 
 def test_the_new_tools_do_not_create_evidence():
@@ -2318,8 +2555,9 @@ def test_past_theses_carries_the_id_the_edge_needs():
     rows = past_theses(connection, as_of_at=AS_OF, subject_code="KOSPI", n=PREFETCHED_PAST_THESES)
 
     # 프롬프트에 실리는 행과 엣지 끝이 같은 조회에서 나온다. 따로 조회하면 둘이 어긋날 수 있다.
-    assert [row["id"] for row in rows] == [7]
-    assert rows[0]["outcomes"][0]["verdict"] == "contradicted"
+    assert [row.id for row in rows] == [7]
+    assert rows[0].outcomes[0].verdict == "contradicted"
+    assert rows[0].run_date == date(2026, 8, 20)
     _, parameters = connection.calls[0]
     assert parameters == (AS_OF, "KOSPI", PREFETCHED_PAST_THESES)
 

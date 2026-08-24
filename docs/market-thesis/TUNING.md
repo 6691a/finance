@@ -145,7 +145,10 @@ GROUP BY run_slot;
 | 툴 개수 | 14 | 같은 곳 | **어떤 툴을 실제로 부르는지**와 `tool_rounds` 분포 | 한 번도 안 불리는 툴은 뺀다(문맥만 먹는다). 반대로 상한에 붙어 있으면 왕복을 늘린다. **서브 에이전트로 나누는 것은 여기서 판단한다** — 아래 참고 |
 | `verdict` 값 셋 | `supported`/`contradicted`/`unresolved` | `analysis.py` + CHECK | `contradicted` 비율 | 60% 위가 유지되면 "반박"과 "다른 원인 지목"을 가를지 본다. **지금은 안 가른다** |
 | `MAX_TOOL_ROUNDS` / `MAX_TOOL_CALLS` / `MAX_TOOL_RESULT_CHARS` | 3 / 12 / 24,000 | `thesis.py` | 쿼리 B의 분포 | 상한에 붙어 있으면 올린다. **값이 인자 모델(`RecentDocumentsArgs` 등)의 `Field(description=...)`에 f-string으로 실려 프롬프트가 자동으로 따라간다** |
-| `PROMPT_VERSION` / `NARRATIVE_PROMPT_VERSION` | `"1"` / `"1"` | `thesis.py` | — | 프롬프트를 고치면 올린다. 올린 뒤 28일은 ops 창이 두 판에 걸친다 |
+| `PROMPT_VERSION` / `NARRATIVE_PROMPT_VERSION` | `"3"` / `"1"` | `thesis.py` | — | 프롬프트를 고치면 올린다. 올린 뒤 28일은 ops 창이 두 판에 걸친다. `"3"`은 2026-08-24 기술적 보조지표가 들어온 판이다 — 관측 상태에 `technical` 블록이 실리고 `daily_history`가 지표·신호를 함께 준다 |
+| `RULE_VERSION` | `"1"` | `technical.py` | `kind`·`direction`별 지평 적중률(기술지표 문서 12.6절) | 신호 검출 규칙을 고치면 올린다. `PROMPT_VERSION`과 같은 역할이고 축이 다르다 — 저쪽은 "모델이 잘 읽었나", 이쪽은 "신호가 좋았나"다 |
+| `RSI_OVERBOUGHT` / `RSI_OVERSOLD` | 70 / 30 | `technical.py` | 같은 것 | 검출과 프롬프트가 **같은 상수**를 본다. `rsi_reversal` 건수가 너무 적거나 많으면 여기서 당긴다 |
+| `SIGNAL_STATE_DAYS` / `MAX_STATE_SIGNALS` | 30일 / 3건 | `thesis_common.py` | 프롬프트 길이 | 관측 상태에 싣는 신호의 창과 개수. 툴(`SIGNAL_HISTORY_DAYS`, 90일)보다 짧다 |
 | `THESIS_WINDOW_DAYS` | 28 | `ops.py` | — | 판을 올린 직후엔 짧게 줄여 새 판만 본다 |
 | 스케줄 | 08:35 / 20:30 KST | `market_thesis_forecast.py` / `market_thesis_review.py` | 쿼리 C + readiness 재시도 | 재시도가 잦으면 늦춘다. 08:35는 문서 평가(매시 25분) 뒤, 20:30은 확정 종가(18:10) 뒤라는 제약이 있다 |
 | `ASSESSMENT_LAG` | 20분 | 같은 파일 | 같은 것 | 평가가 정상인데 guard가 막으면 늘린다 |
@@ -263,6 +266,8 @@ ops 브리핑의 **추론 적체** 한 줄. **여기서 즉시 대응하는 것�
 | 2026-08-21 | 툴 개수 | 4 → 11 | 국채 349행·수급 490행·시장폭 748행이 모델에게 안 보이고 있었다 | 운영 DB 실행으로 결함 둘을 잡았다(공매도 당일 0행, 국내 지수 일봉 부재) |
 | 2026-08-22 | `THESIS_TIMEOUT_SECONDS` | 900 → 1800 | **없다.** 900에서 죽은 실행은 아직 없고, 툴이 11개로 늘어 왕복이 길어질 것을 보고 미리 올렸다 | 이 표의 규칙("본 숫자가 없는 행은 기억이다")을 어기는 행이라 그 사실을 적어 둔다. 실제 소요 분포를 보고 되돌릴 후보다 |
 | 2026-08-23 | 해설 호출 단위 | 지평마다 하나(슬롯 `PRE_OPEN` 고정) → (지평, 슬롯)마다 하나 | — (코드 읽기로 잡았다. 응답을 `subject_code`로 대상에 되돌리는데 같은 날 장전·장후가 같은 대상이라 장후 추론은 해설을 한 번도 못 받았다) | 해설 LLM 호출이 날마다 최대 3 → 6으로 는다. 장후 해설이 실제로 쌓이는지는 `SELECT t.run_slot, count(o.narrative) FROM thesis t JOIN thesis_outcome o ON o.thesis_id = t.id GROUP BY 1`로 본다 — `post_close`가 0이면 안 풀린 것이다 |
+| 2026-08-24 | `PROMPT_VERSION` + 기술적 보조지표 | `"2"` → `"3"`. 관측 상태에 `technical` 블록, `daily_history`에 `technical_snapshot`·`recent_signals` | **없다.** 지표가 추론에 도움이 되는지는 아직 재지 않았고, 이 판을 올리는 것이 그것을 재기 위한 조건이다 | 비교는 배포 4주 뒤 `prompt_version` 2 대 3의 지평별 Brier와 [../market-technical-indicators.md](../market-technical-indicators.md) 14.4절 세 SQL이다. 개선이 없으면 관측 상태의 push를 빼고 툴만 남긴다 |
+| 2026-08-24 | `RULE_VERSION` | (없음) → `"1"` | — (첫 판) | 신호 셋(`sma_cross`·`macd_cross`·`rsi_reversal`)의 지평 T+1·5·20 적중률을 4주 뒤 기술지표 문서 12.6절 SQL로 본다. 그 결과가 신호를 늘리거나 줄이는 유일한 근거다 |
 | 2026-08-23 | `MAX_TOOL_ROUNDS` / `build_thesis` `execution_timeout` | 4 → 3 / (없음) → 30분 | **없다.** 요청 타임아웃 1800초 × 호출 최대 7번이면 한 시도가 3시간 넘게 갈 수 있는데 태스크 울타리가 없었다 | 왕복을 하나 줄여 호출 최대 6번으로, 태스크에 30분 울타리를 둔다. `MAX_TOOL_CALLS` 12는 그대로라 한 왕복에 여러 툴을 묶어 부르면 보는 양은 같다. 재시도 셋 유지 |
 
 ---

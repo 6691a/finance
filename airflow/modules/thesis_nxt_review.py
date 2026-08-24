@@ -49,6 +49,7 @@ from pydantic import AwareDatetime, BaseModel, ConfigDict
 
 from modules import thesis_common
 from modules.sql import read_sql
+from modules.thesis_state import AfterHoursObservation, NxtObservedState
 from modules.utility import KST_TIMEZONE
 
 logger = logging.getLogger(__name__)
@@ -180,7 +181,7 @@ class NxtAfterHoursReview:
 
         thesis_common.require_settled_closes(self._connection, self._run_date, self.watched)
 
-    def observed_state(self) -> dict[str, Any]:
+    def observed_state(self) -> NxtObservedState:
         """프롬프트에 주는 관측 상태. 정규장·애프터마켓·지수 맥락 셋이다.
 
         **정규장 등락을 함께 주는 이유**: 애프터 등락만 주면 "왜 애프터에서 더 빠졌나"를 말할
@@ -194,23 +195,30 @@ class NxtAfterHoursReview:
         """
         from modules import thesis as market_thesis
 
-        regular = thesis_common.observed_state(self._connection, market_thesis, self._run_date, self.targets)
-        return {
-            "session": self._run_date.isoformat(),
-            "regular": regular["stock"],
-            "after_hours": {bar.stock_code: self._after_hours_entry(bar) for bar in self.bars if bar.return_pct},
-            "index_regular": regular["index"],
-        }
+        regular = thesis_common.observed_state(
+            self._connection,
+            market_thesis,
+            self._run_date,
+            self.targets,
+            as_of_at=as_of(self._run_date),
+        )
+        return NxtObservedState(
+            session=self._run_date,
+            regular=regular.stock,
+            after_hours={bar.stock_code: self._after_hours_entry(bar) for bar in self.bars if bar.return_pct},
+            index_regular=regular.index,
+            technical=regular.technical,
+        )
 
     @staticmethod
-    def _after_hours_entry(bar: AfterHoursBar) -> dict[str, Any]:
+    def _after_hours_entry(bar: AfterHoursBar) -> AfterHoursObservation:
         """봉 하나를 프롬프트 칸으로. 등락률이 없는 종목은 부르는 쪽이 이미 걸렀다."""
-        return {
-            "close": float(bar.last_close),
-            "return_pct": round(float(bar.return_pct or 0), 2),
-            "last_bar_at": bar.last_bar_at.isoformat(),
-            "bars": bar.bar_count,
-        }
+        return AfterHoursObservation(
+            close=float(bar.last_close),
+            return_pct=round(float(bar.return_pct or 0), 2),
+            last_bar_at=bar.last_bar_at,
+            bars=bar.bar_count,
+        )
 
     def run(self, *, dag_run_id: str) -> int:
         """휴장 판정 → readiness guard → 관측 상태 → LLM → 저장. 저장한 행 수를 준다."""

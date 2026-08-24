@@ -46,7 +46,7 @@ DB 연결과 **기준 시각 `as_of_at`**을 들고 읽기 전용 툴 14개를 �
 | `market_breadth()` | 상승·보합·하락 종목 수와 상·하한가 수 | `market_movement_snapshot/select_thesis_latest.sql` |
 | `stock_investor_flows(days)` | 추적 종목의 확정 수급 며칠치 + 장중 추정치 | `stock_investor_trade_daily/select_thesis_flows.sql`, `stock_investor_estimate_snapshot/select_thesis_latest.sql` |
 | `market_funds(days)` | 고객예탁금·신용융자·미수금 추이 | `krx_market_funds_daily/select_thesis_recent.sql` |
-| `daily_history(symbol, days)` | 심볼 하나의 일봉 추세 | `quote_daily/select_thesis_history.sql`, `select_thesis_symbols.sql` |
+| `daily_history(symbol, days)` | 심볼 하나의 일봉 추세 + 기술적 보조지표(SMA20/60·RSI14·MACD·거래량 비율) + 최근 매매 신호 | `technical/select_history.sql`, `technical/select_symbols.sql`, `technical_signal/select_thesis_recent.sql` |
 | `short_and_credit()` | 공매도 수량·비중, 대차 잔고, 신용융자 잔고 | `krx_stock_short_sale_daily/select_thesis_latest.sql` |
 | `analyst_opinions(ticker)` | 추적 종목 하나의 증권사별 투자의견·목표주가·직전 의견과 그 사유(같은 날 리포트 요약) | `stock_analyst_opinion/select_thesis_recent.sql` |
 | `event_surprises(ticker)` | 추적 종목 하나의 기대 대비 발표 판정(beat/meet/miss)과, 아직 발표되지 않은 이벤트의 대표 기대치 | `stock_event_outcome/select_thesis_recent.sql`, `stock_event_claim/select_thesis_pending.sql` |
@@ -64,9 +64,15 @@ DB 연결과 **기준 시각 `as_of_at`**을 들고 읽기 전용 툴 14개를 �
   추정은 장중 값이라 어긋난다. 한 칸에 담으면 모델이 그 차이를 모른 채 읽는다.
 - **`short_and_credit`은 당일 행을 뺀다.** KIS가 장중에 당일 공매도를 0으로 보낸다
   (2026-08-21 실측). 확정은 다음 영업일 갱신이 채운다.
-- **`daily_history`는 0행이면 쓸 수 있는 심볼을 함께 준다.** `quote_daily`에 KOSPI·KOSDAQ
-  일봉이 없다 — 국내 지수는 분봉만 수집한다. 빈 배열만 주면 모델이 "이력이 없다"가 아니라
-  "움직임이 없었다"로 읽는다.
+- **`daily_history`는 0행이면 쓸 수 있는 심볼을 함께 준다.** 빈 배열만 주면 모델이
+  "이력이 없다"가 아니라 "움직임이 없었다"로 읽는다.
+- **`daily_history`는 지표와 신호를 함께 준다**(2026-08-24). 국내 지수 일봉은
+  `kis_index_daily`가 넣고 국내 종목은 `stock_investor_trade_daily`의 확정 종가를 쓴다.
+  `technical_snapshot`은 마지막 확정 일봉 기준이고 표본이 60봉에 못 미치거나 하루 35퍼센트가
+  넘는 가격 단절이 있으면 `null`이다 — 0으로 채우지 않는다. `recent_signals`의 각 항목은
+  `technical_signal:<id>` ref를 갖는 **인용 가능한 근거**다. 지표값 자체는 문맥이라
+  레지스트리에 넣지 않는다. 설계는 [../market-technical-indicators.md](../market-technical-indicators.md)
+  7.1·12.5·14절이다.
 - **`analyst_opinions`는 당일 행을 빼지 않는다.** 투자의견은 아침에 발표되는 당일 사건이
   정상값이다. 추적 목록 밖 종목은 `past_theses`의 `subject_code`처럼 거절한다. KIS가 사유를
   안 주므로 같은 날 같은 증권사 리포트 요약을 `reason`으로 붙인다(못 찾으면 칸이 없다).

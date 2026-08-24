@@ -125,6 +125,8 @@ def test_thesis_evidence_keeps_one_row_per_ref_and_per_rank(capsys):
         in statement
     )
     assert "CONSTRAINT uq_thesis_evidence_rank UNIQUE (thesis_id, outcome_horizon_days, rank)" in statement
+    # 테이블을 만든 리비전의 값 집합이다. 나중 리비전이 technical_signal을 더한 것은
+    # `test_technical_signal_schema.py`가 본다.
     assert "evidence_kind IN ('document', 'disclosure', 'macro_change')" in statement
     assert "outcome_horizon_days IS NULL OR outcome_horizon_days IN (1, 3, 5)" in statement
     assert "rank > 0" in statement

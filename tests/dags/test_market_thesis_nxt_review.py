@@ -55,8 +55,10 @@ class FakeCursor:
         return None
 
     def execute(self, statement: str, parameters: Any = ()) -> None:
-        self.calls.append((statement, tuple(parameters)))
-        self._row = self._answers.pop(0)
+        # psycopg는 위치(tuple)와 이름(dict) 둘 다 받는다. dict를 tuple로 바꾸면 키만 남는다.
+        self.calls.append((statement, dict(parameters) if isinstance(parameters, dict) else tuple(parameters)))
+        # 답을 다 쓰면 빈 결과다. 조회가 하나 늘 때마다 모든 테스트의 픽스처를 늘리지 않는다.
+        self._row = self._answers.pop(0) if self._answers else []
 
     def fetchone(self) -> Any:
         return self._row
@@ -224,18 +226,30 @@ def test_the_guard_passes_when_final_bars_and_closes_are_in():
 
 def test_the_observed_state_keeps_the_two_sessions_apart():
     """애프터 등락만 주면 "왜 애프터에서 더 빠졌나"를 말할 수 없다."""
-    # 호출 순서대로: `thesis_common.observed_state`의 지수·종목 조회 둘, 그 뒤 봉 조회.
-    connection = FakeConnection([WATCHED_ROWS, [("KOSPI", 3150, 3125)], [("005930", 281500)], [_row("005930")]])
+    # 호출 순서대로: 대상 조회, `observed_state`의 지수·종목 조회 둘, 기술적 관측(일봉 하나 +
+    # 종목마다 신호 하나), 그 뒤 봉 조회.
+    connection = FakeConnection(
+        [
+            WATCHED_ROWS,
+            [("KOSPI", 3150, 3125)],
+            [("005930", 281500)],
+            [],  # technical/select_history.sql
+            [],  # technical_signal/select_thesis_recent.sql · 000660
+            [],  # technical_signal/select_thesis_recent.sql · 005930
+            [_row("005930")],
+        ]
+    )
 
     state = NxtAfterHoursReview(connection, run_date=RUN_DATE).observed_state()
 
-    assert state["session"] == "2026-08-21"
-    assert state["regular"]["005930"]["close"] == 281500.0
-    assert state["after_hours"]["005930"]["return_pct"] == -4.09
-    assert state["after_hours"]["005930"]["bars"] == 260
+    assert state.session == RUN_DATE
+    assert state.regular["005930"].close == 281500.0
+    assert state.after_hours["005930"].return_pct == -4.09
+    assert state.after_hours["005930"].bars == 260
     # 지수는 subject가 아니라 맥락이다. 키 이름이 그것을 밝힌다.
-    assert "index_regular" in state
-    assert "index" not in state
+    payload = state.model_dump(mode="json")
+    assert "index_regular" in payload
+    assert "index" not in payload
 
 
 def test_a_stock_without_a_settled_close_is_left_out_not_zeroed():
@@ -245,7 +259,7 @@ def test_a_stock_without_a_settled_close_is_left_out_not_zeroed():
 
     state = NxtAfterHoursReview(connection, run_date=RUN_DATE).observed_state()
 
-    assert state["after_hours"] == {}
+    assert state.after_hours == {}
 
 
 # --- run() ---------------------------------------------------------------------

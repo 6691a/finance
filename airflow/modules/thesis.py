@@ -55,10 +55,11 @@ from langgraph.graph.message import add_messages
 from langgraph.prebuilt import ToolNode
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
 
-from modules import llm
+from modules import llm, technical
 from modules.llm import UnsupportedResponseFormat
 from modules.schema import SchemaError, json_object, response_format
 from modules.sql import read_sql
+from modules.thesis_state import NxtObservedState, ObservedState, PastOutcome, PastThesis
 from modules.utility import KST_TIMEZONE, atomic
 
 logger = logging.getLogger(__name__)
@@ -66,7 +67,9 @@ logger = logging.getLogger(__name__)
 # 프롬프트를 고치면 올린다. `thesis.prompt_version`에 저장돼 채점 결과를 가르는 기준이 된다.
 # 2: 과거 추론과 결과를 프롬프트에 미리 싣는 절이 생겼고, 인용이 `evidence_refs`에서 근거별
 #    방향·경로를 담는 `claims`로 바뀌었다(2026-08-21, 둘 다 운영에 나가기 전이라 한 판이다).
-PROMPT_VERSION = "2"
+# 3: 기술적 보조지표가 들어왔다(2026-08-24). `daily_history`가 국내 지수·종목 일봉과
+#    technical_snapshot·recent_signals를 함께 주고, 관측 상태에 technical 블록이 실린다.
+PROMPT_VERSION = "3"
 
 # 채점 지평. KRX 영업일 수이고 달력일이 아니다. 0은 예측일 세션 하나다.
 HORIZON_DAYS: tuple[int, ...] = (0, 1, 3, 5)
@@ -184,6 +187,24 @@ SNAPSHOT_LOOKBACK = timedelta(hours=12)
 MIN_HISTORY_DAYS = 1
 MAX_HISTORY_DAYS = 30
 
+# 지표 계산에 받는 봉 수. 모델에게 보여 주는 봉(`days`)과 다르다.
+TECHNICAL_LOOKBACK_BARS = technical.TECHNICAL_LOOKBACK_BARS
+
+# 국내 종목의 하루 가격제한폭보다 큰 인접 종가 단절은 분할·병합이나 원천 이상을 의심한다.
+# 그 구간의 이동평균을 그대로 보여 주느니 지표를 내지 않는 편이 안전하다.
+DOMESTIC_MAX_DAILY_CHANGE_PCT = 35.0
+
+# 툴이 보여 주는 신호 이력의 창. 달력일이고 브리핑(30일)보다 길다 — 브리핑은 "지금 상태"를
+# 한 칸으로 말하고 툴은 "이 대상에 최근 무슨 일이 있었나"를 이력으로 말한다.
+SIGNAL_HISTORY_DAYS = 90
+
+# 프롬프트가 지표를 읽는 기준. 검출 규칙과 **같은 상수**를 쓴다 — 두 곳에 숫자를 적으면
+# 반드시 어긋난다. 거래량 기준만 여기에 있다(검출에 쓰지 않아서다).
+RSI_OVERBOUGHT = technical.RSI_OVERBOUGHT
+RSI_OVERSOLD = technical.RSI_OVERSOLD
+VOLUME_HEAVY_RATIO = 1.5
+VOLUME_LIGHT_RATIO = 0.7
+
 
 class Cursor(Protocol):
     def __enter__(self) -> Self: ...
@@ -257,6 +278,22 @@ class ThesisEvidenceKind(StrEnum):
     DOCUMENT = "document"
     DISCLOSURE = "disclosure"
     MACRO_CHANGE = "macro_change"
+    # 기술적 매매 신호. 지표값은 문맥이라 인용 대상이 아니지만 신호는 행 ID를 가진 사건이다.
+    # 인용하게 만드는 이유는 평가다 — "신호를 근거로 쓴 추론이 안 쓴 추론보다 나았나"를
+    # 재려면 어느 추론이 어느 신호를 인용했는지가 엣지로 남아야 한다(문서 14.3절).
+    TECHNICAL_SIGNAL = "technical_signal"
+
+
+# 사건 이름. Slack 표(`briefing/market.SIGNAL_LABELS`)와 같은 말을 쓴다. `매수`·`매도`
+# 낱말을 쓰지 않는 이유도 같다 — 사건이지 판정이 아니다.
+SIGNAL_LABELS: dict[tuple[str, str], str] = {
+    ("sma_cross", "up"): "골든크로스",
+    ("sma_cross", "down"): "데드크로스",
+    ("macd_cross", "up"): "MACD 상향 교차",
+    ("macd_cross", "down"): "MACD 하향 교차",
+    ("rsi_reversal", "up"): "RSI 과매도 탈출",
+    ("rsi_reversal", "down"): "RSI 과매수 이탈",
+}
 
 
 # ---------------------------------------------------------------------------
@@ -351,7 +388,7 @@ PAST_THESES = read_sql("postgres", "thesis", "select_past_with_outcomes.sql")
 PRECEDENT_INSERT = read_sql("postgres", "thesis_precedent", "insert.sql")
 
 
-def past_theses(connection: Connection, *, as_of_at: datetime, subject_code: str, n: int) -> list[dict[str, Any]]:
+def past_theses(connection: Connection, *, as_of_at: datetime, subject_code: str, n: int) -> list[PastThesis]:
     """이 대상의 지난 장전 추론과 지평별 결과. 최근 것부터 `n`건이다. 피드백 루프는 이 조회 하나다.
 
     **창의 끝은 `as_of_at`이다.** 없으면 장전 슬롯을 오후에 재실행할 때 그날 저녁의 채점이
@@ -365,17 +402,18 @@ def past_theses(connection: Connection, *, as_of_at: datetime, subject_code: str
         cursor.execute(PAST_THESES, (as_of_at, subject_code, n))
         rows = cursor.fetchall()
     return [
-        {
-            "id": row[0],
-            "run_date": row[1].isoformat(),
-            "prob_up": float(row[2]),
-            "prob_down": float(row[3]),
-            "prob_flat": float(row[4]),
-            "up_reasoning": row[5],
-            "down_reasoning": row[6],
-            "flat_reasoning": row[7],
-            "outcomes": row[8],
-        }
+        PastThesis(
+            id=row[0],
+            run_date=row[1],
+            prob_up=float(row[2]),
+            prob_down=float(row[3]),
+            prob_flat=float(row[4]),
+            up_reasoning=row[5],
+            down_reasoning=row[6],
+            flat_reasoning=row[7],
+            # SQL이 jsonb_agg로 만든 목록. 모양은 `PastOutcome`이 검증한다.
+            outcomes=tuple(PastOutcome.model_validate(outcome) for outcome in row[8]),
+        )
         for row in rows
     ]
 
@@ -393,8 +431,9 @@ MARKET_BREADTH = read_sql("postgres", "market_movement_snapshot", "select_thesis
 STOCK_FLOWS = read_sql("postgres", "stock_investor_trade_daily", "select_thesis_flows.sql")
 STOCK_FLOW_ESTIMATES = read_sql("postgres", "stock_investor_estimate_snapshot", "select_thesis_latest.sql")
 MARKET_FUNDS = read_sql("postgres", "krx_market_funds_daily", "select_thesis_recent.sql")
-DAILY_HISTORY = read_sql("postgres", "quote_daily", "select_thesis_history.sql")
-DAILY_HISTORY_SYMBOLS = read_sql("postgres", "quote_daily", "select_thesis_symbols.sql")
+DAILY_HISTORY = read_sql("postgres", "technical", "select_history.sql")
+DAILY_HISTORY_SYMBOLS = read_sql("postgres", "technical", "select_symbols.sql")
+RECENT_SIGNALS = read_sql("postgres", "technical_signal", "select_thesis_recent.sql")
 SHORT_AND_CREDIT = read_sql("postgres", "krx_stock_short_sale_daily", "select_thesis_latest.sql")
 # 6단계(2026-08-22). 증권사 투자의견·목표주가. 리포트 본문은 `recent_documents`가 문서로 준다.
 ANALYST_OPINIONS = read_sql("postgres", "stock_analyst_opinion", "select_thesis_recent.sql")
@@ -505,8 +544,8 @@ class MarketFundsArgs(ToolArgs):
 class DailyHistoryArgs(ToolArgs):
     symbol: str = Field(
         description=(
-            "일봉을 볼 심볼 하나. macro_changes가 돌려준 symbol 값을 그대로 쓴다"
-            "(예: SP500_FUT, USDKRW, VIX). **국내 지수(KOSPI, KOSDAQ)는 일봉이 없다** — "
+            "일봉을 볼 심볼 하나. macro_changes가 돌려준 symbol 값(예: SP500_FUT, USDKRW, VIX), "
+            "국내 지수(KOSPI, KOSDAQ), 추적 종목 코드 6자리(예: 005930)를 쓸 수 있다. "
             "없는 심볼을 물으면 쓸 수 있는 목록을 돌려준다."
         )
     )
@@ -573,8 +612,12 @@ TOOL_DESCRIPTIONS: dict[str, str] = {
         "고객예탁금, 신용융자 잔고, 미수금 등 국내 증시자금의 최근 추이. 살 돈이 늘고 있는지 줄고 있는지를 본다."
     ),
     "daily_history": (
-        "심볼 하나의 최근 일봉(시가·고가·저가·종가·거래량). macro_changes가 창 하나의 양 끝만 "
-        "주는 것과 달리 며칠치 추세를 준다 — '어제 하루 빠진 것'과 '닷새째 빠지는 중'을 가른다."
+        "심볼 하나의 최근 일봉(시가·고가·저가·종가·거래량)과 그 심볼의 기술적 보조지표. "
+        "macro_changes가 창 하나의 양 끝만 주는 것과 달리 며칠치 추세를 준다 — "
+        "'어제 하루 빠진 것'과 '닷새째 빠지는 중'을 가른다. "
+        "technical_snapshot은 마지막 확정 일봉 기준의 SMA20·SMA60·RSI14·MACD(라인·시그널·히스토그램)와 "
+        "직전 20거래일 평균 대비 거래량 비율이다. as_of_date가 그 기준일이고, 표본이 60봉에 못 미치거나 "
+        "가격이 하루에 35퍼센트 넘게 튄 구간이 있으면 null이다 — 0으로 채우지 않는다."
     ),
     "short_and_credit": (
         "추적 종목의 최신 공매도 수량·비중, 대차 잔고, 신용융자 잔고. 셋이 서로의 재고라 "
@@ -779,9 +822,8 @@ class ThesisToolbox:
         # document·disclosure·macro_change 셋 그대로 두고, 이 툴은 문맥으로만 쓴다.
         self._charge()
         body = json.dumps(
-            self._past_theses({"subject_code": subject_code, "n": n}),
+            [past.model_dump(mode="json") for past in self._past_theses({"subject_code": subject_code, "n": n})],
             ensure_ascii=False,
-            default=str,
         )
         self._chars += len(body)
         return body
@@ -908,18 +950,24 @@ class ThesisToolbox:
         )
 
     def _tool_daily_history(self, symbol: str, days: int) -> str:
-        """심볼 하나의 일봉. **없는 심볼이면 쓸 수 있는 목록을 함께 돌려준다.**
+        """심볼 하나의 일봉과 기술지표. **없는 심볼이면 쓸 수 있는 목록을 함께 돌려준다.**
 
-        2026-08-21 실측: `quote_daily`에 KOSPI·KOSDAQ 일봉이 없다. 국내 지수는 분봉만
-        수집하고 일봉 테이블에는 해외 지수만 들어 있다. 그냥 빈 배열을 주면 모델이
-        "이력이 없다"가 아니라 "움직임이 없었다"로 읽을 수 있다.
+        빈 배열만 주면 모델이 "이력이 없다"가 아니라 "움직임이 없었다"로 읽을 수 있다.
+
+        **모델에게 보여 주는 봉은 요청한 `days`뿐이고 계산에는 120봉을 쓴다.** SMA60과 EMA
+        안정화에 그만큼이 필요한데 그 봉을 다 실으면 문맥만 먹는다.
         """
         self._charge()
         span = _clamp_int(days, MIN_HISTORY_DAYS, MAX_HISTORY_DAYS, 10)
         wanted = str(symbol).strip()
         rows = self._fetch(
             DAILY_HISTORY,
-            {"symbol": wanted, "as_of_at": self._as_of_at, "days": span},
+            {
+                "symbols": [wanted],
+                "include_watched": False,
+                "as_of_at": self._as_of_at,
+                "limit": TECHNICAL_LOOKBACK_BARS,
+            },
         )
         if not rows:
             available = self._fetch(DAILY_HISTORY_SYMBOLS, {"as_of_at": self._as_of_at})
@@ -927,29 +975,72 @@ class ThesisToolbox:
                 {
                     "symbol": wanted,
                     "bars": [],
+                    "technical_snapshot": None,
                     "note": f"{wanted}의 일봉이 없다. 아래 심볼만 일봉을 갖는다",
                     "available_symbols": [{"symbol": row[0], "label": row[1], "kind": row[2]} for row in available],
                 }
             )
+        snapshot = _technical_snapshot(wanted, rows)
+        signals = self._recent_signals(wanted)
         return self._body(
             {
                 "symbol": wanted,
                 "bars": [
                     {
-                        "label": row[1],
-                        "kind": row[2],
-                        "country": row[3],
-                        "business_date": row[4],
-                        "open": _number(row[5]),
-                        "high": _number(row[6]),
-                        "low": _number(row[7]),
-                        "close": _number(row[8]),
-                        "volume": _number(row[9]),
+                        "label": row[2],
+                        "kind": row[3],
+                        "country": row[4],
+                        "business_date": row[5],
+                        "open": _number(row[6]),
+                        "high": _number(row[7]),
+                        "low": _number(row[8]),
+                        "close": _number(row[9]),
+                        "volume": _number(row[10]),
                     }
-                    for row in rows
+                    for row in rows[:span]
                 ],
+                "technical_snapshot": None if snapshot is None else snapshot.model_dump(mode="json"),
+                "recent_signals": signals,
             }
         )
+
+    def _recent_signals(self, symbol: str) -> list[dict[str, Any]]:
+        """이 심볼의 최근 매매 신호. **각 항목은 인용할 수 있는 근거다.**
+
+        지표(`technical_snapshot`)와 달리 레지스트리에 넣는다. 신호는 행 ID를 가진 사건이고,
+        모델이 그것을 인용해야 "신호가 추론에 도움이 됐나"를 나중에 잴 수 있다(문서 14.3절).
+        """
+        rows = self._fetch(
+            RECENT_SIGNALS,
+            {
+                "symbol": symbol,
+                "since_date": (self._as_of_at - timedelta(days=SIGNAL_HISTORY_DAYS)).date(),
+                "as_of_at": self._as_of_at,
+                "limit": MAX_TOOL_RESULTS,
+            },
+        )
+        signals = []
+        for row in rows:
+            kind, direction = str(row[3]), str(row[4])
+            ref = evidence_ref(ThesisEvidenceKind.TECHNICAL_SIGNAL, str(row[0]))
+            self._registry[ref] = Evidence(
+                kind=ThesisEvidenceKind.TECHNICAL_SIGNAL,
+                ref=ref,
+                title=f"{symbol} {SIGNAL_LABELS.get((kind, direction), f'{kind} {direction}')} ({row[2]})",
+                # 사건은 링크할 곳이 없다. 매크로 변화와 같다.
+                url=None,
+                detail={
+                    "symbol": symbol,
+                    "signal_date": str(row[2]),
+                    "kind": kind,
+                    "direction": direction,
+                    "close": _number(row[5]),
+                    "rsi14": _number(row[6]),
+                    "volume_ratio20": _number(row[7]),
+                },
+            )
+            signals.append({"ref": ref, "signal_date": str(row[2]), "kind": kind, "direction": direction})
+        return signals
 
     def _tool_short_and_credit(self) -> str:
         self._charge()
@@ -1068,7 +1159,7 @@ class ThesisToolbox:
             raise ToolLimitExceeded(f"모르는 툴 이름이다: {name!r}. 쓸 수 있는 것은 {sorted(self._by_name)}")
         return tool.invoke(arguments)
 
-    def _past_theses(self, arguments: dict[str, Any]) -> list[dict[str, Any]]:
+    def _past_theses(self, arguments: dict[str, Any]) -> list[PastThesis]:
         """툴 판 `past_theses`. 대상 목록 밖을 거절하고 건수를 자른 뒤 모듈 함수에 맡긴다.
 
         장전은 같은 조회를 프롬프트에 미리 싣는다(`PREFETCHED_PAST_THESES`). 툴은 모델이
@@ -1302,6 +1393,37 @@ def _change_label(kind: str, first_close: Decimal, last_close: Decimal) -> str:
     return f"{float((last_close - first_close) / first_close) * 100:+.2f}%"
 
 
+def _technical_snapshot(subject_code: str, rows: Sequence[Sequence[Any]]) -> technical.TechnicalSnapshot | None:
+    """`technical/select_history.sql` 행에서 지표 한 벌을 만든다. 못 만들면 `None`이다.
+
+    조회는 최신순이고 계산기는 오름차순을 받는다. **국내 KIS 행에만 35% 단절 guard를 건다** —
+    해외 지수·환율은 가격제한폭이 없어 같은 잣대를 댈 수 없다.
+    """
+    ascending = list(reversed(rows))
+    try:
+        bars = [
+            technical.DailyBar(
+                business_date=row[5],
+                open=float(row[6]),
+                high=float(row[7]),
+                low=float(row[8]),
+                close=float(row[9]),
+                volume=None if row[10] is None else int(row[10]),
+            )
+            for row in ascending
+        ]
+    except (TypeError, ValueError, ValidationError):
+        # 원천 값이 계약을 깨면 지표를 만들지 않는다. 원시 봉은 그대로 나간다.
+        return None
+    domestic_kis = ascending[0][0] == "kis" and ascending[0][4] == "KR"
+    return technical.summarize(
+        subject_code,
+        str(ascending[0][2] or subject_code),
+        bars,
+        max_abs_daily_change_pct=DOMESTIC_MAX_DAILY_CHANGE_PCT if domestic_kis else None,
+    )
+
+
 def _number(value: Any) -> Any:
     """`Decimal`을 JSON이 읽는 수로 바꾼다. `None`은 그대로 둔다.
 
@@ -1481,6 +1603,27 @@ SYSTEM_PROMPT = f"""너는 시장 추론 기록기다. 주어진 관측 상태�
 근거가 필요하면 툴을 불러 직접 가져와라. 무엇을 얼마나 볼지는 네가 정한다.
 조사가 끝나면 답을 낸다.
 
+## 기술적 관측
+
+관측 상태의 `technical`은 `as_of_date` 마감 기준의 일봉 지표이고 대상별 값이
+`technical.subjects[대상코드]`에 있다. 그 대상의 지표를 낼 수 없었으면(표본 부족·가격 단절)
+`null`이다. 읽는 규칙:
+
+- `close_vs_sma20_pct`, `sma20_vs_sma60_pct`가 둘 다 양수면 단기·중기 추세가 위(정배열),
+  둘 다 음수면 아래(역배열)다. 부호가 갈리면 추세 전환 구간이다.
+- `rsi14`는 {int(RSI_OVERBOUGHT)} 위가 과열, {int(RSI_OVERSOLD)} 아래가 과매도다.
+  그 사이는 방향 정보가 약하다.
+- `macd_histogram`은 부호가 모멘텀 방향, 크기 변화가 가속·감속이다.
+- `volume_ratio20`이 {VOLUME_HEAVY_RATIO} 위면 그날 움직임에 거래가 실렸다는 뜻이고
+  {VOLUME_LIGHT_RATIO} 아래면 실리지 않았다는 뜻이다.
+- `recent_signals`는 **교차가 일어났다는 사건**이다. 골든크로스가 곧 상승이 아니다.
+  같은 사건이 과거에 얼마나 맞았는지는 너도 시스템도 아직 모른다. 인용하려면 `ref`를 쓴다.
+
+지표는 **가격이 이미 한 일**이다. 왜 그랬는지는 말해 주지 않는다. 뉴스·공시·수급과
+맞춰 보고, 맞는 것이 없으면 지표만으로 확률을 기울이지 마라. 횡보 이유에는 RSI 중립·
+히스토그램 0 근처 같은 "방향 정보 없음"을 근거로 써도 된다.
+`daily_history` 툴은 심볼 하나의 일봉·지표·신호 이력을 더 길게 준다.
+
 ## 규칙
 
 - **툴 결과와 관측 상태에 없는 사실·숫자를 쓰지 마라.** 지어낸 근거는 기록을 망친다.
@@ -1592,18 +1735,20 @@ class ThesisBuilder:
         run_slot: RunSlot,
         as_of_at: datetime,
         subjects: Sequence[Subject],
-        observed_state: dict[str, Any],
-        past_theses: Mapping[str, Sequence[Mapping[str, Any]]],
+        observed_state: ObservedState | NxtObservedState,
+        past_theses: Mapping[str, Sequence[PastThesis]],
     ) -> list[BaseMessage]:
         """`past_theses`는 subject 코드별 과거 추론 목록(`thesis.past_theses`의 행)이다.
 
         빈 매핑이면 그 절에 `NO_PAST_THESES`가 들어간다. 장후 리뷰가 그 경우다.
+
+        **모양은 모델이 정한다**(`thesis_state`). 여기서 하는 것은 JSON으로 바꾸는 것뿐이다.
         """
         subject_lines = "\n".join(f"- {subject.code} ({subject.label}, {subject.kind.value})" for subject in subjects)
-        shown = {code: rows for code, rows in past_theses.items() if rows}
-        past_section = (
-            f"```json\n{json.dumps(shown, ensure_ascii=False, indent=2, default=str)}\n```" if shown else NO_PAST_THESES
-        )
+        shown = {
+            code: [past.model_dump(mode="json") for past in rows] for code, rows in past_theses.items() if rows
+        }
+        past_section = f"```json\n{json.dumps(shown, ensure_ascii=False, indent=2)}\n```" if shown else NO_PAST_THESES
         return [
             SystemMessage(SYSTEM_PROMPT),
             HumanMessage(
@@ -1611,7 +1756,7 @@ class ThesisBuilder:
                     slot_instruction=SLOT_INSTRUCTION[run_slot],
                     as_of_at=kst_label(as_of_at),
                     subjects=subject_lines or "(없음)",
-                    observed_state=json.dumps(observed_state, ensure_ascii=False, indent=2, default=str),
+                    observed_state=json.dumps(observed_state.model_dump(mode="json"), ensure_ascii=False, indent=2),
                     past_theses=past_section,
                 )
             ),
@@ -1623,8 +1768,8 @@ class ThesisBuilder:
         run_slot: RunSlot,
         as_of_at: datetime,
         subjects: Sequence[Subject],
-        observed_state: dict[str, Any],
-        past_theses: Mapping[str, Sequence[Mapping[str, Any]]],
+        observed_state: ObservedState | NxtObservedState,
+        past_theses: Mapping[str, Sequence[PastThesis]],
     ) -> tuple[tuple[ThesisDraft, ...], int]:
         """추론들과 툴 왕복 수. 두 번째도 실패하면 `ThesisError`를 올린다."""
         if not subjects:
@@ -1892,7 +2037,7 @@ def store_theses(
     dag_run_id: str,
     drafts: Sequence[ThesisDraft],
     registry: dict[str, Evidence],
-    observed_state: dict[str, Any],
+    observed_state: ObservedState | NxtObservedState,
     llm_model: str,
     tool_rounds: int,
     precedents: Mapping[str, Sequence[int]],
@@ -1925,7 +2070,7 @@ def store_theses(
                     draft.up_reasoning,
                     draft.down_reasoning,
                     draft.flat_reasoning,
-                    json.dumps(observed_state, ensure_ascii=False, default=str),
+                    json.dumps(observed_state.model_dump(mode="json"), ensure_ascii=False),
                     tool_rounds,
                     llm_model,
                     PROMPT_VERSION,

@@ -1,4 +1,12 @@
-from apps.models.analysis import Thesis, ThesisEvidence, ThesisOutcome, ThesisPrecedent
+from apps.models.analysis import (
+    StockEventClaim,
+    StockEventExtraction,
+    StockEventOutcome,
+    Thesis,
+    ThesisEvidence,
+    ThesisOutcome,
+    ThesisPrecedent,
+)
 from apps.models.content import Document, DocumentIndicator, DocumentInstrument, DocumentSource
 from apps.models.market import (
     BondFutureBar,
@@ -74,6 +82,9 @@ __all__ = [
     "StockAnalystOpinion",
     "StockBar",
     "StockDaily",
+    "StockEventClaim",
+    "StockEventExtraction",
+    "StockEventOutcome",
     "StockInvestorEstimateSnapshot",
     "StockInvestorTradeDaily",
     "Thesis",

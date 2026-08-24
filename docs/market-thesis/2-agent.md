@@ -12,7 +12,7 @@
 
 ## 1. ThesisToolbox
 
-DB 연결과 **기준 시각 `as_of_at`**을 들고 읽기 전용 툴 13개를 실행한다.
+DB 연결과 **기준 시각 `as_of_at`**을 들고 읽기 전용 툴 14개를 실행한다.
 **툴 수가 tool call 상한(`MAX_TOOL_CALLS` 12)을 넘었다** — 모델이 툴마다 한 번씩도 못 부른다.
 상한에 붙는 실행이 보이면 그 숫자부터 올린다([TUNING.md](TUNING.md) 5절).
 
@@ -30,12 +30,13 @@ DB 연결과 **기준 시각 `as_of_at`**을 들고 읽기 전용 툴 13개를 �
 | `macro_changes()` | 분석 창의 지수·선물·환율 변화(첫봉 대비 마지막봉) | `quote_bar/select_window_changes.sql`(뷰는 읽기 전용 — 조회만) |
 | `us_market_close()` | 밤사이 미국장 마감 종가와 **전일 종가 대비** 등락 | `quote_bar/select_thesis_us_close.sql`(뷰는 읽기 전용 — 조회만) |
 
-### 문맥만 주는 툴 아홉
+### 문맥만 주는 툴 열
 
 `past_theses`를 뺀 일곱은 2026-08-21에 열었다. 그전까지 모델이 볼 수 있는 것은 문서·공시·분봉
 창 변화뿐이어서 **수집 중인 것의 대부분이 보이지 않았다** — 특히 `indicator_observation`에
 9개국 국채 곡선이 쌓여 있는데 금리를 못 보면서 "왜 움직였나"를 묻고 있었다.
-`analyst_opinions`는 6단계(2026-08-22, [6-analyst.md](6-analyst.md))가 열었다.
+`analyst_opinions`는 6단계(2026-08-22, [6-analyst.md](6-analyst.md))가,
+`event_surprises`는 8단계(2026-08-24, [8-expectation.md](8-expectation.md))가 열었다.
 
 | 툴 | 반환 | SQL |
 | --- | --- | --- |
@@ -48,6 +49,7 @@ DB 연결과 **기준 시각 `as_of_at`**을 들고 읽기 전용 툴 13개를 �
 | `daily_history(symbol, days)` | 심볼 하나의 일봉 추세 | `quote_daily/select_thesis_history.sql`, `select_thesis_symbols.sql` |
 | `short_and_credit()` | 공매도 수량·비중, 대차 잔고, 신용융자 잔고 | `krx_stock_short_sale_daily/select_thesis_latest.sql` |
 | `analyst_opinions(ticker)` | 추적 종목 하나의 증권사별 투자의견·목표주가·직전 의견과 그 사유(같은 날 리포트 요약) | `stock_analyst_opinion/select_thesis_recent.sql` |
+| `event_surprises(ticker)` | 추적 종목 하나의 기대 대비 발표 판정(beat/meet/miss)과, 아직 발표되지 않은 이벤트의 대표 기대치 | `stock_event_outcome/select_thesis_recent.sql`, `stock_event_claim/select_thesis_pending.sql` |
 
 - **`us_market_close`는 `macro_changes`와 비교 대상이 다르다.** 저쪽은 분석 창의 첫 봉 대비이고
   이쪽은 봉이 들고 온 `previous_close`(전일 정규장 종가) 대비다. KIS 해외지수 현물은 마감 직전
@@ -70,6 +72,11 @@ DB 연결과 **기준 시각 `as_of_at`**을 들고 읽기 전용 툴 13개를 �
   안 주므로 같은 날 같은 증권사 리포트 요약을 `reason`으로 붙인다(못 찾으면 칸이 없다).
   인용할 `ref`가 붙은 리포트 전문은 이 툴이 아니라 `recent_documents`의 `naver_research_*`
   문서에 있다(6단계).
+- **`event_surprises`는 창의 끝을 `announced_at`이 아니라 판정 행의 `created_at`으로 건다.**
+  발표 시각으로 자르면 아직 판정하지 않은 발표가 판정된 것처럼 보인다. 판정 DAG(매시 :45)가
+  장전 추론(08:35)을 넘겨 돌면 그날 장전에는 전 판정까지만 보인다 — 의도된 동작이다.
+  아직 발표되지 않은 이벤트의 기대치를 함께 주는 이유는 "오늘 발표가 나오면 기준선이
+  얼마인가"를 모델이 알아야 서프라이즈를 해석할 수 있기 때문이다(8단계).
 - 열지 않은 것: `earnings_fact`(6행뿐이라 지금 열면 빈 결과만 준다), `market_session`
   (관측 상태가 이미 세션 날짜를 준다).
 

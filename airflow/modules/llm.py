@@ -101,6 +101,20 @@ def document_model() -> BaseChatModel:
     )
 
 
+def expectation_model() -> BaseChatModel:
+    """이벤트 기대치 추출(`modules/expectation.py`)이 쓰는 모델.
+
+    문서 하나를 읽고 구조화 JSON을 내는 일이라 문서 태깅과 같은 모델로 시작한다. 함수를
+    나눠 두는 이유도 같다 — 추출만 다른 모델로 옮기고 싶어질 때 이 함수만 고친다.
+    """
+    return ChatOpenAI(
+        model="gpt-5.6-luna",
+        timeout=REQUEST_TIMEOUT_SECONDS,
+        # 재시도는 Airflow가 한다. 위 모듈 docstring 참고.
+        max_retries=0,
+    )
+
+
 def briefing_model() -> BaseChatModel:
     """Slack 브리핑 선별(`modules/briefing/picks.py`)이 쓰는 모델.
 

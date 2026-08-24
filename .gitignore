@@ -17,7 +17,6 @@ docs/*
 !docs/collection-map.html
 !docs/collectors-class-migration.md
 !docs/market-technical-indicators.md
-!docs/pydantic-return-migration.md
 
 # 실행하면 앱키와 시세 응답이 출력에 남는다. 커밋하지 않는다.
 notebooks/

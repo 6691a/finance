@@ -996,7 +996,7 @@ ORDER BY kind, direction, rule_version, horizon;
 | 14.1 신호 개수 | 관측 상태는 30일·최대 3건, 툴은 90일·`MAX_TOOL_RESULTS` | 관측 상태가 사건 목록으로 채워지지 않게 묶었다 |
 | 12.3 실패 판정 | "60봉 미만은 건너뛴다"에 더해 **조회가 0행이어도 실패**시킨다 | 볼 대상이 하나도 없는 것은 앞단 수집이 빈 것이다. 건너뜀과 원천 부재를 다른 예외 메시지로 가른다 |
 | Task 5 표 | `신호` 열을 Task 10에서 더했다 | 표 자체(Task 5)와 신호 열(Task 10)의 앞단이 달라 순서를 지켰다 |
-| 관측 상태·과거 추론의 반환 타입 | `dict[str, Any]` → `thesis_state.py`의 Pydantic 모델(`ObservedState`·`NxtObservedState`·`TechnicalState`·`PastThesis` 등) | 사용자 요청(2026-08-24). 프롬프트와 JSONB 둘로 나가는 값이라 키 오타가 조용히 살아남으면 안 된다. 규칙은 `.claude/CLAUDE.md`·`.codex/AGENTS.md`의 "함수가 돌려주는 데이터 모양은 Pydantic 모델이다"에 적었고, 남은 곳의 전환 계획은 `docs/pydantic-return-migration.md`에 있다 |
+| 관측 상태·과거 추론의 반환 타입 | `dict[str, Any]` → `thesis_state.py`의 Pydantic 모델(`ObservedState`·`NxtObservedState`·`TechnicalState`·`PastThesis` 등) | 사용자 요청(2026-08-24). 프롬프트와 JSONB 둘로 나가는 값이라 키 오타가 조용히 살아남으면 안 된다. 규칙은 `.claude/CLAUDE.md`·`.codex/AGENTS.md`의 "함수가 돌려주는 데이터 모양은 Pydantic 모델이다"에 적었고, 남은 곳도 2026-08-24에 함께 옮겼다(툴 응답은 `thesis_tools.py`) |
 | `technical` 블록의 모양 | `{"as_of_date": ..., "KOSPI": {...}}` → `{"as_of_date": ..., "subjects": {"KOSPI": {...}}}` | 위 전환의 따라오는 변경. 기준일과 대상 코드가 같은 층에 섞이면 모델로 표현할 수 없다. 14.4절 평가 SQL의 경로도 `-> 'technical' -> 'subjects' -> subject_code`로 고쳤다 |
 
 `ruff format`은 저장소가 강제하지 않는다(기존 파일 다수가 미포맷). 새로 만든 파일만 포맷했다.

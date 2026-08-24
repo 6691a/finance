@@ -49,7 +49,7 @@ from pydantic import AwareDatetime, BaseModel, ConfigDict
 
 from modules import thesis_common
 from modules.sql import read_sql
-from modules.thesis_state import AfterHoursObservation, NxtObservedState
+from modules.thesis_state import AfterHoursObservation, NxtObservedState, ThesisRunResult
 from modules.utility import KST_TIMEZONE
 
 logger = logging.getLogger(__name__)
@@ -240,7 +240,7 @@ class NxtAfterHoursReview:
         )
 
 
-def build() -> dict[str, Any]:
+def build() -> ThesisRunResult:
     """Airflow 태스크 진입점. 컨텍스트를 읽어 리뷰 하나를 돌린다."""
     context = get_current_context()
     run_date = thesis_common.resolve_run_date(context)
@@ -248,4 +248,4 @@ def build() -> dict[str, Any]:
 
     with closing(thesis_common.connection()) as conn:
         written = NxtAfterHoursReview(conn, run_date=run_date).run(dag_run_id=dag_run_id)
-    return {"run_date": run_date.isoformat(), "slot": SLOT, "written": written}
+    return ThesisRunResult(run_date=run_date, slot=SLOT, written=written)

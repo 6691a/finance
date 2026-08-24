@@ -12,6 +12,7 @@ from typing import Any
 from airflow.sdk import get_current_context
 
 from modules import thesis_common
+from modules.thesis_state import ThesisRunResult
 from modules.utility import KST_TIMEZONE
 
 logger = logging.getLogger(__name__)
@@ -64,7 +65,7 @@ def macro_window_start(conn: Any, run_date: date) -> datetime:
     return thesis_common.close_at(previous or run_date)
 
 
-def build() -> dict[str, Any]:
+def build() -> ThesisRunResult:
     """오늘의 방향을 확률로 적는다. 관측 상태(SQL) → LLM 추론 → 저장."""
     from modules import thesis as market_thesis
 
@@ -102,4 +103,4 @@ def build() -> dict[str, Any]:
             past=past,
             dag_run_id=dag_run_id,
         )
-    return {"run_date": run_date.isoformat(), "slot": SLOT, "written": written}
+    return ThesisRunResult(run_date=run_date, slot=SLOT, written=written)

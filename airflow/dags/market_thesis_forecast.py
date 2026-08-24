@@ -91,7 +91,8 @@ from modules.utility import KST_TIMEZONE
 def market_thesis_forecast():
     @task(task_display_name="추론 생성", execution_timeout=thesis_common.BUILD_TIMEOUT)
     def build_thesis() -> dict[str, Any]:
-        return thesis_forecast.build()
+        # XCom 경계다. Airflow가 Pydantic 모델을 어떻게 직렬화하는지에 기대지 않는다.
+        return thesis_forecast.build().model_dump(mode="json")
 
     @task(task_display_name="Slack 발송")
     def notify_slack(built: dict[str, Any]) -> str:

@@ -21,6 +21,7 @@ from airflow.exceptions import AirflowFailException
 from airflow.sdk import get_current_context
 
 from modules import thesis_common
+from modules.thesis_state import ThesisRunResult
 from modules.utility import KST_TIMEZONE
 
 logger = logging.getLogger(__name__)
@@ -63,7 +64,7 @@ def macro_window_start(run_date: date) -> datetime:
     return datetime.combine(run_date, SESSION_OPEN_TIME, tzinfo=KST_TIMEZONE).astimezone(UTC)
 
 
-def build() -> dict[str, Any]:
+def build() -> ThesisRunResult:
     """오늘 왜 그렇게 움직였는지를 적는다. 관측 상태(SQL) → LLM 추론 → 저장."""
     from modules import thesis as market_thesis
 
@@ -92,7 +93,7 @@ def build() -> dict[str, Any]:
             past={},
             dag_run_id=dag_run_id,
         )
-    return {"run_date": run_date.isoformat(), "slot": SLOT, "written": written}
+    return ThesisRunResult(run_date=run_date, slot=SLOT, written=written)
 
 
 def grade_followups() -> int:
@@ -139,7 +140,7 @@ def narrate_followups(built: dict[str, Any]) -> int:
     from modules import thesis as market_thesis
     from modules.llm import LlmError, RetryableLlmError, model_name, thesis_model
 
-    run_date = date.fromisoformat(built["run_date"])
+    run_date = ThesisRunResult.model_validate(built).run_date
     dag_run_id = str(get_current_context()["dag_run"].run_id)
     model = thesis_model()
     written = 0

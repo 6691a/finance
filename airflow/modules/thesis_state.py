@@ -136,6 +136,23 @@ class PastOutcome(BaseModel):
     narrative: str | None = None
 
 
+class ThesisRunResult(BaseModel):
+    """추론 태스크 한 번의 결과. **XCom을 건너 다음 태스크가 읽는다.**
+
+    `slot`이 `RunSlot`이 아니라 `str`인 것은 이 모듈이 `thesis.py`(LangChain)를 모듈 수준에서
+    import할 수 없어서다. 읽는 쪽이 `RunSlot(result.slot)`으로 되돌린다.
+
+    `written`을 읽는 코드는 없다. Airflow UI의 XCom 화면에서 그 실행이 몇 건을 썼는지
+    보는 값이라 남긴다.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    run_date: date
+    slot: str
+    written: int
+
+
 class PastThesis(BaseModel):
     """지난 장전 추론 하나와 그 결과. 피드백 루프가 프롬프트에 싣는 것이다.
 

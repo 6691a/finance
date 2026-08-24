@@ -42,6 +42,11 @@ airflow/config/*
 airflow/plugins/*
 !airflow/plugins/.gitkeep
 
+# 로컬 Airflow가 실행 중에 값을 덮어쓴다(Sentry DSN 등). 추적하면 그 흔적이 매번 diff에 뜨고
+# DSN이 커밋에 실린다. **배포 호스트에는 파일이 있어야 한다** — 운영 compose가 이것을
+# 바인드 마운트하므로, 없으면 Docker가 같은 이름의 root 소유 디렉터리를 만든다.
+airflow/airflow.cfg
+
 
 graphify-out/
 

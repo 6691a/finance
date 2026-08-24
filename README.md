@@ -581,7 +581,7 @@ ORDER BY ts
 
 | 스택 | compose | 마운트하는 트리 |
 | --- | --- | --- |
-| Airflow | `compose/prod/airflow/docker-compose.yaml` | `airflow/{dags,logs,plugins,modules,utility,sql,airflow.cfg}` |
+| Airflow | `compose/prod/airflow/docker-compose.yaml` | `airflow/{dags,logs,plugins,modules,utility,sql,airflow.cfg}` (`airflow.cfg`는 추적하지 않는 호스트 파일) |
 | KIS 실시간 수집기 | `compose/prod/docker-compose.yaml` | `apps/`, clone 루트의 `config.yaml` |
 
 배포 순서: `main`에 push → NAS clone에서:
@@ -612,11 +612,23 @@ just가 없으면 레시피 안의 docker compose 명령을 그대로 실행합�
 - `airflow/airflow.cfg` — 컨테이너 재시작이 필요합니다. NAS에서 airflow 스택을
   `docker compose restart` 합니다(드문 일이라 deploy 레시피에 넣지 않았습니다).
 
-NAS에만 두는 파일은 셋이고 전부 gitignore 대상입니다: `compose/prod/airflow/.env`(Airflow
+NAS에만 두는 파일은 넷이고 전부 gitignore 대상입니다: `compose/prod/airflow/.env`(Airflow
 환경변수·API 키, Sentry DSN 포함), `compose/prod/.env`(realtime 노브), clone 루트의
-`config.yaml`(KIS 키·DB·Sentry — FastAPI와 같은 파일). 키 구성은 각 디렉터리의
-`.env.sample`이 기준입니다. Sentry는 `airflow.cfg`가 아니라 `.env`의
-`AIRFLOW__SENTRY__*`로 켭니다 — cfg는 저장소 파일을 마운트하므로 DSN을 넣으면 커밋됩니다.
+`config.yaml`(KIS 키·DB·Sentry — FastAPI와 같은 파일), 그리고 `airflow/airflow.cfg`입니다.
+키 구성은 각 디렉터리의 `.env.sample`이 기준입니다. Sentry는 `airflow.cfg`가 아니라 `.env`의
+`AIRFLOW__SENTRY__*`로 켭니다 — cfg는 Airflow가 실행 중에 덮어쓰는 파일이라 값을 넣어도
+호스트 밖으로 나가지 않고, 다음 재생성에 지워질 수 있습니다.
+
+**`airflow/airflow.cfg`는 추적하지 않습니다**(2026-08-24). Airflow가 실행 중에 값을 덮어써
+매번 diff에 뜨고 DSN이 커밋될 위험이 있었습니다. 대신 **최초 클론에는 이 파일이 없으므로
+컨테이너를 처음 올리기 전에 만들어 둬야 합니다** — 없으면 bind-mount가 같은 이름의 root
+소유 디렉터리를 만들고 Airflow가 설정을 읽지 못합니다. 기존 clone에는 이미 파일이 있어
+`git pull`만으로 아무 일도 일어나지 않습니다.
+
+```bash
+# 최초 1회, NAS clone에서. 컨테이너가 기본 설정을 찍어 준다.
+docker run --rm apache/airflow:3.3.0 cat /opt/airflow/airflow.cfg > airflow/airflow.cfg
+```
 
 최초 세팅(1회): NAS에 deploy key를 등록해 `git clone git@github.com:6691a/finance.git
 /volume1/docker/finance`, 세 파일을 `.env.sample`과 대조해 채우고, 각 compose를

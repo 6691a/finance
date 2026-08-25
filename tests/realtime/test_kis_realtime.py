@@ -343,12 +343,17 @@ def test_websocket_url_appends_tryitout_only_without_path():
 
 
 def test_registry_honors_the_nxt_flag():
-    krx_only = build_registry(make_settings())
-    both = build_registry(make_settings(enable_nxt=True))
+    krx_only = build_registry(make_settings(enable_nxt=False))
+    both = build_registry(make_settings())
 
     assert {(sub.tr_id, sub.tr_key) for sub in krx_only} == {(KRX_TR_ID, "005930"), (KRX_TR_ID, "000660")}
     assert len(both) == 4
     assert {sub.tr_id for sub in both} == {KRX_TR_ID, NXT_TR_ID}
+
+
+def test_nxt_is_on_by_default():
+    """REST 손잡이와 방향을 맞춘 값이다. 기본이 갈리면 한쪽만 켠 사람이 둘 다 켰다고 믿는다."""
+    assert make_settings().enable_nxt is True
 
 
 # ---------------------------------------------------- Airflow 수집기와의 정합
@@ -359,6 +364,35 @@ def test_domestic_stocks_match_the_airflow_collector():
     from modules.collectors import kis
 
     assert {member.value for member in DomesticStock} == {member.value for member in kis.DomesticStock}
+
+
+def test_the_nxt_flags_share_their_default_and_vocabulary():
+    """의도적 중복이다. 두 손잡이가 다르게 동작하면 한쪽을 끈 사람이 다른 쪽도 껐다고 믿는다."""
+    from apps.realtime import main
+    from modules.collectors import kis
+
+    assert main.FLAG_ON_VALUES == kis.FLAG_ON_VALUES
+    assert main.FLAG_OFF_VALUES == kis.FLAG_OFF_VALUES
+    # 비어 있으면 둘 다 NXT를 켠다.
+    assert main.nxt_websocket_enabled() is True
+    assert kis.StockExchange.NXT in kis.rest_exchanges()
+
+
+def test_the_websocket_flag_rejects_an_unknown_value(monkeypatch):
+    from apps.realtime import main
+
+    monkeypatch.setenv(main.NXT_WEBSOCKET_FLAG, "fasle")
+
+    with pytest.raises(ValueError, match=main.NXT_WEBSOCKET_FLAG):
+        main.nxt_websocket_enabled()
+
+
+def test_the_websocket_flag_can_still_drop_nxt(monkeypatch):
+    from apps.realtime import main
+
+    monkeypatch.setenv(main.NXT_WEBSOCKET_FLAG, "false")
+
+    assert main.nxt_websocket_enabled() is False
 
 
 def test_session_windows_match_the_airflow_collector():
@@ -490,7 +524,8 @@ async def test_connection_echoes_pingpong_and_closes_the_session(monkeypatch, tm
         ]
     )
     monkeypatch.setattr(service, "connect", lambda url, ping_interval=None: socket)
-    settings = make_settings()
+    # 이 테스트가 보는 것은 프레임 왕복이라 구독은 KRX 둘로 고정한다.
+    settings = make_settings(enable_nxt=False)
     repository = FakeRepository()
     heartbeat = heartbeat_module.Heartbeat(tmp_path / "heartbeat.json")
 
@@ -511,7 +546,8 @@ async def test_connection_echoes_pingpong_and_closes_the_session(monkeypatch, tm
 async def test_all_rejected_subscriptions_mean_an_auth_problem(monkeypatch, tmp_path):
     socket = FakeSocket([ack(KRX_TR_ID, "005930", ok=False), ack(KRX_TR_ID, "000660", ok=False)])
     monkeypatch.setattr(service, "connect", lambda url, ping_interval=None: socket)
-    settings = make_settings()
+    # 이 테스트가 보는 것은 프레임 왕복이라 구독은 KRX 둘로 고정한다.
+    settings = make_settings(enable_nxt=False)
     repository = FakeRepository()
     heartbeat = heartbeat_module.Heartbeat(tmp_path / "heartbeat.json")
 

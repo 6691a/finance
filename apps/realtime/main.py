@@ -19,8 +19,27 @@ from apps.realtime.service import DEFAULT_HEARTBEAT_PATH, RealtimeSettings, run_
 logger = logging.getLogger(__name__)
 
 
-def _env_bool(value: str | None) -> bool:
-    return (value or "").strip().lower() in {"1", "true", "yes"}
+NXT_WEBSOCKET_FLAG = "KIS_ENABLE_NXT_WEBSOCKET"
+FLAG_ON_VALUES = frozenset({"1", "true", "yes", "on"})
+FLAG_OFF_VALUES = frozenset({"0", "false", "no", "off"})
+
+
+def nxt_websocket_enabled() -> bool:
+    """NXT WebSocket 구독 여부. 비우면 켜짐.
+
+    **REST 쪽 `KIS_ENABLE_NXT_REST`와 기본값·허용 값이 같다.** 두 손잡이가 서로 다르게
+    동작하면 한쪽을 끈 사람이 다른 쪽도 껐다고 믿는다. airflow 트리를 import하지 않으므로
+    (저장소 규칙) 판정이 두 벌이고, `tests/realtime/`이 그 둘을 대조한다.
+
+    모르는 값은 실패시킨다. `fasle`가 조용히 켜짐으로 읽히면 손잡이를 당겼다고 믿는 사람과
+    실제 동작이 갈린다. 상주 서비스라 시작할 때 멈추는 것이 맞다.
+    """
+    raw = (os.environ.get(NXT_WEBSOCKET_FLAG) or "").strip().lower()
+    if not raw or raw in FLAG_ON_VALUES:
+        return True
+    if raw in FLAG_OFF_VALUES:
+        return False
+    raise ValueError(f"{NXT_WEBSOCKET_FLAG} must be one of {sorted(FLAG_ON_VALUES | FLAG_OFF_VALUES)}, got {raw!r}")
 
 
 def main(argv: Sequence[str] | None = None) -> int:
@@ -44,7 +63,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         app_secret=SecretStr(settings.kis_app_secret),
         rest_domain=settings.kis_rest_domain,
         websocket_domain=settings.kis_websocket_domain,
-        enable_nxt=_env_bool(os.environ.get("KIS_ENABLE_NXT_WEBSOCKET")),
+        enable_nxt=nxt_websocket_enabled(),
         finalization_delay_seconds=float(os.environ.get("WS_FINALIZATION_DELAY_SECONDS", "3")),
         heartbeat_path=heartbeat_path,
         db_alias=os.environ.get("REALTIME_DB_ALIAS", "default"),

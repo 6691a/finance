@@ -248,9 +248,10 @@ def rest_exchanges() -> tuple[StockExchange, ...]:
     NXT가 흔들릴 때 **코드를 고치지 않고 NXT만 떼기 위한 손잡이다**(분봉 문서 §3.3·§11.1).
     KRX는 끌 수 없다 — 그건 이 수집을 통째로 멈추는 것이고 그때는 DAG를 pause 한다.
 
-    **기본은 켜짐이다.** WebSocket 쪽 `KIS_ENABLE_NXT_WEBSOCKET`은 반대로 기본이 꺼짐인데,
-    그쪽은 처음부터 opt-in이었고 REST NXT는 이미 상시 수집 중이다. 여기서 기본을 끄면 이
-    변경만으로 NXT 수집이 조용히 멈춘다.
+    **기본은 켜짐이다.** REST NXT는 이미 상시 수집 중이라 기본을 끄면 손잡이를 넣는 변경만으로
+    수집이 조용히 멈춘다. WebSocket 쪽 `KIS_ENABLE_NXT_WEBSOCKET`도 같은 기본값·같은 허용
+    값이다(`apps/realtime/main.py`). 두 손잡이가 다르게 동작하면 한쪽을 끈 사람이 다른 쪽도
+    껐다고 믿는다.
 
     **모르는 값은 실패시킨다.** `KIS_ENABLE_NXT_REST=fasle`가 조용히 켜짐으로 읽히면 손잡이를
     당겼다고 믿는 사람과 실제 동작이 갈린다. 재시도해도 같은 답이라 부르는 DAG가

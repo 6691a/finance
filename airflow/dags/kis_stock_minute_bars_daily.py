@@ -54,9 +54,9 @@ KIS에는 종목 분봉 조회가 둘이다. 장중 조회(`FHKST03010200`)와 �
 조용히 켜짐으로 읽히면 손잡이를 당겼다고 믿는 사람과 실제 동작이 갈린다. 판단은
 `modules.collectors.kis.rest_exchanges`가 한 벌로 갖는다.
 
-WebSocket 쪽 `KIS_ENABLE_NXT_WEBSOCKET`은 기본이 꺼짐이라 방향이 반대다. 그쪽은 처음부터
-opt-in이었고 REST NXT는 이미 상시 수집 중이라, 기본을 끄면 손잡이를 넣는 것만으로 수집이
-멈춘다.
+WebSocket 쪽 `KIS_ENABLE_NXT_WEBSOCKET`도 기본값과 허용 값이 같다. 두 손잡이가 다르게
+동작하면 한쪽을 끈 사람이 다른 쪽도 껐다고 믿는다. 판정은 트리가 달라 두 벌이고
+(`apps/realtime/main.py`), `tests/realtime/`이 그 둘을 대조한다.
 
 ## 필요한 환경
 

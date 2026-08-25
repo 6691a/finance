@@ -589,13 +589,17 @@ NXT 두 feature flag는 운영 계약 확인 전에는 `false`, 확인 뒤에는
 `KIS_ENABLE_NXT_REST`는 `modules.collectors.kis.rest_exchanges()`가 읽고, 종목 봉 REST 수집이
 그 결과를 그대로 돈다. 위 계획과 다른 점 둘이다.
 
-- **기본이 `true`다.** 계획은 확인 전 `false`였지만 NXT REST는 이미 상시 수집 중이라, 기본을
-  `false`로 두면 손잡이를 넣는 변경만으로 수집이 조용히 멈춘다. WebSocket 쪽
-  (`KIS_ENABLE_NXT_WEBSOCKET`, 기본 `false`)과 방향이 반대인 이유가 이것이다.
+- **두 손잡이 다 기본이 `true`다.** 계획은 확인 전 `false`였지만 NXT는 REST·WebSocket 양쪽
+  다 이미 상시 수집 중이라, 기본을 `false`로 두면 손잡이를 넣는 변경만으로 수집이 조용히
+  멈춘다. `KIS_ENABLE_NXT_WEBSOCKET`도 같은 날 기본을 `true`로 맞췄다 — 두 손잡이가 다르게
+  동작하면 한쪽을 끈 사람이 다른 쪽도 껐다고 믿는다.
 - **모르는 값은 즉시 실패한다.** `fasle` 같은 오타가 조용히 켜짐으로 읽히면 손잡이를 당겼다고
   믿는 사람과 실제 동작이 갈린다. `ValueError`를 DAG가 `AirflowFailException`으로 바꾼다.
 
 KRX는 끌 수 없다 — 그건 수집을 통째로 멈추는 것이고 그때는 DAG를 pause 한다.
+
+판정은 트리가 갈려 두 벌이다(백엔드는 airflow 트리를 import하지 않는다).
+`tests/realtime/test_kis_realtime.py`가 두 손잡이의 기본값과 허용 값을 대조한다.
 
 서비스는 heartbeat 파일 또는 `--healthcheck` 명령을 제공한다. 다음 상태를 구분한다.
 

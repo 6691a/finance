@@ -848,7 +848,7 @@ def test_store_stock_bars_records_the_call_count(monkeypatch):
 # 지수 일봉 (docs/market-technical-indicators.md 4절)
 # ---------------------------------------------------------------------------
 
-DAILY_SPAN_START = date(2026, 8, 17)
+DAILY_SPAN_START = date(2026, 8, 20)
 DAILY_SPAN_END = date(2026, 8, 21)
 
 
@@ -893,7 +893,11 @@ def daily_send(pages: list[tuple[bytes, str]]):
 
     def send(token, app_key, app_secret, path, tr_id, query, tr_cont=""):
         requests.append((path, tr_id, dict(query), tr_cont))
-        body, next_flag = pages[min(len(requests), len(pages)) - 1]
+        if len(requests) > len(pages):
+            # 대본을 다 쓰면 빈 응답이다. 같은 장을 되풀이하면 걷기가 중복 날짜 오류로 끝나
+            # 실제 종료 조건을 가린다.
+            return index_daily_payload(()), 200, {"tr_cont": ""}
+        body, next_flag = pages[len(requests) - 1]
         return body, 200, {"tr_cont": next_flag}
 
     return requests, send
@@ -917,7 +921,7 @@ class TestFetchIndexDaily:
         assert query == {
             "FID_COND_MRKT_DIV_CODE": "U",
             "FID_INPUT_ISCD": "0001",
-            "FID_INPUT_DATE_1": "20260817",
+            "FID_INPUT_DATE_1": "20260820",
             "FID_INPUT_DATE_2": "20260821",
             "FID_PERIOD_DIV_CODE": "D",
         }
@@ -936,8 +940,8 @@ class TestFetchIndexDaily:
     def test_a_continuation_header_asks_for_the_next_page(self, monkeypatch):
         requests, send = daily_send(
             [
-                (index_daily_payload(("20260821", "20260820")), "M"),
-                (index_daily_payload(("20260819",)), ""),
+                (index_daily_payload(("20260821",)), "M"),
+                (index_daily_payload(("20260820",)), ""),
             ]
         )
         monkeypatch.setattr(kis, "send_get", send)
@@ -947,47 +951,54 @@ class TestFetchIndexDaily:
         assert [request[3] for request in requests] == ["", "N"]
         # 연속조회는 같은 구간을 다시 묻는다
         assert requests[1][2]["FID_INPUT_DATE_2"] == "20260821"
-        assert [bar.business_date for bar in fetch.bars] == [
-            date(2026, 8, 19),
-            date(2026, 8, 20),
-            date(2026, 8, 21),
-        ]
+        assert [bar.business_date for bar in fetch.bars] == [date(2026, 8, 20), date(2026, 8, 21)]
         assert fetch.page_count == 2
 
-    def test_a_full_page_without_continuation_walks_the_window_back(self, monkeypatch):
-        # tr_cont 없이 가득 찬 응답은 조용히 잘린 것이다(확정 수급 API와 같은 행태).
-        # 가장 오래된 날짜 하루 전으로 창을 옮긴다. 짧은 응답은 걷지 않는다.
+    def test_a_page_that_misses_the_span_start_walks_the_window_back(self, monkeypatch):
+        """구간의 시작에 못 닿은 응답은 조용히 잘린 것이다(확정 수급 API와 같은 행태).
+
+        **판정 기준은 행 수가 아니라 구간이다.** 2026-08-24에 한 장의 상한을 100봉으로
+        가정했다가 실제가 50봉이라, 잘린 응답을 "구간을 다 줬다"로 읽고 걷지 않았다.
+        그래서 지수 일봉이 두 달 넘게 50봉에 묶였다. 여기 세 봉짜리 짧은 응답이 걷는지를
+        보는 이유가 그것이다 — 상한을 몰라도 판정이 선다.
+        """
         span_start = date(2026, 1, 5)
-        full_page = tuple(
-            (date(2026, 8, 21) - timedelta(days=offset)).strftime("%Y%m%d")
-            for offset in range(kis.INDEX_DAILY_FULL_PAGE_ROWS)
-        )
-        oldest = date(2026, 8, 21) - timedelta(days=kis.INDEX_DAILY_FULL_PAGE_ROWS - 1)
         requests, send = daily_send(
             [
-                (index_daily_payload(full_page), ""),
-                (index_daily_payload(((oldest - timedelta(days=1)).strftime("%Y%m%d"),)), ""),
+                (index_daily_payload(("20260821", "20260820", "20260819")), ""),
+                (index_daily_payload(("20260105",)), ""),
             ]
         )
         monkeypatch.setattr(kis, "send_get", send)
 
         fetch = daily_collector().fetch_index_daily(DomesticIndex.KOSPI, span_start, DAILY_SPAN_END, sleep=0)
 
+        assert len(requests) == 2
+        # 요청 구간의 시작은 그대로 두고 끝만 가장 오래된 날짜 하루 전으로 옮긴다
         assert requests[1][2]["FID_INPUT_DATE_1"] == "20260105"
-        assert requests[1][2]["FID_INPUT_DATE_2"] == (oldest - timedelta(days=1)).strftime("%Y%m%d")
+        assert requests[1][2]["FID_INPUT_DATE_2"] == "20260818"
         assert requests[1][3] == ""
-        assert len(fetch.bars) == kis.INDEX_DAILY_FULL_PAGE_ROWS + 1
+        assert len(fetch.bars) == 4
         assert fetch.page_count == 2
 
+    def test_reaching_the_span_start_stops_the_walk(self, monkeypatch):
+        """구간의 시작에 닿았으면 더 부르지 않는다. 걷기가 끝나는 정상 경로다."""
+        span_start = date(2026, 8, 19)
+        requests, send = daily_send([(index_daily_payload(("20260821", "20260820", "20260819")), "")])
+        monkeypatch.setattr(kis, "send_get", send)
+
+        fetch = daily_collector().fetch_index_daily(DomesticIndex.KOSPI, span_start, DAILY_SPAN_END, sleep=0)
+
+        assert len(requests) == 1
+        assert fetch.page_count == 1
+        assert len(fetch.bars) == 3
+
     def test_an_empty_walk_page_stops_the_walk(self, monkeypatch):
+        """구간의 시작에 못 닿았어도 빈 응답이면 거기서 끝이다. 그 심볼의 이력이 짧은 것이다."""
         span_start = date(2026, 1, 5)
-        full_page = tuple(
-            (date(2026, 8, 21) - timedelta(days=offset)).strftime("%Y%m%d")
-            for offset in range(kis.INDEX_DAILY_FULL_PAGE_ROWS)
-        )
         requests, send = daily_send(
             [
-                (index_daily_payload(full_page), ""),
+                (index_daily_payload(("20260821", "20260820")), ""),
                 (index_daily_payload(()), ""),
             ]
         )
@@ -996,7 +1007,7 @@ class TestFetchIndexDaily:
         fetch = daily_collector().fetch_index_daily(DomesticIndex.KOSPI, span_start, DAILY_SPAN_END, sleep=0)
 
         assert len(requests) == 2
-        assert len(fetch.bars) == kis.INDEX_DAILY_FULL_PAGE_ROWS
+        assert len(fetch.bars) == 2
 
     def test_more_pages_after_the_cap_fail_the_symbol(self, monkeypatch):
         span_start = date(2026, 8, 1)
@@ -1064,7 +1075,7 @@ class TestStoreIndexDaily:
         assert record[1][2] == "inquire_daily_indexchartprice"
         metadata = json.loads(record[1][8])
         assert metadata["symbol"] == "KOSPI"
-        assert metadata["start_date"] == "2026-08-17"
+        assert metadata["start_date"] == "2026-08-20"
         assert metadata["end_date"] == "2026-08-21"
         assert metadata["page_count"] == 1
         assert metadata["bar_count"] == 2

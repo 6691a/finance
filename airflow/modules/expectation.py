@@ -21,7 +21,7 @@
 ## 도메인 상수는 백엔드와 중복이다
 
 이 모듈은 `apps/models`를 import하지 못한다(Airflow 트리 규칙). 이벤트·지표·기간 표기
-상수는 `apps/models/analysis.py`와 **중복을 허용하되 테스트로 대조한다**
+상수는 `apps/models/analysis/events.py`와 **중복을 허용하되 테스트로 대조한다**
 (`tests/modules/test_expectation.py`, realtime 수집기의 `*_match_the_airflow_collector`와
 같은 방식).
 
@@ -66,7 +66,7 @@ DEFAULT_BATCH_SIZE = 50
 # FLAT_THRESHOLD_PCT처럼 판정 분포가 쌓이면 다시 정한다(docs/market-thesis/TUNING.md).
 MEET_BAND_PCT = Decimal("5.0")
 
-# 아래 도메인 상수는 apps/models/analysis.py와 중복이다(모듈 docstring). 테스트가 대조한다.
+# 아래 도메인 상수는 apps/models/analysis/events.py와 중복이다(모듈 docstring). 테스트가 대조한다.
 EVENT_TYPES: tuple[str, ...] = ("shareholder_return", "earnings", "guidance")
 CLAIM_KINDS: tuple[str, ...] = ("expectation", "actual")
 EVENT_METRICS: dict[str, tuple[str, ...]] = {

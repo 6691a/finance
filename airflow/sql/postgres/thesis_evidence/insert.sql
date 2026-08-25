@@ -12,7 +12,7 @@
 -- `direction`·`mechanism`은 **이 추론이 이 근거를 어떻게 썼나**다. 원 추론의 인용에만 있고
 -- 사후 해설의 인용에는 둘 다 NULL이다(CHECK가 쌍을 강제한다).
 --
--- 정의의 원본은 `apps/models/analysis.py`의 `ThesisEvidence`이고
+-- 정의의 원본은 `apps/models/analysis/thesis.py`의 `ThesisEvidence`이고
 -- `tests/modules/test_thesis.py`가 여기 컬럼을 그 모델 metadata와 대조한다.
 INSERT INTO thesis_evidence (
     thesis_id,

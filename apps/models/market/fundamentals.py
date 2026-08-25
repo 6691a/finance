@@ -1,7 +1,7 @@
 """기업 단위 사실 — 공시, 실적, 애널리스트 의견.
 
 시세가 아니라 그 종목에 대해 누가 무엇을 발표했는가다. `earnings_fact`가 실적 실제값의
-원본이고 `stock_event_outcome`의 판정이 이것을 읽는다(`apps/models/analysis.py`).
+원본이고 `stock_event_outcome`의 판정이 이것을 읽는다(`apps/models/analysis/events.py`).
 """
 
 from datetime import date, datetime

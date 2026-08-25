@@ -1,5 +1,5 @@
 -- 문서 하나의 추출 원장. 본문이 바뀌어 다시 뽑으면 같은 행을 갱신한다.
--- 정의의 원본은 `apps/models/analysis.py`의 `StockEventExtraction`이다.
+-- 정의의 원본은 `apps/models/analysis/events.py`의 `StockEventExtraction`이다.
 INSERT INTO stock_event_extraction (
     document_id,
     extracted_content_hash,

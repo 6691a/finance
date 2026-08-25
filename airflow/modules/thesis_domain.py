@@ -4,7 +4,7 @@
 `ThesisSubjectKind` 하나 때문에 LangChain 전체를 끌고 오던 것을 여기서 끊는다. 무거운 것은
 `thesis_toolbox`·`thesis_generation`·`thesis_outcomes`에 있고 그쪽은 늦게 import한다.
 
-값은 `apps/models/analysis.py`의 같은 이름 enum과 같아야 한다. Airflow는 `apps/`를 보지
+값은 `apps/models/analysis/thesis.py`의 같은 이름 enum과 같아야 한다. Airflow는 `apps/`를 보지
 못해 import하지 못하므로 값을 한 벌 더 둔다(중복 허용 + 테스트 대조 규칙).
 `tests/models/test_analysis_models.py`가 대조한다.
 """
@@ -232,7 +232,7 @@ class ThesisError(RuntimeError):
 
 
 # ---------------------------------------------------------------------------
-# 값 종류. `apps/models/analysis.py`의 같은 이름 enum과 값이 같아야 한다.
+# 값 종류. `apps/models/analysis/thesis.py`의 같은 이름 enum과 값이 같아야 한다.
 # Airflow는 `apps/`를 보지 못해 import하지 못하므로 값을 한 벌 더 둔다
 # (프로젝트의 중복 허용 + 테스트 대조 규칙). `tests/models/test_analysis_models.py`가 대조한다.
 # ---------------------------------------------------------------------------

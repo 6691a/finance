@@ -9,7 +9,7 @@
 --
 -- 채점 컬럼 넷은 여기서 채우지 않는다. `update_outcome.sql`이 나중에 채운다.
 --
--- 정의의 원본은 `apps/models/analysis.py`의 `Thesis`이고
+-- 정의의 원본은 `apps/models/analysis/thesis.py`의 `Thesis`이고
 -- `tests/modules/test_thesis.py`가 여기 컬럼을 그 모델 metadata와 대조한다.
 INSERT INTO thesis (
     run_slot,

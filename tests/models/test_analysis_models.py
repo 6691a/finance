@@ -1,6 +1,34 @@
 from sqlalchemy import CheckConstraint, UniqueConstraint
 from sqlalchemy import Enum as SqlEnum
 
+from tests.helpers import models_defined_in
+
+# --- 등록 경로 (2026-08-25 패키지 분리) ---------------------------------------
+
+
+def test_every_model_in_the_package_is_re_exported():
+    """하위 모듈에 모델을 넣고 `analysis/__init__.py`에 이름을 안 더하면 그 테이블이
+    `Base.metadata`에서 사라지고 autogenerate가 `DROP TABLE`을 낸다.
+
+    `market` 패키지와 같은 보호다. 파일을 나눈 뒤 남는 유일한 조용한 사고 경로다.
+    """
+    import apps.models.analysis as package
+
+    defined = models_defined_in(package)
+
+    assert defined, "하위 모듈에서 모델을 하나도 못 찾았다. 훑는 방식이 깨졌다"
+    missing = sorted(name for name in defined if name not in package.__all__)
+    assert not missing, f"analysis/__init__.py의 __all__에 없다: {missing}"
+    assert all(getattr(package, name, None) is model for name, model in defined.items())
+
+
+def test_every_model_in_the_package_reaches_the_metadata():
+    import apps.models.analysis as package
+    from apps.core.database import Base
+
+    for name, model in models_defined_in(package).items():
+        assert model.__tablename__ in Base.metadata.tables, f"{name}이 metadata에 없다"
+
 
 def test_analysis_models_are_exported_for_autogenerate():
     from apps import models

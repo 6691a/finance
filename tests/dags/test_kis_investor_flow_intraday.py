@@ -1,6 +1,7 @@
-"""DAG 객체와 호출 시각 판단만 검증한다.
+"""DAG 객체와 첫 집계 가드만 검증한다.
 
 파싱과 저장 규칙은 `modules/collectors/market/kis_investor_flow.py`에 있고 `tests/collectors/`가 덮는다.
+종목 추정은 `kis_investor_estimate_intraday`가 따로 갖는다.
 """
 
 from datetime import datetime
@@ -26,30 +27,16 @@ def test_one_task_walks_every_target():
     assert set(tasks) == {"collect"}
 
 
-@pytest.mark.parametrize(
-    ("hour", "minute", "expected"),
-    [
-        (9, 35, True),
-        (10, 5, True),
-        (11, 25, True),
-        (13, 25, True),
-        (14, 35, True),
-        (10, 55, False),
-        (9, 30, False),
-    ],
-)
-def test_stock_estimates_are_called_only_on_update_slots(hour, minute, expected):
-    """추정치는 하루 몇 차례만 갱신된다. 5분마다 부르면 같은 값만 반복된다."""
-    now = datetime(2026, 8, 14, hour, minute, tzinfo=KST_TIMEZONE)
+def test_the_dag_has_no_mode_switch():
+    """종목 추정을 가르던 벽시계 분기와 파라미터가 남아 있지 않다.
 
-    assert kis_investor_flow_intraday.wants_stock_estimates(now, {}) is expected
+    갱신 시각이 아닐 때 Trigger 를 누르면 추정이 조용히 빠진 채 성공하던 형태다.
+    `kis_investor_estimate_intraday`로 갈랐다.
+    """
+    dag = kis_investor_flow_intraday.kis_investor_flow_intraday
 
-
-@pytest.mark.parametrize("given", [True, False])
-def test_a_manual_run_can_override_the_slot_check(given):
-    now = datetime(2026, 8, 14, 10, 55, tzinfo=KST_TIMEZONE)
-
-    assert kis_investor_flow_intraday.wants_stock_estimates(now, {"include_stock_estimates": given}) is given
+    assert "include_stock_estimates" not in dag.params
+    assert not hasattr(kis_investor_flow_intraday, "wants_stock_estimates")
 
 
 @pytest.mark.parametrize(

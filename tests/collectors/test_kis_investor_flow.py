@@ -583,8 +583,9 @@ def test_daily_trade_rejects_rows_after_the_end_date(monkeypatch):
 
 
 def test_the_time_window_refusal_gets_its_own_type(monkeypatch):
-    """KST 15:40 전에는 이 조회가 `rt_cd=2`로 거절한다(2026-08-25 실측).
+    """당일을 구간 끝으로 주면 KST 15:40 전에는 `rt_cd=2`로 거절한다(2026-08-25 실측).
 
+    과거 구간은 같은 시각에도 정상 응답한다 — 제한은 마감 확정이 나오는 시각의 문제다.
     재시도로 풀리지 않는 실패라 종류를 갈라 올린다. 죽일지 넘길지는 DAG가 정한다.
     """
     monkeypatch.setattr(

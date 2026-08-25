@@ -96,6 +96,8 @@ class ThesisRun:
         self._connection = connection
         self._run_date = run_date
         self._as_of_at = as_of_at
+        self._previous_open_day: date | None = None
+        self._previous_read = False
 
     @property
     def connection(self) -> Any:
@@ -132,6 +134,14 @@ class ThesisRun:
                 raise ThesisNotReady(f"settled closes for {self._run_date} are not all in yet")
 
     def previous_open_day(self) -> date | None:
+        """직전 개장일. 달력이 아직 그날까지 안 채워졌으면 `None`이다.
+
+        **한 번만 조회하고 들고 있는다.** 장전은 이 값을 매크로 창의 시작과 관측 세션 둘에
+        쓰는데, 그 사이 `market_calendar_daily`가 행을 넣으면 두 답이 갈린다. 창은 어제
+        마감부터인데 관측은 오늘 세션을 보는 상태가 되고, 그대로 프롬프트에 실린다.
+        """
+        if self._previous_read:
+            return self._previous_open_day
         with self._connection.cursor() as cursor:
             cursor.execute(
                 "SELECT session_date FROM market_session "
@@ -140,7 +150,9 @@ class ThesisRun:
                 (self._run_date,),
             )
             row = cursor.fetchone()
-        return row[0] if row else None
+        self._previous_open_day = row[0] if row else None
+        self._previous_read = True
+        return self._previous_open_day
 
     def origin_day(self, horizon_days: int) -> date | None:
         """이 세션이 T+N이 되는 추론일. 달력이 없으면 `None`."""
@@ -436,7 +448,7 @@ def notify_slack(built: dict[str, Any]) -> str:
     token, channel = slack_settings()
     result = ThesisRunResult.model_validate(built)
     run_date = result.run_date
-    run_slot = market_thesis.RunSlot(result.slot)
+    run_slot = result.slot
 
     with closing(connection()) as conn:
         store = market_thesis.ThesisStore(conn)

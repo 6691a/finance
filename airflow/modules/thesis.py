@@ -61,7 +61,14 @@ from modules.db import TransactionalConnection as Connection
 from modules.llm import UnsupportedResponseFormat
 from modules.schema import SchemaError, json_object, response_format
 from modules.sql import read_sql
-from modules.thesis_state import NxtObservedState, ObservedState, PastOutcome, PastThesis, SignalObservation
+from modules.thesis_state import (
+    NxtObservedState,
+    ObservedState,
+    PastOutcome,
+    PastThesis,
+    RunSlot,
+    SignalObservation,
+)
 from modules.thesis_tools import (
     AnalystOpinionsPayload,
     AvailableSymbolRow,
@@ -258,14 +265,6 @@ class ThesisError(RuntimeError):
 # Airflow는 `apps/`를 보지 못해 import하지 못하므로 값을 한 벌 더 둔다
 # (프로젝트의 중복 허용 + 테스트 대조 규칙). `tests/models/test_analysis_models.py`가 대조한다.
 # ---------------------------------------------------------------------------
-
-
-class RunSlot(StrEnum):
-    """추론을 만든 슬롯. 슬롯이 곧 추론의 종류다."""
-
-    PRE_OPEN = "pre_open"
-    POST_CLOSE = "post_close"
-    POST_NXT_CLOSE = "post_nxt_close"
 
 
 class ThesisSubjectKind(StrEnum):

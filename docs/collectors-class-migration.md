@@ -151,7 +151,7 @@ airflow/modules/collectors/
 
 전환 대상이 아니다. 감쌀 상태가 없다.
 
-`blocks.py`·`trend.py`·`chart.py`·`schema.py`·`sql.py`·`period.py`·`utility.py`·`upsert.py`·
+`blocks.py`·`chart.py`·`schema.py`·`sql.py`·`period.py`·`utility.py`·`upsert.py`·
 `dedup.py`·`market_session.py`·`apps/realtime/frames.py`.
 
 `modules/llm.py`는 규칙이 명시적으로 함수라고 못박은 자리다 — 모델 정의(`document_model`·

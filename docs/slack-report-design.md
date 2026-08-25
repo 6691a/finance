@@ -349,7 +349,8 @@ ambiguous 폭이라 글꼴마다 한 칸이 되기도 두 칸이 되기도 하�
   위에서 낸 백분위는 잡음이다. 값을 숨기는 대신 `thin`을 실어 보내고 프롬프트가 "그 백분위를
   근거로 쓰지 마라"를 말한다(§8.3의 `MIN_MEANINGFUL_OBSERVATIONS`와 같은 판단).
 
-이력이 없는 계열은 `trend`가 `null`이다. 새로 붙인 심볼 때문에 리포트가 죽으면 안 되고,
+이력이 없는 계열은 `trend`가 `null`이다(**이 절의 추세 필드와 `briefing/trend.py`는 2026-08-25에
+지웠다** — LLM 코멘트를 뺀 뒤 소비자가 없었다. `git show d57fe1e:airflow/modules/briefing/trend.py`). 새로 붙인 심볼 때문에 리포트가 죽으면 안 되고,
 없는 것과 0을 구분해야 프롬프트가 "모른다"를 말할 수 있다.
 
 **툴을 주지 않은 이유.** 모델이 스스로 데이터를 조회하게 하는 설계는
@@ -442,7 +443,6 @@ SCHEDULE = "0 8 * * *"  # KST 매일 08:00 = UTC -1일 23:00
 | `tests/modules/test_slack.py` | 오류 분류표, 전달 인자, `retry_handlers=[]`, 예외 문자열에 토큰 미노출 |
 | `tests/modules/test_briefing_comment.py` | 성공·교정 1회·재실패·`ConnectionError` 통과, 단락 여럿 허용 |
 | `tests/modules/test_briefing_picks.py` | 목록 밖 id만 버리기, 전부 밖이면 교정 1회, 빈 선별은 정상, 건수·이유 길이 상한, 코드 펜스, `ConnectionError` 통과 |
-| `tests/modules/test_briefing_trend.py` | 연속 일수, 이상 움직임 백분위, 금리 bp vs 가격 퍼센트, 마이너스 금리, 표본 부족 표시, 수급의 부호 연속 |
 | `tests/modules/test_briefing_market.py` | 나라·종류 분할(한국장에서 미국 현물 제외), 미국장 요약 입력에 한국 값 포함, 뉴욕 기준 세션 날짜, 요일 표기, 요약 입력의 추세 필드, 줄마다 붙는 기준 시각 |
 | `tests/modules/test_briefing_documents.py` | 창이 `assessed_at` 기준, 0건 짧은 형태, 고른 것만 그리기, 주의 섹션 분리, 빈 선별과 선별 실패의 구분 |
 | `tests/modules/test_briefing_ops.py` | 무소식 판정(주말 예외 포함), 백로그 임계, 올그린 하트비트, 피드 접기 |

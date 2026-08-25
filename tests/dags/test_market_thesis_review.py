@@ -1,6 +1,7 @@
 """장후 리뷰 DAG와 `modules/thesis_review.py`.
 
-채점·해설의 알맹이는 `modules/thesis.py`에 있고 `tests/modules/test_thesis.py`가 덮는다.
+채점·해설의 알맹이는 `modules/thesis_outcomes.py`·`thesis_store.py`에 있고
+`tests/modules/test_thesis_pipeline.py`가 덮는다.
 여기 남은 것은 태스크 그래프, 장후의 시각 계산, 그리고 `PostCloseReview`다.
 """
 
@@ -141,7 +142,8 @@ def test_run_hands_build_and_store_every_argument_it_requires(monkeypatch):
     2026-08-23에 형제 브랜치 둘을 합치며 `past`가 필수 인자로 생겼는데 한 호출이 그것을
     모른 채 합쳐져 매 실행 `TypeError`였다. 충돌 없이 합쳐진 자리라 테스트만이 잡는다.
     """
-    from modules import thesis as market_thesis
+    from modules import thesis_store
+    from modules.thesis_domain import ThesisSubjectKind
 
     run_date = date(2026, 8, 21)
     signature = inspect.signature(thesis_common.ThesisRun.build_and_store)
@@ -154,8 +156,8 @@ def test_run_hands_build_and_store_every_argument_it_requires(monkeypatch):
 
         def subjects(self) -> tuple[FakeSubject, ...]:
             return (
-                FakeSubject("KOSPI", market_thesis.ThesisSubjectKind.INDEX),
-                FakeSubject("005930", market_thesis.ThesisSubjectKind.STOCK),
+                FakeSubject("KOSPI", ThesisSubjectKind.INDEX),
+                FakeSubject("005930", ThesisSubjectKind.STOCK),
             )
 
     def fake_build_and_store(self: Any, **kwargs: Any) -> int:
@@ -164,12 +166,12 @@ def test_run_hands_build_and_store_every_argument_it_requires(monkeypatch):
 
     monkeypatch.setattr(thesis_common.ThesisRun, "skip_unless_open", lambda self: None)
     monkeypatch.setattr(
-        thesis_common.ThesisRun, "observed_state", lambda self, module, session, targets: {"session": str(session)}
+        thesis_common.ThesisRun, "observed_state", lambda self, session, targets: {"session": str(session)}
     )
     monkeypatch.setattr(
         thesis_review.PostCloseReview, "check_ready", lambda self, watched: guarded.append(list(watched))
     )
-    monkeypatch.setattr(market_thesis, "ThesisStore", FakeStore)
+    monkeypatch.setattr(thesis_store, "ThesisStore", FakeStore)
     monkeypatch.setattr(thesis_common.ThesisRun, "build_and_store", fake_build_and_store)
 
     review = thesis_review.PostCloseReview(FakeConnection([]), run_date=run_date)

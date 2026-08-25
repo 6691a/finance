@@ -31,6 +31,13 @@ from pydantic import SecretStr
 
 from modules.market_session import krx_open_day
 from modules.slack import SlackClient, SlackError
+from modules.thesis_domain import (
+    DOMESTIC_MAX_DAILY_CHANGE_PCT,
+    ThesisError,
+    ThesisEvidenceKind,
+    ThesisSubjectKind,
+    evidence_ref,
+)
 from modules.thesis_state import (
     IndexObservation,
     NxtObservedState,
@@ -166,7 +173,7 @@ class ThesisRun:
             row = cursor.fetchone()
         return row[0] if row else None
 
-    def observed_state(self, market_thesis: Any, session: date | None, targets: Any) -> ObservedState:
+    def observed_state(self, session: date | None, targets: Any) -> ObservedState:
         """프롬프트에 주는 관측 상태. **전부 SQL이 계산한다.**
 
         **어느 세션을 볼지는 부르는 쪽이 정한다.** 장후는 당일, 장전은 전 영업일이고 그 판단은
@@ -184,8 +191,8 @@ class ThesisRun:
 
         index: dict[str, IndexObservation] = {}
         stock: dict[str, StockObservation] = {}
-        index_codes = [s.code for s in targets if s.kind is market_thesis.ThesisSubjectKind.INDEX]
-        stock_codes = [s.code for s in targets if s.kind is market_thesis.ThesisSubjectKind.STOCK]
+        index_codes = [s.code for s in targets if s.kind is ThesisSubjectKind.INDEX]
+        stock_codes = [s.code for s in targets if s.kind is ThesisSubjectKind.STOCK]
         with self._connection.cursor() as cursor:
             cursor.execute(
                 "SELECT symbol, close, previous_close FROM index_bar "
@@ -220,13 +227,9 @@ class ThesisRun:
         슬롯으로 갈리지 않는다 — 세션과 기준 시각은 부르는 쪽이 이미 정해서 넘겼다.
         """
         from modules import technical
-        from modules.thesis import (
-            DAILY_HISTORY,
-            DOMESTIC_MAX_DAILY_CHANGE_PCT,
-            RECENT_SIGNALS,
-            ThesisEvidenceKind,
-            evidence_ref,
-        )
+
+        # SQL 상수는 툴박스가 갖고 그 모듈이 LangChain을 끈다. 늦게 import한다.
+        from modules.thesis_toolbox import DAILY_HISTORY, RECENT_SIGNALS
 
         codes = list(subject_codes)
         if not codes:
@@ -330,38 +333,42 @@ class ThesisRun:
 
         **슬롯으로 갈라지지 않는다.** 슬롯은 값으로 흘러갈 뿐이고, 무엇이 다른지(기준 시각,
         창의 시작, 관측 세션, 프롬프트에 실을 과거 추론 `past`)는 이미 부르는 쪽이 정해서
-        인자로 넘겼다. `past`는 subject 코드별 `ThesisStore.past_theses` 행이고, 그 `id`가
+        인자로 넘겼다. `past`는 subject 코드별 `thesis_store.ThesisStore.past_theses` 행이고, 그 `id`가
         `thesis_precedent` 엣지로 남는다.
 
         **첫 성공본 불변.** 행이 있으면 모델을 부르지 않는다 — LLM은 재호출마다 답이 달라서
         덮어쓰면 최초 판단이 사라진다.
         """
-        from modules import thesis as market_thesis
+        # LangChain·LangGraph를 끄는 모듈은 여기서 늦게 import한다(DagBag 30초 타임아웃).
+        # `thesis_domain`은 가벼워서 모듈 수준에 있다.
         from modules.llm import LlmError, RetryableLlmError, model_name, thesis_model
+        from modules.thesis_generation import ThesisBuilder
+        from modules.thesis_store import ThesisStore
+        from modules.thesis_toolbox import ThesisToolbox
 
-        store = market_thesis.ThesisStore(self._connection)
+        store = ThesisStore(self._connection)
         stored = store.existing_theses(run_date=self._run_date, run_slot=run_slot)
         if stored:
             logger.info("thesis for %s %s already exists; skipping the model", self._run_date, run_slot.value)
             return 0
 
         model = thesis_model()
-        toolbox = market_thesis.ThesisToolbox(
+        toolbox = ThesisToolbox(
             self._connection,
             as_of_at=self._as_of_at,
             macro_window_start=macro_window_start,
-            watched_codes=[s.code for s in targets if s.kind is market_thesis.ThesisSubjectKind.STOCK],
+            watched_codes=[s.code for s in targets if s.kind is ThesisSubjectKind.STOCK],
             subject_codes=[s.code for s in targets],
         )
         try:
-            drafts, rounds = market_thesis.ThesisBuilder(model, toolbox).run(
+            drafts, rounds = ThesisBuilder(model, toolbox).run(
                 run_slot=run_slot,
                 as_of_at=self._as_of_at,
                 subjects=targets,
                 observed_state=observed,
                 past_theses=past,
             )
-        except market_thesis.ThesisError as error:
+        except ThesisError as error:
             raise AirflowFailException(str(error)) from error
         except LlmError as error:
             # 재시도할 값어치가 있는 것은 그대로 올린다. 판단은 여기서 한다.
@@ -440,10 +447,11 @@ def notify_slack(built: dict[str, Any]) -> str:
     보는 사람이 읽고, "우리 추론이 잘 맞고 있나"는 운영자가 본다. 지표는
     `slack_ops_briefing`이 OPS 채널로 낸다.
 
-    두 DAG가 같은 함수를 쓴다. 렌더링이 슬롯으로 갈리는 것은 `thesis.render_blocks`
+    두 DAG가 같은 함수를 쓴다. 렌더링이 슬롯으로 갈리는 것은 `thesis_render.render_blocks`
     안이고, 그건 문구를 고르는 일이지 흐름이 갈리는 것이 아니다.
     """
-    from modules import thesis as market_thesis
+    from modules.thesis_render import render_blocks, render_text
+    from modules.thesis_store import ThesisStore
 
     token, channel = slack_settings()
     result = ThesisRunResult.model_validate(built)
@@ -451,13 +459,13 @@ def notify_slack(built: dict[str, Any]) -> str:
     run_slot = result.slot
 
     with closing(connection()) as conn:
-        store = market_thesis.ThesisStore(conn)
+        store = ThesisStore(conn)
         theses = store.existing_theses(run_date=run_date, run_slot=run_slot)
         ids = [thesis.id for thesis in theses]
         evidence = store.top_evidence(ids)
 
-    blocks = market_thesis.render_blocks(run_slot, run_date, theses, evidence)
-    text = market_thesis.render_text(run_slot, run_date, theses)
+    blocks = render_blocks(run_slot, run_date, theses, evidence)
+    text = render_text(run_slot, run_date, theses)
     try:
         return SlackClient(token).post_message(channel, text=text, blocks=blocks)
     except SlackError as error:

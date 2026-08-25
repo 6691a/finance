@@ -9,9 +9,10 @@ from typing import Any, Self
 
 import pytest
 
-from modules import thesis as market_thesis
 from modules import thesis_common
 from modules.technical import TECHNICAL_LOOKBACK_BARS
+from modules.thesis_domain import RSI_OVERBOUGHT, RSI_OVERSOLD, ThesisSubjectKind
+from modules.thesis_generation import SYSTEM_PROMPT
 from modules.thesis_state import (
     IndexObservation,
     ObservedState,
@@ -81,8 +82,8 @@ class Subject:
 
 
 TARGETS = (
-    Subject("KOSPI", market_thesis.ThesisSubjectKind.INDEX),
-    Subject("005930", market_thesis.ThesisSubjectKind.STOCK),
+    Subject("KOSPI", ThesisSubjectKind.INDEX),
+    Subject("005930", ThesisSubjectKind.STOCK),
 )
 
 
@@ -108,7 +109,7 @@ def both_subjects(count: int = 120) -> list[tuple]:
 
 def state(connection: FakeConnection) -> ObservedState:
     run = thesis_common.ThesisRun(connection, run_date=SESSION, as_of_at=AS_OF)
-    return run.observed_state(market_thesis, SESSION, TARGETS)
+    return run.observed_state(SESSION, TARGETS)
 
 
 def test_the_state_is_a_model_not_a_bare_dict():
@@ -210,21 +211,21 @@ def test_the_technical_query_asks_only_for_the_targets():
 def test_no_session_gives_an_empty_state():
     """휴장·미판정이면 관측 상태 자체가 비어 있다."""
     run = thesis_common.ThesisRun(FakeConnection(), run_date=SESSION, as_of_at=AS_OF)
-    result = run.observed_state(market_thesis, None, TARGETS)
+    result = run.observed_state(None, TARGETS)
 
     assert result == ObservedState()
     assert result.session is None
     assert result.technical.subjects == {}
 
 
-@pytest.mark.parametrize("threshold", [market_thesis.RSI_OVERBOUGHT, market_thesis.RSI_OVERSOLD])
+@pytest.mark.parametrize("threshold", [RSI_OVERBOUGHT, RSI_OVERSOLD])
 def test_the_prompt_carries_the_shared_thresholds(threshold):
     """상수를 고치면 프롬프트가 따라간다. 두 곳에 숫자를 적으면 반드시 어긋난다."""
-    assert str(int(threshold)) in market_thesis.SYSTEM_PROMPT
+    assert str(int(threshold)) in SYSTEM_PROMPT
 
 
 def test_the_prompt_explains_how_to_read_the_block():
-    prompt = market_thesis.SYSTEM_PROMPT
+    prompt = SYSTEM_PROMPT
 
     assert "technical" in prompt
     assert "as_of_date" in prompt

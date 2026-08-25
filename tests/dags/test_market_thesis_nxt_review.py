@@ -1,6 +1,6 @@
 """애프터마켓 리뷰 DAG와 `modules/thesis_nxt_review.py`.
 
-추론의 알맹이는 `modules/thesis.py`에 있고 `tests/modules/test_thesis.py`가 덮는다.
+추론의 알맹이는 `modules/thesis_*.py` 여섯에 있고 `tests/modules/test_thesis_pipeline.py`가 덮는다.
 여기 남은 것은 태스크 그래프, 이 슬롯의 시각 계산, 그리고 `NxtAfterHoursReview`다.
 """
 

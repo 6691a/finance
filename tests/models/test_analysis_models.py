@@ -145,7 +145,7 @@ def test_thesis_evidence_follows_its_thesis_on_delete():
 
 def test_airflow_and_backend_agree_on_the_direction_vocabulary():
     from apps.models.analysis import ThesisDirection as BackendDirection
-    from modules.thesis import ThesisDirection as AirflowDirection
+    from modules.thesis_domain import ThesisDirection as AirflowDirection
 
     # Airflow는 apps/를 보지 못해 값을 한 벌 더 든다. 중복은 허용하되 여기서 대조한다.
     assert {member.value for member in AirflowDirection} == {member.value for member in BackendDirection}

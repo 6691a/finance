@@ -185,10 +185,10 @@ DAG가 쓰는 코드는 **위치는 Airflow를, 규칙은 백엔드를** 따른�
   안 변하는 값**을 들고 도는 것. 그 값이 인자로 함수마다 다시 들어가고 있으면 그게 신호다.
   기준 구현은 `modules/collectors/analyst/kis_opinion.py`의 `KisAnalystOpinionCollector`,
   `modules/collectors/document/naver_research.py`의 `NaverResearchCollector`,
-  `modules/assessment.py`의 `DocumentAssessor`, `modules/thesis.py`의 `ThesisToolbox`·
+  `modules/assessment.py`의 `DocumentAssessor`, `modules/thesis_toolbox.py`의 `ThesisToolbox`·
   `ThesisBuilder`·`FollowupNarrator`다. 연결을 쥐는 흐름 코드는
   `modules/thesis_nxt_review.py`의 `NxtAfterHoursReview`, `modules/thesis_common.py`의
-  `ThesisRun`, `modules/thesis.py`의 `ThesisStore`가 기준이다.
+  `ThesisRun`, `modules/thesis_store.py`의 `ThesisStore`가 기준이다.
 - **생성자는 그 실행 동안 안 변하는 것만 받는다.** 종목·구간처럼 호출마다 바뀌는 것은
   메서드 인자다.
 - **함수로 둔다**: 파싱·정규화·계산처럼 감쌀 상태가 없는 것, 그리고 그 클래스의 관심사가
@@ -544,7 +544,7 @@ LLM을 부르는 코드는 **Pydantic, LangChain, LangGraph 위에서만 쓴다.
   쓰지 않는다 — 그건 제공처 wire format이라 이름·타입이 실제 함수와 어긋나도 아무도 못 잡는다.
   툴이 연결·기준 시각·레지스트리 같은 상태를 봐야 하면 모듈 수준 `@tool` 대신 **바인드된
   메서드**를 `StructuredTool.from_function(func=self._tool_x, args_schema=XArgs)`로 감싼다.
-  기준 구현은 `airflow/modules/thesis.py`의 `ThesisToolbox._build_tools`다.
+  기준 구현은 `airflow/modules/thesis_toolbox.py`의 `ThesisToolbox._build_tools`다.
 - **툴 실행 루프를 손으로 짜지 않는다.** `langgraph.prebuilt.ToolNode`가 tool_call을 돌리고
   `tool_call_id`마다 `ToolMessage` 하나를 보장한다. 직접 짜면 그 보장이 우리 책임이 되고,
   빠지거나 둘이면 제공처가 다음 요청을 거절한다.

@@ -14,7 +14,7 @@
 -- `bar_at <= as_of_at`으로 자르면 경계 봉이 담은 미래 1분이 섞인다.
 --
 -- 변화는 여기서 계산하지 않는다. 금리 계열은 퍼센트가 아니라 bp로 읽어야 해서
--- 표기는 `modules/thesis.py`가 정한다(`select_window_changes.sql`과 같은 이유).
+-- 표기는 `modules/thesis_toolbox.py`가 정한다(`select_window_changes.sql`과 같은 이유).
 --
 -- 크립토는 country가 `XX`라 여기 안 들어온다. 24시간 거래라 "마감"이 없고, 창 변화는
 -- `macro_changes()`가 이미 준다.

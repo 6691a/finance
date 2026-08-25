@@ -22,13 +22,14 @@ from airflow.exceptions import AirflowFailException
 from airflow.sdk import get_current_context
 
 from modules import thesis_common
-from modules.thesis_state import ThesisRunResult
+from modules.thesis_domain import ThesisSubjectKind
+from modules.thesis_state import RunSlot, ThesisRunResult
 from modules.utility import KST_TIMEZONE
 
 if TYPE_CHECKING:
-    # 런타임 import는 못 한다 — `modules.thesis`가 LangChain을 끌고 와서 DagBag 30초
-    # 타임아웃에 걸린다(`thesis_common` docstring). `TYPE_CHECKING`은 런타임에 안 돈다.
-    from modules import thesis as market_thesis_types
+    # 런타임 import는 안 한다 — 타입 이름 하나 때문에 모듈을 끌고 올 이유가 없다.
+    # `TYPE_CHECKING`은 런타임에 돌지 않는다.
+    from modules.thesis_store import PendingGrade
 
 logger = logging.getLogger(__name__)
 
@@ -80,20 +81,20 @@ class PostCloseReview:
 
     def run(self, *, dag_run_id: str) -> int:
         """휴장 판정 → readiness guard → 관측 상태 → LLM → 저장. 저장한 행 수를 준다."""
-        from modules import thesis as market_thesis
+        from modules.thesis_store import ThesisStore
 
         self._run.skip_unless_open()
 
-        targets = market_thesis.ThesisStore(self.connection).subjects()
-        watched = [s.code for s in targets if s.kind is market_thesis.ThesisSubjectKind.STOCK]
+        targets = ThesisStore(self.connection).subjects()
+        watched = [s.code for s in targets if s.kind is ThesisSubjectKind.STOCK]
         self.check_ready(watched)
 
         # 장후가 보는 세션은 **당일**이다. 오늘 장이 이미 끝났다.
         return self._run.build_and_store(
-            run_slot=market_thesis.RunSlot.POST_CLOSE,
+            run_slot=RunSlot.POST_CLOSE,
             macro_window_start=macro_window_start(self._run.run_date),
             targets=targets,
-            observed=self._run.observed_state(market_thesis, self._run.run_date, targets),
+            observed=self._run.observed_state(self._run.run_date, targets),
             # 장후는 예측이 아니라 해석이다. 과거 예측 성적을 실어 줄 자리가 아니다.
             past={},
             dag_run_id=dag_run_id,
@@ -128,19 +129,19 @@ def grade_followups() -> int:
     **`ThesisRun`을 쓰지 않는다.** 채점은 이 실행의 세션이 아니라 *지난* 추론의 날짜를 돌기
     때문에, 세션 날짜를 쥔 객체에 담으면 그 값이 항목마다 거짓이 된다. 연결만 상태다.
     """
-    from modules import thesis as market_thesis
+    from modules.thesis_store import ThesisStore
 
     dag_run_id = str(get_current_context()["dag_run"].run_id)
     graded = 0
     with closing(thesis_common.connection()) as conn:
-        store = market_thesis.ThesisStore(conn)
+        store = ThesisStore(conn)
         pending = store.pending_grades()
         for item in pending:
             target_day = store.nth_open_day(item.run_date, item.horizon_days)
             if target_day is None:
                 # 달력이 그날까지 안 채워졌다. 다음 실행이 다시 집는다.
                 continue
-            value = _horizon_return(store, market_thesis, item, target_day)
+            value = _horizon_return(store, item, target_day)
             if value is None:
                 # 종가가 없다. 0으로 꾸미지 않고 미채점으로 남긴다.
                 continue
@@ -163,8 +164,11 @@ def narrate_followups(built: dict[str, Any]) -> int:
     슬롯을 나누는 이유는 `FollowupNarrator.run`에 있다 — 같은 날 장전·장후 추론이 같은
     대상을 가져 한 호출에 섞으면 응답을 대상에 되돌릴 수 없다.
     """
-    from modules import thesis as market_thesis
     from modules.llm import LlmError, RetryableLlmError, model_name, thesis_model
+    from modules.thesis_domain import NARRATED_HORIZON_DAYS, ThesisError
+    from modules.thesis_outcomes import FollowupNarrator
+    from modules.thesis_store import ThesisStore
+    from modules.thesis_toolbox import ThesisToolbox
 
     run_date = ThesisRunResult.model_validate(built).run_date
     dag_run_id = str(get_current_context()["dag_run"].run_id)
@@ -173,28 +177,28 @@ def narrate_followups(built: dict[str, Any]) -> int:
     as_of_at = thesis_common.close_at(run_date)
     with closing(thesis_common.connection()) as conn:
         run = thesis_common.ThesisRun(conn, run_date=run_date, as_of_at=as_of_at)
-        store = market_thesis.ThesisStore(conn)
-        for horizon in market_thesis.NARRATED_HORIZON_DAYS:
+        store = ThesisStore(conn)
+        for horizon in NARRATED_HORIZON_DAYS:
             # 그 지평의 원 추론일을 거슬러 찾는다. 오늘이 T+N이면 추론일은 N영업일 전이다.
             origin = run.origin_day(horizon)
             if origin is None:
                 continue
             pending = store.pending_narratives(run_date=origin, horizon_days=horizon)
-            for run_slot in market_thesis.RunSlot:
+            for run_slot in RunSlot:
                 targets = tuple(t for t in pending if t.run_slot is run_slot)
                 if not targets:
                     continue
-                toolbox = market_thesis.ThesisToolbox(
+                toolbox = ThesisToolbox(
                     conn,
                     as_of_at=as_of_at,
                     macro_window_start=thesis_common.close_at(origin),
                     watched_codes=[t.subject.code for t in targets],
                     subject_codes=[t.subject.code for t in targets],
                 )
-                narrator = market_thesis.FollowupNarrator(model, toolbox)
+                narrator = FollowupNarrator(model, toolbox)
                 try:
                     drafts = narrator.run(run_date=origin, horizon_days=horizon, as_of_at=as_of_at, targets=targets)
-                except market_thesis.ThesisError as error:
+                except ThesisError as error:
                     # 그 (지평, 슬롯)만 없던 것으로 남는다. 다음 실행이 다시 집는다.
                     logger.warning("T+%s %s narration failed for %s: %s", horizon, run_slot.value, origin, error)
                     continue
@@ -218,12 +222,11 @@ def narrate_followups(built: dict[str, Any]) -> int:
 
 def _horizon_return(
     store: Any,
-    market_thesis: Any,
-    item: "market_thesis_types.PendingGrade",
+    item: "PendingGrade",
     target_day: date,
 ) -> Decimal | None:
     """지평 하나의 누적 등락률. 종목은 확정 종가, 지수는 마감 봉을 본다."""
-    if item.subject_kind is market_thesis.ThesisSubjectKind.STOCK:
+    if item.subject_kind is ThesisSubjectKind.STOCK:
         returns = store.horizon_returns(
             subject_kind=item.subject_kind,
             run_date=item.run_date,

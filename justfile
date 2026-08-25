@@ -41,7 +41,7 @@ realtime-prod-down:
 deploy: deploy-airflow deploy-realtime
 
 # airflow는 up만 한다. dags/modules는 bind-mount라 dag-processor가 재파싱하고,
-# airflow/airflow.cfg 변경만 수동 스택 재시작이 필요하다(README 배포 절).
+# airflow/config/airflow.cfg 변경만 수동 스택 재시작이 필요하다(README 배포 절).
 deploy-airflow:
     docker compose -f compose/prod/airflow/docker-compose.yaml up -d
 

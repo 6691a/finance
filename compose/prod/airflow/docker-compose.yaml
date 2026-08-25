@@ -81,7 +81,10 @@ x-airflow-common:
     # for other purpose (development, test and especially production usage) build/extend Airflow image.
     _PIP_ADDITIONAL_REQUIREMENTS: ${_PIP_ADDITIONAL_REQUIREMENTS:-}
     # The following line can be used to set a custom config file, stored in the local config folder
-    AIRFLOW_CONFIG: '/opt/airflow/airflow.cfg'
+    # cfg는 파일이 아니라 config 디렉터리째 마운트한다. 파일 하나만 bind-mount 하면 컨테이너가
+    # 생성 시점의 inode에 못 박혀서, 호스트에서 에디터가 rename-replace로 저장하는 순간
+    # 컨테이너는 지워진 옛 파일을 계속 읽는다(restart로도 안 붙는다). 로컬 compose와 같은 배치다.
+    AIRFLOW_CONFIG: '/opt/airflow/config/airflow.cfg'
     # 4코어 호스트 기준 병렬도 상한. 코어를 늘리면 이 세 값만 올리면 된다.
     # 기본값은 각각 16 / 4 / 2 라서 4코어에서는 프로세스가 과하게 뜬다.
     AIRFLOW__CELERY__WORKER_CONCURRENCY: '2'
@@ -99,11 +102,11 @@ x-airflow-common:
   volumes:
     - ${AIRFLOW_PROJ_DIR:-../../../airflow}/dags:/opt/airflow/dags
     - ${AIRFLOW_PROJ_DIR:-../../../airflow}/logs:/opt/airflow/logs
+    - ${AIRFLOW_PROJ_DIR:-../../../airflow}/config:/opt/airflow/config
     - ${AIRFLOW_PROJ_DIR:-../../../airflow}/plugins:/opt/airflow/plugins
     - ${AIRFLOW_PROJ_DIR:-../../../airflow}/modules:/opt/airflow/modules
     - ${AIRFLOW_PROJ_DIR:-../../../airflow}/utility:/opt/airflow/utility
     - ${AIRFLOW_PROJ_DIR:-../../../airflow}/sql:/opt/airflow/sql
-    - ${AIRFLOW_PROJ_DIR:-../../../airflow}/airflow.cfg:/opt/airflow/airflow.cfg
   user: "${AIRFLOW_UID:-50000}:0"
   # 진짜 CPU 상한. cpu_shares는 경합 시 가중치일 뿐이라 총 사용량도 발열도 못 줄인다.
   # cpuset은 cpu.cfs_quota_us 없이도 동작하고, 4코어 중 2개(2,3)로 물리적으로 묶는다.

@@ -581,7 +581,7 @@ ORDER BY ts
 
 | 스택 | compose | 마운트하는 트리 |
 | --- | --- | --- |
-| Airflow | `compose/prod/airflow/docker-compose.yaml` | `airflow/{dags,logs,plugins,modules,utility,sql,airflow.cfg}` (`airflow.cfg`는 추적하지 않는 호스트 파일) |
+| Airflow | `compose/prod/airflow/docker-compose.yaml` | `airflow/{dags,logs,config,plugins,modules,utility,sql}` (`config/airflow.cfg`는 추적하지 않는 호스트 파일) |
 | KIS 실시간 수집기 | `compose/prod/docker-compose.yaml` | `apps/`, clone 루트의 `config.yaml` |
 
 배포 순서: `main`에 push → NAS clone에서:
@@ -609,25 +609,35 @@ just가 없으면 레시피 안의 docker compose 명령을 그대로 실행합�
 - compose 파일 — `up -d`가 설정 변경을 감지해 재생성합니다.
 - Dockerfile·requirements — `just build-<스택>` 후 `just deploy-<스택>`. 드문 일이라
   deploy에 넣지 않았습니다.
-- `airflow/airflow.cfg` — 컨테이너 재시작이 필요합니다. NAS에서 airflow 스택을
-  `docker compose restart` 합니다(드문 일이라 deploy 레시피에 넣지 않았습니다).
+- `airflow/config/airflow.cfg` — 컨테이너 재시작이 필요합니다. Airflow는 프로세스가
+  뜰 때 cfg를 한 번 읽습니다. NAS에서 airflow 스택을 `docker compose restart` 합니다
+  (드문 일이라 deploy 레시피에 넣지 않았습니다).
 
 NAS에만 두는 파일은 넷이고 전부 gitignore 대상입니다: `compose/prod/airflow/.env`(Airflow
 환경변수·API 키, Sentry DSN 포함), `compose/prod/.env`(realtime 노브), clone 루트의
-`config.yaml`(KIS 키·DB·Sentry — FastAPI와 같은 파일), 그리고 `airflow/airflow.cfg`입니다.
+`config.yaml`(KIS 키·DB·Sentry — FastAPI와 같은 파일), 그리고 `airflow/config/airflow.cfg`입니다.
 키 구성은 각 디렉터리의 `.env.sample`이 기준입니다. Sentry는 `airflow.cfg`가 아니라 `.env`의
 `AIRFLOW__SENTRY__*`로 켭니다 — cfg는 Airflow가 실행 중에 덮어쓰는 파일이라 값을 넣어도
 호스트 밖으로 나가지 않고, 다음 재생성에 지워질 수 있습니다.
 
-**`airflow/airflow.cfg`는 추적하지 않습니다**(2026-08-24). Airflow가 실행 중에 값을 덮어써
-매번 diff에 뜨고 DSN이 커밋될 위험이 있었습니다. 대신 **최초 클론에는 이 파일이 없으므로
-컨테이너를 처음 올리기 전에 만들어 둬야 합니다** — 없으면 bind-mount가 같은 이름의 root
-소유 디렉터리를 만들고 Airflow가 설정을 읽지 못합니다. 기존 clone에는 이미 파일이 있어
-`git pull`만으로 아무 일도 일어나지 않습니다.
+**`airflow/config/airflow.cfg`는 추적하지 않습니다**(2026-08-24). Airflow가 실행 중에 값을
+덮어써 매번 diff에 뜨고 DSN이 커밋될 위험이 있었습니다. 파일이 없어도 `airflow-init`이
+`airflow config list`로 기본 설정을 찍어 만들고, 그전까지는 Airflow가 내장 기본값과 `.env`로
+동작합니다. 따로 준비할 것이 없습니다.
+
+**cfg는 파일이 아니라 `config` 디렉터리째 마운트합니다**(2026-08-25). 파일 하나만
+bind-mount 하면 컨테이너가 생성 시점의 inode에 못 박힙니다. 호스트에서 에디터가
+rename-replace로 저장하는 순간 inode가 갈리고, 컨테이너는 이름이 사라진 옛 파일을 계속
+읽습니다 — `docker compose restart`로도 붙지 않아 `--force-recreate`가 필요했습니다.
+운영에서 실제로 이 상태가 관측됐습니다(컨테이너 쪽 `stat`이 `Links: 0`). 디렉터리 마운트는
+경로를 읽을 때마다 풀므로 이 덫이 없고, 로컬 compose와 배치도 같아집니다.
+
+기존 clone은 `git pull` 후 파일을 한 번 옮기고 스택을 재생성합니다.
 
 ```bash
-# 최초 1회, NAS clone에서. 컨테이너가 기본 설정을 찍어 준다.
-docker run --rm apache/airflow:3.3.0 cat /opt/airflow/airflow.cfg > airflow/airflow.cfg
+# NAS clone에서 1회. 실행 중인 태스크가 없을 때 한다 — 컨테이너를 새로 만든다.
+mv airflow/airflow.cfg airflow/config/airflow.cfg
+docker compose -f compose/prod/airflow/docker-compose.yaml up -d --force-recreate
 ```
 
 최초 세팅(1회): NAS에 deploy key를 등록해 `git clone git@github.com:6691a/finance.git

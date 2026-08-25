@@ -137,7 +137,7 @@ GROUP BY run_slot;
 
 | 손잡이 | 지금 값 | 사는 곳 | 무엇을 보고 | 어느 방향 |
 | --- | --- | --- | --- | --- |
-| `FLAT_THRESHOLD_PCT` | `{0:0.3, 1:0.3, 3:0.5, 5:0.7}` | `thesis.py` | 지평별 `flat` 비율 | 한 지평만 5% 아래면 그 값을 낮추고 60% 위면 올린다. **실측이 아니라 `0.3 × sqrt(N)` 반올림이다** — 조정 조건은 코드 주석이 원본 |
+| `FLAT_THRESHOLD_PCT` | `{0:0.3, 1:0.3, 3:0.5, 5:0.7}` | `thesis.py` | 지평별 `flat` 비율 | 한 지평만 5% 아래면 그 값을 **올리고** 60% 위면 **낮춘다**(2026-08-25 정정 — 반대로 적혀 있었다. 임계를 낮추면 `flat`이 더 희귀해진다). 고치면 `FLAT_BASE_RATE_PCT`도 다시 잰다. **실측이 아니라 `0.3 × sqrt(N)` 반올림이다** — 조정 조건은 코드 주석이 원본 |
 | `INDEX_SUBJECTS` + `instrument.is_watched` | KOSPI·코스닥 + watched 종목 | `thesis.py` / `instrument` 테이블 | 표본 수 | **표본을 늘리는 가장 싼 손잡이다.** LLM 호출 수는 그대로고 날짜당 건수만 는다([5-followup.md](5-followup.md) 12절). 단 독립 사건 수는 안 는다 — 1절 |
 | `NarrativeVariant` 기본 | `INFORMED` | `thesis.py`, `FollowupNarrator.__init__` | 분기 Brier + `verdict` 분포 | 노트북 재실행으로 재검증. `BLIND`가 남아 있어 되돌리기가 인자 하나다 |
 | `HORIZON_DAYS` | `(0,1,3,5)` | `thesis.py` `HORIZON_DAYS`·`NARRATED_HORIZON_DAYS`, `ops.py` `THESIS_HORIZONS`, DB CHECK — **네 곳** | LLM 호출 비용 | 비용이 문제면 **해설만** T+5 하나로 줄인다. 채점은 SQL이라 공짜다. 네 곳을 같은 커밋에서 만진다 |
@@ -145,7 +145,7 @@ GROUP BY run_slot;
 | 툴 개수 | 14 | 같은 곳 | **어떤 툴을 실제로 부르는지**와 `tool_rounds` 분포 | 한 번도 안 불리는 툴은 뺀다(문맥만 먹는다). 반대로 상한에 붙어 있으면 왕복을 늘린다. **서브 에이전트로 나누는 것은 여기서 판단한다** — 아래 참고 |
 | `verdict` 값 셋 | `supported`/`contradicted`/`unresolved` | `analysis.py` + CHECK | `contradicted` 비율 | 60% 위가 유지되면 "반박"과 "다른 원인 지목"을 가를지 본다. **지금은 안 가른다** |
 | `MAX_TOOL_ROUNDS` / `MAX_TOOL_CALLS` / `MAX_TOOL_RESULT_CHARS` | 3 / 12 / 24,000 | `thesis.py` | 쿼리 B의 분포 | 상한에 붙어 있으면 올린다. **값이 인자 모델(`RecentDocumentsArgs` 등)의 `Field(description=...)`에 f-string으로 실려 프롬프트가 자동으로 따라간다** |
-| `PROMPT_VERSION` / `NARRATIVE_PROMPT_VERSION` | `"3"` / `"1"` | `thesis.py` | — | 프롬프트를 고치면 올린다. 올린 뒤 28일은 ops 창이 두 판에 걸친다. `"3"`은 2026-08-24 기술적 보조지표가 들어온 판이다 — 관측 상태에 `technical` 블록이 실리고 `daily_history`가 지표·신호를 함께 준다 |
+| `PROMPT_VERSION` / `NARRATIVE_PROMPT_VERSION` | `"5"` / `"1"` | `thesis.py` | — | 프롬프트를 고치면 올린다. 올린 뒤 28일은 ops 창이 두 판에 걸친다. `"3"`은 기술적 보조지표(2026-08-24), `"4"`는 과거 추론 절에 장후 리뷰가 실린 판(2026-08-25), `"5"`는 `## 확률` 절이 `prob_flat`의 뜻과 base rate를 정의한 판(2026-08-25)이다 |
 | `RULE_VERSION` | `"1"` | `technical.py` | `kind`·`direction`별 지평 적중률(기술지표 문서 12.6절) | 신호 검출 규칙을 고치면 올린다. `PROMPT_VERSION`과 같은 역할이고 축이 다르다 — 저쪽은 "모델이 잘 읽었나", 이쪽은 "신호가 좋았나"다 |
 | `RSI_OVERBOUGHT` / `RSI_OVERSOLD` | 70 / 30 | `technical.py` | 같은 것 | 검출과 프롬프트가 **같은 상수**를 본다. `rsi_reversal` 건수가 너무 적거나 많으면 여기서 당긴다 |
 | `SIGNAL_STATE_DAYS` / `MAX_STATE_SIGNALS` | 30일 / 3건 | `thesis_common.py` | 프롬프트 길이 | 관측 상태에 싣는 신호의 창과 개수. 툴(`SIGNAL_HISTORY_DAYS`, 90일)보다 짧다 |
@@ -155,7 +155,9 @@ GROUP BY run_slot;
 | `thesis_model()` | `grok-4.6` | `llm.py` | 분기 Brier | 교체는 `PROMPT_VERSION`과 **함께** 올린다(1절 넷째) |
 | `THESIS_TIMEOUT_SECONDS` | 1800 | `llm.py` | 타임아웃 실패 건수 | 2026-08-21 첫 실행이 300초에서 죽어 900으로, 툴이 11개로 늘면서 2026-08-22에 1800으로 올렸다. **1800은 관측이 아니라 예방이다** — 900에서 죽은 실행은 아직 없다. 다음 실행들의 실제 소요를 보고 되돌릴 여지가 있다. 또 걸리면 툴 상한(`MAX_TOOL_ROUNDS`)을 먼저 의심한다 — 왕복이 늘수록 한 요청이 길어진다. 문서 태깅의 `REQUEST_TIMEOUT_SECONDS`(300)는 따로다 |
 | `BUILD_TIMEOUT` | 30분 | `thesis_common.py` | `build_thesis`의 `AirflowTaskTimeout` 건수와 성공 실행의 소요 분포 | 요청 타임아웃의 바깥 울타리. 한 빌드는 모델을 최대 왕복 3 + 답변 + 교정 = 6번 부른다. 장전이 09:00 개장 전에 닿아야 해서 이 값이고, 걸리면 `MAX_TOOL_ROUNDS`를 먼저 의심한다. 재시도 셋은 그대로라 최악 4회 × (30 + 10)분이다 |
-| `SLACK_EVIDENCE_LIMIT` | 3 | `thesis.py` | 사람 눈 | 줄이 길어 안 읽히면 줄인다 |
+| `SLACK_EVIDENCE_LIMIT` | 3 | `thesis.py` | 사람 눈 | 줄이 길어 안 읽히면 줄인다. 조회 상한(`EVIDENCE_FETCH_LIMIT`, 12)은 따로다 — 결론 방향으로 거른 뒤에도 이만큼 남아야 한다 |
+| `FLAT_BASE_RATE_PCT` | `{KOSPI:6, KOSDAQ:11, stock:6}` | `thesis.py` | 프롬프트에 실리는 `flat` 기준선 | **실측이다**(2026-08-25, `index_daily` 132거래일·`stock_investor_trade_daily` 123거래일). `FLAT_THRESHOLD_PCT[0]`을 고치면 같이 다시 잰다 — 임계가 이 빈도의 정의다 |
+| `VERDICT_TIE_GAP` | `0.05` | `thesis.py` | 결론이 둘 이상 나오는 비율 | 최고 확률에서 이만큼 안에 붙은 방향을 Slack에 함께 보인다. **실측이 아니라 시작값이다** — 매번 둘이 나오면 좁히고 한 번도 안 나오면 넓힌다. `PROMPT_VERSION` 5가 확률을 벌려 놓으므로 그 뒤 분포로 판단한다 |
 | `MEET_BAND_PCT` | `5.0` | `expectation.py` | `stock_event_outcome.verdict` 분포 | 기대 대비 발표를 `meet`로 볼 폭(퍼센트). **실측이 아니라 시작값이다** — `meet`가 사실상 없거나 대부분이면 그 폭이 틀린 것이다. `FLAT_THRESHOLD_PCT`와 같은 성격이고 판단 시점도 같다(+4주) |
 | 추출 `PROMPT_VERSION` | `"1"` | `expectation.py` | 버림 로그의 사유 분포 | 프롬프트를 고치면 올린다. **올리면 이미 뽑은 문서가 전부 재추출 대상이 된다** — `document.prompt_version`과 같은 장치다. 버림 사유가 한 유형에 몰리면 프롬프트 예시를 보강할지 `StockEventType`을 늘릴지를 그 로그가 정한다 |
 | 추출 `DEFAULT_BATCH_SIZE` | 50 | `expectation.py` | 대상 문서 백로그 | 대상이 종목 태그 문서뿐이라 지금 물량에서는 남는다. watched가 크게 늘면 이 값과 대상 조건(`value_score` 하한 추가)이 손잡이다 |
@@ -269,6 +271,7 @@ ops 브리핑의 **추론 적체** 한 줄. **여기서 즉시 대응하는 것�
 | 2026-08-24 | `PROMPT_VERSION` + 기술적 보조지표 | `"2"` → `"3"`. 관측 상태에 `technical` 블록, `daily_history`에 `technical_snapshot`·`recent_signals` | **없다.** 지표가 추론에 도움이 되는지는 아직 재지 않았고, 이 판을 올리는 것이 그것을 재기 위한 조건이다 | 비교는 배포 4주 뒤 `prompt_version` 2 대 3의 지평별 Brier와 [../market-technical-indicators.md](../market-technical-indicators.md) 14.4절 세 SQL이다. 개선이 없으면 관측 상태의 push를 빼고 툴만 남긴다 |
 | 2026-08-24 | `RULE_VERSION` | (없음) → `"1"` | — (첫 판) | 신호 셋(`sma_cross`·`macd_cross`·`rsi_reversal`)의 지평 T+1·5·20 적중률을 4주 뒤 기술지표 문서 12.6절 SQL로 본다. 그 결과가 신호를 늘리거나 줄이는 유일한 근거다 |
 | 2026-08-23 | `MAX_TOOL_ROUNDS` / `build_thesis` `execution_timeout` | 4 → 3 / (없음) → 30분 | **없다.** 요청 타임아웃 1800초 × 호출 최대 7번이면 한 시도가 3시간 넘게 갈 수 있는데 태스크 울타리가 없었다 | 왕복을 하나 줄여 호출 최대 6번으로, 태스크에 30분 울타리를 둔다. `MAX_TOOL_CALLS` 12는 그대로라 한 왕복에 여러 툴을 묶어 부르면 보는 양은 같다. 재시도 셋 유지 |
+| 2026-08-25 | `PROMPT_VERSION` + Slack 표시 | `"4"` → `"5"`. 프롬프트에 `## 확률` 절, Slack은 세 확률·세 이유 → 결론(붙어 있으면 여럿)과 그 방향 근거 | **있다.** 실현 `flat` 비율이 코스피 6.1%·코스닥 11.4%·005930 4.9%·000660 6.5%인데 모델은 30~36%를 줬다. `pre_open` 12건 전부 최고 확률이 0.32~0.44, 지평 0 Brier 평균 0.643/0.722(균등 baseline 0.667) | 프롬프트에서 "확신이 없으면 확률을 고르게 두면 된다"와 "횡보 이유에는 … '방향 정보 없음'"을 빼고 임계·base rate를 실었다. `FLAT_THRESHOLD_PCT`는 안 건드렸다 — outcome 8건으로는 임계를 못 정한다(+4주 그대로). 다음 실행의 `prob_flat`이 10% 아래로 내려오고 최고 확률이 0.5를 넘는지가 첫 확인이다 |
 
 ---
 

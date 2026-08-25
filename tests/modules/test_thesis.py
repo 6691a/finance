@@ -2494,9 +2494,29 @@ def stored_thesis(thesis_id: int = 1, code: str = "KOSPI", label: str = "코스�
 
 def linked_evidence() -> tuple[StoredEvidence, ...]:
     return (
-        StoredEvidence(thesis_id=1, evidence_title="기사", evidence_url="https://x.test/1", rank=1),
+        StoredEvidence(
+            thesis_id=1,
+            evidence_title="기사",
+            evidence_url="https://x.test/1",
+            rank=1,
+            direction="up",
+            mechanism="자사주 매입이 수급을 받친다",
+        ),
         # 매크로 변화는 링크할 곳이 없다.
-        StoredEvidence(thesis_id=1, evidence_title="S&P500 선물 +0.8%", rank=2),
+        StoredEvidence(
+            thesis_id=1,
+            evidence_title="S&P500 선물 +0.8%",
+            rank=2,
+            direction="up",
+            mechanism="야간 선물 강세가 위험선호를 남긴다",
+        ),
+        StoredEvidence(
+            thesis_id=1,
+            evidence_title="SOX -2.7%",
+            rank=3,
+            direction="down",
+            mechanism="반도체 약세가 대형주를 누른다",
+        ),
     )
 
 
@@ -2509,25 +2529,72 @@ def _texts(built: list[dict[str, Any]]) -> list[str]:
     return collected
 
 
-def test_the_slack_message_shows_all_three_directions():
+def test_the_slack_message_shows_one_verdict_not_three_probabilities():
     built = render_blocks(RunSlot.PRE_OPEN, date(2026, 8, 21), [stored_thesis()], {1: linked_evidence()})
 
     body = "\n".join(_texts(built))
-    # 사용자가 요청한 "오를 확률/이유, 내릴 확률/이유, 횡보 확률/이유" 그대로다.
-    for piece in ("상승 62%", "하락 23%", "횡보 15%", "오를 이유", "내릴 이유", "횡보 이유"):
-        assert piece in body
-    # 가장 높은 확률만 굵게 한다. 순서는 ▲▼– 로 고정이라 눈이 매번 다시 읽지 않는다.
+    # 결론 하나와 그 이유만 나간다. 나머지 둘은 DB에 남고 채점이 쓴다.
     assert "*▲ 상승 62%*" in body
-    assert "*▼ 하락 23%*" not in body
+    assert "오를 이유" in body
+    for piece in ("하락 23%", "횡보 15%", "내릴 이유", "횡보 이유"):
+        assert piece not in body
 
 
-def test_only_evidence_with_a_url_becomes_a_link():
+def test_close_probabilities_show_every_tied_direction():
+    """하락 41%·횡보 38%처럼 붙어 있으면 하나로 접지 않는다.
+
+    접으면 모델이 고르지 못한 것을 우리가 대신 골라 준 셈이 된다.
+    """
+    tied = stored_thesis().model_copy(
+        update={"prob_up": Decimal("0.2100"), "prob_down": Decimal("0.4100"), "prob_flat": Decimal("0.3800")}
+    )
+
+    body = "\n".join(_texts(render_blocks(RunSlot.PRE_OPEN, date(2026, 8, 21), [tied], {})))
+
+    assert "*▼ 하락 41%*" in body
+    assert "*– 횡보 38%*" in body
+    # 21%는 최고 확률에서 VERDICT_TIE_GAP 밖이라 빠진다.
+    assert "상승 21%" not in body
+    # 방향이 둘이면 이유마다 어느 쪽인지 표시가 붙는다.
+    assert "> *▼* 내릴 이유" in body
+    assert "> *–* 횡보 이유" in body
+
+
+def test_a_clear_winner_shows_only_itself():
+    body = "\n".join(_texts(render_blocks(RunSlot.PRE_OPEN, date(2026, 8, 21), [stored_thesis()], {})))
+
+    # 방향이 하나면 이유 앞에 표시를 또 달지 않는다 — 바로 윗줄이 이미 말했다.
+    assert "> 오를 이유" in body
+    assert "> *▲*" not in body
+
+
+def test_only_evidence_matching_the_verdict_is_shown():
     built = render_blocks(RunSlot.PRE_OPEN, date(2026, 8, 21), [stored_thesis()], {1: linked_evidence()})
 
     body = "\n".join(_texts(built))
-    # 근거는 context 블록으로 내려 본문보다 작게 그려진다.
-    assert "📎 <https://x.test/1|기사>" in body
-    assert "· S&P500 선물 +0.8%" in body
+    # 결론이 상승이므로 상승 근거만, 경로 문장과 함께 나간다.
+    assert "📎 *판단 근거*" in body
+    assert "• <https://x.test/1|기사>" in body
+    assert "자사주 매입이 수급을 받친다" in body
+    # 반대 방향 근거는 DB에 남되 메시지에는 안 나온다.
+    assert "SOX -2.7%" not in body
+    # 방향이 하나면 근거마다 방향을 또 적지 않는다.
+    assert "(상승)" not in body
+
+
+def test_evidence_falls_back_when_no_claim_matches_the_verdict():
+    """결론 방향 근거가 없으면 방향을 가리지 않고 보인다.
+
+    인용한 것이 있는데 아무 것도 안 보이는 편이 더 나쁘다. 그때는 어느 쪽 근거인지 밝힌다.
+    """
+    down = stored_thesis().model_copy(
+        update={"prob_up": Decimal("0.1500"), "prob_down": Decimal("0.7000"), "prob_flat": Decimal("0.1500")}
+    )
+    only_up = (linked_evidence()[0],)
+
+    body = "\n".join(_texts(render_blocks(RunSlot.PRE_OPEN, date(2026, 8, 21), [down], {1: only_up})))
+
+    assert "• <https://x.test/1|기사> (상승)" in body
 
 
 def test_no_evidence_says_so_rather_than_leaving_a_blank():

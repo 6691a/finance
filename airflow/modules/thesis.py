@@ -97,7 +97,10 @@ logger = logging.getLogger(__name__)
 #    technical_snapshot·recent_signals를 함께 주고, 관측 상태에 technical 블록이 실린다.
 # 4: 과거 추론 절에 장후 리뷰(`post_close`)와 그 사후 해설이 함께 실린다(2026-08-25).
 #    그전에는 장전 예측만 돌아왔고 리뷰 해설은 Slack T+5와 그래프로만 나갔다.
-PROMPT_VERSION = "4"
+# 5: 확률의 뜻을 정의했다(2026-08-25). `prob_flat`이 "±임계 안에 들어올 빈도"임을 밝히고
+#    실측 base rate를 실었다. 그전에는 정의가 없어 모델이 `flat`을 "방향을 모르겠다"로 읽고
+#    30%대를 줬다 — 실제 빈도는 5~11%다.
+PROMPT_VERSION = "5"
 
 # 채점 지평. KRX 영업일 수이고 달력일이 아니다. 0은 예측일 세션 하나다.
 HORIZON_DAYS: tuple[int, ...] = (0, 1, 3, 5)
@@ -119,6 +122,16 @@ FLAT_THRESHOLD_PCT: dict[int, Decimal] = {
     3: Decimal("0.5"),
     5: Decimal("0.7"),
 }
+
+# 프롬프트에 싣는 `flat` 실현 빈도(퍼센트). 지평 0, 임계 0.3% 기준의 **실측**이다
+# (`index_daily` 132거래일, `stock_investor_trade_daily` 123거래일, 2026-08-25 조회).
+#
+# 이 값이 프롬프트에 있는 이유는 모델이 `prob_flat`을 "±0.3% 안"이 아니라 "방향을
+# 모르겠다"로 읽어 30%대를 주고 있었기 때문이다. 그만큼이 up·down에서 빠져나가 최고 확률이
+# 0.44를 넘지 못했다. 기준선을 주면 그것을 넘길 때 근거를 대게 된다.
+#
+# **`FLAT_THRESHOLD_PCT[0]`을 고치면 이 값도 다시 재야 한다.** 임계가 곧 이 빈도의 정의다.
+FLAT_BASE_RATE_PCT: dict[str, int] = {"KOSPI": 6, "KOSDAQ": 11, "stock": 6}
 
 # 조사 왕복 상한. 넘으면 조사를 끝내고 답변 단계로 넘어간다. 왕복 하나가 모델 호출 하나라
 # 이 값이 빌드 한 번의 길이를 정한다(`thesis_common.BUILD_TIMEOUT`이 그 바깥 울타리다).
@@ -1649,7 +1662,6 @@ SYSTEM_PROMPT = f"""너는 시장 추론 기록기다. 주어진 관측 상태�
 
 **너는 예측 정확도로 평가받지 않는다.** 맞고 틀림은 시간이 지나야 알고, 채점은 시스템이
 자동으로 한다. 네가 할 일은 "어떤 정보를 근거로 어떤 결론을 냈다"를 남기는 것이다.
-확신이 없으면 확률을 고르게 두면 된다. 억지로 한쪽을 고르지 마라.
 
 ## 조사
 
@@ -1673,9 +1685,22 @@ SYSTEM_PROMPT = f"""너는 시장 추론 기록기다. 주어진 관측 상태�
   같은 사건이 과거에 얼마나 맞았는지는 너도 시스템도 아직 모른다. 인용하려면 `ref`를 쓴다.
 
 지표는 **가격이 이미 한 일**이다. 왜 그랬는지는 말해 주지 않는다. 뉴스·공시·수급과
-맞춰 보고, 맞는 것이 없으면 지표만으로 확률을 기울이지 마라. 횡보 이유에는 RSI 중립·
-히스토그램 0 근처 같은 "방향 정보 없음"을 근거로 써도 된다.
+맞춰 보고, 맞는 것이 없으면 지표만으로 확률을 기울이지 마라.
 `daily_history` 툴은 심볼 하나의 일봉·지표·신호 이력을 더 길게 준다.
+
+## 확률
+
+세 확률은 **그 일이 실제로 일어날 빈도**다. 네 확신의 정도가 아니다.
+
+- `prob_flat`은 그 세션의 등락률이 **±{FLAT_THRESHOLD_PCT[0]}% 안**에 들어올 확률이다.
+  "방향을 모르겠다"가 아니다. 모르겠으면 `prob_up`과 `prob_down`을 비슷하게 두는 것이
+  맞고, `prob_flat`을 올리는 것은 틀리다. RSI 중립이나 히스토그램 0 근처는 방향 정보가
+  없다는 뜻이지 등락률이 작을 것이라는 뜻이 아니다.
+- 과거 실현 빈도가 기준선이다 — 코스피 {FLAT_BASE_RATE_PCT["KOSPI"]}%, 코스닥 {FLAT_BASE_RATE_PCT["KOSDAQ"]}%, 개별 종목 {FLAT_BASE_RATE_PCT["stock"]}%가 실제
+  `flat` 비율이다. 이보다 크게 올리려면 밴드 장세·거래량 급감처럼 **그날에 한정된 근거**를
+  `claims`에 대야 한다.
+- 근거가 한쪽으로 쏠려 있으면 확률도 쏠려야 한다. 근거를 찾았는데도 세 값을 균등에
+  가깝게 두면 그 기록은 아무 것도 말하지 않는다.
 
 ## 규칙
 
@@ -2830,6 +2855,18 @@ OUTCOME_SELECT_BY_IDS = read_sql("postgres", "thesis_outcome", "select_by_thesis
 # 근거 줄에 그릴 개수. 세 개를 넘으면 한 줄이 길어져 읽히지 않는다.
 SLACK_EVIDENCE_LIMIT = 3
 
+# 근거를 DB에서 가져올 개수. 표시 개수보다 넉넉히 받아 결론 방향으로 거른 뒤 자른다.
+# 인용은 실행당 20건이 상한이라(`MAX_TOOL_RESULTS`) 이 값이면 사실상 전부다.
+EVIDENCE_FETCH_LIMIT = 12
+
+# 최고 확률에서 이만큼 안에 붙은 방향은 결론에 함께 보인다. 하락 41%·횡보 38%처럼 갈리는
+# 것을 하나로 접으면 모델이 고르지 못한 것을 우리가 대신 골라 주는 셈이다.
+#
+# **0.05는 실측이 아니라 시작값이다.** 두 방향이 매번 함께 나오면 좁히고, 한 번도 함께
+# 나오지 않으면 넓힌다. 프롬프트 캘리브레이션(`PROMPT_VERSION` 5)이 확률을 벌려 놓기
+# 때문에 그 뒤 분포를 보고 정한다.
+VERDICT_TIE_GAP = Decimal("0.05")
+
 # 되돌아보기 섹션을 그릴 지평. T+1·T+3까지 매일 보내면 하루 세 덩이가 더 붙어 원래 알림이
 # 묻힌다. T+5가 해설이 가장 굳은 시점이기도 하다.
 SLACK_REVIEW_HORIZON = 5
@@ -2873,7 +2910,12 @@ class StoredOutcome(BaseModel):
 
 
 class StoredEvidence(BaseModel):
-    """저장된 근거 한 행. Slack 근거 줄이 쓴다."""
+    """저장된 근거 한 행. Slack 근거 줄이 쓴다.
+
+    `direction`·`mechanism`은 해설이 인용한 근거에서는 비어 있다(`store_narratives`가
+    claims 없이 저장한다). 원 추론의 근거여도 모델이 `claims`에 안 담고 `evidence_refs`로만
+    올린 것은 마찬가지로 비어 있다 — 그래서 옵셔널이다.
+    """
 
     model_config = ConfigDict(frozen=True)
 
@@ -2881,6 +2923,8 @@ class StoredEvidence(BaseModel):
     evidence_title: str
     evidence_url: str | None = None
     rank: int
+    direction: str | None = None
+    mechanism: str | None = None
 
 
 def top_evidence(
@@ -2888,9 +2932,13 @@ def top_evidence(
     thesis_ids: Sequence[int],
     *,
     outcome_horizon_days: int | None = None,
-    limit: int = SLACK_EVIDENCE_LIMIT,
+    limit: int = EVIDENCE_FETCH_LIMIT,
 ) -> dict[int, tuple[StoredEvidence, ...]]:
-    """추론별 상위 근거. `outcome_horizon_days`가 `None`이면 원 추론이 인용한 것이다."""
+    """추론별 상위 근거. `outcome_horizon_days`가 `None`이면 원 추론이 인용한 것이다.
+
+    기본 상한이 표시 개수(`SLACK_EVIDENCE_LIMIT`)가 아니라 `EVIDENCE_FETCH_LIMIT`인 것은
+    부르는 쪽이 채택 방향으로 한 번 더 거르기 때문이다.
+    """
     if not thesis_ids:
         return {}
     with connection.cursor() as cursor:
@@ -2899,7 +2947,14 @@ def top_evidence(
     grouped: dict[int, list[StoredEvidence]] = {}
     for row in rows:
         grouped.setdefault(row[0], []).append(
-            StoredEvidence(thesis_id=row[0], evidence_title=row[4], evidence_url=row[5], rank=row[6])
+            StoredEvidence(
+                thesis_id=row[0],
+                evidence_title=row[4],
+                evidence_url=row[5],
+                rank=row[6],
+                direction=row[7],
+                mechanism=row[8],
+            )
         )
     return {thesis_id: tuple(items) for thesis_id, items in grouped.items()}
 
@@ -2927,56 +2982,74 @@ def stored_outcomes(connection: Connection, thesis_ids: Sequence[int]) -> dict[i
     return {thesis_id: tuple(items) for thesis_id, items in grouped.items()}
 
 
-def _evidence_context(items: Sequence[StoredEvidence]) -> str:
+def _verdicts(thesis: StoredThesis) -> tuple[tuple[str, Decimal], ...]:
+    """보일 방향과 확률. 최고 확률에서 `VERDICT_TIE_GAP` 안에 붙은 것을 내림차순으로 준다.
+
+    하나만 나오는 것이 정상이지만 하락 41%·횡보 38%처럼 붙어 있으면 둘 다 낸다. 그때
+    앞의 것만 보이면 모델이 고르지 못한 것을 우리가 대신 골라 준 셈이 된다.
+
+    동률이면 up · down · flat 순이다(`sorted`가 안정 정렬이라 입력 순서를 지킨다).
+    """
+    ranked = sorted(
+        (("up", thesis.prob_up), ("down", thesis.prob_down), ("flat", thesis.prob_flat)),
+        key=lambda pair: pair[1],
+        reverse=True,
+    )
+    top = ranked[0][1]
+    return tuple(pair for pair in ranked if top - pair[1] <= VERDICT_TIE_GAP)
+
+
+def _evidence_lines(items: Sequence[StoredEvidence], directions: Sequence[str]) -> str:
     """근거 줄. `context` 블록에 들어가 본문보다 작게 그려진다.
+
+    **결론 방향의 근거만 그린다.** 세 방향 확률을 다 보이던 때는 근거도 방향과 무관하게
+    상위 세 개였지만, 결론만 보이는 지금 반대 방향 근거를 함께 두면 "그래서 왜 이
+    결론인가"가 흐려진다. 반대편 근거는 DB에 그대로 남는다.
+
+    맞는 근거가 없으면 방향을 가리지 않고 상위 몇 개를 그린다. `direction`이 비어 있는
+    근거(모델이 `claims`에 안 담은 것)도 그때 나온다 — 인용한 것이 있는데 아무 것도 안
+    보이는 편이 더 나쁘다.
 
     URL이 있는 것만 링크로 만든다 — 매크로 변화는 링크할 곳이 없다.
     """
     if not items:
         # 억지 인용보다 낫다는 판단의 결과라 그렇게 적는다.
         return "📎 근거 없음 — 관측 상태만으로 추론"
-    parts = [
-        f"<{item.evidence_url}|{item.evidence_title}>" if item.evidence_url else item.evidence_title for item in items
-    ]
-    return "📎 " + " · ".join(parts)
+    matched = [item for item in items if item.direction in directions]
+    # 방향이 둘 이상이거나 폴백이면 어느 쪽 근거인지 밝혀야 읽힌다.
+    label_direction = len(directions) > 1 or not matched
+    lines = ["📎 *판단 근거*"]
+    for item in (matched or items)[:SLACK_EVIDENCE_LIMIT]:
+        title = f"<{item.evidence_url}|{item.evidence_title}>" if item.evidence_url else item.evidence_title
+        mark = f" ({DIRECTION_NAMES[item.direction]})" if label_direction and item.direction else ""
+        lines.append(f"• {title}{mark}")
+        if item.mechanism:
+            lines.append(f"    {item.mechanism}")
+    return "\n".join(lines)
 
 
-def _dominant(thesis: StoredThesis) -> tuple[str, Decimal]:
-    """모델이 가장 높은 확률을 준 방향과 그 확률."""
-    return max(
-        (("up", thesis.prob_up), ("down", thesis.prob_down), ("flat", thesis.prob_flat)),
-        key=lambda pair: pair[1],
-    )
+def _thesis_section(thesis: StoredThesis, verdicts: Sequence[tuple[str, Decimal]]) -> str:
+    """추론 하나. 결론 줄과 그 방향의 이유다.
 
-
-def _probability_line(thesis: StoredThesis) -> str:
-    """세 확률을 한 줄에. **가장 높은 것만 굵게 한다.**
-
-    순서는 ▲▼– 로 고정한다. 대상마다 순서가 바뀌면 눈이 매번 다시 읽어야 한다.
+    세 확률·세 이유를 늘 늘어놓던 것을 2026-08-25에 이 형태로 바꿨다. 확률이 균등 근처에
+    몰려 있어 세 값을 나란히 두면 어느 것이 판단인지 읽는 사람이 매번 골라야 했다.
+    보이지 않는 확률과 이유도 `thesis` 테이블에 그대로 남고 채점은 셋을 다 쓴다.
     """
-    dominant, _ = _dominant(thesis)
-    cells = []
-    for key, mark, name, value in (
-        ("up", "▲", "상승", thesis.prob_up),
-        ("down", "▼", "하락", thesis.prob_down),
-        ("flat", "–", "횡보", thesis.prob_flat),
-    ):
-        text = f"{mark} {name} {value:.0%}"
-        cells.append(f"*{text}*" if key == dominant else text)
-    return "   ".join(cells)
-
-
-def _thesis_section(thesis: StoredThesis) -> str:
-    """추론 하나. 이유 셋은 인용줄로 내려 확률 줄과 무게를 가른다."""
-    return "\n".join(
-        [
-            f"*{thesis.label}*",
-            _probability_line(thesis),
-            f"> *▲* {thesis.up_reasoning}",
-            f"> *▼* {thesis.down_reasoning}",
-            f"> *–* {thesis.flat_reasoning}",
-        ]
+    reasonings = {
+        "up": thesis.up_reasoning,
+        "down": thesis.down_reasoning,
+        "flat": thesis.flat_reasoning,
+    }
+    verdict_line = "   ".join(
+        f"*{DIRECTION_MARKS[direction]} {DIRECTION_NAMES[direction]} {probability:.0%}*"
+        for direction, probability in verdicts
     )
+    # 방향이 하나면 바로 위 줄이 이미 방향을 말했다. 둘 이상일 때만 이유마다 표시를 단다.
+    lines = [f"*{thesis.label}*", verdict_line]
+    for direction, _ in verdicts:
+        prefix = f"*{DIRECTION_MARKS[direction]}* " if len(verdicts) > 1 else ""
+        lines.append(f"> {prefix}{reasonings[direction]}")
+    return "\n".join(lines)
 
 
 def render_blocks(
@@ -2987,7 +3060,7 @@ def render_blocks(
 ) -> list[dict[str, Any]]:
     """Slack 블록. 추론이 0건이면 그 사실을 한 줄로 알린다.
 
-    대상마다 `section`(확률·이유)과 `context`(근거) 둘을 낸다. 근거를 본문에 두면 이유
+    대상마다 `section`(결론·이유)과 `context`(근거) 둘을 낸다. 근거를 본문에 두면 이유
     문장과 같은 무게로 읽혀 어느 것이 판단이고 어느 것이 출처인지 흐려진다.
 
     **채점과 사후 해설은 여기 싣지 않는다**(2026-08-21 결정). 읽는 사람이 다르다 — 이 메시지는
@@ -3002,8 +3075,10 @@ def render_blocks(
         built.append(block.section("_이번 슬롯에 남은 추론이 없다._"))
         return built
     for thesis in theses:
-        built.append(block.section(_thesis_section(thesis)))
-        built.append(block.context([_evidence_context(evidence.get(thesis.id, ()))]))
+        verdicts = _verdicts(thesis)
+        built.append(block.section(_thesis_section(thesis, verdicts)))
+        directions = [direction for direction, _ in verdicts]
+        built.append(block.context([_evidence_lines(evidence.get(thesis.id, ()), directions)]))
     return built
 
 

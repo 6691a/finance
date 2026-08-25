@@ -98,8 +98,17 @@ def body(rt_cd: str = "0", msg1: str = "정상처리 되었습니다.", **output
 
 
 class FakeCursor:
-    def __init__(self) -> None:
+    """DB 대역. `stored_rows`가 저장 검증 쿼리에 돌려줄 행 수다.
+
+    `None`이면 실제로 upsert된 행 수를 그대로 돌려준다 — 정상 저장이다. 숫자를 주면 덜
+    들어간 상태를 흉내 낸다.
+    """
+
+    def __init__(self, stored_rows: int | None = None) -> None:
         self.calls: list[tuple[str, tuple]] = []
+        self.stored_rows = stored_rows
+        self.upserted = 0
+        self.last_statement = ""
 
     def __enter__(self) -> Self:
         return self
@@ -109,17 +118,27 @@ class FakeCursor:
 
     def execute(self, statement: str, parameters) -> None:
         self.calls.append((statement, tuple(parameters)))
+        self.last_statement = statement
 
     def executemany(self, statement: str, parameters) -> None:
-        self.calls.extend((statement, tuple(row)) for row in parameters)
+        rows = [tuple(row) for row in parameters]
+        self.calls.extend((statement, row) for row in rows)
+        self.last_statement = statement
+        if "INSERT INTO stock_investor_trade_daily" in statement:
+            self.upserted += len(rows)
 
     def fetchone(self) -> tuple[int]:
+        if "count(*)" in self.last_statement:
+            return (self.upserted if self.stored_rows is None else self.stored_rows,)
         return (SOURCE_RECORD_ID,)
+
+    def fetchall(self) -> list[tuple]:
+        return []
 
 
 class FakeConnection:
-    def __init__(self) -> None:
-        self.recorded_cursor = FakeCursor()
+    def __init__(self, stored_rows: int | None = None) -> None:
+        self.recorded_cursor = FakeCursor(stored_rows)
 
     def cursor(self) -> FakeCursor:
         return self.recorded_cursor
@@ -556,6 +575,26 @@ def test_store_daily_trade_writes_one_row_per_business_date(monkeypatch):
     assert [row[1] for row in rows] == [date(2026, 8, 14), date(2026, 8, 13)]
     assert all(row[0] == "005930" for row in rows)
     assert all(row[-1] == SOURCE_RECORD_ID for row in rows)
+
+
+def test_store_daily_trade_fails_when_the_rows_do_not_survive(monkeypatch):
+    """원장에는 30행이라 적히고 테이블에는 한 행만 남는 상태(2026-08-20 실측)를 막는다."""
+    monkeypatch.setattr(kis_investor_flow, "send_get", fake_send_get(body(output2=[DAILY_ROW, DAILY_ROW_PREVIOUS])))
+    fetch = COLLECTOR.fetch_stock_trade_daily(SAMSUNG, BUSINESS_DATE)
+
+    with pytest.raises(kis_investor_flow.StoreVerificationError, match="upserted 2 daily trade rows but 1 remain"):
+        COLLECTOR.store_stock_trade_daily(FakeConnection(stored_rows=1), fetch)
+
+
+def test_missing_open_days_asks_for_the_stock_and_the_window():
+    """구멍 검사는 KIS 자격 증명과 무관해 함수다. 판정(태스크를 죽일지)은 DAG이 한다."""
+    connection = FakeConnection()
+
+    assert kis_investor_flow.missing_open_days(connection, "005930", date(2026, 8, 3), date(2026, 8, 20)) == ()
+
+    statement, parameters = connection.recorded_cursor.calls[0]
+    assert "market_session" in statement
+    assert parameters == ("005930", date(2026, 8, 3), date(2026, 8, 20))
 
 
 def test_store_daily_trade_records_the_covered_range(monkeypatch):

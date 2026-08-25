@@ -203,8 +203,8 @@ def _validated(
     return True
 
 
-class _Series(BaseModel):
-    """한 대상의 지표 시리즈 전체. snapshot과 신호 검출이 같은 것을 본다."""
+class IndicatorSeries(BaseModel):
+    """한 대상의 지표 시리즈 전체. snapshot과 신호 검출, 일봉 차트가 같은 것을 본다."""
 
     model_config = ConfigDict(frozen=True, arbitrary_types_allowed=True)
 
@@ -215,14 +215,18 @@ class _Series(BaseModel):
     macd_signal: list[float | None]
 
 
-def _compute(closes: Sequence[float]) -> _Series:
+def compute_series(closes: Sequence[float]) -> IndicatorSeries:
+    """종가 시리즈 하나에서 이동평균·RSI·MACD를 한 번에 낸다.
+
+    값이 없는 앞부분은 `None`이다. 0으로 채우면 차트가 0에서 솟는 가짜 선을 그린다.
+    """
     fast = ema_series(list(closes), MACD_FAST_BARS)
     slow = ema_series(list(closes), MACD_SLOW_BARS)
     macd = [
         None if fast_value is None or slow_value is None else fast_value - slow_value
         for fast_value, slow_value in zip(fast, slow, strict=True)
     ]
-    return _Series(
+    return IndicatorSeries(
         sma20=sma_series(closes, SMA_SHORT_BARS),
         sma60=sma_series(closes, SMA_LONG_BARS),
         rsi14=rsi_series(closes),
@@ -242,7 +246,7 @@ def summarize(
     if not _validated(bars, max_abs_daily_change_pct):
         return None
     closes = [bar.close for bar in bars]
-    series = _compute(closes)
+    series = compute_series(closes)
     last = len(bars) - 1
     sma20 = series.sma20[last]
     sma60 = series.sma60[last]
@@ -292,7 +296,7 @@ def detect_signals(
     scan = min(scan_bars, SIGNAL_SCAN_BARS_MAX)
     closes = [bar.close for bar in bars]
     volumes = [bar.volume for bar in bars]
-    series = _compute(closes)
+    series = compute_series(closes)
     events: list[SignalEvent] = []
     for index in range(max(1, len(bars) - scan), len(bars)):
         values = (

@@ -65,6 +65,7 @@ from modules.collectors.kis import (
 from modules.collectors.market.kis_investor_flow import (
     InvestorFlowStock,
     KisInvestorFlowCollector,
+    missing_open_days,
 )
 from modules.market_session import krx_open_day
 from modules.utility import CONNECTION_ID, KIS_UNRECOVERABLE_STATUSES, KST_TIMEZONE, atomic
@@ -175,8 +176,10 @@ def kis_investor_trade_daily():
 
         stored = 0
         failures: list[str] = []
+        gaps: list[str] = []
         with closing(_connection()) as connection:
             for stock in InvestorFlowStock:
+                earliest = end_date
                 cursor_date = end_date
                 for page in range(pages):
                     name = f"{stock.value}:{cursor_date.isoformat()}"
@@ -209,12 +212,24 @@ def kis_investor_trade_daily():
 
                     # 다음 구간의 끝은 이번 응답의 가장 이른 거래일 하루 전이다. 우리가 거래일을
                     # 세면 휴장일에서 어긋난다.
-                    cursor_date = min(row.business_date for row in fetch.rows) - timedelta(days=1)
+                    earliest = min(row.business_date for row in fetch.rows)
+                    cursor_date = earliest - timedelta(days=1)
                     if page + 1 < pages:
                         logger.info("Walking back to %s for %s", cursor_date, stock.value)
 
+                # 받은 구간에 KRX 개장일이 빠져 있으면 그 구멍은 아무도 모르게 남는다.
+                # 한 응답이 30 거래일을 담으므로 매일 도는 것만으로 메워져야 하고, 메워지지
+                # 않았다면 응답이나 저장 어느 한쪽이 우리가 믿는 대로 굴러가지 않은 것이다.
+                missing = missing_open_days(connection, stock.value, earliest, end_date)
+                if missing:
+                    gaps.append(f"{stock.value}: {', '.join(day.isoformat() for day in missing)}")
+
+        # 호출 실패가 먼저다. 실패하면 구멍은 그 결과라 원인을 두 번 말할 것이 없다.
         if failures:
             raise AirflowFailException(f"{len(failures)} KIS calls failed: {', '.join(failures)}")
+
+        if gaps:
+            raise AirflowFailException(f"daily bars are missing on KRX open days — {'; '.join(gaps)}")
 
         logger.info("Stored %s daily investor trade rows ending %s", stored, end_date)
         return stored

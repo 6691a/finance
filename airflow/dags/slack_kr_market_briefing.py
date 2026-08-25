@@ -78,6 +78,7 @@ SCHEDULE = MultipleCronTriggerTimetable(
     timezone=KST_TIMEZONE,
 )
 
+
 def _connection() -> Any:
     # 반환 타입은 provider 버전에 따라 psycopg2/psycopg3 래퍼로 갈린다. 어느 쪽이든 PEP 249다.
     return PostgresHook(postgres_conn_id=CONNECTION_ID).get_conn()
@@ -136,17 +137,19 @@ def slack_kr_market_briefing():
         connection = _connection()
         try:
             _skip_when_closed(connection, now.astimezone(KST_TIMEZONE).date())
-            summary = market.collect_summary(connection, now)
+            reader = market.MarketBriefingReader(connection, now)
+            summary = reader.summary()
             open_hour = (
                 market.NXT_PREMARKET_OPEN_HOUR_KST
                 if scope is MarketScope.KOREA_PREOPEN
                 else market.SESSION_OPEN_HOUR_KST
             )
-            chart_series = market.collect_chart_series(connection, now, open_hour=open_hour)
+            chart_series = reader.chart_series(open_hour=open_hour)
+            daily_series = reader.daily_chart_series()
         finally:
             connection.close()
 
-        chart_files, chart_error = _chart(token, chart_series, now)
+        chart_files, chart_error = _chart(token, chart_series, daily_series, now)
         blocks = market.render_blocks(summary, scope, chart_files=chart_files, chart_error=chart_error)
         text = market.render_text(summary, scope)
 
@@ -157,15 +160,20 @@ def slack_kr_market_briefing():
             raise AirflowFailException(str(error)) from error
 
     def _chart(
-        token: SecretStr, series: tuple[market.ChartSeries, ...], now: datetime
+        token: SecretStr,
+        series: tuple[market.ChartSeries, ...],
+        daily_series: tuple[market.DailyChartSeries, ...],
+        now: datetime,
     ) -> tuple[tuple[tuple[str, str], ...] | None, str | None]:
         """계열마다 차트 한 장을 그려 올린다. **실패해도 리포트를 막지 않는다.**
 
-        표가 본체다. 개장 전처럼 그릴 봉이 없으면 실패가 아니라 생략이라 오류도 남기지
-        않는다. 한 장이라도 실패하면 전부 버리고 원인을 메시지에 남긴다 — 일부만 실린
-        차트는 빠진 심볼이 안 보이기 때문이다.
+        당일 분봉 뒤에 확정 일봉 보조지표 차트가 붙는다. 두 종류를 한 목록으로 올리는 이유는
+        실패 판정이 같기 때문이다 — 한 장이라도 실패하면 전부 버린다. 일부만 실린 차트는
+        빠진 심볼이 안 보인다.
+
+        표가 본체다. 개장 전처럼 그릴 봉이 없으면 실패가 아니라 생략이라 오류도 남기지 않는다.
         """
-        if not series:
+        if not series and not daily_series:
             return None, None
         local = now.astimezone(KST_TIMEZONE)
         try:
@@ -174,12 +182,23 @@ def slack_kr_market_briefing():
                     upload_file(
                         token,
                         filename=f"kr-{one.symbol}-{local:%Y%m%d-%H%M}.png",
-                        title=f"{one.label} 당일 흐름 {local:%m/%d %H:%M} KST",
+                        title=f"{one.label}({one.venue}) 당일 흐름 {local:%m/%d %H:%M} KST",
                         content=chart.render_series_png(one),
                     ),
-                    one.label,
+                    f"{one.label}({one.venue})",
                 )
                 for one in series
+            ) + tuple(
+                (
+                    upload_file(
+                        token,
+                        filename=f"kr-daily-{one.subject_code}-{local:%Y%m%d}.png",
+                        title=f"{one.label}({one.venue}) 확정 일봉 {one.bars[-1].business_date:%m/%d}",
+                        content=chart.render_daily_png(one),
+                    ),
+                    f"{one.label}({one.venue}) 일봉",
+                )
+                for one in daily_series
             )
         except ImportError as error:
             # matplotlib이 운영 이미지에 없다. 재시도해도 같으므로 표만 보낸다.

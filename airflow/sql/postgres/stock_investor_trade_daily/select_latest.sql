@@ -1,6 +1,8 @@
 -- 종목마다 마지막 확정 거래일 하나. 장 마감 뒤 리포트가 읽는다.
--- 등락은 직전 거래일 종가와 비교한다. quote_bar와 달리 이 테이블에는 previous_close가 없어
--- LATERAL로 직전 행을 붙인다. 상장 첫날처럼 직전이 없으면 NULL이고 렌더링이 '-'로 그린다.
+-- 등락과 수급 비교는 직전 거래일 행과 한다. quote_bar와 달리 이 테이블에는 previous_close가
+-- 없어 LATERAL로 직전 행을 통째로 붙이고, 종가뿐 아니라 그날 날짜와 수급 세 칸도 함께 받는다.
+-- 수집이 매일 도는 것이 아니라 직전 행이 전일이 아닐 수 있어 날짜를 함께 준다.
+-- 상장 첫날처럼 직전이 없으면 NULL이고 렌더링이 '-'로 그린다.
 -- 종목명은 instrument 마스터에서 가져온다. 마스터에 없으면 종목코드를 그대로 쓴다.
 SELECT DISTINCT ON (daily.stock_code)
        daily.stock_code,
@@ -8,6 +10,10 @@ SELECT DISTINCT ON (daily.stock_code)
        daily.business_date,
        daily.close_price,
        previous.close_price AS previous_close,
+       previous.business_date AS previous_business_date,
+       previous.foreign_net_buy_qty AS previous_foreign_net_buy_qty,
+       previous.institution_net_buy_qty AS previous_institution_net_buy_qty,
+       previous.individual_net_buy_qty AS previous_individual_net_buy_qty,
        daily.foreign_net_buy_qty,
        daily.institution_net_buy_qty,
        daily.individual_net_buy_qty,
@@ -22,7 +28,11 @@ FROM stock_investor_trade_daily AS daily
 LEFT JOIN instrument
   ON instrument.ticker = daily.stock_code
 LEFT JOIN LATERAL (
-    SELECT prev.close_price
+    SELECT prev.business_date,
+           prev.close_price,
+           prev.foreign_net_buy_qty,
+           prev.institution_net_buy_qty,
+           prev.individual_net_buy_qty
     FROM stock_investor_trade_daily AS prev
     WHERE prev.stock_code = daily.stock_code
       AND prev.business_date < daily.business_date

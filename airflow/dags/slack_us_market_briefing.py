@@ -89,7 +89,7 @@ def slack_us_market_briefing():
         connection = _connection()
         try:
             _skip_when_closed(connection, market.us_session_date(now))
-            summary = market.collect_summary(connection, now)
+            summary = market.MarketBriefingReader(connection, now).summary()
         finally:
             connection.close()
 

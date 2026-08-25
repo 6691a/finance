@@ -45,7 +45,7 @@ from pydantic import BaseModel, ConfigDict, SecretStr, ValidationError
 from modules.collectors.kis import (
     SOURCE,
     KisPayloadError,
-    KisResultError,
+    result_error,
     send_get,
 )
 from modules.db import Connection
@@ -78,6 +78,16 @@ US_COUNTRY_CODE = "US"
 MARKET_SESSION_DOMESTIC_UPSERT = read_sql("postgres", "market_session", "upsert_domestic.sql")
 MARKET_SESSION_SETTLEMENT_UPDATE = read_sql("postgres", "market_session", "update_settlement.sql")
 SOURCE_RECORD_INSERT = read_sql("postgres", "source_record", "insert.sql")
+
+
+class SettlementTargetMissing(RuntimeError):
+    """결제일을 채울 `US_EQUITY` 행이 없다. **갱신은 0행이었다.**
+
+    `nyse_calendar`가 앞서 도는데도 그 날짜 행이 없으면 NYSE 캘린더가 그 해를 아직 덮지
+    않은 것이다. 재시도해도 같으므로 DAG가 즉시 실패시킨다. 예전에는 경고만 남기고
+    `settlement`를 그대로 돌려줘서, 아무 것도 쓰지 않은 실행이 "US settlement for ..."
+    로그와 함께 성공으로 끝났다.
+    """
 
 
 class KisCursorError(RuntimeError):
@@ -204,7 +214,9 @@ def _parse_body(body: bytes) -> dict[str, Any]:
 
     code = str(payload.get("rt_cd", ""))
     if code != "0":
-        raise KisResultError(code, str(payload.get("msg1", "")).strip())
+        # 팩토리를 거쳐야 시각 제한(`TIME LIMIT …`)이 `KisTimeWindowError`로 갈린다.
+        # 직접 raise 하면 그 응답이 다시 평범한 본문 실패로 보이고 DAG가 재시도를 태운다.
+        raise result_error(code, str(payload.get("msg1", "")).strip())
     return payload
 
 
@@ -471,8 +483,8 @@ class KisMarketCalendarCollector:
             )
             updated = cursor.fetchone()
             if updated is None:
-                logger.warning(
-                    "No US_EQUITY row for %s; NYSE has not covered that year yet",
-                    settlement.session_date,
+                raise SettlementTargetMissing(
+                    f"No US_EQUITY session row for {settlement.session_date}; "
+                    "the NYSE calendar has not covered that year yet, so the settlement dates were dropped"
                 )
         return settlement

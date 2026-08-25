@@ -1152,8 +1152,10 @@ def _technical_snapshot(subject_code: str, rows: Sequence[Sequence[Any]]) -> tec
             )
             for row in ascending
         ]
-    except (TypeError, ValueError, ValidationError):
+    except (TypeError, ValueError, ValidationError) as error:
         # 원천 값이 계약을 깨면 지표를 만들지 않는다. 원시 봉은 그대로 나간다.
+        # **로그는 남긴다** — 조용히 빠지면 프롬프트에 지표가 없는 이유를 아무도 모른다.
+        logger.warning("technical snapshot for %s skipped: %s", subject_code, error)
         return None
     domestic_kis = ascending[0][0] == "kis" and ascending[0][4] == "KR"
     return technical.summarize(

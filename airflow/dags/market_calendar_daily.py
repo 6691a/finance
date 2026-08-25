@@ -77,6 +77,7 @@ from pydantic import SecretStr
 from modules.collectors.calendar.kis_market_calendar import (
     KisCursorError,
     KisMarketCalendarCollector,
+    SettlementTargetMissing,
 )
 from modules.collectors.calendar.nyse_calendar import (
     NyseParseError,
@@ -156,7 +157,7 @@ def _store[Stored](store: Callable[..., Stored], *arguments: Any) -> Stored:
         try:
             with atomic(connection):
                 return store(connection, *arguments)
-        except (KisPayloadError, KisResultError, NyseParseError) as error:
+        except (KisPayloadError, KisResultError, NyseParseError, SettlementTargetMissing) as error:
             raise AirflowFailException(str(error)) from error
 
 

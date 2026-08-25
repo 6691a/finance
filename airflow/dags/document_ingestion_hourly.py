@@ -134,22 +134,22 @@ def document_ingestion_hourly():
                     logger.warning("%s is unreachable with HTTP %s; check the feed URL", source.slug, error.status)
                 else:
                     logger.warning("%s failed with HTTP %s", source.slug, error.status)
-                failures.append(source.slug)
+                failures.append(f"{source.slug}({error})")
                 continue
             except DocumentPayloadError as error:
                 logger.warning("%s returned something that is not a feed: %s", source.slug, error)
-                failures.append(source.slug)
+                failures.append(f"{source.slug}({error})")
                 continue
             except ConnectionError as error:
                 logger.warning("%s failed to connect: %s", source.slug, error)
-                failures.append(source.slug)
+                failures.append(f"{source.slug}({error})")
                 continue
-            except Exception:
+            except Exception as error:
                 # 우리가 예상하지 못한 예외도 이 출처에서 멈춰야 한다. 실제로 BEA 요약의
                 # escape되지 않은 `<` 하나가 파서 예외로 새어 나와 나머지 출처를 통째로
                 # 막은 적이 있다(2026-08-15). 격리를 예외 목록에 맡기지 않는다.
                 logger.exception("%s raised an unexpected error", source.slug)
-                failures.append(source.slug)
+                failures.append(f"{source.slug}({error})")
                 continue
 
             stored += count
@@ -157,9 +157,9 @@ def document_ingestion_hourly():
 
         if len(failures) == len(sources):
             # 전부 실패했으면 우리 쪽 문제일 가능성이 크다. 재시도할 값어치가 있다.
-            raise ConnectionError(f"Every feed failed: {', '.join(failures)}")
+            raise ConnectionError(f"Every feed failed: {'; '.join(failures)}")
         if failures:
-            logger.warning("%s of %s feeds failed: %s", len(failures), len(sources), ", ".join(failures))
+            logger.warning("%s of %s feeds failed: %s", len(failures), len(sources), "; ".join(failures))
 
         logger.info("Stored %s documents from %s feeds", stored, len(sources) - len(failures))
         return stored

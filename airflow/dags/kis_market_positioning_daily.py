@@ -66,6 +66,7 @@ from modules.collectors.kis import (
     KisHTTPError,
     KisPayloadError,
     KisResultError,
+    KisTimeWindowError,
     access_token,
 )
 from modules.collectors.market.kis_positioning import (
@@ -218,15 +219,19 @@ def kis_market_positioning_daily():
                     if error.status in KIS_UNRECOVERABLE_STATUSES:
                         raise AirflowFailException(f"{name}: {error}") from error
                     logger.warning("%s failed with HTTP %s", name, error.status)
-                    failures.append(name)
+                    failures.append(f"{name}({error})")
                     continue
+                except KisTimeWindowError as error:
+                    # 제공처가 지금은 이 조회를 받지 않는다(응답 본문이 창을 말해 준다). 재시도는 같은
+                    # 답을 받으며 예산만 태우므로 즉시 죽인다. 사람이 시각을 맞춰 다시 트리거한다.
+                    raise AirflowFailException(f"{name}: {error}. 제한 시각 뒤에 다시 트리거한다.") from error
                 except (KisResultError, KisPayloadError) as error:
                     logger.warning("%s failed: %s", name, error)
-                    failures.append(name)
+                    failures.append(f"{name}({error})")
                     continue
                 except ConnectionError as error:
                     logger.warning("%s failed to connect: %s", name, error)
-                    failures.append(name)
+                    failures.append(f"{name}({error})")
                     continue
 
                 with atomic(connection):
@@ -236,7 +241,14 @@ def kis_market_positioning_daily():
                 logger.info("Stored %s rows for %s", rows, name)
 
         if failures:
-            raise AirflowFailException(f"{len(failures)} of {len(jobs)} KIS calls failed: {', '.join(failures)}")
+            raise AirflowFailException(f"{len(failures)} of {len(jobs)} KIS calls failed: {'; '.join(failures)}")
+
+        # 개장일인데 12개 조회가 전부 0행이면 응답 형식이나 조회 구간이 어긋난 것이다.
+        # 건당 0행은 고시 지연으로 정상이라 합계가 0일 때만 죽인다.
+        if stored == 0:
+            raise AirflowFailException(
+                f"Every KIS positioning call returned zero rows for {observation_start}..{observation_end}"
+            )
 
         logger.info("Stored %s positioning rows for %s..%s", stored, observation_start, observation_end)
         return stored

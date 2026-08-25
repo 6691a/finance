@@ -87,6 +87,7 @@ from modules.collectors.kis import (
     KisHTTPError,
     KisPayloadError,
     KisResultError,
+    KisTimeWindowError,
     access_token,
     rest_exchanges,
 )
@@ -239,15 +240,19 @@ def kis_stock_minute_bars_daily():
                         if error.status in KIS_UNRECOVERABLE_STATUSES:
                             raise AirflowFailException(f"{name}: {error}") from error
                         logger.warning("%s failed with HTTP %s", name, error.status)
-                        failures.append(name)
+                        failures.append(f"{name}({error})")
                         continue
+                    except KisTimeWindowError as error:
+                        # 제공처가 지금은 이 조회를 받지 않는다(응답 본문이 창을 말해 준다). 재시도는 같은
+                        # 답을 받으며 예산만 태우므로 즉시 죽인다. 사람이 시각을 맞춰 다시 트리거한다.
+                        raise AirflowFailException(f"{name}: {error}. 제한 시각 뒤에 다시 트리거한다.") from error
                     except (KisResultError, KisPayloadError) as error:
                         logger.warning("%s failed: %s", name, error)
-                        failures.append(name)
+                        failures.append(f"{name}({error})")
                         continue
                     except ConnectionError as error:
                         logger.warning("%s failed to connect: %s", name, error)
-                        failures.append(name)
+                        failures.append(f"{name}({error})")
                         continue
 
                     if not fetch.bars:
@@ -268,7 +273,7 @@ def kis_stock_minute_bars_daily():
                     logger.info("Stored %s bars for %s in %s calls", rows, name, fetch.call_count)
 
         if failures:
-            raise AirflowFailException(f"{len(failures)} KIS calls failed: {', '.join(failures)}")
+            raise AirflowFailException(f"{len(failures)} KIS calls failed: {'; '.join(failures)}")
 
         logger.info(
             "Stored %s stock bars ending %s across %s",

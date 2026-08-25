@@ -252,6 +252,25 @@ def test_the_observed_state_keeps_the_two_sessions_apart():
     assert "index" not in payload
 
 
+def test_a_flat_after_hours_stock_is_kept_not_dropped():
+    """보합(정확히 0)을 결측으로 취급하면 모델이 "애프터 데이터 없음"으로 읽는다."""
+    connection = FakeConnection(
+        [
+            WATCHED_ROWS,
+            [("KOSPI", 3150, 3125)],
+            [("005930", 281500)],
+            [],  # technical/select_history.sql
+            [],  # technical_signal/select_thesis_recent.sql · 000660
+            [],  # technical_signal/select_thesis_recent.sql · 005930
+            [_row("005930", return_pct="0")],
+        ]
+    )
+
+    state = NxtAfterHoursReview(connection, run_date=RUN_DATE).observed_state()
+
+    assert state.after_hours["005930"].return_pct == 0.0
+
+
 def test_a_stock_without_a_settled_close_is_left_out_not_zeroed():
     """등락률이 NULL이면 그 종목은 관측 상태에 없다. 0으로 꾸미지 않는다."""
     rows = [_row("005930", settled=None, return_pct=None)]

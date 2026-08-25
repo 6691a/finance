@@ -204,7 +204,11 @@ class NxtAfterHoursReview:
         return NxtObservedState(
             session=self._run_date,
             regular=regular.stock,
-            after_hours={bar.stock_code: self._after_hours_entry(bar) for bar in self.bars if bar.return_pct},
+            # `is not None`이다. `if bar.return_pct`로 두면 **보합(정확히 0)인 종목이 통째로
+            # 빠져** 모델이 그것을 '애프터마켓 데이터 없음'으로 읽는다.
+            after_hours={
+                bar.stock_code: self._after_hours_entry(bar) for bar in self.bars if bar.return_pct is not None
+            },
             index_regular=regular.index,
             technical=regular.technical,
         )

@@ -220,6 +220,23 @@ def test_change_is_computed_from_the_stored_previous_close():
     assert quotes["NIKKEI225"].change_percent < 0
 
 
+def test_a_zero_previous_close_is_unknown_not_flat():
+    """0.0%를 지어내면 표에서 보합과 구별되지 않는다. `-`로 찍혀야 한다."""
+    quote = market_data.QuoteChange(
+        provider="kis",
+        symbol="005930",
+        label="삼성전자",
+        kind="stock",
+        country="KR",
+        close=Decimal(70000),
+        previous_close=Decimal(0),
+        bar_at=datetime(2026, 8, 25, 6, 0, tzinfo=UTC),
+    )
+
+    assert quote.change_percent is None
+    assert market._percent(quote.change_percent) == "-"
+
+
 def test_the_quote_window_survives_a_long_holiday():
     """연휴 뒤 첫 실행에서도 직전 거래일 종가가 창에 들어와야 한다.
 

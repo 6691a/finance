@@ -50,9 +50,21 @@ KIS에는 종목 분봉 조회가 둘이다. 장중 조회(`FHKST03010200`)와 �
 - HTTP 400/403/404: 설정 오류라 즉시 실패한다.
 - 0봉은 정상이다. 휴장일이면 그렇게 온다.
 
+## NXT를 떼는 손잡이
+
+`KIS_ENABLE_NXT_REST=false`면 KRX만 받는다. NXT가 흔들릴 때 코드를 고치지 않고 그쪽만 떼기
+위한 것이다(분봉 문서 §3.3·§11.1). **기본은 켜짐이고** 모르는 값은 즉시 실패한다 — 오타가
+조용히 켜짐으로 읽히면 손잡이를 당겼다고 믿는 사람과 실제 동작이 갈린다. 판단은
+`modules.collectors.kis.rest_exchanges`가 한 벌로 갖는다.
+
+WebSocket 쪽 `KIS_ENABLE_NXT_WEBSOCKET`도 기본값과 허용 값이 같다. 두 손잡이가 다르게
+동작하면 한쪽을 끈 사람이 다른 쪽도 껐다고 믿는다. 판정은 트리가 달라 두 벌이고
+(`apps/realtime/main.py`), `tests/realtime/`이 그 둘을 대조한다.
+
 ## 필요한 환경
 
 - `KIS_APP_KEY`, `KIS_APP_SECRET`. Airflow가 읽는 건 `compose/local/airflow/.env`다.
+- `KIS_ENABLE_NXT_REST`(선택). 비우면 KRX·NXT 둘 다 받는다.
 - `CONNECTION_ID`가 가리키는 Airflow 연결. 접속 정보는 `AIRFLOW_CONN_FINANCE`가 갖는다.
 
 토큰은 다른 KIS DAG와 같은 Airflow Variable 캐시를 공유한다.
@@ -77,8 +89,8 @@ from modules.collectors.kis import (
     KisPayloadError,
     KisQuoteCollector,
     KisResultError,
-    StockExchange,
     access_token,
+    rest_exchanges,
 )
 from modules.sql import read_sql
 from modules.utility import CONNECTION_ID, KIS_UNRECOVERABLE_STATUSES, KST_TIMEZONE
@@ -203,6 +215,10 @@ def kis_stock_minute_bars_daily():
         days = requested_days(params)
 
         app_key, app_secret = _credentials()
+        try:
+            exchanges = rest_exchanges()
+        except ValueError as error:
+            raise AirflowFailException(str(error)) from error
         collector = KisQuoteCollector(access_token(Variable, app_key, app_secret), app_key, app_secret)
 
         stored = 0
@@ -221,8 +237,9 @@ def kis_stock_minute_bars_daily():
                     continue
 
                 # 같은 종목을 KRX 한 번, NXT 한 번 받는다. 통합(UN)은 두 거래소 체결이
-                # 섞여 쓰지 않는다. NXT 전일 기준가도 KRX 확정 종가다.
-                for exchange in StockExchange:
+                # 섞여 쓰지 않는다. NXT 전일 기준가도 KRX 확정 종가다. NXT는
+                # `KIS_ENABLE_NXT_REST`로 뗄 수 있다(rest_exchanges).
+                for exchange in exchanges:
                     name = f"{stock.value}:{exchange.value}:{target.isoformat()}"
 
                     try:
@@ -262,7 +279,12 @@ def kis_stock_minute_bars_daily():
         if failures:
             raise AirflowFailException(f"{len(failures)} KIS calls failed: {', '.join(failures)}")
 
-        logger.info("Stored %s stock bars ending %s", stored, business_date)
+        logger.info(
+            "Stored %s stock bars ending %s across %s",
+            stored,
+            business_date,
+            ", ".join(exchange.value for exchange in exchanges),
+        )
         return stored
 
     collect()

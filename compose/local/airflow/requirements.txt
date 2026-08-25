@@ -38,3 +38,7 @@ langsmith>=0.11.0
 # 환경에서 켜므로 이미지에는 반드시 들어가야 한다. 베이스 이미지에는 없다.
 # 버전은 위 규칙대로 constraints에 맡긴다.
 sentry-sdk
+# modules/briefing/chart.py: 브리핑 분봉 차트 PNG. 함수 안에서 import하므로 없어도
+# 브리핑은 표만으로 나가지만, 차트가 나가려면 이미지에 있어야 한다. 한글 라벨용
+# 폰트(fonts-nanum)는 Dockerfile의 apt가 설치한다. 버전 하한은 백엔드 dev 그룹과 맞춘다.
+matplotlib>=3.9

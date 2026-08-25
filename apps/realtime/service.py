@@ -156,7 +156,9 @@ class RealtimeSettings(BaseModel):
     app_secret: SecretStr
     rest_domain: str = "https://openapi.koreainvestment.com:9443"
     websocket_domain: str = "ws://ops.koreainvestment.com:21000"
-    enable_nxt: bool = False
+    # 기본은 켜짐이다. REST 쪽 `KIS_ENABLE_NXT_REST`와 방향을 맞춘다 — 한쪽만 기본이
+    # 꺼져 있으면 손잡이 하나를 켠 사람이 다른 쪽도 켰다고 믿는다.
+    enable_nxt: bool = True
     finalization_delay_seconds: float = 3.0
     heartbeat_path: Path = DEFAULT_HEARTBEAT_PATH
     db_alias: str = "default"

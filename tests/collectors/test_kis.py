@@ -40,6 +40,7 @@ from modules.collectors.kis import (
     front_contract,
     parse_bars,
     parse_market_movement,
+    rest_exchanges,
 )
 
 KST = ZoneInfo("Asia/Seoul")
@@ -200,6 +201,39 @@ def test_the_stock_bar_rest_upsert_confirms_finality():
     assert "'rest'" in STOCK_BAR_UPSERT
     assert "is_final = true" in STOCK_BAR_UPSERT
     assert "WHERE stock_bar.is_final" not in STOCK_BAR_UPSERT
+
+
+class TestRestExchanges:
+    """NXT REST 수집을 떼는 손잡이. WebSocket 쪽과 기본값 방향이 반대다."""
+
+    def test_an_unset_flag_collects_both_exchanges(self, monkeypatch):
+        """REST NXT는 이미 상시 수집 중이다. 기본을 끄면 손잡이를 넣는 것만으로 수집이 멈춘다."""
+        monkeypatch.delenv(kis.NXT_REST_FLAG, raising=False)
+
+        assert rest_exchanges() == (StockExchange.KRX, StockExchange.NXT)
+
+    @pytest.mark.parametrize("value", ["false", "FALSE", " 0 ", "no", "off"])
+    def test_a_falsey_flag_drops_nxt(self, monkeypatch, value):
+        monkeypatch.setenv(kis.NXT_REST_FLAG, value)
+
+        assert rest_exchanges() == (StockExchange.KRX,)
+
+    @pytest.mark.parametrize("value", ["true", "1", "yes", "on", ""])
+    def test_a_truthy_or_empty_flag_keeps_nxt(self, monkeypatch, value):
+        monkeypatch.setenv(kis.NXT_REST_FLAG, value)
+
+        assert rest_exchanges() == (StockExchange.KRX, StockExchange.NXT)
+
+    def test_an_unknown_value_fails_instead_of_defaulting(self, monkeypatch):
+        """`fasle`가 조용히 켜짐으로 읽히면 손잡이를 당겼다고 믿는 사람과 동작이 갈린다."""
+        monkeypatch.setenv(kis.NXT_REST_FLAG, "fasle")
+
+        with pytest.raises(ValueError, match=kis.NXT_REST_FLAG):
+            rest_exchanges()
+
+    def test_krx_cannot_be_dropped(self):
+        """수집을 통째로 멈추는 것은 손잡이가 아니라 DAG pause 다."""
+        assert StockExchange.KRX in rest_exchanges()
 
 
 def test_the_collector_exchanges_match_the_model_enum():

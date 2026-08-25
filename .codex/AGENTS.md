@@ -233,9 +233,18 @@ uv run ruff check apps airflow migrations tests
 이미 스무 개 DAG가 아래 세 형태 중 하나를 따른다. 새 DAG도 이 중 하나를 고른다.
 
 - **항목별 실패 수집** — 여러 항목을 한 태스크에서 돌 때. 항목 하나가 실패하면 원인을
-  `failures`에 모으고 계속한다. **마지막에 반드시 판정한다.** `dart_disclosure_intraday`,
-  `document_ingestion_hourly`는 전부 실패했을 때, `kis_*`와 `yahoo_*`는 하나라도 실패했을 때
-  태스크를 죽인다. 어느 쪽을 고르든 실패를 세고 이름을 메시지에 싣는다.
+  `failures`에 모으고 계속한다. **마지막에 반드시 판정한다.** 어느 쪽을 고르든 실패를 세고
+  **이름과 사유를 함께** 메시지에 싣는다(`failures.append(f"{name}({error})")`. 사유에 쉼표가
+  들어가므로 구분자는 `;`다).
+  - **다음 run이 곧 같은 창을 다시 보는 수집은 전부 실패했을 때만 죽인다.** 하나로 죽이면
+    경보만 늘고 고쳐지는 것은 없다. `kis_equity_bar_reconcile`(30분), `kis_quote_intraday`,
+    `yahoo_quote_daily`, `yahoo_quote_intraday`, `dart_disclosure_intraday`,
+    `document_ingestion_hourly`가 그렇다.
+  - **하루 한 번 도는 확정 수집은 하나라도 실패하면 죽인다.** 그날 값을 다시 집는 실행이
+    없다. `kis_index_daily`, `kis_investor_trade_daily`, `kis_stock_minute_bars_daily`,
+    `kis_analyst_opinion_daily`, `kis_market_positioning_daily`가 그렇다.
+  - **어느 쪽인지는 DAG가 정하고 그 근거를 모듈 docstring의 "실패와 재시도" 절에 남긴다.**
+    근거가 없으면 다음 사람이 규칙 위반으로 읽는다(2026-08-25에 실제로 그렇게 읽혔다).
 - **태스크 매핑** — 항목마다 태스크를 매핑한다(`.expand`). 실패가 곧 그 태스크의 실패라
   따로 판정할 것이 없고 재시도도 실패한 항목만 다시 돈다. `fred_*`, `ecos_*`가 그렇다.
 - **단일 요청** — 응답 하나가 결과 전부다. 수집기 예외를 그대로 올린다. `bbk`, `boe`,

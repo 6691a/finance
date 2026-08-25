@@ -10,7 +10,8 @@ LLM 요약은 없다 — 2026-08-19까지 붙였지만 표가 이미 말하는 �
 
 시작도 KRX 09:00이 아니라 NXT 프리마켓 08:00이다. 08:10(시작 10분 뒤)과 09:00(개장) 발송
 (`MarketScope.KOREA_PREOPEN`)이 프리마켓(08:00~08:50) 종목 시세·차트와 전일 확정치
-(증시자금·공매도·등락 종목 수)를 담는다. 08:00 미국장 리포트(`slack_us_market_briefing`)가
+(증시자금·공매도·등락 종목 수)를 담는다. 확정 일봉 차트는 그 장 경계를 따라 시작 직후(08:10)와
+마감 뒤(20:15) 두 번만 붙는다(`DAILY_CHART_SLOTS_KST`) — 값이 하루 한 번만 바뀌기 때문이다. 08:00 미국장 리포트(`slack_us_market_briefing`)가
 이미 보낸 섹션은 겹쳐서 뺀다. NXT에는 지수가 없어 프리마켓 값은 개별 종목뿐이다.
 
 ## 왜 미국장과 나뉘어 있나
@@ -24,7 +25,7 @@ LLM 요약은 없다 — 2026-08-19까지 붙였지만 표가 이미 말하는 �
 
 ## 실패를 어떻게 가르나
 
-- 당일 분봉 차트(matplotlib PNG → Slack 파일 업로드)가 실패해도 **리포트는 나간다.**
+- 차트(matplotlib PNG → Slack 파일 업로드)가 실패해도 **리포트는 나간다.**
   표가 본체이고 차트는 덧붙임이다. 대신 실패했다는 사실을 메시지에 남긴다. 조용히 빠지면
   차트가 원래 없는 리포트와 구분되지 않는다. 개장 전처럼 그릴 봉이 없으면 오류가 아니라
   생략이다.
@@ -78,6 +79,12 @@ SCHEDULE = MultipleCronTriggerTimetable(
     timezone=KST_TIMEZONE,
 )
 
+# 확정 일봉은 하루 한 번만 바뀌므로 매 발송에 붙이면 같은 그림이 열세 번 나간다. 장은 NXT를
+# 포함하므로 경계가 KRX 09:00~15:30이 아니라 프리마켓 08:00 시작과 애프터마켓 20:00 마감이고,
+# 그 직후 발송인 08:10과 20:15에만 싣는다. 20:15는 REST 확정 배치(20:05) 뒤라 하루 완결값이다.
+# `SCHEDULE`에 있는 시각이어야 한다 — 없으면 일봉이 영영 안 나간다.
+DAILY_CHART_SLOTS_KST = ((8, 10), (20, 15))
+
 
 def _connection() -> Any:
     # 반환 타입은 provider 버전에 따라 psycopg2/psycopg3 래퍼로 갈린다. 어느 쪽이든 PEP 249다.
@@ -102,6 +109,17 @@ def _scope(now: datetime) -> MarketScope:
     logical = get_current_context().get("logical_date") or now
     hour = logical.astimezone(KST_TIMEZONE).hour
     return MarketScope.KOREA_PREOPEN if hour < 10 else MarketScope.KOREA
+
+
+def _wants_daily_chart(now: datetime) -> bool:
+    """확정 일봉 차트를 실을 발송인가.
+
+    `_scope`와 같은 이유로 벽시계가 아니라 스케줄된 logical time을 본다. 재실행이 늦어져도
+    슬롯 판정이 바뀌지 않아야 한다. 슬롯에 안 걸리는 수동 실행은 당일 분봉만 싣는다.
+    """
+    logical = get_current_context().get("logical_date") or now
+    local = logical.astimezone(KST_TIMEZONE)
+    return (local.hour, local.minute) in DAILY_CHART_SLOTS_KST
 
 
 def _skip_when_closed(connection: Any, today_kst: pendulum.Date) -> None:
@@ -145,7 +163,7 @@ def slack_kr_market_briefing():
                 else market.SESSION_OPEN_HOUR_KST
             )
             chart_series = reader.chart_series(open_hour=open_hour)
-            daily_series = reader.daily_chart_series()
+            daily_series = reader.daily_chart_series() if _wants_daily_chart(now) else ()
         finally:
             connection.close()
 
@@ -168,7 +186,8 @@ def slack_kr_market_briefing():
     ) -> tuple[tuple[tuple[str, str], ...] | None, str | None]:
         """계열마다 차트 한 장을 그려 올린다. **실패해도 리포트를 막지 않는다.**
 
-        당일 분봉 뒤에 확정 일봉 보조지표 차트가 붙는다. 두 종류를 한 목록으로 올리는 이유는
+        당일 분봉은 매 발송에, 확정 일봉 보조지표 차트는 `DAILY_CHART_SLOTS_KST` 두 슬롯에만
+        붙는다. 두 종류를 한 목록으로 올리는 이유는
         실패 판정이 같기 때문이다 — 한 장이라도 실패하면 전부 버린다. 일부만 실린 차트는
         빠진 심볼이 안 보인다.
 

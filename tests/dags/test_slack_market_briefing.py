@@ -49,6 +49,29 @@ def test_preopen_scope_is_chosen_before_ten_kst(monkeypatch):
     assert slack_kr_market_briefing._scope(regular) is MarketScope.KOREA
 
 
+def test_daily_chart_rides_only_the_open_and_close_slots(monkeypatch):
+    """확정 일봉은 하루 한 번만 바뀌므로 매 발송에 붙이지 않는다. 장은 NXT를 포함하므로
+    프리마켓이 열린 뒤(08:10)와 애프터마켓이 닫힌 뒤(20:15)가 시작·마감 슬롯이다.
+    두 값은 발송 스케줄 안에 있어야 한다 — 없으면 일봉이 영영 안 나간다."""
+    from datetime import UTC, datetime
+
+    monkeypatch.setattr(slack_kr_market_briefing, "get_current_context", dict)
+
+    timetable = slack_kr_market_briefing.slack_kr_market_briefing.schedule
+    # 시각 범위(`0 10-19 * * 1-5`)가 섞여 있어 정수로 파싱하지 않고 분·시 칸을 글자로 맞춘다.
+    fields = {" ".join(part.strip().split(" ", 2)[:2]) for part in timetable.summary.split(",")}
+    assert {f"{minute} {hour}" for hour, minute in slack_kr_market_briefing.DAILY_CHART_SLOTS_KST} <= fields
+
+    premarket = datetime(2026, 8, 17, 23, 10, tzinfo=UTC)  # KST 08:10
+    aftermarket = datetime(2026, 8, 18, 11, 15, tzinfo=UTC)  # KST 20:15
+    opening = datetime(2026, 8, 18, 0, 0, tzinfo=UTC)  # KST 09:00
+    krx_close = datetime(2026, 8, 18, 6, 30, tzinfo=UTC)  # KST 15:30
+    assert slack_kr_market_briefing._wants_daily_chart(premarket)
+    assert slack_kr_market_briefing._wants_daily_chart(aftermarket)
+    assert not slack_kr_market_briefing._wants_daily_chart(opening)
+    assert not slack_kr_market_briefing._wants_daily_chart(krx_close)
+
+
 def test_us_briefing_runs_the_morning_after():
     """미국 정규장은 KST 밤이라 장중 알림이 없다. 화~토인 이유는 KST 월요일 아침에
     직전 미국 세션이 없기 때문이다."""

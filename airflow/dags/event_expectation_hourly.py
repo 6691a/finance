@@ -56,13 +56,17 @@ from airflow.providers.postgres.hooks.postgres import PostgresHook
 from airflow.sdk import Param, dag, get_current_context, task
 from pydantic import SecretStr
 
-from modules.expectation import (
+from modules.expectation_domain import (
     DEFAULT_BATCH_SIZE,
-    ExpectationExtractor,
-    ExpectationStore,
     ExtractionError,
-    JudgedOutcome,
+)
+from modules.expectation_extraction import (
+    ExpectationExtractor,
     filter_claims,
+)
+from modules.expectation_judgment import (
+    ExpectationStore,
+    JudgedOutcome,
     render_blocks,
     render_text,
 )

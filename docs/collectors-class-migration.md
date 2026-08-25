@@ -132,7 +132,7 @@ airflow/modules/collectors/
 | `modules/thesis_common.py` | `conn` 7(저장소 최다), `run_date` 3, `as_of_at` 3. `build_and_store` 인자 9 | `ThesisRun(connection, run_date, as_of_at)` — 반복 0, `build_and_store` 인자 6 |
 | `modules/thesis_forecast.py` | `conn` 2, `run_date` 2 | `PreOpenForecast(connection, run_date)` — 반복 0 |
 | `modules/thesis_review.py` | `conn` 2, `run_date` 3 | `PostCloseReview(connection, run_date)` — `run_date` 2(순수 시각 계산 둘) |
-| `modules/expectation.py` | `connection` 3, `dag_run_id` 2, `prompt_version` 2 | `ExpectationStore(connection, prompt_version)` — `connection` 0 |
+| `modules/expectation.py` | `connection` 3, `dag_run_id` 2, `prompt_version` 2 | `ExpectationStore(connection, prompt_version)` — `connection` 0. 파일은 2026-08-25에 `expectation_domain`·`expectation_extraction`·`expectation_judgment`로 갈렸다 |
 | `modules/assessment.py` | `connection` 3, `prompt_revision` 2. `store_assessment` 인자 8 | `AssessmentStore(connection, prompt_revision)` — 반복 0, `store` 인자 6 |
 | `modules/briefing/market.py` | `connection` 6, `now` 5 | `MarketBriefingReader(connection, now)`(2026-08-24 선행) |
 | `modules/briefing/ops.py` | `now` 4, `connection` 1 | `OpsBriefingReader(connection, now)` — `now` 2(렌더러) |

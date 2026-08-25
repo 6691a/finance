@@ -87,6 +87,21 @@ def test_days_below_one_fail():
         kis_stock_minute_bars_daily.requested_days({"days": 0})
 
 
+def test_days_above_the_cap_fail():
+    """`max_active_runs=1`이라 긴 백필 run 하나가 그날 마감 확정 run을 직접 점유한다."""
+    with pytest.raises(AirflowFailException, match="at most 31"):
+        kis_stock_minute_bars_daily.requested_days({"days": kis_stock_minute_bars_daily.MAX_DAYS + 1})
+
+
+def test_the_cap_is_also_on_the_param():
+    """UI 트리거는 태스크에 닿기 전에 막는다. 태스크 검사는 그 밖의 경로를 위한 것이다."""
+    # ParamsDict의 `[]`는 해석된 값을 준다. Param 객체 자체는 `get_param`이 준다.
+    param = kis_stock_minute_bars_daily.kis_stock_minute_bars_daily.params.get_param("days")
+
+    assert param.schema["maximum"] == kis_stock_minute_bars_daily.MAX_DAYS
+    assert param.schema["minimum"] == 1
+
+
 def test_the_previous_close_is_read_for_the_day_before():
     """그날 종가를 분모로 쓰면 변동률이 항상 0에 가깝게 나온다."""
     connection = FakeConnection((Decimal(268000),))

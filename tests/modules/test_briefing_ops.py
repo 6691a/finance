@@ -135,6 +135,35 @@ def test_a_healthy_report_is_still_sent_as_a_heartbeat():
     assert "모든 수집 정상" in text
 
 
+def test_the_activity_table_shows_how_long_a_source_has_been_quiet():
+    """무소식 섹션은 창 안에 한 번도 안 돈 소스만 잡는다. 20시간째 조용한 소스는 이 열이 잡는다."""
+    stale = TUESDAY - timedelta(hours=20)
+    rows = [(source.name, 4, 4, 0, 120, stale) for source in ops.EXPECTED_SOURCES]
+
+    table = _activity_table(ops.render_blocks(summary(rows)))
+
+    assert table["rows"][0][-1]["text"] == "마지막"
+    assert all(row[-1]["text"] == "20h" for row in table["rows"][1:])
+
+
+def test_a_source_without_a_finished_run_shows_a_dash():
+    """실행은 있는데 완료가 없으면 0시간이 아니다. 숫자를 지어내지 않는다."""
+    rows = [(source.name, 1, 0, 0, 0, None) for source in ops.EXPECTED_SOURCES]
+
+    table = _activity_table(ops.render_blocks(summary(rows)))
+
+    assert all(row[-1]["text"] == "-" for row in table["rows"][1:])
+
+
+def test_every_activity_row_has_the_same_width_as_the_header():
+    rows = [*HEALTHY_ROWS, ("yonhap", 12, 12, 0, 40, TUESDAY)]
+
+    table = _activity_table(ops.render_blocks(summary(rows)))
+
+    assert len({len(row) for row in table["rows"]}) == 1
+    assert len(table["rows"][0]) == 5
+
+
 def test_unknown_sources_are_folded_into_one_row():
     """문서 피드는 DB 테이블이 정하고 수십 개다. 하나씩 그리면 표가 화면을 넘는다."""
     rows = [*HEALTHY_ROWS, ("yonhap", 12, 12, 0, 40, TUESDAY), ("hankyung", 12, 12, 0, 30, TUESDAY)]
@@ -251,3 +280,8 @@ def test_queries_name_columns_that_exist(statement: str, table: Table, columns: 
 
 def _block_text(blocks) -> str:
     return json.dumps(blocks, ensure_ascii=False)
+
+
+def _activity_table(blocks) -> dict:
+    """수집 현황 표 블록. 렌더에는 추론 지평 표도 있어 첫 table 만 집는다."""
+    return next(block for block in blocks if block.get("type") == "table")

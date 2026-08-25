@@ -1,6 +1,6 @@
 """DAG 객체 자체를 봐야만 알 수 있는 것과, 태스크의 실패 판정만 본다.
 
-추출·판정 규칙은 `modules/expectation.py`에 있고 `tests/modules/test_expectation.py`가 덮는다.
+추출·판정 규칙은 `modules/expectation_*.py` 셋에 있고 `tests/modules/test_expectation.py`가 덮는다.
 """
 
 from datetime import UTC, datetime, timedelta
@@ -9,7 +9,9 @@ import pytest
 from airflow.exceptions import AirflowFailException
 
 from dags import event_expectation_hourly as module
-from modules.expectation import ExtractionError, ExtractionResponse, JudgedOutcome, PendingExtractionDocument
+from modules.expectation_domain import ExtractionError, PendingExtractionDocument
+from modules.expectation_extraction import ExtractionResponse
+from modules.expectation_judgment import JudgedOutcome
 from modules.llm import LlmError, RetryableLlmError
 
 DOCUMENT = PendingExtractionDocument(

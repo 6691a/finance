@@ -29,37 +29,41 @@ from apps.models.analysis import (
     SurpriseVerdict,
 )
 from apps.models.market import EarningsMetric
-from modules.expectation import (
-    CLAIM_INSERT,
+from modules.expectation_domain import (
     CLAIM_KINDS,
     EVENT_METRICS,
     EVENT_TYPES,
-    EXTRACTION_UPSERT,
     MEET_BAND_PCT,
-    OUTCOME_INSERT,
-    PENDING_EXTRACTION,
     PROMPT_VERSION,
     ClaimRow,
     EarningsFactRow,
-    ExpectationExtractor,
-    ExpectationStore,
     ExtractionError,
-    ExtractionResponse,
     PendingExtractionDocument,
     aggregate_expectations,
     amount_basis_for,
     classify_surprise,
-    filter_claims,
     format_krw,
     normalize_amount,
     period_end_for,
-    render_blocks,
-    render_text,
     resolve_actual,
     resolve_earnings_actual,
 )
-from modules.expectation import (
+from modules.expectation_domain import (
     PERIOD_KEY_PATTERN as MODULE_PERIOD_KEY_PATTERN,
+)
+from modules.expectation_extraction import (
+    ExpectationExtractor,
+    ExtractionResponse,
+    filter_claims,
+)
+from modules.expectation_judgment import (
+    CLAIM_INSERT,
+    EXTRACTION_UPSERT,
+    OUTCOME_INSERT,
+    PENDING_EXTRACTION,
+    ExpectationStore,
+    render_blocks,
+    render_text,
 )
 from modules.llm import UnsupportedResponseFormat
 
@@ -242,7 +246,7 @@ def test_the_earnings_metrics_match_the_earnings_fact_table():
 
 
 def test_the_verdict_values_match_the_backend_enum():
-    from modules.expectation import VERDICT_LABELS
+    from modules.expectation_domain import VERDICT_LABELS
 
     assert set(VERDICT_LABELS) == {member.value for member in SurpriseVerdict}
 

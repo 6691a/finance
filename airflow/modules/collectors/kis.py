@@ -787,6 +787,19 @@ class StockBarFetch(BaseModel):
     completed_at: AwareDatetime
 
 
+def _forming_minute(until: datetime | None, business_date: date) -> time | None:
+    """`until`이 그 거래일 안이면 아직 완결되지 않은 분. 아니면 `None`.
+
+    다른 날짜를 백필하면서 오늘 시각을 넘겨도 창이 잘리지 않게 날짜를 먼저 본다.
+    """
+    if until is None:
+        return None
+    moment = until.astimezone(KST)
+    if moment.date() != business_date:
+        return None
+    return moment.replace(second=0, microsecond=0).time()
+
+
 def _stock_bar_rows(body: bytes) -> tuple[KisRawBar, ...]:
     try:
         payload = KisChartPayload.model_validate_json(body)
@@ -868,7 +881,24 @@ INDEX_BAR_UPSERT = read_sql("postgres", "index_bar", "upsert.sql")
 INDEX_FUTURE_BAR_UPSERT = read_sql("postgres", "index_future_bar", "upsert.sql")
 STOCK_BAR_UPSERT = read_sql("postgres", "stock_bar", "upsert.sql")
 MARKET_MOVEMENT_UPSERT = read_sql("postgres", "market_movement_snapshot", "upsert.sql")
+PREVIOUS_CLOSE_SELECT = read_sql("postgres", "stock_investor_trade_daily", "select_previous_close.sql")
 INDEX_DAILY_UPSERT = read_sql("postgres", "index_daily", "upsert.sql")
+
+
+def last_settled_close(connection: Connection, stock_code: str, business_date: date) -> Decimal | None:
+    """그 거래일 직전에 우리가 확정한 종가. 없으면 `None`.
+
+    `stock_bar.previous_close`가 NOT NULL이라 분봉을 저장하려면 이 값이 필요한데, 분봉 응답의
+    `output1`은 요청한 날짜와 무관하게 **지금 시세**를 담는다(실측). 그래서 KIS가 아니라
+    `stock_investor_trade_daily`에서 읽는다. `kis_investor_trade_daily`가 먼저 돌아야 한다.
+
+    마감 확정 DAG와 장중 조정 태스크가 같은 값을 읽으므로 여기 한 벌만 둔다.
+    """
+    with connection.cursor() as cursor:
+        cursor.execute(PREVIOUS_CLOSE_SELECT, (stock_code, business_date))
+        row = cursor.fetchone()
+    return Decimal(str(row[0])) if row else None
+
 
 # 지수 일봉(국내주식업종기간별시세). 기술지표 계산의 원천이다
 # (docs/market-technical-indicators.md 4절).
@@ -1116,6 +1146,8 @@ class KisQuoteCollector:
         business_date: date,
         previous_close: Decimal,
         exchange: StockExchange = StockExchange.KRX,
+        until: datetime | None = None,
+        max_calls: int | None = None,
     ) -> StockBarFetch:
         """한 종목의 하루치 정규장 1분봉을 받는다.
 
@@ -1135,14 +1167,25 @@ class KisQuoteCollector:
         15:32에 찍혀 31%가 빈다. 그 15:32 행은 같은 값(11,196,308주)이 다른 날짜 응답에도
         나와서 믿을 수 없다. 그래서 정규장 밖은 그대로 버리고 **봉 합이 누적 거래량과 맞는다고
         약속하지 않는다.** 지어낸 봉을 넣는 것보다 빈 쪽이 낫다.
+
+        **`until`은 장 마감 전에 부를 때 준다.** 그 시각의 분부터는 아직 체결이 더 붙으므로
+        저장하지 않고, 커서도 마감이 아니라 그 분에서 시작한다. REST upsert가 `is_final=true`로
+        굳히기 때문에 진행 중인 분을 넣으면 부분 봉이 확정으로 남는다. 마감 뒤에 도는 확정
+        수집은 `until` 없이 불러 창이 그대로 마감까지다.
+
+        **`max_calls`는 최근 구간만 볼 때 준다.** 5분마다 도는 조정이 하루치를 매번 다시 받으면
+        호출이 열 배가 넘는다. 한 응답이 120봉이라 한 호출이면 최근 두 시간을 덮고, 그보다
+        오래된 구멍은 마감 뒤 확정 수집이 메운다. 거래소별 안전장치를 넘기지는 못한다.
         """
         started_at = datetime.now(UTC)
         stamp = business_date.strftime("%Y%m%d")
-        cursor = exchange.last_bar
+        forming = _forming_minute(until, business_date)
+        cursor = exchange.last_bar if forming is None else min(exchange.last_bar, forming)
+        allowed_calls = exchange.max_calls if max_calls is None else min(max_calls, exchange.max_calls)
         seen: dict[time, QuoteBar] = {}
         calls = 0
 
-        while calls < exchange.max_calls:
+        while calls < allowed_calls:
             body, _, _ = send_get(
                 self._token,
                 self._app_key,
@@ -1172,6 +1215,8 @@ class KisQuoteCollector:
             for row in same_day:
                 moment = _bar_time(row)
                 if not (exchange.first_bar <= moment <= exchange.last_bar):
+                    continue
+                if forming is not None and moment >= forming:
                     continue
                 seen[moment] = _stock_bar(row, business_date, moment, previous_close)
 

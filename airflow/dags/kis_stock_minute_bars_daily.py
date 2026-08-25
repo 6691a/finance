@@ -74,7 +74,6 @@ import logging
 import os
 import re
 from datetime import UTC, date, datetime, timedelta
-from decimal import Decimal
 from typing import Any
 
 import pendulum
@@ -90,9 +89,9 @@ from modules.collectors.kis import (
     KisQuoteCollector,
     KisResultError,
     access_token,
+    last_settled_close,
     rest_exchanges,
 )
-from modules.sql import read_sql
 from modules.utility import CONNECTION_ID, KIS_UNRECOVERABLE_STATUSES, KST_TIMEZONE
 
 logger = logging.getLogger(__name__)
@@ -107,8 +106,6 @@ DAYS_PARAM = "days"
 # 이 DAG는 `max_active_runs=1`이라 긴 백필 run이 그날 마감 확정 run을 직접 점유한다. 상한이
 # 없으면 `days` 오타 하나(3650)가 정규 확정을 며칠 멈춘다. 더 넓은 구간은 run을 나눈다.
 MAX_DAYS = 31
-
-PREVIOUS_CLOSE_SELECT = read_sql("postgres", "stock_investor_trade_daily", "select_previous_close.sql")
 
 
 def _credentials() -> tuple[SecretStr, SecretStr]:
@@ -159,14 +156,6 @@ def requested_days(params: dict[str, Any]) -> int:
     if days > MAX_DAYS:
         raise AirflowFailException(f"{DAYS_PARAM} must be at most {MAX_DAYS}, got {days}")
     return days
-
-
-def previous_close(connection: Any, stock_code: str, business_date: date) -> Decimal | None:
-    """직전 거래일 종가. 없으면 `None`."""
-    with connection.cursor() as cursor:
-        cursor.execute(PREVIOUS_CLOSE_SELECT, (stock_code, business_date))
-        row = cursor.fetchone()
-    return Decimal(str(row[0])) if row else None
 
 
 @dag(
@@ -228,7 +217,7 @@ def kis_stock_minute_bars_daily():
             for stock in DomesticStock:
                 connection = _connection()
                 try:
-                    base = previous_close(connection, stock.value, target)
+                    base = last_settled_close(connection, stock.value, target)
                 finally:
                     connection.close()
                 if base is None:

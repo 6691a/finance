@@ -850,12 +850,6 @@ INDEX_DAILY_CONTINUE_FLAGS = frozenset({"M", "F"})
 INDEX_DAILY_MAX_PAGES = 10
 # 페이지 사이 대기. 달력 수집기의 PAGE_DELAY_SECONDS와 같은 이유다.
 INDEX_DAILY_PAGE_DELAY_SECONDS = 0.5
-# 한 응답에 오는 최대 봉 수(2026-08-24 실측: 200달력일을 요청해도 tr_cont 없이 50봉만 온다).
-# **응답이 이만큼 가득 찼는데 tr_cont가 없으면 조용히 잘린 것이다** — 확정 수급 일별 API가
-# 그 행태다(연속조회 없이 30거래일로 잘림, kis_investor_flow 실측). 그때는 가장 오래된 날짜
-# 하루 전으로 창을 옮겨 다시 받는다. 짧은 응답은 구간을 다 준 것이므로 걷지 않는다.
-# 이 값이 실제보다 크면 잘림을 못 알아채고 조용히 짧은 구간만 저장한다.
-INDEX_DAILY_FULL_PAGE_ROWS = 50
 
 
 class KisDailyIndexRow(BaseModel):
@@ -1427,9 +1421,16 @@ class KisQuoteCollector:
         """한 지수의 확정 일봉을 구간으로 받는다.
 
         페이지 이어받기는 두 행태를 다 다룬다(문서 4.1절). 응답 헤더 `tr_cont`가 `M`/`F`면
-        같은 구간을 `N`으로 다시 묻고, 헤더 없이 가득 찬 응답이 오면 가장 오래된 날짜 하루
-        전으로 창을 옮긴다. 마지막 장까지 받고도 남았으면 부분 저장 대신 실패시킨다 —
-        잘린 구간은 지표 계산 창에 구멍을 남긴다.
+        같은 구간을 `N`으로 다시 묻고, 헤더 없이 **구간의 시작에 못 닿은** 응답이 오면 가장
+        오래된 날짜 하루 전으로 창을 옮긴다. 마지막 장까지 받고도 남았으면 부분 저장 대신
+        실패시킨다 — 잘린 구간은 지표 계산 창에 구멍을 남긴다.
+
+        **잘림 판정에 행 수를 세지 않는다.** 확정 수급 일별 API처럼 KIS는 연속조회 표식
+        없이 응답을 자르는데, 한 장의 상한은 문서에 없고 제공처가 바꿔도 알려 주지 않는다.
+        그 상한을 상수로 들고 있다가 실제보다 크게 적어 두면 잘린 응답을 "구간을 다 줬다"로
+        읽는다(2026-08-24: 100봉으로 가정, 실제 50봉, 지수 일봉이 50봉에 묶임). 요청한
+        구간의 시작에 닿았는지로 판정하면 상한을 몰라도 된다. 이력이 구간보다 짧은
+        심볼에서 빈 응답 한 번을 더 받는 것이 그 대가다.
         """
         started_at = datetime.now(UTC)
         seen: dict[date, DailyIndexBar] = {}
@@ -1471,9 +1472,10 @@ class KisQuoteCollector:
             if not rows:
                 break
             oldest = min(seen)
-            if len(rows) < INDEX_DAILY_FULL_PAGE_ROWS or oldest <= start_date:
+            if oldest <= start_date:
                 break
-            # 가득 찼는데 이어받기 표식이 없다 — 조용히 잘린 응답이다. 창을 뒤로 옮긴다.
+            # 구간의 시작에 못 닿았는데 이어받기 표식이 없다 — 조용히 잘린 응답이다.
+            # 창을 뒤로 옮긴다. 요청 구간의 시작은 그대로 두므로 제공처가 거기서 멈춰 준다.
             window_end = oldest - timedelta(days=1)
             tr_cont = ""
             wait_seconds(sleep)

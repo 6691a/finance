@@ -54,7 +54,7 @@ from modules.collectors.kis import (
     SOURCE,
     Connection,
     KisPayloadError,
-    KisResultError,
+    result_error,
     send_get,
 )
 from modules.sql import read_sql
@@ -476,7 +476,7 @@ class KisPositioningCollector:
 
         code = str(payload.get("rt_cd", ""))
         if code != "0":
-            raise KisResultError(code, str(payload.get("msg1", "")).strip())
+            raise result_error(code, str(payload.get("msg1", "")).strip())
         return payload
 
     def fetch_credit_balance(

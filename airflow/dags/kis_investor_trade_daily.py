@@ -28,6 +28,13 @@
 | `end_date` | `null` | 구간의 끝(YYYY-MM-DD). 비우면 실행일(KST) |
 | `pages` | `1` | 30 거래일씩 몇 구간을 뒤로 걸을지 |
 
+## 조회 가능 시각
+
+**이 엔드포인트는 KST 15:40 이전에는 응답하지 않는다.** 그 전에 부르면 `rt_cd=2`에
+`TIME LIMIT 00:00 ~ 15:40`이 온다(2026-08-25 실측). 보는 것은 조회 날짜가 아니라 **호출
+시각**이라 `end_date`를 과거로 줘도 마찬가지다. 스케줄이 18:10인 이유이고, 백필도 15:40
+이후에 트리거해야 한다. 이 응답은 `KisTimeWindowError`로 갈라져 재시도 없이 즉시 실패한다.
+
 ## 실패와 재시도
 
 - **한 종목이 실패해도 다른 종목은 저장한다.** 호출 하나가 트랜잭션 하나다.
@@ -60,6 +67,7 @@ from modules.collectors.kis import (
     KisHTTPError,
     KisPayloadError,
     KisResultError,
+    KisTimeWindowError,
     access_token,
 )
 from modules.collectors.market.kis_investor_flow import (
@@ -191,6 +199,13 @@ def kis_investor_trade_daily():
                         logger.warning("%s failed with HTTP %s", name, error.status)
                         failures.append(name)
                         break
+                    except KisTimeWindowError as error:
+                        # 조회를 받아 주지 않는 시각이다. 재시도는 같은 답을 받으며 예산만
+                        # 태운다. 사람이 시각을 맞춰 다시 트리거해야 하므로 즉시 죽인다.
+                        raise AirflowFailException(
+                            f"{name}: {error}. 이 조회는 KST 15:40 이후에만 응답한다 — "
+                            "그 뒤에 다시 트리거한다(조회 날짜가 아니라 호출 시각 제한이다)."
+                        ) from error
                     except (KisResultError, KisPayloadError) as error:
                         logger.warning("%s failed: %s", name, error)
                         failures.append(name)

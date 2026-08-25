@@ -48,6 +48,7 @@ from collections.abc import Mapping, Sequence
 from datetime import UTC, date, datetime, time, timedelta
 from decimal import Decimal, InvalidOperation
 from enum import StrEnum
+from os import environ
 from time import sleep as wait_seconds
 from typing import Any, Protocol, Self
 from urllib.error import HTTPError, URLError
@@ -232,6 +233,35 @@ class StockExchange(StrEnum):
     @property
     def max_calls(self) -> int:
         return MAX_STOCK_BAR_CALLS if self is StockExchange.KRX else MAX_NXT_STOCK_BAR_CALLS
+
+
+# NXT REST 수집을 끄는 손잡이. 값은 DAG가 아니라 여기서 읽는다 — 두 DAG가 같은 판단을 하고
+# 한쪽만 고치는 일이 없어야 한다(`modules/sql.py`가 AIRFLOW_HOME을 읽는 것과 같은 자리다).
+NXT_REST_FLAG = "KIS_ENABLE_NXT_REST"
+FLAG_ON_VALUES = frozenset({"1", "true", "yes", "on"})
+FLAG_OFF_VALUES = frozenset({"0", "false", "no", "off"})
+
+
+def rest_exchanges() -> tuple[StockExchange, ...]:
+    """REST로 종목 봉을 받을 거래소. `KIS_ENABLE_NXT_REST`가 꺼져 있으면 KRX만.
+
+    NXT가 흔들릴 때 **코드를 고치지 않고 NXT만 떼기 위한 손잡이다**(분봉 문서 §3.3·§11.1).
+    KRX는 끌 수 없다 — 그건 이 수집을 통째로 멈추는 것이고 그때는 DAG를 pause 한다.
+
+    **기본은 켜짐이다.** WebSocket 쪽 `KIS_ENABLE_NXT_WEBSOCKET`은 반대로 기본이 꺼짐인데,
+    그쪽은 처음부터 opt-in이었고 REST NXT는 이미 상시 수집 중이다. 여기서 기본을 끄면 이
+    변경만으로 NXT 수집이 조용히 멈춘다.
+
+    **모르는 값은 실패시킨다.** `KIS_ENABLE_NXT_REST=fasle`가 조용히 켜짐으로 읽히면 손잡이를
+    당겼다고 믿는 사람과 실제 동작이 갈린다. 재시도해도 같은 답이라 부르는 DAG가
+    `AirflowFailException`으로 바꾼다.
+    """
+    raw = (environ.get(NXT_REST_FLAG) or "").strip().lower()
+    if not raw or raw in FLAG_ON_VALUES:
+        return tuple(StockExchange)
+    if raw in FLAG_OFF_VALUES:
+        return (StockExchange.KRX,)
+    raise ValueError(f"{NXT_REST_FLAG} must be one of {sorted(FLAG_ON_VALUES | FLAG_OFF_VALUES)}, got {raw!r}")
 
 
 class DomesticStock(StrEnum):

@@ -1,33 +1,11 @@
-import importlib
-import pkgutil
 from datetime import date
 
 from sqlalchemy import BigInteger, UniqueConstraint
 from sqlalchemy import Enum as SqlEnum
 
+from tests.helpers import models_defined_in
+
 # --- 등록 경로 (2026-08-25 패키지 분리) ---------------------------------------
-
-
-def _models_defined_in_the_package() -> dict[str, type]:
-    """`apps/models/market/` 하위 모듈이 정의한 테이블 모델 전부.
-
-    하위 모듈을 훑어서 찾는다. `__init__.py`의 목록을 읽으면 그 목록이 틀린 것을 못 잡는다.
-    """
-    import apps.models.market as package
-    from apps.core.database import EntityBase
-
-    found: dict[str, type] = {}
-    for info in pkgutil.iter_modules(package.__path__):
-        module = importlib.import_module(f"{package.__name__}.{info.name}")
-        for name, value in vars(module).items():
-            if (
-                isinstance(value, type)
-                and issubclass(value, EntityBase)
-                and value is not EntityBase
-                and value.__module__ == module.__name__
-            ):
-                found[name] = value
-    return found
 
 
 def test_every_model_in_the_package_is_re_exported():
@@ -40,7 +18,7 @@ def test_every_model_in_the_package_is_re_exported():
     """
     import apps.models.market as package
 
-    defined = _models_defined_in_the_package()
+    defined = models_defined_in(package)
 
     assert defined, "하위 모듈에서 모델을 하나도 못 찾았다. 훑는 방식이 깨졌다"
     missing = sorted(name for name in defined if name not in package.__all__)
@@ -50,9 +28,10 @@ def test_every_model_in_the_package_is_re_exported():
 
 def test_every_model_in_the_package_reaches_the_metadata():
     """재수출까지 됐어도 metadata에 실제로 들어갔는지는 따로 본다."""
+    import apps.models.market as package
     from apps.core.database import Base
 
-    for name, model in _models_defined_in_the_package().items():
+    for name, model in models_defined_in(package).items():
         assert model.__tablename__ in Base.metadata.tables, f"{name}이 metadata에 없다"
 
 

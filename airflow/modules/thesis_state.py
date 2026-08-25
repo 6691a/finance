@@ -27,7 +27,7 @@ class RunSlot(StrEnum):
     감쌀 의존성이 없는 값이라 방화벽 쪽에 두면 셋 다 그대로 본다. `thesis.py`가 재수출하므로
     부르는 쪽은 전과 같다.
 
-    값은 `apps/models/analysis.py`의 같은 이름 enum과 같아야 한다.
+    값은 `apps/models/analysis/thesis.py`의 같은 이름 enum과 같아야 한다.
     `tests/models/test_analysis_models.py`가 대조한다.
     """
 

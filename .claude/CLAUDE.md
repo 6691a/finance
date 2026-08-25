@@ -19,9 +19,10 @@ Codex용 규칙 원본은 [.codex/AGENTS.md](../.codex/AGENTS.md)이며 두 문�
 | `../airflow/modules/collectors/` | 수집기. 도메인 폴더(`market/`·`document/`·`indicator/`·`calendar/`·`analyst/`)로 나눈다. 전환 진행 상황은 [docs/collectors-class-migration.md](../docs/collectors-class-migration.md) |
 | `tests/` | pytest |
 
-`apps/models/`의 모듈은 도메인 단위로 나눈다(`raw.py`, `reference.py`, `content.py`,
-`analysis.py`). 한 도메인이 커지면 그 안에서 다시 패키지로 나눈다 — `market/`이
-`sessions.py`·`series.py`·`fundamentals.py`·`positioning.py`·`investor_flow.py`다(2026-08-25).
+`apps/models/`의 모듈은 도메인 단위로 나눈다(`raw.py`, `reference.py`, `content.py`).
+한 도메인이 커지면 그 안에서 다시 패키지로 나눈다(2026-08-25) — `market/`이
+`sessions.py`·`series.py`·`fundamentals.py`·`positioning.py`·`investor_flow.py`,
+`analysis/`가 `thesis.py`·`events.py`·`technical.py`다.
 테이블은 스키마를 지정하지 않고 연결의 `search_path`(PostgreSQL 기본 `public`)를 그대로 따르므로
 파일 이름이 PostgreSQL 스키마와 대응하지 않는다.
 

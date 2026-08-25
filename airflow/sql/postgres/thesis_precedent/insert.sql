@@ -6,7 +6,7 @@
 -- `thesis_evidence`가 아니다. 근거는 모델이 **인용한** 것이고 이것은 우리가 **보여 준**
 -- 것이다. 순서(rank)도 없다 — 순서는 precedent의 run_date가 말한다.
 --
--- 정의의 원본은 `apps/models/analysis.py`의 `ThesisPrecedent`이고
+-- 정의의 원본은 `apps/models/analysis/thesis.py`의 `ThesisPrecedent`이고
 -- `tests/modules/test_thesis.py`가 여기 컬럼을 그 모델 metadata와 대조한다.
 INSERT INTO thesis_precedent (thesis_id, precedent_id)
 VALUES (%s, %s)

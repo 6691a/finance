@@ -12,7 +12,6 @@ docs/*
 !docs/document-assessment-workflow.md
 !docs/us-macro-indicators.md
 !docs/slack-report-design.md
-!docs/llm-briefing-roadmap.md
 !docs/market-thesis/
 !docs/collection-map.html
 !docs/collectors-class-migration.md

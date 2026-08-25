@@ -11,7 +11,8 @@ KIS 수집 계약이다. 수급·포지션의 감시 종목은 삼성전자(`005
 | DAG | 스케줄(KST) | 저장 대상 |
 | --- | --- | --- |
 | `market_calendar_daily` | 매일 07:00 | `market_session` |
-| `kis_investor_flow_intraday` | 평일 09:00~15:55, 5분마다 | `market_investor_flow_snapshot`, `stock_investor_estimate_snapshot` |
+| `kis_investor_flow_intraday` | 평일 09:00~15:55, 5분마다 | `market_investor_flow_snapshot` |
+| `kis_investor_estimate_intraday` | 평일 09:35·10:05·11:25·13:25·14:35 | `stock_investor_estimate_snapshot` |
 | `kis_investor_trade_daily` | 평일 18:10 | `stock_investor_trade_daily` |
 | `kis_market_positioning_daily` | 화~토 08:10 | `krx_*` 수급·포지션 6개 테이블 |
 
@@ -44,9 +45,15 @@ KIS 표기를 환산하지 않는다. 관측 시각은 응답에 없으므로 �
 
 ### 종목 추정 수급
 
-API는 `investor-trend-estimate`(`HHPTJ04160200`)이고 기본 호출 시각은 09:35, 10:05,
-11:25, 13:25, 14:35다. KIS가 하루 몇 번만 갱신하므로 매 5분 호출하지 않는다. 수동 실행은
-`include_stock_estimates=true|false`로 덮을 수 있다.
+`kis_investor_estimate_intraday`가 따로 받는다. API는 `investor-trend-estimate`
+(`HHPTJ04160200`)이고 호출 시각은 09:35, 10:05, 11:25, 13:25, 14:35다. KIS가 하루 몇 번만
+갱신하므로 매 5분 호출하지 않는다.
+
+**시장 누적과 한 DAG 가 아니다**(2026-08-25에 가름). 전에는 한 DAG 가 벽시계로 "지금이 갱신
+시각인가"를 판단해서, 갱신 시각이 아닐 때 UI 의 Trigger 를 누르면 추정이 조용히 빠진 채
+태스크가 성공했다. 두 조회는 실패 판정도 반대다 — 시장 누적은 값이 전부 0이면 시장 코드
+오류라 실패시키고, 종목 추정은 0행이 갱신 전이라 정상이다. 놓쳤을 때도 다르다. 시장 누적은
+5분 뒤 run 이 같은 누적값을 싣지만 종목 추정은 다음 슬롯이 한두 시간 뒤라 재시도를 더 준다.
 
 외국인·기관 추정 순매수를 `stock_investor_estimate_snapshot`에 저장한다. 자연키는
 `(provider, stock_code, business_date, source_time_code)`다. 제공처 슬롯 코드가 실제 값의

@@ -56,6 +56,7 @@ from modules.collectors.kis import (
     KisHTTPError,
     KisPayloadError,
     KisResultError,
+    KisTimeWindowError,
     access_token,
 )
 from modules.collectors.market.kis_quote import (
@@ -160,15 +161,19 @@ def kis_index_daily():
                     if error.status in KIS_UNRECOVERABLE_STATUSES:
                         raise AirflowFailException(f"{index.value}: {error}") from error
                     logger.warning("%s failed with HTTP %s", index.value, error.status)
-                    failures.append(index.value)
+                    failures.append(f"{index.value}({error})")
                     continue
+                except KisTimeWindowError as error:
+                    # 제공처가 지금은 이 조회를 받지 않는다(응답 본문이 창을 말해 준다). 재시도는 같은
+                    # 답을 받으며 예산만 태우므로 즉시 죽인다. 사람이 시각을 맞춰 다시 트리거한다.
+                    raise AirflowFailException(f"{index.value}: {error}. 제한 시각 뒤에 다시 트리거한다.") from error
                 except (KisResultError, KisPayloadError) as error:
                     logger.warning("%s failed: %s", index.value, error)
-                    failures.append(index.value)
+                    failures.append(f"{index.value}({error})")
                     continue
                 except ConnectionError as error:
                     logger.warning("%s failed to connect: %s", index.value, error)
-                    failures.append(index.value)
+                    failures.append(f"{index.value}({error})")
                     continue
 
                 with atomic(connection):
@@ -177,7 +182,7 @@ def kis_index_daily():
                 logger.info("Stored %s daily bars for %s in %s pages", rows, index.value, fetch.page_count)
 
         if failures:
-            raise AirflowFailException(f"Index daily collection failed for: {', '.join(failures)}")
+            raise AirflowFailException(f"Index daily collection failed for: {'; '.join(failures)}")
         return stored
 
     collect()

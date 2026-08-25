@@ -432,6 +432,8 @@ def issue_token(app_key: SecretStr, app_secret: SecretStr) -> tuple[SecretStr, d
 
     token = payload.get("access_token")
     if not token:
+        # 토큰 발급은 응답 스키마가 다르다(`rt_cd`/`msg1`이 아니라 `error_code`/`error_description`).
+        # 시각 제한 문구가 올 자리가 아니므로 `result_error()`를 거치지 않는다.
         raise KisResultError(payload.get("error_code", ""), payload.get("error_description", "no access_token"))
 
     # `access_token_token_expired`는 "YYYY-MM-DD HH:MM:SS" KST다. 없으면 24시간으로 둔다.

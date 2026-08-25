@@ -297,6 +297,23 @@ def test_disclosure_list_follows_every_page(monkeypatch):
     assert [call[1]["page_no"] for call in get.calls] == ["1", "2"]
 
 
+@pytest.mark.parametrize("missing", ["total_count", "total_page"])
+def test_a_paging_field_that_is_missing_fails_instead_of_disabling_the_check(monkeypatch, missing):
+    """`or 0`/`or 1`로 메우면 바로 아래 잘림 검사가 조용히 무력화된다.
+
+    `total_count`가 0으로 접히면 `total_count > len(rows)`가 늘 거짓이고,
+    `total_page`가 1로 접히면 첫 장만 읽고 끝난다. 어느 쪽이든 공시가 조용히 사라진다.
+    """
+    payload = json.loads(list_body([LIST_ROW], total_page=2, total_count=2))
+    del payload[missing]
+    monkeypatch.setattr(dart, "_get", fake_get([json.dumps(payload).encode()]))
+
+    with pytest.raises(dart.DartPayloadError) as error:
+        COLLECTOR.fetch_disclosures(DartCompany.SAMSUNG_ELECTRONICS, date(2026, 7, 24), date(2026, 7, 30))
+
+    assert missing in str(error.value)
+
+
 def test_report_classification():
     assert is_provisional("[기재정정]연결재무제표기준영업(잠정)실적(공정공시)")
     assert is_provisional("연결재무제표기준영업(잠정)실적(공정공시)")

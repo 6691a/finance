@@ -159,11 +159,11 @@ def dart_disclosure_intraday():
                 # 한 회사가 실패해도 다른 회사는 저장한다.
                 _classify(error)
                 logger.warning("%s disclosure list failed: %s", company.label, error)
-                failures.append(company.value)
+                failures.append(f"{company.value}({error})")
                 continue
             except ConnectionError as error:
                 logger.warning("%s disclosure list failed to connect: %s", company.label, error)
-                failures.append(company.value)
+                failures.append(f"{company.value}({error})")
                 continue
 
             with closing(_connection()) as connection:
@@ -176,7 +176,9 @@ def dart_disclosure_intraday():
             logger.info("Stored %s disclosures for %s", len(fetch.disclosures), company.label)
 
         if len(failures) == len(DartCompany):
-            raise ConnectionError("Every DART disclosure request failed")
+            raise ConnectionError(f"Every DART disclosure request failed: {'; '.join(failures)}")
+        if failures:
+            logger.warning("%s of %s disclosure lists failed: %s", len(failures), len(DartCompany), "; ".join(failures))
         return stored
 
     @task(task_display_name="실적 추출")
@@ -191,8 +193,25 @@ def dart_disclosure_intraday():
             connection.close()
 
         stored = 0
+        failures: list[str] = []
         for disclosure in waiting:
-            fetch = _extract(collector, disclosure)
+            try:
+                fetch = _extract(collector, disclosure)
+            except (DartHTTPError, DartStatusError) as error:
+                _classify(error)
+                logger.warning("%s earnings extraction failed: %s", disclosure.rcept_no, error)
+                failures.append(f"{disclosure.rcept_no}({error})")
+                continue
+            except DartPayloadError as error:
+                # 원문 형식이 바뀐 것이다. 이 공시만 건너뛰고 공시 이벤트는 그대로 둔다.
+                logger.warning("%s earnings parsing failed: %s", disclosure.rcept_no, error)
+                failures.append(f"{disclosure.rcept_no}({error})")
+                continue
+            except ConnectionError as error:
+                logger.warning("%s earnings extraction failed to connect: %s", disclosure.rcept_no, error)
+                failures.append(f"{disclosure.rcept_no}({error})")
+                continue
+
             if fetch is None:
                 continue
 
@@ -206,30 +225,32 @@ def dart_disclosure_intraday():
                 disclosure.rcept_no,
                 disclosure.report_name,
             )
+
+        # 매시간 도는 수집이라 한 건의 실패로 죽이지 않는다. 전부 실패하면 원문 형식이나
+        # 자격 증명이 바뀐 것이라 다음 실행도 같은 자리에서 멈춘다.
+        if failures and len(failures) == len(waiting):
+            raise AirflowFailException(f"Every earnings extraction failed: {'; '.join(failures)}")
+        if failures:
+            logger.warning("%s of %s earnings extractions failed: %s", len(failures), len(waiting), "; ".join(failures))
         return stored
 
     collect_disclosures() >> extract_earnings()
 
 
 def _extract(collector: DartCollector, disclosure: Disclosure):
-    """공시 하나에서 실적을 뽑는다. 대상이 아니거나 아직 준비 전이면 `None`.
+    """공시 하나에서 실적을 뽑는다. **대상이 아니면** `None`이다.
 
-    **한 공시의 실패가 나머지를 막지 않는다.** 그 공시는 다음 run의 재시도 목록에 그대로
+    **실패는 삼키지 않는다** — 부르는 쪽이 세고 판정한다. 여기서 warning 뒤 `None`을
+    돌려주면 "대상 아님"과 "실패"가 같아 보여서, 대기 공시 전부가 실패해도 태스크가
+    `stored=0`으로 성공했다.
+
+    한 공시의 실패가 나머지를 막지는 않는다. 그 공시는 다음 run의 재시도 목록에 그대로
     남아 있다.
     """
-    try:
-        if is_provisional(disclosure.report_name):
-            return collector.fetch_provisional(disclosure)
-        if periodic_report(disclosure.report_name) is not None:
-            return collector.fetch_financials(disclosure)
-    except (DartHTTPError, DartStatusError) as error:
-        _classify(error)
-        logger.warning("%s earnings extraction failed: %s", disclosure.rcept_no, error)
-    except DartPayloadError as error:
-        # 원문 형식이 바뀐 것이다. 이 공시만 건너뛰고 공시 이벤트는 그대로 둔다.
-        logger.warning("%s earnings parsing failed: %s", disclosure.rcept_no, error)
-    except ConnectionError as error:
-        logger.warning("%s earnings extraction failed to connect: %s", disclosure.rcept_no, error)
+    if is_provisional(disclosure.report_name):
+        return collector.fetch_provisional(disclosure)
+    if periodic_report(disclosure.report_name) is not None:
+        return collector.fetch_financials(disclosure)
     return None
 
 

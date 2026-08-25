@@ -170,6 +170,8 @@ def narrate_followups(built: dict[str, Any]) -> int:
     dag_run_id = str(get_current_context()["dag_run"].run_id)
     model = thesis_model()
     written = 0
+    attempted = 0
+    failures: list[str] = []
     as_of_at = thesis_common.close_at(run_date)
     with closing(thesis_common.connection()) as conn:
         run = thesis_common.ThesisRun(conn, run_date=run_date, as_of_at=as_of_at)
@@ -192,11 +194,15 @@ def narrate_followups(built: dict[str, Any]) -> int:
                     subject_codes=[t.subject.code for t in targets],
                 )
                 narrator = market_thesis.FollowupNarrator(model, toolbox)
+                attempted += 1
                 try:
                     drafts = narrator.run(run_date=origin, horizon_days=horizon, as_of_at=as_of_at, targets=targets)
                 except market_thesis.ThesisError as error:
                     # 그 (지평, 슬롯)만 없던 것으로 남는다. 다음 실행이 다시 집는다.
+                    # 다만 **세고 나서 판정한다** — 전부 실패했는데 written=0으로 성공하면
+                    # 해설이 통째로 빠진 실행이 UI에서 초록으로 보인다.
                     logger.warning("T+%s %s narration failed for %s: %s", horizon, run_slot.value, origin, error)
+                    failures.append(f"T+{horizon} {run_slot.value} {origin}({error})")
                     continue
                 except LlmError as error:
                     if isinstance(error, RetryableLlmError):
@@ -212,6 +218,12 @@ def narrate_followups(built: dict[str, Any]) -> int:
                     llm_model=model_name(model),
                     prompt_revision=narrator.prompt_revision,
                 )
+    # 해설을 시도한 (지평, 슬롯)이 전부 실패했으면 프롬프트나 앞단 데이터가 깨진 것이다.
+    # 다음 실행도 같은 자리에서 멈추므로 여기서 죽는 편이 낫다.
+    if failures and len(failures) == attempted:
+        raise AirflowFailException(f"Every followup narration failed: {'; '.join(failures)}")
+    if failures:
+        logger.warning("%s of %s narrations failed: %s", len(failures), attempted, "; ".join(failures))
     logger.info("wrote %s narratives", written)
     return written
 

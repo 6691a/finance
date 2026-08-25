@@ -161,9 +161,11 @@ class QuoteChange(BaseModel):
     exchange: str | None = None
 
     @property
-    def change_percent(self) -> float:
+    def change_percent(self) -> float | None:
+        # 분모가 0이면 등락을 계산할 수 없다. 0.0%로 지어내면 표에서 보합과 구별되지 않는다.
+        # `_percent`가 `None`을 `-`로 찍어 "모른다"를 밝힌다(`FlowSnapshot`과 같은 형태다).
         if not self.previous_close:
-            return 0.0
+            return None
         return float((self.close - self.previous_close) / self.previous_close * 100)
 
 

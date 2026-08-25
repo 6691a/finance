@@ -197,7 +197,7 @@ def kis_investor_trade_daily():
                         if error.status in KIS_UNRECOVERABLE_STATUSES:
                             raise AirflowFailException(f"{name}: {error}") from error
                         logger.warning("%s failed with HTTP %s", name, error.status)
-                        failures.append(name)
+                        failures.append(f"{name}({error})")
                         break
                     except KisTimeWindowError as error:
                         # 조회를 받아 주지 않는 시각이다. 재시도는 같은 답을 받으며 예산만
@@ -208,11 +208,11 @@ def kis_investor_trade_daily():
                         ) from error
                     except (KisResultError, KisPayloadError) as error:
                         logger.warning("%s failed: %s", name, error)
-                        failures.append(name)
+                        failures.append(f"{name}({error})")
                         break
                     except ConnectionError as error:
                         logger.warning("%s failed to connect: %s", name, error)
-                        failures.append(name)
+                        failures.append(f"{name}({error})")
                         break
 
                     if not fetch.rows:
@@ -241,7 +241,7 @@ def kis_investor_trade_daily():
 
         # 호출 실패가 먼저다. 실패하면 구멍은 그 결과라 원인을 두 번 말할 것이 없다.
         if failures:
-            raise AirflowFailException(f"{len(failures)} KIS calls failed: {', '.join(failures)}")
+            raise AirflowFailException(f"{len(failures)} KIS calls failed: {'; '.join(failures)}")
 
         if gaps:
             raise AirflowFailException(f"daily bars are missing on KRX open days — {'; '.join(gaps)}")

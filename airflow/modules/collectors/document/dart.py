@@ -509,6 +509,17 @@ def parse_financials(payload: dict[str, Any], period_end: date, scope: str) -> t
     return tuple(values)
 
 
+def _paging_field(payload: dict[str, Any], key: str, company: DartCompany) -> int:
+    """페이지 계산에 쓰는 칸을 정수로 읽는다. 없거나 숫자가 아니면 실패다."""
+    value = payload.get(key)
+    if value is None:
+        raise DartPayloadError(f"DART list.json for {company.value} has no {key}; the truncation check cannot run")
+    try:
+        return int(value)
+    except (TypeError, ValueError) as error:
+        raise DartPayloadError(f"DART list.json for {company.value} has a non-numeric {key}: {value!r}") from error
+
+
 def _company_of(disclosure: Disclosure) -> DartCompany:
     for company in DartCompany:
         if company.value == disclosure.stock_code:
@@ -617,8 +628,10 @@ class DartCollector:
                 raise DartStatusError(status, str(payload.get("message", "")).strip())
 
             rows.extend(payload.get("list") or [])
-            total_count = int(payload.get("total_count") or 0)
-            if page >= int(payload.get("total_page") or 1):
+            # 아래 잘림 검사가 이 두 칸 위에 서 있다. 없는 값을 0·1로 메우면 검사가 조용히
+            # 무력화되므로(0이면 늘 통과, 1이면 첫 장에서 끝) 값 자체를 요구한다.
+            total_count = _paging_field(payload, "total_count", company)
+            if page >= _paging_field(payload, "total_page", company):
                 break
 
         # 장 상한에서 멈추면 조회 구간에 구멍이 남는다. 조용히 잘린 목록보다 실패가 낫다.
@@ -697,6 +710,9 @@ class DartCollector:
         year, report_code, period_end = periodic
 
         started_at = datetime.now(UTC)
+        # 응답도 왔고 이 공시의 행도 맞는데 계정 매핑이 하나도 못 집은 범위를 모은다.
+        # 아직 안 올라온 것(`STATUS_NO_DATA`)과 우리 파서가 못 읽은 것이 구분돼야 한다.
+        unparsed: list[str] = []
         for scope in ("CFS", "OFS"):
             payload = _json(
                 self._call(
@@ -727,6 +743,7 @@ class DartCollector:
 
             values = parse_financials(payload, period_end, scope)
             if not values:
+                unparsed.append(f"{scope}({len(rows)} rows)")
                 continue
             return EarningsFetch(
                 rcept_no=disclosure.rcept_no,
@@ -746,6 +763,13 @@ class DartCollector:
                 completed_at=datetime.now(UTC),
             )
 
+        if unparsed:
+            # 원문 계정 ID가 바뀐 것이다. 그대로 `None`을 돌려주면 "아직 안 올라왔다"와
+            # 같아 보여 매 실행이 같은 공시를 조용히 건너뛴다.
+            raise DartPayloadError(
+                f"DART financial statements for {disclosure.rcept_no} answered with rows but no known accounts "
+                f"were parsed: {', '.join(unparsed)}"
+            )
         return None
 
     def store_disclosures(

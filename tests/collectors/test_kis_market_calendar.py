@@ -390,6 +390,18 @@ def test_store_overseas_updates_only_the_settlement_columns():
     assert json.loads(payload)[0]["tr_mket_name"] == "나스닥"
 
 
+def test_an_update_that_matched_no_row_fails_instead_of_looking_stored(monkeypatch):
+    """0행 UPDATE는 아무 것도 쓰지 않았다는 뜻이다. 경고만 남기면 DAG가 성공으로 끝난다."""
+    connection = FakeConnection()
+    monkeypatch.setattr(connection.recorded_cursor, "update_result", None)
+    fetch = overseas_fetch([overseas_row("01", "나스닥"), overseas_row("02", "뉴욕거래소")])
+
+    with pytest.raises(kis_market_calendar.SettlementTargetMissing) as error:
+        COLLECTOR.store_overseas(connection, fetch)
+
+    assert "2026-08-12" in str(error.value)
+
+
 def test_overseas_fetch_keeps_the_country_name(monkeypatch):
     rows = [overseas_row("02", "뉴욕거래소")]
     monkeypatch.setattr(kis_market_calendar, "send_get", fake_send_get([(body(rows), "D")]))

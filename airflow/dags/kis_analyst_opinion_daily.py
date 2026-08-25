@@ -61,6 +61,7 @@ from modules.collectors.kis import (
     KisHTTPError,
     KisPayloadError,
     KisResultError,
+    KisTimeWindowError,
     access_token,
 )
 from modules.market_session import krx_open_day
@@ -160,15 +161,19 @@ def kis_analyst_opinion_daily():
                     if error.status in KIS_UNRECOVERABLE_STATUSES:
                         raise AirflowFailException(f"{label}: {error}") from error
                     logger.warning("%s failed with HTTP %s", label, error.status)
-                    failures.append(label)
+                    failures.append(f"{label}({error})")
                     continue
+                except KisTimeWindowError as error:
+                    # 제공처가 지금은 이 조회를 받지 않는다(응답 본문이 창을 말해 준다). 재시도는 같은
+                    # 답을 받으며 예산만 태우므로 즉시 죽인다. 사람이 시각을 맞춰 다시 트리거한다.
+                    raise AirflowFailException(f"{label}: {error}. 제한 시각 뒤에 다시 트리거한다.") from error
                 except (KisResultError, KisPayloadError) as error:
                     logger.warning("%s failed: %s", label, error)
-                    failures.append(label)
+                    failures.append(f"{label}({error})")
                     continue
                 except ConnectionError as error:
                     logger.warning("%s failed to connect: %s", label, error)
-                    failures.append(label)
+                    failures.append(f"{label}({error})")
                     continue
 
                 with atomic(connection):
@@ -178,7 +183,7 @@ def kis_analyst_opinion_daily():
                 logger.info("Stored %s opinion rows for %s (%s)", rows, name, stock_code)
 
         if failures:
-            raise AirflowFailException(f"{len(failures)} of {len(stocks)} KIS calls failed: {', '.join(failures)}")
+            raise AirflowFailException(f"{len(failures)} of {len(stocks)} KIS calls failed: {'; '.join(failures)}")
 
         logger.info("Stored %s analyst opinion rows for %s..%s", stored, observation_start, observation_end)
         return stored

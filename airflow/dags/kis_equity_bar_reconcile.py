@@ -77,6 +77,7 @@ from modules.collectors.kis import (
     KisHTTPError,
     KisPayloadError,
     KisResultError,
+    KisTimeWindowError,
     StockExchange,
     access_token,
     rest_exchanges,
@@ -232,15 +233,19 @@ def kis_equity_bar_reconcile():
                         if error.status in KIS_UNRECOVERABLE_STATUSES:
                             raise AirflowFailException(f"{name}: {error}") from error
                         logger.warning("%s failed with HTTP %s", name, error.status)
-                        failures.append(name)
+                        failures.append(f"{name}({error})")
                         continue
+                    except KisTimeWindowError as error:
+                        # 제공처가 지금은 이 조회를 받지 않는다(응답 본문이 창을 말해 준다). 재시도는 같은
+                        # 답을 받으며 예산만 태우므로 즉시 죽인다. 사람이 시각을 맞춰 다시 트리거한다.
+                        raise AirflowFailException(f"{name}: {error}. 제한 시각 뒤에 다시 트리거한다.") from error
                     except (KisResultError, KisPayloadError) as error:
                         logger.warning("%s failed: %s", name, error)
-                        failures.append(name)
+                        failures.append(f"{name}({error})")
                         continue
                     except ConnectionError as error:
                         logger.warning("%s failed to connect: %s", name, error)
-                        failures.append(name)
+                        failures.append(f"{name}({error})")
                         continue
 
                     succeeded.append(name)
@@ -252,13 +257,13 @@ def kis_equity_bar_reconcile():
                         stored += collector.store_stock_bars(connection, fetch)
 
         if failures and not succeeded:
-            raise ConnectionError(f"Every reconcile call failed: {', '.join(failures)}")
+            raise ConnectionError(f"Every reconcile call failed: {'; '.join(failures)}")
         if failures:
             logger.warning(
                 "%s of %s reconcile calls failed: %s",
                 len(failures),
                 len(failures) + len(succeeded),
-                ", ".join(failures),
+                "; ".join(failures),
             )
 
         logger.info("Confirmed %s bars across %s series: %s", stored, len(succeeded), ", ".join(succeeded))

@@ -193,11 +193,15 @@ class ThesisRun:
                 (close_at(session), index_codes),
             )
             for symbol, close, previous in cursor.fetchall():
-                if previous:
-                    index[symbol] = IndexObservation(
-                        close=float(close),
-                        return_pct=round(float((close - previous) / previous) * 100, 2),
-                    )
+                if not previous:
+                    # 분모가 0이면 등락을 만들 수 없다. 다만 **로그는 남긴다** — 조용히 빠지면
+                    # 모델이 그 지수를 "데이터 없음"으로 읽는 이유를 아무도 되짚지 못한다.
+                    logger.warning("index %s has no usable previous close on %s; left out of the state", symbol, session)
+                    continue
+                index[symbol] = IndexObservation(
+                    close=float(close),
+                    return_pct=round(float((close - previous) / previous) * 100, 2),
+                )
             cursor.execute(
                 "SELECT stock_code, close_price FROM stock_investor_trade_daily "
                 "WHERE provider = 'kis' AND business_date = %s AND stock_code = ANY(%s)",

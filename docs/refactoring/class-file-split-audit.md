@@ -12,7 +12,8 @@
 
 ## 결론
 
-분리 가치가 확인된 곳은 여섯 곳이었고 그중 하나(`collectors/kis.py`)는 절반이 끝났다.
+분리 가치가 확인된 곳은 여섯 곳이다. `briefing/market.py`가 끝났고 `collectors/kis.py`는
+절반이 끝났다. 남은 넷은 아직 그대로다.
 
 LOC는 `c10c167` 기준이다. 클래스 전환이 이 파일들을 여럿 건드려 최초 조사 때와 다르다.
 
@@ -20,10 +21,10 @@ LOC는 `c10c167` 기준이다. 클래스 전환이 이 파일들을 여럿 건�
 | --- | --- | ---: | --- |
 | P0 | `apps/models/market.py` | 1,916 | 세션·시세·기업 이벤트·포지셔닝·수급 모델을 패키지로 분리 |
 | P0 | `airflow/modules/thesis.py` | 3,075 | 도메인·도구·생성·사후평가·렌더링을 역할 모듈로 분리 |
-| P0 | `airflow/modules/briefing/market.py` | 1,498 | 조회 모델/reader와 무상태 renderer를 분리 |
 | P1 | `apps/models/analysis.py` | 986 | thesis·stock event·technical signal 모델을 분리 |
 | P1 | `airflow/modules/expectation.py` | 849 | LLM 추출과 결정론적 판정을 다음 기능 변경 때 분리 |
 | 완료 | `airflow/modules/collectors/kis.py` | 1,622→537 | 전송층과 시세 수집을 갈랐다(2026-08-25). 남은 절반은 P0-3 |
+| 완료 | `airflow/modules/briefing/market.py` | 1,498→739 | 조회를 `market_data.py`(795)로 뺐다(2026-08-25). P0-4 |
 
 `assessment.py`, `collectors/document/dart.py`, `thesis_tools.py`, `thesis_state.py`는 클래스가
 많아 보여도 지금은 나누지 않는다. 클래스 수가 아니라 **서로 독립적으로 바뀌는 책임이 둘
@@ -188,7 +189,10 @@ airflow/modules/collectors/
 - **`tests/collectors/test_kis.py`(1,256 LOC)가 아직 한 파일이다.** 소스가 둘로 갈렸는데
   테스트는 그대로라 어느 경계를 덮는지가 파일에서 안 보인다.
 
-## P0-4. `airflow/modules/briefing/market.py`
+## P0-4. `airflow/modules/briefing/market.py` (완료)
+
+> **2026-08-25에 끝났다.** 조회가 `briefing/market_data.py`(795 LOC)로 가고 표시가
+> `briefing/market.py`(739 LOC)에 남았다. 아래는 왜 그 축으로 갈랐는지의 기록이다.
 
 ### 문제
 
@@ -213,8 +217,20 @@ airflow/modules/briefing/
 두 DAG과 `briefing/chart.py`는 필요한 모듈을 직접 import한다. `market.py`가 reader를 다시
 노출하는 facade는 두지 않는다.
 
-`MarketBriefingReader`는 이미 있다. **여기서 남은 것은 클래스 전환이 아니라 파일 분리뿐이다.**
-`docs/collectors-class-migration.md`도 2026-08-25에 이 모듈을 완료로 옮겼다.
+### 옮기면서 정한 것
+
+- **`MarketScope`는 표시 쪽에 뒀다.** 이 감사의 최초 권장은 `market_data.py`였는데, AST로
+  세어 보니 조회부는 그 값을 한 번도 보지 않는다. 무엇을 어느 리포트에 넣을지는 표시의
+  결정이라 `market.py`가 갖는다. 두 DAG의 import도 그대로 남았다.
+- **`session_state`·`us_session_date`는 조회 쪽이다.** 표시만 쓰지만 세션 상수
+  (`US_EASTERN`·`SESSION_OPEN_HOUR_KST`·`SESSION_CLOSE_MINUTE_KST`)와 같이 있어야 한다.
+  `market.py`가 `session_state`를 import한다.
+- **`QUOTED_KINDS`·심볼 순서 상수 일곱은 표시 쪽으로 따라갔다.** 조회는 kind로 거르지 않고
+  전부 받아 오고, 무엇을 어떤 순서로 그릴지가 표시의 몫이다.
+- **테스트는 나누지 않았다.** `tests/modules/test_briefing_market.py`의 렌더러 테스트가
+  전부 가짜 연결 → reader → 렌더 순으로 도는 통합 형태라, 나누면 픽스처 블록(행 대역
+  열두 개)이 두 파일에 복제된다. 소스와 달리 여기서는 경계가 파일이 아니라 픽스처다.
+- facade는 두지 않았다. `briefing/chart.py`와 두 DAG이 필요한 모듈을 직접 import한다.
 
 ## P1 후보
 
@@ -264,12 +280,16 @@ DTO 한 개당 파일 하나를 만드는 방식은 사용하지 않는다. 한 
 
 각 항목은 독립 변경으로 처리한다. 한 번에 여러 곳을 옮기지 않는다.
 
-1. `briefing/market.py` 조회/렌더 분리로 가장 작은 패턴을 검증한다.
+1. ~~`briefing/market.py` 조회/렌더 분리~~ — 2026-08-25 완료. 가장 작은 패턴이 검증됐다.
 2. `apps/models/market.py`를 패키지로 옮기고 metadata 무변경을 검증한다.
 3. `thesis.py`를 domain → toolbox → generation → outcomes → render 순으로 이동한다.
 4. `apps/models/analysis.py`는 모델 파일 이동만 하는 독립 변경으로 처리한다.
 5. `expectation.py`는 다음 기능 변경과 함께 두 변경 축을 가른다.
 6. KIS 지수 일봉 수집기와 `test_kis.py` 분리는 남은 절반이라 언제 해도 된다(P0-3).
+
+**1번에서 배운 것**: 자를 자리는 AST로 먼저 센다. 최상위 이름마다 조회부에서 쓰이는지
+표시부에서 쓰이는지를 세면 경계가 기계적으로 나오고, 감사 때 눈으로 정한 배치 하나
+(`MarketScope`)가 실제와 달랐다. 자른 뒤 남는 오류는 ruff의 F821 하나뿐이었다.
 
 **3번은 `ThesisStore`가 이미 들어간 뒤의 파일을 옮긴다.** 클래스 전환과 파일 이동을 섞지
 않기로 한 것이 지켜졌고, 순서는 전환이 먼저였다.

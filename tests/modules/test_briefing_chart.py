@@ -5,7 +5,7 @@ import pytest
 
 from modules import technical
 from modules.briefing import chart
-from modules.briefing.market import ChartSeries, DailyChartSeries
+from modules.briefing.market_data import ChartSeries, DailyChartSeries
 
 # KST 2026-08-18(화) 12:30.
 MIDDAY = datetime(2026, 8, 18, 3, 30, tzinfo=UTC)

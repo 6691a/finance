@@ -83,7 +83,7 @@ class OverseasIndex(StrEnum):
 def us_session_date(now: datetime) -> date:
     """이 시각에 막 끝난 미국 세션의 날짜. 뉴욕 시계로 봐야 세션 하나가 한 날짜에 담긴다.
 
-    `modules.briefing.market.us_session_date`와 같은 값이다. 수집기가 브리핑 모듈을
+    `modules.briefing.market_data.us_session_date`와 같은 값이다. 수집기가 브리핑 모듈을
     import하지 않으려고 따로 두고 테스트가 둘을 대조한다.
     """
     return now.astimezone(US_EASTERN).date()

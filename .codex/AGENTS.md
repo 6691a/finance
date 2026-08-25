@@ -163,7 +163,7 @@ uv run ruff check apps airflow migrations tests
   일봉은 마지막 확정 거래일을 적는다. Slack에 올리는 파일 제목과 image 블록 라벨도 같은 값을
   담는다 — 이미지가 접혀 있을 때 보이는 것이 그 라벨이다.
 - **시장 표기는 거래소가 있으면 거래소다**(`KRX`·`NXT`·둘이 섞이면 `KRX·NXT`). 거래소 개념이
-  없는 지수·환율은 제공처를 적는다(`briefing/market.py`의 `PROVIDER_VENUES`). **비워 두지
+  없는 지수·환율은 제공처를 적는다(`briefing/market_data.py`의 `PROVIDER_VENUES`). **비워 두지
   않는다** — 빈 칸은 "거래소가 없다"가 아니라 "안 밝혔다"로 읽힌다.
 - **표의 마지막 열은 언제나 `기준`이다**(날짜, 장중 값이면 날짜와 시각). 시장이 표 전체에
   하나면 제목에 적고(`공매도·대차(주·KRX)`, `기술적 관측(확정 일봉·KRX)`), 행마다 다르면

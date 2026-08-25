@@ -26,7 +26,7 @@ from modules.briefing import blocks
 from modules.utility import KST_TIMEZONE
 
 if TYPE_CHECKING:
-    from modules.briefing.market import ChartSeries, DailyChartSeries
+    from modules.briefing.market_data import ChartSeries, DailyChartSeries
 
 # 한글 글리프를 가진 폰트 이름 조각. 나눔(운영 이미지), 맑은 고딕(Windows),
 # Apple SD Gothic(macOS 로컬 테스트) 순으로 찾는다.

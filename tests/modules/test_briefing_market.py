@@ -20,7 +20,7 @@ from apps.models.market import (
     StockInvestorTradeDaily,
 )
 from apps.models.reference import IndicatorSeries, QuoteSymbol
-from modules.briefing import market
+from modules.briefing import market, market_data
 from modules.briefing.market import MarketScope
 
 # KST 2026-08-18(화) 08:00. 이때 뉴욕은 아직 8월 17일(월) 저녁이다.
@@ -210,7 +210,7 @@ def summary(now: datetime = MIDDAY):
         SHORT_POSITION_ROWS,
         SPREAD_ROWS,
     )
-    return market.MarketBriefingReader(connection, now).summary()
+    return market_data.MarketBriefingReader(connection, now).summary()
 
 
 def test_change_is_computed_from_the_stored_previous_close():
@@ -226,8 +226,8 @@ def test_the_quote_window_survives_a_long_holiday():
     실측(2026-08-18 화): 광복절 대체공휴일로 직전 거래일이 금요일 08-14였고, 4일 창은
     그 세션 종료(KST 15:30)를 놓쳐 국내 시세가 통째로 비었다. 설날·추석은 더 길다.
     """
-    assert market.QUOTE_LOOKBACK >= timedelta(days=8)
-    assert market.FLOW_LOOKBACK >= timedelta(days=8)
+    assert market_data.QUOTE_LOOKBACK >= timedelta(days=8)
+    assert market_data.FLOW_LOOKBACK >= timedelta(days=8)
 
 
 def test_every_row_carries_its_own_as_of_time():
@@ -253,7 +253,7 @@ def test_every_row_carries_its_own_as_of_time():
         [],
         [],
     )
-    blocks_out = market.render_blocks(market.MarketBriefingReader(connection, MIDDAY).summary(), MarketScope.KOREA)
+    blocks_out = market.render_blocks(market_data.MarketBriefingReader(connection, MIDDAY).summary(), MarketScope.KOREA)
     table = next(block for block in blocks_out if block["type"] == "table")
     rows = [[cell["text"] for cell in row] for row in table["rows"]]
 
@@ -283,7 +283,7 @@ def test_nxt_bars_are_labeled_so_they_do_not_read_as_krx_closes():
         [],
         [],
     )
-    result = market.MarketBriefingReader(connection, after_hours).summary()
+    result = market_data.MarketBriefingReader(connection, after_hours).summary()
     table = next(block for block in market.render_blocks(result, MarketScope.KOREA) if block["type"] == "table")
     rows = [[cell["text"] for cell in row] for row in table["rows"]]
     by_label = {row[0]: row for row in rows[1:]}
@@ -322,7 +322,7 @@ def test_yields_are_not_drawn_as_percent_moves():
         [("yahoo", "US10Y", "미국 10년물 금리", "rate", "US", Decimal("4.70"), Decimal("4.65"), MIDDAY)],
         *([[]] * 9),
     )
-    result = market.MarketBriefingReader(connection, MORNING).summary()
+    result = market_data.MarketBriefingReader(connection, MORNING).summary()
 
     assert "미국 10년물 금리" not in _block_text(market.render_blocks(result, MarketScope.US))
 
@@ -369,7 +369,7 @@ def test_preopen_report_shows_premarket_stocks_and_skips_us_briefing_sections():
         SHORT_POSITION_ROWS,
         SPREAD_ROWS,
     )
-    result = market.MarketBriefingReader(connection, preopen).summary()
+    result = market_data.MarketBriefingReader(connection, preopen).summary()
     rendered = market.render_blocks(result, MarketScope.KOREA_PREOPEN)
     text = _block_text(rendered)
 
@@ -405,7 +405,7 @@ def test_preopen_fallback_text_leads_with_premarket_stocks():
 def test_preopen_chart_window_opens_with_the_nxt_premarket():
     """프리마켓 발송의 차트 창은 09:00이 아니라 NXT 프리마켓 08:00에서 시작한다."""
     connection = FakeConnection([], [])
-    market.MarketBriefingReader(connection, MIDDAY).chart_series(open_hour=market.NXT_PREMARKET_OPEN_HOUR_KST)
+    market_data.MarketBriefingReader(connection, MIDDAY).chart_series(open_hour=market_data.NXT_PREMARKET_OPEN_HOUR_KST)
 
     since = connection.cursors[0].calls[0][1][2]
     assert (since.hour, since.minute) == (8, 0)
@@ -413,7 +413,7 @@ def test_preopen_chart_window_opens_with_the_nxt_premarket():
 
 def test_us_session_date_follows_new_york_not_seoul():
     """KST 화요일 아침에 보는 미국 세션은 뉴욕 월요일이다."""
-    assert market.us_session_date(MORNING) == date(2026, 8, 17)
+    assert market_data.us_session_date(MORNING) == date(2026, 8, 17)
 
 
 @pytest.mark.parametrize(
@@ -425,7 +425,7 @@ def test_us_session_date_follows_new_york_not_seoul():
     ],
 )
 def test_session_state_uses_the_korean_clock(now, expected):
-    assert market.session_state(now) == expected
+    assert market_data.session_state(now) == expected
 
 
 def test_header_is_written_in_korean_time():
@@ -493,7 +493,7 @@ def test_empty_us_sections_are_not_drawn():
         DOMESTIC_STOCK_ROWS,
         *([[]] * 8),
     )
-    result = market.MarketBriefingReader(connection, MORNING).summary()
+    result = market_data.MarketBriefingReader(connection, MORNING).summary()
 
     titles = [title for title, _ in _us_tables(result)]
     assert "미국 지수·선물" in titles
@@ -565,7 +565,7 @@ def test_market_funds_are_drawn_with_computed_deltas():
 
 def test_the_first_collection_day_falls_back_to_the_api_delta():
     """전일 행이 없으면 예탁금만 API 전일대비로 그리고 나머지 둘은 `-`다."""
-    funds = market.MarketBriefingReader(FakeConnection(FUNDS_ROWS[:1]), MIDDAY)._market_funds()
+    funds = market_data.MarketBriefingReader(FakeConnection(FUNDS_ROWS[:1]), MIDDAY)._market_funds()
 
     assert funds.customer_deposit_change == Decimal("-2345.00")
     assert funds.credit_loan_change is None
@@ -632,7 +632,7 @@ def test_chart_series_keep_the_symbol_order_and_skip_empty_ones():
         ("kis", "005930", "삼성전자", MIDDAY - timedelta(minutes=1), Decimal(267500), "KRX"),
         ("kis", "005930", "삼성전자", MIDDAY, Decimal(268000), "KRX"),
     ]
-    series = market.MarketBriefingReader(FakeConnection(view_rows, stock_rows), MIDDAY).chart_series()
+    series = market_data.MarketBriefingReader(FakeConnection(view_rows, stock_rows), MIDDAY).chart_series()
 
     assert [one.symbol for one in series] == ["KOSPI", "005930"]  # CHART_SYMBOLS 순서
     assert len(series[0].points) == 2
@@ -649,7 +649,7 @@ def test_a_single_bar_is_also_skipped_as_an_empty_chart():
         ("kis", "005930", "삼성전자", MIDDAY - timedelta(minutes=1), Decimal(267500), "KRX"),
         ("kis", "005930", "삼성전자", MIDDAY, Decimal(268000), "KRX"),
     ]
-    series = market.MarketBriefingReader(FakeConnection(view_rows, stock_rows), MIDDAY).chart_series()
+    series = market_data.MarketBriefingReader(FakeConnection(view_rows, stock_rows), MIDDAY).chart_series()
 
     assert [one.symbol for one in series] == ["005930"]
 
@@ -668,8 +668,8 @@ def test_chart_series_name_the_exchange_of_their_bars():
         ("kis", "005930", "삼성전자", MIDDAY, Decimal(268000), "NXT"),
     ]
 
-    nxt_series = market.MarketBriefingReader(FakeConnection([], premarket), MIDDAY).chart_series()
-    mixed_series = market.MarketBriefingReader(FakeConnection([], mixed), MIDDAY).chart_series()
+    nxt_series = market_data.MarketBriefingReader(FakeConnection([], premarket), MIDDAY).chart_series()
+    mixed_series = market_data.MarketBriefingReader(FakeConnection([], mixed), MIDDAY).chart_series()
 
     assert nxt_series[0].venue == "NXT"
     assert mixed_series[0].venue == "KRX·NXT"
@@ -722,57 +722,57 @@ def test_stock_estimates_are_counted_in_shares_not_won():
     [
         # LATEST_QUOTES는 quote_bar **뷰**를 읽는다. 뷰의 컬럼은
         # kind 테이블과 같으므로 대표로 IndexBar 모델과 대조한다.
-        (market.LATEST_QUOTES, IndexBar.__table__, ("provider", "symbol", "close", "previous_close", "bar_at")),
-        (market.LATEST_QUOTES, QuoteSymbol.__table__, ("label", "kind", "country")),
+        (market_data.LATEST_QUOTES, IndexBar.__table__, ("provider", "symbol", "close", "previous_close", "bar_at")),
+        (market_data.LATEST_QUOTES, QuoteSymbol.__table__, ("label", "kind", "country")),
         (
-            market.LATEST_RATES,
+            market_data.LATEST_RATES,
             IndicatorObservation.__table__,
             ("provider", "series_id", "observation_date", "value"),
         ),
-        (market.LATEST_RATES, IndicatorSeries.__table__, ("country_name", "maturity_months", "kind")),
+        (market_data.LATEST_RATES, IndicatorSeries.__table__, ("country_name", "maturity_months", "kind")),
         (
-            market.LATEST_FLOWS,
+            market_data.LATEST_FLOWS,
             MarketInvestorFlowSnapshot.__table__,
             ("market_code", "observed_at", "foreign_net_buy_amount"),
         ),
-        (market.LATEST_MOVEMENTS, MarketMovementSnapshot.__table__, ("rising_count", "falling_count")),
+        (market_data.LATEST_MOVEMENTS, MarketMovementSnapshot.__table__, ("rising_count", "falling_count")),
         (
-            market.LATEST_STOCK_FLOWS,
+            market_data.LATEST_STOCK_FLOWS,
             StockInvestorEstimateSnapshot.__table__,
             ("stock_code", "business_date", "source_time_code", "foreign_net_buy_qty"),
         ),
         (
-            market.LATEST_STOCK_TRADES,
+            market_data.LATEST_STOCK_TRADES,
             StockInvestorTradeDaily.__table__,
             ("stock_code", "business_date", "close_price", "institution_net_buy_qty", "pension_fund_net_buy_qty"),
         ),
-        (market.INTRADAY_SERIES, IndexBar.__table__, ("provider", "symbol", "bar_at", "close")),
-        (market.INTRADAY_SERIES, QuoteSymbol.__table__, ("label",)),
+        (market_data.INTRADAY_SERIES, IndexBar.__table__, ("provider", "symbol", "bar_at", "close")),
+        (market_data.INTRADAY_SERIES, QuoteSymbol.__table__, ("label",)),
         # 국내 종목 조회는 stock_bar 물리 테이블을 직접 읽는다(NXT 포함).
         (
-            market.LATEST_DOMESTIC_STOCKS,
+            market_data.LATEST_DOMESTIC_STOCKS,
             StockBar.__table__,
             ("provider", "stock_code", "exchange", "close", "previous_close", "bar_at"),
         ),
-        (market.LATEST_DOMESTIC_STOCKS, QuoteSymbol.__table__, ("label", "kind", "country")),
-        (market.DOMESTIC_STOCK_SERIES, StockBar.__table__, ("provider", "stock_code", "exchange", "bar_at", "close")),
-        (market.DOMESTIC_STOCK_SERIES, QuoteSymbol.__table__, ("label",)),
+        (market_data.LATEST_DOMESTIC_STOCKS, QuoteSymbol.__table__, ("label", "kind", "country")),
+        (market_data.DOMESTIC_STOCK_SERIES, StockBar.__table__, ("provider", "stock_code", "exchange", "bar_at", "close")),
+        (market_data.DOMESTIC_STOCK_SERIES, QuoteSymbol.__table__, ("label",)),
         (
-            market.LATEST_MARKET_FUNDS,
+            market_data.LATEST_MARKET_FUNDS,
             KrxMarketFundsDaily.__table__,
             ("business_date", "customer_deposit", "customer_deposit_change", "credit_loan_balance", "unsettled_amount"),
         ),
         (
-            market.LATEST_SHORT_POSITIONS,
+            market_data.LATEST_SHORT_POSITIONS,
             KrxStockShortSaleDaily.__table__,
             ("stock_code", "business_date", "short_sale_quantity", "short_sale_volume_ratio"),
         ),
         (
-            market.LATEST_SHORT_POSITIONS,
+            market_data.LATEST_SHORT_POSITIONS,
             KrxStockSecuritiesLendingDaily.__table__,
             ("balance_quantity", "balance_change_quantity"),
         ),
-        (market.SPREAD_PAIRS, IndicatorObservation.__table__, ("provider", "series_id", "observation_date", "value")),
+        (market_data.SPREAD_PAIRS, IndicatorObservation.__table__, ("provider", "series_id", "observation_date", "value")),
     ],
 )
 def test_queries_name_columns_that_exist(statement: str, table: Table, columns: tuple[str, ...]):
@@ -843,14 +843,14 @@ def summary_with_technicals(
         technical_history_rows() if technical_rows is None else technical_rows,
         SIGNAL_ROWS if signal_rows is None else signal_rows,
     )
-    return market.MarketBriefingReader(connection, now).summary()
+    return market_data.MarketBriefingReader(connection, now).summary()
 
 
 def test_daily_chart_series_follows_the_subject_list_not_the_query():
     """일봉 차트 대상은 `DAILY_CHART_SUBJECTS`가 정한다. 조회에는 그 밖의 대상도 온다."""
     connection = FakeConnection(technical_history_rows())
 
-    series = market.MarketBriefingReader(connection, MIDDAY).daily_chart_series()
+    series = market_data.MarketBriefingReader(connection, MIDDAY).daily_chart_series()
 
     assert [one.subject_code for one in series] == ["KOSPI", "005930"]
     # 계산기는 오름차순을 받는다. 조회는 최신순이라 여기서 뒤집혀 있어야 한다.
@@ -861,10 +861,10 @@ def test_the_chart_query_asks_only_for_the_chart_subjects():
     """차트 조회는 watched를 켜지 않는다. 종목이 늘어도 이미지가 따라 늘면 안 된다."""
     connection = FakeConnection(technical_history_rows())
 
-    market.MarketBriefingReader(connection, MIDDAY).daily_chart_series()
+    market_data.MarketBriefingReader(connection, MIDDAY).daily_chart_series()
 
     _, parameters = connection.cursors[0].calls[0]
-    assert parameters["symbols"] == list(market.DAILY_CHART_SUBJECTS)
+    assert parameters["symbols"] == list(market_data.DAILY_CHART_SUBJECTS)
     assert parameters["include_watched"] is False
     # 환율은 표에 없고 차트에만 있다.
     assert "USDKRW" in parameters["symbols"]
@@ -875,7 +875,7 @@ def test_a_subject_without_enough_bars_is_not_drawn():
     rows = [row for row in technical_history_rows() if row[1] == "KOSPI"][:10]
     connection = FakeConnection(rows)
 
-    assert market.MarketBriefingReader(connection, MIDDAY).daily_chart_series() == ()
+    assert market_data.MarketBriefingReader(connection, MIDDAY).daily_chart_series() == ()
 
 
 def test_the_technical_query_asks_for_the_watched_stocks_too():
@@ -893,7 +893,7 @@ def test_the_technical_query_asks_for_the_watched_stocks_too():
         SPREAD_ROWS,
         technical_history_rows(),
     )
-    market.MarketBriefingReader(connection, MIDDAY).summary()
+    market_data.MarketBriefingReader(connection, MIDDAY).summary()
 
     statement, parameters = next(
         (statement, parameters)
@@ -901,7 +901,7 @@ def test_the_technical_query_asks_for_the_watched_stocks_too():
         for statement, parameters in cursor.calls
         if "WITH requested AS" in statement
     )
-    assert parameters["symbols"] == list(market.TECHNICAL_INDEXES)
+    assert parameters["symbols"] == list(market_data.TECHNICAL_INDEXES)
     assert parameters["include_watched"] is True
     assert "instrument" in statement
 
@@ -1023,7 +1023,7 @@ def test_the_signal_window_is_asked_for_in_days():
         technical_history_rows(),
         SIGNAL_ROWS,
     )
-    market.MarketBriefingReader(connection, MIDDAY).summary()
+    market_data.MarketBriefingReader(connection, MIDDAY).summary()
 
     statement, parameters = next(
         (statement, parameters)
@@ -1031,5 +1031,5 @@ def test_the_signal_window_is_asked_for_in_days():
         for statement, parameters in cursor.calls
         if "FROM technical_signal" in statement
     )
-    assert parameters["since_date"] == (MIDDAY - market.SIGNAL_LOOKBACK).astimezone(market.KST_TIMEZONE).date()
+    assert parameters["since_date"] == (MIDDAY - market_data.SIGNAL_LOOKBACK).astimezone(market.KST_TIMEZONE).date()
     assert "DISTINCT ON (symbol)" in statement

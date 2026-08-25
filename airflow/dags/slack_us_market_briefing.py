@@ -18,7 +18,7 @@ KST 월요일 아침에는 직전 미국 세션이 없다. 금요일 밤 세션�
 
 ## 세션 날짜는 뉴욕 시계로 뽑는다
 
-KST 날짜로 물으면 세션 하나가 두 날짜에 걸친다. `market.us_session_date`가
+KST 날짜로 물으면 세션 하나가 두 날짜에 걸친다. `market_data.us_session_date`가
 `America/New_York` 기준으로 날짜를 뽑고, 휴장 판정도 그 날짜로 `market_session`에 묻는다.
 
 ## 필요한 환경
@@ -37,7 +37,7 @@ from airflow.providers.postgres.hooks.postgres import PostgresHook
 from airflow.sdk import dag, task
 from pydantic import SecretStr
 
-from modules.briefing import market
+from modules.briefing import market, market_data
 from modules.briefing.market import MarketScope
 from modules.market_session import us_equity_open_day
 from modules.slack import SlackClient, SlackError
@@ -88,8 +88,8 @@ def slack_us_market_briefing():
 
         connection = _connection()
         try:
-            _skip_when_closed(connection, market.us_session_date(now))
-            summary = market.MarketBriefingReader(connection, now).summary()
+            _skip_when_closed(connection, market_data.us_session_date(now))
+            summary = market_data.MarketBriefingReader(connection, now).summary()
         finally:
             connection.close()
 

@@ -89,7 +89,7 @@ def test_more_history_moves_the_ema_but_not_the_moving_averages():
     """조회 봉 수가 지표에 남기는 흔적. 표와 차트가 같은 봉 수를 써야 하는 이유다.
 
     이동평균은 창 안의 종가만 보므로 앞을 잘라도 같고, EMA를 쓰는 MACD는 달라진다.
-    브리핑은 `briefing/market.INDICATOR_HISTORY_BARS` 하나로 표와 차트를 함께 맞춘다.
+    브리핑은 `briefing/market_data.INDICATOR_HISTORY_BARS` 하나로 표와 차트를 함께 맞춘다.
     """
     bars = reference_bars()
     short = technical.summarize("005930", "삼성전자", bars[-70:])

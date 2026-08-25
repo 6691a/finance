@@ -179,7 +179,7 @@ class OpsSummary(BaseModel):
 class OpsBriefingReader:
     """운영 리포트 한 통에 들어갈 값을 읽는다. 연결과 기준 시각이 상태다.
 
-    `briefing.market.MarketBriefingReader`와 같은 모양이다. 조회 셋이 전부 그 둘을 쓰고,
+    `briefing.market_data.MarketBriefingReader`와 같은 모양이다. 조회 셋이 전부 그 둘을 쓰고,
     한 번의 발송 동안 둘 다 바뀌지 않는다.
 
     **렌더링과 판정은 여기 없다.** `render_blocks`·`render_text`와 `silent_sources`는

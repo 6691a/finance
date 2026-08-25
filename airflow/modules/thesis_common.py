@@ -436,7 +436,7 @@ def notify_slack(built: dict[str, Any]) -> str:
     token, channel = slack_settings()
     result = ThesisRunResult.model_validate(built)
     run_date = result.run_date
-    run_slot = market_thesis.RunSlot(result.slot)
+    run_slot = result.slot
 
     with closing(connection()) as conn:
         store = market_thesis.ThesisStore(conn)

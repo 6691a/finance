@@ -14,8 +14,26 @@ JSON으로 바꾸는 것은 프롬프트 조립과 저장이다(`model_dump(mode
 """
 
 from datetime import date
+from enum import StrEnum
 
 from pydantic import AwareDatetime, BaseModel, ConfigDict, Field
+
+
+class RunSlot(StrEnum):
+    """추론을 만든 슬롯. 슬롯이 곧 추론의 종류다.
+
+    `thesis.py`가 아니라 여기 있는 것은 슬롯을 아는 코드가 셋으로 갈려 있기 때문이다 —
+    LangChain을 끄는 `thesis.py`, Airflow를 끄는 `thesis_common.py`, 그리고 슬롯 모듈 셋이다.
+    감쌀 의존성이 없는 값이라 방화벽 쪽에 두면 셋 다 그대로 본다. `thesis.py`가 재수출하므로
+    부르는 쪽은 전과 같다.
+
+    값은 `apps/models/analysis.py`의 같은 이름 enum과 같아야 한다.
+    `tests/models/test_analysis_models.py`가 대조한다.
+    """
+
+    PRE_OPEN = "pre_open"
+    POST_CLOSE = "post_close"
+    POST_NXT_CLOSE = "post_nxt_close"
 
 
 class IndexObservation(BaseModel):
@@ -139,9 +157,6 @@ class PastOutcome(BaseModel):
 class ThesisRunResult(BaseModel):
     """추론 태스크 한 번의 결과. **XCom을 건너 다음 태스크가 읽는다.**
 
-    `slot`이 `RunSlot`이 아니라 `str`인 것은 이 모듈이 `thesis.py`(LangChain)를 모듈 수준에서
-    import할 수 없어서다. 읽는 쪽이 `RunSlot(result.slot)`으로 되돌린다.
-
     `written`을 읽는 코드는 없다. Airflow UI의 XCom 화면에서 그 실행이 몇 건을 썼는지
     보는 값이라 남긴다.
     """
@@ -149,7 +164,7 @@ class ThesisRunResult(BaseModel):
     model_config = ConfigDict(frozen=True)
 
     run_date: date
-    slot: str
+    slot: RunSlot
     written: int
 
 
@@ -160,14 +175,13 @@ class PastThesis(BaseModel):
 
     `run_slot`은 `pre_open`(그날의 예측, 채점이 붙는다)과 `post_close`(장이 닫힌 뒤의 해석,
     채점 없이 해설·판정만 붙는다)를 가른다. **모델이 이 둘을 구분해야 하므로 값으로 싣는다** —
-    채점이 없는 행을 "빗나간 예측"으로 읽으면 안 된다. `RunSlot`이 아니라 `str`인 것은 이
-    모듈이 `thesis.py`(LangChain)를 모듈 수준에서 import할 수 없어서다.
+    채점이 없는 행을 "빗나간 예측"으로 읽으면 안 된다.
     """
 
     model_config = ConfigDict(frozen=True)
 
     id: int
-    run_slot: str
+    run_slot: RunSlot
     run_date: date
     prob_up: float
     prob_down: float

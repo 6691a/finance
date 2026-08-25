@@ -271,7 +271,8 @@ DAG마다 절을 두지 않습니다. 상세는 각 DAG 파일의 `doc_md`에 �
 | `ecb_convergence_monthly` | 수 08:30 | `indicator_observation` | ECB |
 | `market_calendar_daily` | 매일 07:00 | `market_session` | KIS·NYSE |
 | `kis_quote_intraday` | 평일 08~16시 5분마다 | `quote_bar`, `market_movement_snapshot` | KIS |
-| `kis_investor_flow_intraday` | 평일 09~15시 5분마다 | `market_investor_flow_snapshot`, `stock_investor_estimate_snapshot` | KIS |
+| `kis_investor_flow_intraday` | 평일 09~15시 5분마다 | `market_investor_flow_snapshot` | KIS |
+| `kis_investor_estimate_intraday` | 평일 09:35·10:05·11:25·13:25·14:35 | `stock_investor_estimate_snapshot` | KIS |
 | `kis_investor_trade_daily` | 평일 18:10 | `stock_investor_trade_daily` | KIS |
 | `kis_stock_minute_bars_daily` | 평일 20:40 | `stock_bar` | KIS |
 | `kis_market_positioning_daily` | 화~토 08:10 | `krx_*` 6종(신용·공매도·대차·증시자금) | KIS |

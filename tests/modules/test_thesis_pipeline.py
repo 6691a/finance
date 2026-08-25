@@ -2479,8 +2479,9 @@ def test_evidence_refs_are_built_from_the_kind_itself():
 
 
 def test_the_character_budget_constant_leaves_room_for_the_answer_step():
-    # 컨텍스트가 근거로 가득 차면 답변 단계에 쓸 자리가 없다.
-    assert MAX_TOOL_RESULT_CHARS < 32_000
+    # 컨텍스트가 근거로 가득 차면 답변 단계에 쓸 자리가 없다. 상한은 툴 결과가 한 요청의
+    # 절반을 넘지 않는 선이다 — 한 호출이 최대 20건 × 600자(12,000자)라 그 서넛까지다.
+    assert MAX_TOOL_RESULT_CHARS <= 4 * MAX_TOOL_RESULTS * MAX_ITEM_DETAIL_CHARS
 
 
 # --- Slack 렌더링 -------------------------------------------------------------

@@ -13,8 +13,8 @@
 ## 1. ThesisToolbox
 
 DB 연결과 **기준 시각 `as_of_at`**을 들고 읽기 전용 툴 14개를 실행한다.
-**툴 수가 tool call 상한(`MAX_TOOL_CALLS` 12)을 넘었다** — 모델이 툴마다 한 번씩도 못 부른다.
-상한에 붙는 실행이 보이면 그 숫자부터 올린다([TUNING.md](TUNING.md) 5절).
+툴 수(14)가 tool call 상한(`MAX_TOOL_CALLS`)을 넘어 모델이 툴마다 한 번씩도 못 부르던 것을
+2026-08-25에 20으로 올렸다. 툴을 더 열면 이 값도 같이 본다([TUNING.md](TUNING.md) 5절).
 
 툴은 **근거를 만드는 것과 문맥만 주는 것**으로 갈린다. 근거 툴의 결과 항목에는 `ref`가 붙고
 `ref → (kind, title, url, detail)` 레지스트리에 등록된다. 이 레지스트리가 답변 검증과
@@ -98,8 +98,8 @@ DB 연결과 **기준 시각 `as_of_at`**을 들고 읽기 전용 툴 14개를 �
   이것이 보장하는 것은 event-time cutoff까지다(README 1절).
 - **상한은 코드 상수로 강제한다.** 모델이 인자를 넘겨도 잘라서 실행한다:
   `1 <= hours <= 72`, `0 <= min_score <= 100`, 툴 호출당 결과 ≤ 20건, 항목당
-  `new_facts`·`reason` 합쳐 ≤ 600자, 실행당 tool call 총 ≤ 12회(왕복 3 × 회당 4),
-  실행당 툴 결과 누적 ≤ 24,000자. 넘는 호출은 빈 결과가 아니라 "상한 초과" `ToolMessage`로
+  `new_facts`·`reason` 합쳐 ≤ 600자, 실행당 tool call 총 ≤ 20회,
+  실행당 툴 결과 누적 ≤ 40,000자. 넘는 호출은 빈 결과가 아니라 "상한 초과" `ToolMessage`로
   돌려 모델이 알게 한다.
 
 ### 툴은 LangChain이 정의하고 LangGraph가 돌린다
@@ -253,8 +253,8 @@ ScriptedModel(tool_calls 붙인 `AIMessage` 지원)로:
 - 목록 밖 subject_code·evidence_ref 버림, 전부 버려지면 repair 1회, 두 번째 실패는 `ThesisError`
 - 확률 합 검증: ±0.02 안이면 정규화, 벗어나면 그 subject 버림, 전부 벗어나면 repair 1회
 - 근거 0건 허용, 세 `*_reasoning` 필드 각각 자름
-- 툴 상한: `hours` 0·73, `min_score` −1·101, 결과 20건 초과, tool call 12회 초과, 누적
-  24,000자 초과가 잘리거나 "상한 초과" `ToolMessage`로 돌아오는지
+- 툴 상한: `hours` 0·73, `min_score` −1·101, 결과 20건 초과, tool call 20회 초과, 누적
+  40,000자 초과가 잘리거나 "상한 초과" `ToolMessage`로 돌아오는지
 - 툴 계약: 모르는 툴·깨진 인자가 오류 `ToolMessage`로 돌아오고 `tool_call_id`마다
   `ToolMessage`가 정확히 하나인지, DB 예외가 그대로 올라오는지
 - `evidence_refs` 중복이 첫 등장 rank로 합쳐지는지, 중복 `subject_code`가 거절되는지,

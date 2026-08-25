@@ -203,7 +203,7 @@ investigate → (tool_calls 있으면) tools → investigate → … → answer 
 ```
 
 Toolbox는 2단계의 것을 그대로 쓴다. `as_of_at`만 그 지평의 장후 15:30 KST로 바꿔 만든다.
-상한도 그대로(왕복 3, tool call 12회, 결과 누적 24,000자).
+상한도 그대로(왕복 3, tool call 20회, 결과 누적 40,000자).
 
 ### 프롬프트에 주는 것 — 변형 둘을 실측으로 가른다
 

@@ -246,9 +246,9 @@ stock_event_outcome (            -- 이벤트·지표 하나의 판정. 첫 성�
   (`DISTINCT ON`)은 양쪽이 같다.
 - 인자는 `ticker` 하나. 추적 목록 밖은 `ToolLimitExceeded`(기존 `analyst_opinions`와 같은
   처리). 건수 상한 `MAX_TOOL_RESULTS`(20).
-- **tool call 상한 주의**: 툴이 14개가 된다. `MAX_TOOL_CALLS` 12를 이미 넘어 있는 상태라
-  ([2-agent.md](2-agent.md) 1절) 이 툴 추가로 더 벌어진다 — 상한 조정은
-  [TUNING.md](TUNING.md)의 기존 항목을 따르고 여기서 건드리지 않는다.
+- **tool call 상한 주의**: 툴이 14개가 된다. 12로는 툴마다 한 번씩도 못 불러
+  2026-08-25에 `MAX_TOOL_CALLS`를 20으로 올렸다([2-agent.md](2-agent.md) 1절).
+  더 조정할 일이 생기면 [TUNING.md](TUNING.md)의 기존 항목을 따른다.
 
 ## 6. 컨센서스 수집기 — 후행 단계
 

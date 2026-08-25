@@ -40,6 +40,20 @@ from modules.utility import KST_TIMEZONE
 ASIA_COUNTRIES = frozenset({"JP", "TW", "HK", "CN"})
 INDEX_FUTURE = "index_future"
 
+# 기관 세부·기타 표의 열. 필드 이름과 머리글을 한 곳에 둔다 — 둘을 따로 적으면 순서가
+# 어긋나 값이 옆 칸으로 밀린다. 앞 일곱만 더해야 기관계이고 뒤 둘은 기관계 밖이다.
+INSTITUTION_DETAIL_COLUMNS = (
+    ("securities", "금융투자"),
+    ("investment_trust", "투신"),
+    ("private_equity", "사모"),
+    ("bank", "은행"),
+    ("insurance", "보험"),
+    ("merchant_bank", "종금"),
+    ("pension_fund", "연기금"),
+    ("other_corporation", "기타법인"),
+    ("other_organization", "기타단체"),
+)
+
 # 표에 그리는 순서. **정렬을 SQL에 맡기지 않는다.** 이름순으로 두면 코스닥이 코스피 위에
 # 오고 통화가 CNY부터 시작한다. 읽는 사람이 먼저 보고 싶은 것과 가나다·알파벳 순서는 다르다.
 # 목록에 없는 값은 뒤로 밀리고 자기들끼리는 원래 순서를 지킨다.
@@ -538,6 +552,9 @@ def _stock_trade_sections(summary: MarketSummary) -> list[dict[str, Any]]:
 
     제목에 KRX를 밝힌다. 시세 표가 15:30 이후 NXT 봉을 보이므로, 여기 종가가 그와 다른
     이유(KRX 정규장 확정치이고 NXT 체결은 이 집계에 없음)가 제목에서 보여야 한다.
+
+    기타법인·기타단체(KIS 화면의 `기타기관`)는 **기관계 밖이라** 앞 일곱과 합이 기관계가
+    아니다. 그래서 제목이 `기관 세부·기타`다. 앞 일곱만 더하면 기관계가 된다.
     """
     trades = _closed_trades(summary)
     if not trades:
@@ -563,13 +580,15 @@ def _stock_trade_sections(summary: MarketSummary) -> list[dict[str, Any]]:
     detail_rows = [
         (
             trade.label,
-            f"{trade.securities_net_buy_qty:+,}",
-            f"{trade.investment_trust_net_buy_qty:+,}",
-            f"{trade.private_equity_net_buy_qty:+,}",
-            f"{trade.bank_net_buy_qty:+,}",
-            f"{trade.insurance_net_buy_qty:+,}",
-            f"{trade.merchant_bank_net_buy_qty:+,}",
-            f"{trade.pension_fund_net_buy_qty:+,}",
+            *(
+                cell
+                for name, _ in INSTITUTION_DETAIL_COLUMNS
+                for cell in (
+                    f"{getattr(trade, f'{name}_net_buy_qty'):+,}",
+                    _quantity(getattr(trade, f"previous_{name}_net_buy_qty")),
+                )
+            ),
+            _session_stamp(trade.previous_business_date),
             f"{trade.business_date:%m/%d}",
         )
         for trade in trades
@@ -594,8 +613,13 @@ def _stock_trade_sections(summary: MarketSummary) -> list[dict[str, Any]]:
             closing_rows,
         ),
         *blocks.table_section(
-            "기관 세부(주·KRX)",
-            ("종목", "금융투자", "투신", "사모", "은행", "보험", "종금", "연기금", "기준"),
+            "기관 세부·기타(주·KRX)",
+            (
+                "종목",
+                *(label for _, header in INSTITUTION_DETAIL_COLUMNS for label in (header, f"직전 {header}")),
+                "직전 기준",
+                "기준",
+            ),
             detail_rows,
         ),
     ]

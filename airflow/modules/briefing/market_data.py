@@ -258,6 +258,18 @@ class StockTradeSnapshot(BaseModel):
     insurance_net_buy_qty: int
     merchant_bank_net_buy_qty: int
     pension_fund_net_buy_qty: int
+    # 기관계 밖이다. 기관 세부 일곱의 합에 넣으면 기관계와 어긋난다.
+    other_corporation_net_buy_qty: int
+    other_organization_net_buy_qty: int
+    previous_securities_net_buy_qty: int | None = None
+    previous_investment_trust_net_buy_qty: int | None = None
+    previous_private_equity_net_buy_qty: int | None = None
+    previous_bank_net_buy_qty: int | None = None
+    previous_insurance_net_buy_qty: int | None = None
+    previous_merchant_bank_net_buy_qty: int | None = None
+    previous_pension_fund_net_buy_qty: int | None = None
+    previous_other_corporation_net_buy_qty: int | None = None
+    previous_other_organization_net_buy_qty: int | None = None
 
     @property
     def change_percent(self) -> float | None:
@@ -530,6 +542,17 @@ class MarketBriefingReader:
                 insurance_net_buy_qty=row[16],
                 merchant_bank_net_buy_qty=row[17],
                 pension_fund_net_buy_qty=row[18],
+                other_corporation_net_buy_qty=row[19],
+                other_organization_net_buy_qty=row[20],
+                previous_securities_net_buy_qty=row[21],
+                previous_investment_trust_net_buy_qty=row[22],
+                previous_private_equity_net_buy_qty=row[23],
+                previous_bank_net_buy_qty=row[24],
+                previous_insurance_net_buy_qty=row[25],
+                previous_merchant_bank_net_buy_qty=row[26],
+                previous_pension_fund_net_buy_qty=row[27],
+                previous_other_corporation_net_buy_qty=row[28],
+                previous_other_organization_net_buy_qty=row[29],
             ),
         )
         movements = self._fetch(

@@ -69,6 +69,8 @@ def _key(statement: str) -> str:
         return "index"
     if "FROM stock_investor_trade_daily" in statement:
         return "stock"
+    if "FROM market_session" in statement:
+        return "session"
     return "other"
 
 
@@ -229,3 +231,29 @@ def test_the_prompt_explains_how_to_read_the_block():
     assert "recent_signals" in prompt
     # 사건이지 판정이 아니라는 것을 프롬프트가 직접 말한다.
     assert "사건" in prompt
+
+
+# --- ThesisRun ----------------------------------------------------------------
+
+
+def test_the_previous_open_day_is_read_once():
+    """장전이 이 값을 매크로 창의 시작과 관측 세션 둘에 쓴다.
+
+    두 번 조회하면 그 사이 `market_calendar_daily`가 행을 넣어 두 답이 갈릴 수 있다.
+    창은 어제 마감부터인데 관측은 오늘 세션을 보는 상태가 그대로 프롬프트에 실린다.
+    """
+    connection = FakeConnection({"session": [(date(2026, 8, 20),)]})
+    run = thesis_common.ThesisRun(connection, run_date=SESSION, as_of_at=AS_OF)
+
+    assert run.previous_open_day() == run.previous_open_day() == date(2026, 8, 20)
+    assert len([call for call in connection.calls if _key(call[0]) == "session"]) == 1
+
+
+def test_an_unfilled_calendar_is_remembered_as_none():
+    """달력이 아직 없는 것도 답이다. 두 번째 호출이 다시 조회하지 않는다."""
+    connection = FakeConnection()
+    run = thesis_common.ThesisRun(connection, run_date=SESSION, as_of_at=AS_OF)
+
+    assert run.previous_open_day() is None
+    assert run.previous_open_day() is None
+    assert len([call for call in connection.calls if _key(call[0]) == "session"]) == 1

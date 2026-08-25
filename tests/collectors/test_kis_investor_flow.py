@@ -335,8 +335,8 @@ def test_market_flow_reads_the_institution_breakdown(monkeypatch):
 
 
 def test_the_institution_parts_must_add_up_to_the_institution_total(monkeypatch):
-    # 반올림 오차 허용 폭(4)을 넘는 어긋남이어야 실패한다.
-    broken = market_row(fund_ntby_qty="21683")
+    """접미사가 어긋나 한 분류가 0이 되면 세부 합이 기관계를 못 채운다."""
+    broken = market_row(fund_ntby_qty="0")
     monkeypatch.setattr(kis_investor_flow, "send_get", fake_send_get(body(output=[broken])))
 
     with pytest.raises(KisPayloadError, match="institution parts do not add up"):
@@ -345,12 +345,46 @@ def test_the_institution_parts_must_add_up_to_the_institution_total(monkeypatch)
 
 def test_the_investor_categories_must_close_to_zero(monkeypatch):
     """시장 전체는 닫혀 있다. 닫히지 않으면 분류 하나를 빠뜨린 것이다."""
-    # 반올림 오차 허용 폭(3)을 넘는 어긋남이어야 실패한다.
-    broken = market_row(etc_corp_ntby_vol="1204")
+    broken = market_row(etc_corp_ntby_vol="20000")
     monkeypatch.setattr(kis_investor_flow, "send_get", fake_send_get(body(output=[broken])))
 
     with pytest.raises(KisPayloadError, match="do not close to zero"):
         COLLECTOR.fetch_market_flow(InvestorFlowMarket.KOSPI, OBSERVED_AT)
+
+
+def test_a_snapshot_skew_within_the_proportional_tolerance_is_stored(monkeypatch):
+    """KIS가 분류마다 몇 초 어긋난 집계를 섞어 준다. 그 폭은 거래 규모를 따라 커진다.
+
+    실측(2026-08-25): 코스피 잔차 170에 총거래 345천, 주식선물 잔차 8831에 총거래 10.2백만.
+    둘 다 0.1% 아래인데 상수 허용 폭(3·4)에는 걸려서 태스크 13%가 재시도로 살아났다.
+    """
+    gross = sum(
+        int(market_row()[f"{prefix}_{side}_vol"]) for prefix in ("frgn", "orgn", "prsn") for side in ("seln", "shnu")
+    )
+    skew = gross // 1000  # 0.1%. 실측 잔차의 크기다.
+    skewed = market_row(etc_corp_ntby_vol=str(1200 + skew))
+
+    monkeypatch.setattr(kis_investor_flow, "send_get", fake_send_get(body(output=[skewed])))
+
+    row = COLLECTOR.fetch_market_flow(InvestorFlowMarket.KOSPI, OBSERVED_AT).row
+
+    assert row.other_corporation_net_buy_qty == 1200 + skew
+
+
+def test_a_shifted_column_still_fails_under_the_proportional_tolerance(monkeypatch):
+    """완화의 조건. 칸이 밀리면 잔차가 순매수 값 자체 크기라 허용 폭의 20배를 넘는다."""
+    base = market_row()
+    shifted = market_row(frgn_ntby_qty=base["orgn_ntby_qty"], orgn_ntby_qty=base["frgn_ntby_qty"])
+    monkeypatch.setattr(kis_investor_flow, "send_get", fake_send_get(body(output=[shifted])))
+
+    with pytest.raises(KisPayloadError, match="net buy does not add up"):
+        COLLECTOR.fetch_market_flow(InvestorFlowMarket.KOSPI, OBSERVED_AT)
+
+
+def test_the_tolerance_has_a_floor_for_quiet_slots():
+    """거래가 얇은 이른 슬롯에서는 비례 폭이 0이 된다. 반올림 한 칸은 그래도 봐준다."""
+    assert kis_investor_flow.identity_tolerance(0) == 4
+    assert kis_investor_flow.identity_tolerance(10_000_000) == 20_000
 
 
 def test_the_vol_suffix_categories_are_not_read_as_qty():

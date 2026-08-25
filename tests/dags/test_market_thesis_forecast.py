@@ -1,6 +1,6 @@
 """장전 전망 DAG와 `modules/thesis_forecast.py`.
 
-추론의 알맹이는 `modules/thesis.py`에 있고 `tests/modules/test_thesis.py`가 덮는다.
+추론의 알맹이는 `modules/thesis_*.py` 여섯에 있고 `tests/modules/test_thesis_pipeline.py`가 덮는다.
 여기 남은 것은 `@dag`가 만든 객체를 읽어야 알 수 있는 것(스케줄, 태스크 그래프),
 장전의 시각 계산, 그리고 `PreOpenForecast`다.
 """
@@ -210,7 +210,7 @@ def test_run_hands_build_and_store_every_argument_it_requires(monkeypatch):
     2026-08-23에 형제 브랜치 둘을 합치며 `past`가 필수 인자로 생겼는데 한 호출이 그것을
     모른 채 합쳐져 매 실행 `TypeError`였다. 충돌 없이 합쳐진 자리라 테스트만이 잡는다.
     """
-    from modules import thesis as market_thesis
+    from modules import thesis_store
 
     signature = inspect.signature(thesis_common.ThesisRun.build_and_store)
     received: dict[str, Any] = {}
@@ -222,10 +222,10 @@ def test_run_hands_build_and_store_every_argument_it_requires(monkeypatch):
     monkeypatch.setattr(thesis_common.ThesisRun, "skip_unless_open", lambda self: None)
     monkeypatch.setattr(thesis_common.ThesisRun, "previous_open_day", lambda self: date(2026, 8, 20))
     monkeypatch.setattr(
-        thesis_common.ThesisRun, "observed_state", lambda self, module, session, targets: {"session": str(session)}
+        thesis_common.ThesisRun, "observed_state", lambda self, session, targets: {"session": str(session)}
     )
     monkeypatch.setattr(thesis_forecast.PreOpenForecast, "check_ready", lambda self: None)
-    monkeypatch.setattr(market_thesis, "ThesisStore", FakeStore)
+    monkeypatch.setattr(thesis_store, "ThesisStore", FakeStore)
     monkeypatch.setattr(thesis_common.ThesisRun, "build_and_store", fake_build_and_store)
 
     forecast = thesis_forecast.PreOpenForecast(FakeConnection([]), run_date=RUN_DATE)

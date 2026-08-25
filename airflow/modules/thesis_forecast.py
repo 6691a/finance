@@ -12,7 +12,7 @@ from typing import Any
 from airflow.sdk import get_current_context
 
 from modules import thesis_common
-from modules.thesis_state import ThesisRunResult
+from modules.thesis_state import RunSlot, ThesisRunResult
 from modules.utility import KST_TIMEZONE
 
 logger = logging.getLogger(__name__)
@@ -85,12 +85,13 @@ class PreOpenForecast:
 
     def run(self, *, dag_run_id: str) -> int:
         """휴장 판정 → readiness guard → 관측 상태 → LLM → 저장. 저장한 행 수를 준다."""
-        from modules import thesis as market_thesis
+        from modules.thesis_domain import PREFETCHED_PAST_THESES
+        from modules.thesis_store import ThesisStore
 
         self._run.skip_unless_open()
         self.check_ready()
 
-        store = market_thesis.ThesisStore(self.connection)
+        store = ThesisStore(self.connection)
         targets = store.subjects()
         # 장전이 보는 세션은 **전 영업일**이다. 오늘 장은 아직 열리지 않았다.
         session = self._run.previous_open_day()
@@ -101,15 +102,15 @@ class PreOpenForecast:
             target.code: store.past_theses(
                 as_of_at=self._run.as_of_at,
                 subject_code=target.code,
-                n=market_thesis.PREFETCHED_PAST_THESES,
+                n=PREFETCHED_PAST_THESES,
             )
             for target in targets
         }
         return self._run.build_and_store(
-            run_slot=market_thesis.RunSlot.PRE_OPEN,
+            run_slot=RunSlot.PRE_OPEN,
             macro_window_start=self.macro_window_start(),
             targets=targets,
-            observed=self._run.observed_state(market_thesis, session, targets),
+            observed=self._run.observed_state(session, targets),
             past=past,
             dag_run_id=dag_run_id,
         )

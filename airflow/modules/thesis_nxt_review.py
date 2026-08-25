@@ -49,13 +49,14 @@ from pydantic import AwareDatetime, BaseModel, ConfigDict
 
 from modules import thesis_common
 from modules.sql import read_sql
-from modules.thesis_state import AfterHoursObservation, NxtObservedState, ThesisRunResult
+from modules.thesis_domain import ThesisSubjectKind
+from modules.thesis_state import AfterHoursObservation, NxtObservedState, RunSlot, ThesisRunResult
 from modules.utility import KST_TIMEZONE
 
 if TYPE_CHECKING:
-    # 런타임 import는 못 한다 — `modules.thesis`가 LangChain을 끌고 와서 DagBag 30초
-    # 타임아웃에 걸린다(`thesis_common` docstring). `TYPE_CHECKING`은 런타임에 안 돈다.
-    from modules.thesis import Subject
+    # 런타임 import는 안 한다 — 타입 이름 하나 때문에 모듈을 끌고 올 이유가 없다.
+    # `TYPE_CHECKING`은 런타임에 돌지 않는다.
+    from modules.thesis_domain import Subject
 
 logger = logging.getLogger(__name__)
 
@@ -144,10 +145,10 @@ class NxtAfterHoursReview:
     def targets(self) -> tuple["Subject", ...]:
         """이번 실행의 추론 대상. **종목뿐이다** — NXT에 지수가 없다(모듈 docstring)."""
         if self._targets is None:
-            from modules import thesis as market_thesis
+            from modules.thesis_store import ThesisStore
 
-            subjects = market_thesis.ThesisStore(self._connection).subjects()
-            self._targets = tuple(s for s in subjects if s.kind is market_thesis.ThesisSubjectKind.STOCK)
+            subjects = ThesisStore(self._connection).subjects()
+            self._targets = tuple(s for s in subjects if s.kind is ThesisSubjectKind.STOCK)
         return self._targets
 
     @property
@@ -199,9 +200,7 @@ class NxtAfterHoursReview:
         **지수는 `index_regular`라는 이름으로 준다.** subject가 아니라 맥락이라는 사실이 키에서
         보여야 모델이 지수에 대한 추론을 쓰지 않는다.
         """
-        from modules import thesis as market_thesis
-
-        regular = self._run.observed_state(market_thesis, self._run_date, self.targets)
+        regular = self._run.observed_state(self._run_date, self.targets)
         return NxtObservedState(
             session=self._run_date,
             regular=regular.stock,
@@ -222,12 +221,10 @@ class NxtAfterHoursReview:
 
     def run(self, *, dag_run_id: str) -> int:
         """휴장 판정 → readiness guard → 관측 상태 → LLM → 저장. 저장한 행 수를 준다."""
-        from modules import thesis as market_thesis
-
         self._run.skip_unless_open()
         self.check_ready()
         return self._run.build_and_store(
-            run_slot=market_thesis.RunSlot.POST_NXT_CLOSE,
+            run_slot=RunSlot.POST_NXT_CLOSE,
             macro_window_start=macro_window_start(self._run_date),
             targets=self.targets,
             observed=self.observed_state(),

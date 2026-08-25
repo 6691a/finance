@@ -1,3 +1,13 @@
+"""시장 추론 파이프라인 — 도메인·툴박스·생성·사후평가·저장·렌더링.
+
+`thesis.py`가 역할 모듈 여섯으로 갈린 뒤에도(2026-08-25) 이 파일은 하나다. **테스트가
+공유하는 것이 모듈 경계가 아니라 픽스처이기 때문이다** — 가짜 연결과 대본 모델, 행 만드는
+함수 열몇 개, SQL 상수 스물여섯을 거의 모든 절이 함께 쓴다. 여섯으로 흩으면 그것들이
+테스트 전용 모듈로 빠지거나 파일마다 복제된다.
+
+절 머리 주석이 어느 모듈을 보는지 밝힌다.
+"""
+
 import json
 import re
 from datetime import UTC, date, datetime, timedelta
@@ -11,13 +21,12 @@ from sqlalchemy import Table
 from apps.models.analysis import Thesis, ThesisEvidence, ThesisOutcome, ThesisPrecedent
 from modules.sql import read_sql
 from modules.technical import TECHNICAL_LOOKBACK_BARS
-from modules.thesis import (
+from modules.thesis_domain import (
     DART_VIEWER_URL,
     FLAT_THRESHOLD_PCT,
     HORIZON_DAYS,
     MAX_ITEM_DETAIL_CHARS,
     MAX_MECHANISM_CHARS,
-    MAX_NARRATIVE_CHARS,
     MAX_OPINION_REASON_CHARS,
     MAX_REASONING_CHARS,
     MAX_TOOL_CALLS,
@@ -29,30 +38,45 @@ from modules.thesis import (
     PREFETCHED_PAST_THESES,
     PROMPT_VERSION,
     Evidence,
-    FollowupNarrator,
-    NarrativeDraft,
-    NarrativeTarget,
-    RunSlot,
-    StoredEvidence,
-    StoredThesis,
     Subject,
-    ThesisBuilder,
     ThesisDirection,
     ThesisError,
     ThesisEvidenceKind,
-    ThesisStore,
     ThesisSubjectKind,
-    ThesisToolbox,
     ThesisVerdict,
-    ToolLimitExceeded,
     brier_score,
     classify_outcome,
     evidence_ref,
+)
+from modules.thesis_generation import (
+    ThesisBuilder,
     normalize_probabilities,
+)
+from modules.thesis_outcomes import (
+    MAX_NARRATIVE_CHARS,
+    FollowupNarrator,
+    NarrativeDraft,
+    NarrativeTarget,
+)
+from modules.thesis_render import (
     render_blocks,
     render_text,
 )
-from modules.thesis_state import IndexObservation, ObservedState, StockObservation
+from modules.thesis_state import (
+    IndexObservation,
+    ObservedState,
+    RunSlot,
+    StockObservation,
+)
+from modules.thesis_store import (
+    StoredEvidence,
+    StoredThesis,
+    ThesisStore,
+)
+from modules.thesis_toolbox import (
+    ThesisToolbox,
+    ToolLimitExceeded,
+)
 from modules.thesis_tools import DocumentDetail, MacroDetail
 
 THESIS_INSERT = read_sql("postgres", "thesis", "insert.sql")

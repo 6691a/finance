@@ -12,19 +12,20 @@
 
 ## 결론
 
-분리 가치가 확인된 곳은 여섯 곳이다. `briefing/market.py`와 `apps/models/market.py`가
-끝났고 `collectors/kis.py`는 절반이 끝났다. 남은 셋은 아직 그대로다.
+분리 가치가 확인된 곳은 여섯 곳이다. P0 넷 중 셋(`briefing/market.py`,
+`apps/models/market.py`, `thesis.py`)이 끝났고 `collectors/kis.py`는 절반이 끝났다.
+남은 것은 P1 둘이다.
 
 LOC는 `c10c167` 기준이다. 클래스 전환이 이 파일들을 여럿 건드려 최초 조사 때와 다르다.
 
 | 우선순위 | 파일 | LOC | 판정 |
 | --- | --- | ---: | --- |
-| P0 | `airflow/modules/thesis.py` | 3,075 | 도메인·도구·생성·사후평가·렌더링을 역할 모듈로 분리 |
 | P1 | `apps/models/analysis.py` | 986 | thesis·stock event·technical signal 모델을 분리 |
 | P1 | `airflow/modules/expectation.py` | 849 | LLM 추출과 결정론적 판정을 다음 기능 변경 때 분리 |
 | 완료 | `airflow/modules/collectors/kis.py` | 1,622→537 | 전송층과 시세 수집을 갈랐다(2026-08-25). 남은 절반은 P0-3 |
 | 완료 | `airflow/modules/briefing/market.py` | 1,498→739 | 조회를 `market_data.py`(795)로 뺐다(2026-08-25). P0-4 |
 | 완료 | `apps/models/market.py` | 1,916→패키지 | 하위 모듈 다섯으로 나눴다(2026-08-25). P0-1 |
+| 완료 | `airflow/modules/thesis.py` | 3,075→모듈 여섯 | 역할별로 나눴다(2026-08-25). P0-2 |
 
 `assessment.py`, `collectors/document/dart.py`, `thesis_tools.py`, `thesis_state.py`는 클래스가
 많아 보여도 지금은 나누지 않는다. 클래스 수가 아니라 **서로 독립적으로 바뀌는 책임이 둘
@@ -118,7 +119,10 @@ apps/models/market/
 비교하면 그 목록이 틀린 것을 못 잡기 때문이다. 이름 하나를 빼고 돌려 실제로 실패하는 것을
 확인했다.
 
-## P0-2. `airflow/modules/thesis.py`
+## P0-2. `airflow/modules/thesis.py` (완료)
+
+> **2026-08-25에 끝났다.** 역할 모듈 여섯이 됐다. 아래는 왜 그 축으로 갈랐는지의
+> 기록이고, 실제로 옮긴 결과와 그때 정한 것은 "옮기면서 정한 것"에 있다.
 
 ### 문제
 
@@ -155,13 +159,44 @@ Pydantic 도구 응답 카탈로그이므로 그대로 둔다. 영구 호환 fac
 직접 import 파일이 5개뿐이므로 각 소비자가 필요한 역할 모듈을 직접 import하는 편이
 의존성이 더 분명하다.
 
-### 완료 조건
+### 옮기면서 정한 것
 
-- `thesis_common.py`와 DAG의 모듈 import 단계가 LangChain·LangGraph 전체를 불러오지 않는다.
-- SQL 상수와 프롬프트 revision 값은 이동만 하고 내용은 바꾸지 않는다.
-- `tests/modules/test_thesis.py`(3,242 LOC)는 toolbox, generation, outcomes, render 경계로
-  함께 나눈다.
-- 파일 이동과 `ThesisStore` 같은 새 상태 객체 도입은 같은 변경에 섞지 않는다.
+실제 모듈은 다섯이 아니라 여섯이다. 계획에 없던 `thesis_store.py`가 생겼다 — 이 감사를
+쓴 뒤 `ThesisStore`(연결 하나를 쥔 저장·조회 클래스)가 들어왔고, 그 메서드들이 생성·채점·
+해설·렌더 넷에 걸쳐 있어서 역할별로 흩으면 클래스가 셋으로 쪼개진다. 클래스 규칙이 방금
+합쳐 놓은 것을 파일 분리가 다시 가르는 셈이라 통째로 자기 모듈에 뒀다.
+
+```text
+thesis_domain.py      404  enum, Evidence, Subject, 임계값, 채점 수식 — LangChain 없음
+thesis_toolbox.py   1,219  툴 인자 스키마, 조회 SQL, ThesisToolbox
+thesis_generation.py  577  답변 모델, 프롬프트, ThesisBuilder
+thesis_outcomes.py    473  해설 모델/프롬프트, FollowupNarrator
+thesis_store.py       642  저장·조회 SQL, Stored* 모델, ThesisStore
+thesis_render.py      204  Slack 블록과 표시 helper
+```
+
+의존은 한 방향이다: `domain <- toolbox <- generation <- outcomes <- store <- render`.
+**늦은 import 하나만 남았다** — `ThesisToolbox._past_theses`가 `ThesisStore`를 부르는 자리다.
+그 한 줄 때문에 toolbox→store 간선이 생기고 store가 초안 모델 때문에 generation을 보므로
+순환이 된다. 툴박스가 store를 보는 곳은 거기 하나뿐이라 함수 안 import로 끊고 이유를 주석에 남겼다.
+
+### 완료 조건과 그 결과
+
+- **`thesis_common.py`와 DAG의 모듈 import 단계가 LangChain·LangGraph를 불러오지 않는다.**
+  별도 인터프리터에서 재서 0개를 확인했고 `tests/modules/test_thesis_import_weight.py`가
+  그것을 잠근다. 반대 방향(`thesis_generation`은 무겁다)도 함께 재서, 테스트가 아무 것도
+  지키지 않는 상태가 되지 않게 했다.
+- **덤으로 `observed_state(market_thesis, ...)`의 모듈 인자가 없어졌다.** `ThesisSubjectKind`
+  하나 때문에 모듈 객체를 넘기고 있었는데, 이제 `thesis_domain`이 가벼워서 모듈 수준에서
+  import한다. 이것이 파일을 가른 값어치가 코드에 드러난 자리다.
+- SQL 상수와 프롬프트 revision 값은 이동만 했다. 코드는 글자 그대로다.
+- **`tests/modules/test_thesis.py`는 나누지 않고 `test_thesis_pipeline.py`로 이름만 바꿨다.**
+  테스트가 공유하는 것이 모듈 경계가 아니라 픽스처다 — 가짜 연결과 대본 모델, 행 만드는
+  함수 열몇 개, SQL 상수 스물여섯을 거의 모든 절이 함께 쓴다. 여섯으로 흩으면 그것들이
+  테스트 전용 모듈로 빠지거나 파일마다 복제된다. 다만 없어진 모듈 이름을 파일 이름이
+  가리키고 있으면 안 되므로 이름은 고쳤다.
+- 파일 이동과 새 상태 객체 도입을 같은 변경에 섞지 않았다. `ThesisStore`가 먼저(클래스 전환),
+  파일 이동이 나중이다.
 
 ## P0-3. `airflow/modules/collectors/kis.py` (절반 완료)
 
@@ -306,7 +341,7 @@ DTO 한 개당 파일 하나를 만드는 방식은 사용하지 않는다. 한 
 
 1. ~~`briefing/market.py` 조회/렌더 분리~~ — 2026-08-25 완료. 가장 작은 패턴이 검증됐다.
 2. ~~`apps/models/market.py`를 패키지로~~ — 2026-08-25 완료.
-3. `thesis.py`를 domain → toolbox → generation → outcomes → render 순으로 이동한다.
+3. ~~`thesis.py`를 역할 모듈로~~ — 2026-08-25 완료.
 4. `apps/models/analysis.py`는 모델 파일 이동만 하는 독립 변경으로 처리한다.
 5. `expectation.py`는 다음 기능 변경과 함께 두 변경 축을 가른다.
 6. KIS 지수 일봉 수집기와 `test_kis.py` 분리는 남은 절반이라 언제 해도 된다(P0-3).
@@ -317,8 +352,10 @@ DTO 한 개당 파일 하나를 만드는 방식은 사용하지 않는다. 한 
 F821이 아예 없었다 — 하위 모듈끼리 서로를 참조하지 않는다는 뜻이고, 경계가 맞았다는 신호다.
 그리고 **옮기기 전에 불변량을 스냅샷으로 떠 둔다.** 모델 이동에서는 그것이 곧 완료 증명이다.
 
-**3번은 `ThesisStore`가 이미 들어간 뒤의 파일을 옮긴다.** 클래스 전환과 파일 이동을 섞지
-않기로 한 것이 지켜졌고, 순서는 전환이 먼저였다.
+**3번에서 배운 것**: 배치를 손으로 정하기 전에 이름마다 어느 쪽에서 쓰이는지를 세고
+**모듈 간 간선으로 순환을 먼저 찾는다.** 처음 잡은 줄 번호 경계는 순환 셋을 만들었고,
+그것을 보고 `Subject`·`SLOT_LABELS`를 도메인으로 올리고 저장 SQL을 store로 모아 풀었다.
+자른 뒤 남은 오류는 의도한 늦은 import 하나뿐이었다.
 
 공통 검증 명령은 기존 문서와 같다.
 

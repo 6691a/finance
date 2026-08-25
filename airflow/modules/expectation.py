@@ -41,7 +41,7 @@ import statistics
 from collections.abc import Sequence
 from datetime import UTC, date, datetime
 from decimal import Decimal, InvalidOperation
-from typing import Any, Literal, Protocol, Self, TypedDict
+from typing import Any, Literal, TypedDict
 
 from langchain_core.language_models import BaseChatModel
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, SystemMessage
@@ -49,6 +49,7 @@ from langgraph.graph import END, START, StateGraph
 from pydantic import BaseModel, ConfigDict, ValidationError
 
 from modules import llm
+from modules.db import Connection, Cursor
 from modules.llm import UnsupportedResponseFormat
 from modules.schema import SchemaError, json_object, response_format
 from modules.sql import read_sql
@@ -106,26 +107,6 @@ VERDICT_LABELS: dict[str, str] = {
     "meet": "– 부합",
     "miss": "▼ 미달",
 }
-
-
-class Cursor(Protocol):
-    def __enter__(self) -> Self: ...
-
-    def __exit__(self, *args: object) -> bool | None: ...
-
-    def execute(self, statement: str, parameters: Sequence[Any] = ()) -> object: ...
-
-    def executemany(self, statement: str, parameters: Sequence[Sequence[Any]]) -> object: ...
-
-    def fetchall(self) -> Any: ...
-
-    def fetchone(self) -> Any: ...
-
-
-class Connection(Protocol):
-    def cursor(self) -> Cursor: ...
-
-
 class ExtractionError(RuntimeError):
     """모델이 우리가 아는 모양으로 답하지 않았다. 문서는 원장에 오르지 않고 다음 실행이 다시 집는다."""
 
@@ -610,77 +591,6 @@ EARNINGS_ACTUAL = read_sql("postgres", "earnings_fact", "select_actual_for_judgm
 OUTCOME_INSERT = read_sql("postgres", "stock_event_outcome", "insert.sql")
 
 
-def pending_documents(
-    connection: Connection,
-    limit: int = DEFAULT_BATCH_SIZE,
-    prompt_version: str = PROMPT_VERSION,
-) -> tuple[PendingExtractionDocument, ...]:
-    """추출을 기다리는 문서. 평가 완료 + 종목 태그 + (미추출이거나 본문·프롬프트가 바뀜)."""
-    with connection.cursor() as cursor:
-        cursor.execute(PENDING_EXTRACTION, (prompt_version, limit))
-        rows = cursor.fetchall()
-    return tuple(
-        PendingExtractionDocument(
-            id=row[0],
-            source_slug=row[1],
-            title=row[2],
-            summary=row[3],
-            body=row[4],
-            published_at=row[5],
-            detected_at=row[6],
-            content_hash=row[7],
-            tickers=tuple(row[8] or ()),
-        )
-        for row in rows
-    )
-
-
-def store_extraction(
-    connection: Connection,
-    document: PendingExtractionDocument,
-    claims: Sequence[NormalizedClaim],
-    model: str,
-    extracted_at: datetime | None = None,
-    prompt_version: str = PROMPT_VERSION,
-) -> None:
-    """주장과 원장을 저장한다. 문서 하나가 트랜잭션 하나다(커밋은 호출자가 한다).
-
-    주장 0건도 원장에 남는다 — "뽑았는데 없었다"와 "아직 안 뽑았다"가 구분돼야
-    매시간 같은 문서를 다시 뽑지 않는다.
-    """
-    stated_at = document.stated_at
-    with connection.cursor() as cursor:
-        for claim in claims:
-            cursor.execute(
-                CLAIM_INSERT,
-                (
-                    claim.stock_code,
-                    claim.event_type,
-                    claim.period_key,
-                    claim.metric,
-                    claim.claim_kind,
-                    claim.value,
-                    claim.value_low,
-                    claim.value_high,
-                    stated_at,
-                    claim.broker,
-                    document.id,
-                    None,
-                ),
-            )
-        cursor.execute(
-            EXTRACTION_UPSERT,
-            (
-                document.id,
-                document.content_hash,
-                extracted_at or datetime.now(UTC),
-                model,
-                prompt_version,
-                len(claims),
-            ),
-        )
-
-
 class JudgedOutcome(BaseModel):
     """이번 실행이 새로 쓴 판정 하나. Slack 렌더링의 입력이다."""
 
@@ -723,106 +633,185 @@ def _group_by_event(rows: Sequence[ClaimRow]) -> dict[tuple[str, str, str, str],
     return grouped
 
 
-def judge_pending(connection: Connection, dag_run_id: str) -> tuple[JudgedOutcome, ...]:
-    """판정 없는 이벤트를 대조해 새 판정 행을 쓴다. 이번 실행이 **새로 쓴** 것만 돌려준다.
+class ExpectationStore:
+    """기대·판정 원장을 읽고 쓴다. **연결과 프롬프트 버전이 상태다.**
 
-    LLM이 없다. 실제값 확보(주장 일치 또는 earnings_fact) → 발표 전 기대 집계 → 분류 →
-    INSERT(첫 성공본 불변, RETURNING 0행이면 동시 실행이 먼저 쓴 것이라 발송 대상이 아니다).
-    조건을 못 채운 키(실제 불일치, 기대 0건, 기대 0 나누기)는 행이 안 생기고 다음 실행이
-    다시 본다.
+    전에는 조회·저장·판정 셋이 각각 `connection`을 받고 그중 둘이 `prompt_version`까지
+    다시 받았다. `assessment.AssessmentStore`와 같은 모양이다 — 문서 하나가 트랜잭션
+    하나라 DAG이 저장마다 새 연결을 열고, 그 연결의 수명이 이 객체의 수명이다.
+
+    `dag_run_id`는 생성자가 아니라 `judge`의 인자다. 판정 한 번에만 쓰이고 조회·저장과
+    상관이 없다.
     """
-    with connection.cursor() as cursor:
-        cursor.execute(PENDING_JUDGMENT)
-        claim_groups = _group_by_event(_claim_rows(cursor.fetchall()))
-        cursor.execute(PENDING_EARNINGS_EXPECTATIONS)
-        earnings_groups = _group_by_event(_claim_rows(cursor.fetchall()))
 
-    judged: list[JudgedOutcome] = []
-    with connection.cursor() as cursor:
-        for key, rows in claim_groups.items():
-            actual = resolve_actual(rows)
-            if actual is None:
-                continue
-            outcome = _judge_one(cursor, key, rows, actual, dag_run_id)
-            if outcome is not None:
-                judged.append(outcome)
+    def __init__(self, connection: Connection, prompt_version: str = PROMPT_VERSION) -> None:
+        self._connection = connection
+        self._prompt_version = prompt_version
 
-        for key, rows in earnings_groups.items():
-            stock_code, _, period_key, metric = key
-            cursor.execute(EARNINGS_ACTUAL, (stock_code, period_end_for(period_key), metric))
-            fact_rows = tuple(
-                EarningsFactRow(
-                    id=row[0],
-                    statement_scope=row[1],
-                    amount_basis=row[2],
-                    release_type=row[3],
-                    rcept_no=row[4],
-                    current_amount=row[5],
-                    created_at=row[6],
-                )
-                for row in cursor.fetchall()
+    def pending(self, limit: int = DEFAULT_BATCH_SIZE) -> tuple[PendingExtractionDocument, ...]:
+        """추출을 기다리는 문서. 평가 완료 + 종목 태그 + (미추출이거나 본문·프롬프트가 바뀜)."""
+        with self._connection.cursor() as cursor:
+            cursor.execute(PENDING_EXTRACTION, (self._prompt_version, limit))
+            rows = cursor.fetchall()
+        return tuple(
+            PendingExtractionDocument(
+                id=row[0],
+                source_slug=row[1],
+                title=row[2],
+                summary=row[3],
+                body=row[4],
+                published_at=row[5],
+                detected_at=row[6],
+                content_hash=row[7],
+                tickers=tuple(row[8] or ()),
             )
-            actual = resolve_earnings_actual(fact_rows, period_key)
-            if actual is None:
-                continue
-            outcome = _judge_one(cursor, key, rows, actual, dag_run_id)
-            if outcome is not None:
-                judged.append(outcome)
-    return tuple(judged)
+            for row in rows
+        )
 
+    def store_extraction(
+        self,
+        document: PendingExtractionDocument,
+        claims: Sequence[NormalizedClaim],
+        model: str,
+        extracted_at: datetime | None = None,
+    ) -> None:
+        """주장과 원장을 저장한다. 문서 하나가 트랜잭션 하나다(커밋은 호출자가 한다).
 
-def _judge_one(
-    cursor: Cursor,
-    key: tuple[str, str, str, str],
-    rows: Sequence[ClaimRow],
-    actual: tuple[Decimal, datetime, str],
-    dag_run_id: str,
-) -> JudgedOutcome | None:
-    stock_code, event_type, period_key, metric = key
-    actual_value, announced_at, actual_ref = actual
-    aggregated = aggregate_expectations(rows, announced_at)
-    if aggregated is None:
-        # 기대가 없던 발표는 그것대로 사실이다. 억지 판정이 더 나쁘다.
-        logger.info("no pre-announcement expectations for %s %s %s %s", *key)
-        return None
-    expected_value, expectation_count = aggregated
-    classified = classify_surprise(expected_value, actual_value)
-    if classified is None:
-        logger.warning("cannot classify %s %s %s %s: expected 0, actual %s", *key, actual_value)
-        return None
-    surprise_pct, verdict = classified
-    cursor.execute(
-        OUTCOME_INSERT,
-        (
-            stock_code,
-            event_type,
-            period_key,
-            metric,
-            expected_value,
-            expectation_count,
-            actual_value,
-            surprise_pct,
-            verdict,
-            announced_at,
-            actual_ref,
-            dag_run_id,
-        ),
-    )
-    if cursor.fetchone() is None:
-        # 동시 실행이 먼저 썼다. 첫 성공본 불변 — 이번 실행의 발송 대상이 아니다.
-        return None
-    return JudgedOutcome(
-        stock_code=stock_code,
-        event_type=event_type,
-        period_key=period_key,
-        metric=metric,
-        expected_value=expected_value,
-        expectation_count=expectation_count,
-        actual_value=actual_value,
-        surprise_pct=surprise_pct,
-        verdict=verdict,
-        announced_at=announced_at,
-    )
+        주장 0건도 원장에 남는다 — "뽑았는데 없었다"와 "아직 안 뽑았다"가 구분돼야
+        매시간 같은 문서를 다시 뽑지 않는다.
+        """
+        stated_at = document.stated_at
+        with self._connection.cursor() as cursor:
+            for claim in claims:
+                cursor.execute(
+                    CLAIM_INSERT,
+                    (
+                        claim.stock_code,
+                        claim.event_type,
+                        claim.period_key,
+                        claim.metric,
+                        claim.claim_kind,
+                        claim.value,
+                        claim.value_low,
+                        claim.value_high,
+                        stated_at,
+                        claim.broker,
+                        document.id,
+                        None,
+                    ),
+                )
+            cursor.execute(
+                EXTRACTION_UPSERT,
+                (
+                    document.id,
+                    document.content_hash,
+                    extracted_at or datetime.now(UTC),
+                    model,
+                    self._prompt_version,
+                    len(claims),
+                ),
+            )
+
+    def judge(self, dag_run_id: str) -> tuple[JudgedOutcome, ...]:
+        """판정 없는 이벤트를 대조해 새 판정 행을 쓴다. 이번 실행이 **새로 쓴** 것만 돌려준다.
+
+        LLM이 없다. 실제값 확보(주장 일치 또는 earnings_fact) → 발표 전 기대 집계 → 분류 →
+        INSERT(첫 성공본 불변, RETURNING 0행이면 동시 실행이 먼저 쓴 것이라 발송 대상이 아니다).
+        조건을 못 채운 키(실제 불일치, 기대 0건, 기대 0 나누기)는 행이 안 생기고 다음 실행이
+        다시 본다.
+        """
+        with self._connection.cursor() as cursor:
+            cursor.execute(PENDING_JUDGMENT)
+            claim_groups = _group_by_event(_claim_rows(cursor.fetchall()))
+            cursor.execute(PENDING_EARNINGS_EXPECTATIONS)
+            earnings_groups = _group_by_event(_claim_rows(cursor.fetchall()))
+
+        judged: list[JudgedOutcome] = []
+        with self._connection.cursor() as cursor:
+            for key, rows in claim_groups.items():
+                actual = resolve_actual(rows)
+                if actual is None:
+                    continue
+                outcome = self._judge_one(cursor, key, rows, actual, dag_run_id)
+                if outcome is not None:
+                    judged.append(outcome)
+
+            for key, rows in earnings_groups.items():
+                stock_code, _, period_key, metric = key
+                cursor.execute(EARNINGS_ACTUAL, (stock_code, period_end_for(period_key), metric))
+                fact_rows = tuple(
+                    EarningsFactRow(
+                        id=row[0],
+                        statement_scope=row[1],
+                        amount_basis=row[2],
+                        release_type=row[3],
+                        rcept_no=row[4],
+                        current_amount=row[5],
+                        created_at=row[6],
+                    )
+                    for row in cursor.fetchall()
+                )
+                actual = resolve_earnings_actual(fact_rows, period_key)
+                if actual is None:
+                    continue
+                outcome = self._judge_one(cursor, key, rows, actual, dag_run_id)
+                if outcome is not None:
+                    judged.append(outcome)
+        return tuple(judged)
+
+    @staticmethod
+    def _judge_one(
+        cursor: Cursor,
+        key: tuple[str, str, str, str],
+        rows: Sequence[ClaimRow],
+        actual: tuple[Decimal, datetime, str],
+        dag_run_id: str,
+    ) -> JudgedOutcome | None:
+        stock_code, event_type, period_key, metric = key
+        actual_value, announced_at, actual_ref = actual
+        aggregated = aggregate_expectations(rows, announced_at)
+        if aggregated is None:
+            # 기대가 없던 발표는 그것대로 사실이다. 억지 판정이 더 나쁘다.
+            logger.info("no pre-announcement expectations for %s %s %s %s", *key)
+            return None
+        expected_value, expectation_count = aggregated
+        classified = classify_surprise(expected_value, actual_value)
+        if classified is None:
+            logger.warning("cannot classify %s %s %s %s: expected 0, actual %s", *key, actual_value)
+            return None
+        surprise_pct, verdict = classified
+        cursor.execute(
+            OUTCOME_INSERT,
+            (
+                stock_code,
+                event_type,
+                period_key,
+                metric,
+                expected_value,
+                expectation_count,
+                actual_value,
+                surprise_pct,
+                verdict,
+                announced_at,
+                actual_ref,
+                dag_run_id,
+            ),
+        )
+        if cursor.fetchone() is None:
+            # 동시 실행이 먼저 썼다. 첫 성공본 불변 — 이번 실행의 발송 대상이 아니다.
+            return None
+        return JudgedOutcome(
+            stock_code=stock_code,
+            event_type=event_type,
+            period_key=period_key,
+            metric=metric,
+            expected_value=expected_value,
+            expectation_count=expectation_count,
+            actual_value=actual_value,
+            surprise_pct=surprise_pct,
+            verdict=verdict,
+            announced_at=announced_at,
+        )
 
 
 # ---------------------------------------------------------------------------

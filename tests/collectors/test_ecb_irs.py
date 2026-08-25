@@ -10,7 +10,7 @@ from sqlalchemy import Table
 
 from apps.models.market import IndicatorObservation
 from apps.models.raw import SourceRecord
-from modules.collectors.ecb_irs import (
+from modules.collectors.indicator.ecb_irs import (
     CONVERGENCE_SERIES,
     COUNTRIES,
     DATAFLOW,

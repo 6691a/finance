@@ -58,11 +58,10 @@ import csv
 import io
 import json
 import re
-from collections.abc import Sequence
 from datetime import UTC, date, datetime
 from decimal import Decimal, InvalidOperation
 from enum import StrEnum
-from typing import Any, Protocol, Self
+from typing import Self
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlencode
 from urllib.request import Request, urlopen
@@ -75,6 +74,7 @@ from pydantic import (
     model_validator,
 )
 
+from modules.db import Connection
 from modules.sql import read_sql
 
 ECB_URL = "https://data-api.ecb.europa.eu/service/data"
@@ -175,22 +175,6 @@ MISSING_VALUES = frozenset({"", "NaN"})
 
 # `TIME_PERIOD`가 달력 하루인지 보는 모양. 일별 시계열이므로 항상 이 꼴이어야 한다.
 ISO_DATE_PATTERN = re.compile(r"^\d{4}-\d{2}-\d{2}$")
-
-
-class Cursor(Protocol):
-    def __enter__(self) -> Self: ...
-
-    def __exit__(self, *args: object) -> bool | None: ...
-
-    def execute(self, statement: str, parameters: Sequence[Any]) -> object: ...
-
-    def fetchone(self) -> Any: ...
-
-
-class Connection(Protocol):
-    def cursor(self) -> Cursor: ...
-
-
 class EcbHTTPError(RuntimeError):
     """ECB가 2xx가 아닌 상태로 응답했다.
 

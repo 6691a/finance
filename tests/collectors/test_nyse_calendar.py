@@ -8,7 +8,7 @@ from sqlalchemy import Table
 
 from apps.models.market import MarketSession
 from apps.models.raw import SourceRecord
-from modules.collectors.nyse_calendar import (
+from modules.collectors.calendar.nyse_calendar import (
     MARKET_SESSION_US_UPSERT,
     SOURCE_RECORD_INSERT,
     NyseCalendar,

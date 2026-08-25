@@ -45,7 +45,7 @@ from collections.abc import Iterable, Mapping, Sequence
 from datetime import UTC, date, datetime, timedelta
 from decimal import ROUND_HALF_UP, Decimal
 from enum import StrEnum
-from typing import Annotated, Any, Literal, Protocol, Self, TypedDict
+from typing import Annotated, Any, Literal, TypedDict
 
 from langchain_core.language_models import BaseChatModel
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, SystemMessage
@@ -56,6 +56,8 @@ from langgraph.prebuilt import ToolNode
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
 
 from modules import llm, technical
+from modules.db import Cursor
+from modules.db import TransactionalConnection as Connection
 from modules.llm import UnsupportedResponseFormat
 from modules.schema import SchemaError, json_object, response_format
 from modules.sql import read_sql
@@ -247,28 +249,6 @@ RSI_OVERBOUGHT = technical.RSI_OVERBOUGHT
 RSI_OVERSOLD = technical.RSI_OVERSOLD
 VOLUME_HEAVY_RATIO = 1.5
 VOLUME_LIGHT_RATIO = 0.7
-
-
-class Cursor(Protocol):
-    def __enter__(self) -> Self: ...
-
-    def __exit__(self, *args: object) -> bool | None: ...
-
-    def execute(self, statement: str, parameters: Sequence[Any] = ()) -> object: ...
-
-    def fetchall(self) -> Any: ...
-
-    def fetchone(self) -> Any: ...
-
-
-class Connection(Protocol):
-    def cursor(self) -> Cursor: ...
-
-    def commit(self) -> None: ...
-
-    def rollback(self) -> None: ...
-
-
 class ThesisError(RuntimeError):
     """모델이 쓸 수 있는 추론을 내지 않았다. 다시 불러도 같은 결과다."""
 
@@ -429,43 +409,6 @@ WINDOW_CHANGES = read_sql("postgres", "quote_bar", "select_window_changes.sql")
 US_MARKET_CLOSE = read_sql("postgres", "quote_bar", "select_thesis_us_close.sql")
 PAST_THESES = read_sql("postgres", "thesis", "select_past_with_outcomes.sql")
 PRECEDENT_INSERT = read_sql("postgres", "thesis_precedent", "insert.sql")
-
-
-def past_theses(connection: Connection, *, as_of_at: datetime, subject_code: str, n: int) -> list[PastThesis]:
-    """이 대상의 지난 추론과 지평별 결과. **슬롯마다** 최근 것부터 `n`건이다.
-
-    피드백 루프는 이 조회 하나다. 장전 예측(`pre_open`)과 장후 리뷰(`post_close`)를 함께
-    돌려준다 — 리뷰에 붙는 사후 해설이 "그 인과 주장이 이후 보도로 지지됐나"를 담고 있어
-    다음 예측이 볼 값어치가 크다.
-
-    **`n`은 슬롯마다다.** 총량으로 자르면 장후가 섞여 들어온 만큼 장전 예측 이력이 짧아진다.
-
-    **창의 끝은 `as_of_at`이다.** 없으면 장전 슬롯을 오후에 재실행할 때 그날 저녁의 채점이
-    아침 예측에 섞인다. SQL이 술어 셋을 건다.
-
-    `n <= 0`이면 조회하지 않고 빈 목록이다 — `PREFETCHED_PAST_THESES = 0`이 끄는 스위치다.
-    """
-    if n <= 0:
-        return []
-    with connection.cursor() as cursor:
-        cursor.execute(PAST_THESES, (as_of_at, subject_code, n))
-        rows = cursor.fetchall()
-    return [
-        PastThesis(
-            id=row[0],
-            run_slot=row[1],
-            run_date=row[2],
-            prob_up=float(row[3]),
-            prob_down=float(row[4]),
-            prob_flat=float(row[5]),
-            up_reasoning=row[6],
-            down_reasoning=row[7],
-            flat_reasoning=row[8],
-            # SQL이 jsonb_agg로 만든 목록. 모양은 `PastOutcome`이 검증한다.
-            outcomes=tuple(PastOutcome.model_validate(outcome) for outcome in row[9]),
-        )
-        for row in rows
-    ]
 
 
 # 아래 일곱은 2026-08-21에 열었다. 그전까지 모델이 볼 수 있는 것은 문서·공시·분봉 창
@@ -1231,7 +1174,7 @@ class ThesisToolbox:
         if code not in self._subject_codes:
             raise ToolLimitExceeded(f"대상 목록 밖이다: {code!r}. 쓸 수 있는 것은 {sorted(self._subject_codes)}")
         count = _clamp_int(arguments.get("n"), MIN_PAST_THESES, MAX_PAST_THESES, MIN_PAST_THESES)
-        return past_theses(self._connection, as_of_at=self._as_of_at, subject_code=code, n=count)
+        return ThesisStore(self._connection).past_theses(as_of_at=self._as_of_at, subject_code=code, n=count)
 
     def _recent_documents(self, arguments: dict[str, Any]) -> list[Evidence]:
         hours = _clamp_int(arguments.get("hours"), MIN_WINDOW_HOURS, MAX_WINDOW_HOURS, MAX_WINDOW_HOURS)
@@ -2087,92 +2030,6 @@ WATCHED_INSTRUMENTS = read_sql("postgres", "instrument", "select_watched.sql")
 INDEX_SUBJECTS: tuple[tuple[str, str], ...] = (("KOSPI", "코스피"), ("KOSDAQ", "코스닥"))
 
 
-def subjects(connection: Connection) -> tuple[Subject, ...]:
-    """이번 실행의 추론 대상. 지수는 코드가, 종목은 `instrument.is_watched`가 정한다.
-
-    종목을 마스터에서 읽는 이유는 추적 종목이 늘 때 이 모듈을 고치지 않기 위해서다.
-    지수는 마스터에 없어(그쪽은 `quote_symbol`이다) 코드에 둔다.
-    """
-    with connection.cursor() as cursor:
-        cursor.execute(WATCHED_INSTRUMENTS)
-        watched = cursor.fetchall()
-    return (
-        *(Subject(kind=ThesisSubjectKind.INDEX, code=code, label=label) for code, label in INDEX_SUBJECTS),
-        *(Subject(kind=ThesisSubjectKind.STOCK, code=row[0], label=row[1]) for row in watched),
-    )
-
-
-def existing_theses(connection: Connection, *, run_date: date, run_slot: RunSlot) -> tuple[StoredThesis, ...]:
-    """이 (날짜, 슬롯)에 이미 저장된 추론.
-
-    **부르는 쪽은 LLM을 부르기 전에 이것을 먼저 본다.** 비어 있지 않으면 모델을 부르지 않는다
-    (첫 성공본 불변). 재실행은 기존 행을 읽어 다음 태스크로 넘길 뿐이다.
-    """
-    with connection.cursor() as cursor:
-        cursor.execute(THESIS_SELECT_BY_RUN, (run_date, run_slot.value))
-        rows = cursor.fetchall()
-    return tuple(_stored(row) for row in rows)
-
-
-def store_theses(
-    connection: Connection,
-    *,
-    run_date: date,
-    run_slot: RunSlot,
-    as_of_at: datetime,
-    dag_run_id: str,
-    drafts: Sequence[ThesisDraft],
-    registry: dict[str, Evidence],
-    observed_state: ObservedState | NxtObservedState,
-    llm_model: str,
-    tool_rounds: int,
-    precedents: Mapping[str, Sequence[int]],
-) -> tuple[StoredThesis, ...]:
-    """추론과 근거, 그리고 본 과거 추론을 한 트랜잭션에 쓴다.
-
-    **추론은 `INSERT ... ON CONFLICT DO NOTHING`이다.** 같은 (날짜, 슬롯, subject)에 행이 이미
-    있으면 아무 것도 바꾸지 않는다. `RETURNING`이 0행이면 삽입 직전에 다른 실행이 먼저 넣은
-    것이므로, 그 경우에도 실패로 보지 않고 저장된 행을 읽어 돌려준다.
-
-    thesis와 evidence를 한 트랜잭션에 쓴다 — 추론만 들어가고 근거가 빠진 상태를 남기지 않는다.
-    `precedents`는 subject 코드별로 프롬프트에 실린 과거 thesis ID 목록이고 `thesis_precedent`
-    엣지가 된다. 같은 트랜잭션이다 — "무엇을 보고 냈나"도 추론과 함께 들어가거나 함께 빠진다.
-    """
-    with atomic(connection) as transaction, transaction.cursor() as cursor:
-        for draft in drafts:
-            cursor.execute(
-                THESIS_INSERT,
-                (
-                    run_slot.value,
-                    run_date,
-                    as_of_at,
-                    dag_run_id,
-                    draft.subject.kind.value,
-                    draft.subject.code,
-                    draft.subject.label,
-                    draft.prob_up,
-                    draft.prob_down,
-                    draft.prob_flat,
-                    draft.up_reasoning,
-                    draft.down_reasoning,
-                    draft.flat_reasoning,
-                    json.dumps(observed_state.model_dump(mode="json"), ensure_ascii=False),
-                    tool_rounds,
-                    llm_model,
-                    PROMPT_VERSION,
-                ),
-            )
-            returned = cursor.fetchone()
-            if returned is None:
-                logger.info("thesis for %s %s %s already existed", run_date, run_slot.value, draft.subject.code)
-                continue
-            _store_evidence(cursor, returned[0], draft.evidence_refs, registry, claims=draft.claims)
-            for precedent_id in precedents.get(draft.subject.code, ()):
-                cursor.execute(PRECEDENT_INSERT, (returned[0], precedent_id))
-
-    return existing_theses(connection, run_date=run_date, run_slot=run_slot)
-
-
 def _store_evidence(
     cursor: Cursor,
     thesis_id: int,
@@ -2256,102 +2113,6 @@ class PendingGrade(BaseModel):
     prob_down: Decimal
     prob_flat: Decimal
     horizon_days: int
-
-
-def pending_grades(connection: Connection, horizons: Sequence[int] = HORIZON_DAYS) -> tuple[PendingGrade, ...]:
-    """아직 채점하지 않은 (추론, 지평) 전부. `pre_open`만이다."""
-    with connection.cursor() as cursor:
-        cursor.execute(PENDING_GRADES, (list(horizons),))
-        rows = cursor.fetchall()
-    return tuple(
-        PendingGrade(
-            thesis_id=row[0],
-            run_date=row[1],
-            as_of_at=row[2],
-            subject_kind=row[3],
-            subject_code=row[4],
-            prob_up=row[5],
-            prob_down=row[6],
-            prob_flat=row[7],
-            horizon_days=row[8],
-        )
-        for row in rows
-    )
-
-
-def nth_open_day(connection: Connection, base_date: date, horizon_days: int) -> date | None:
-    """`base_date`부터 세어 `horizon_days`번째 KRX 개장일. 달력이 안 채워졌으면 `None`.
-
-    0이면 `base_date` 자신(개장일일 때)이다. **날짜를 우리가 세지 않는다** — 휴장일에서
-    어긋난다. `None`이면 부르는 쪽은 그 조합을 미채점으로 남기고 다음 실행이 다시 집는다.
-    """
-    with connection.cursor() as cursor:
-        cursor.execute(NTH_OPEN_DAY, (base_date, horizon_days))
-        row = cursor.fetchone()
-    return row[0] if row else None
-
-
-def horizon_returns(
-    connection: Connection,
-    *,
-    subject_kind: ThesisSubjectKind,
-    run_date: date,
-    target_date: date,
-    codes: Sequence[str],
-    base_bar_at: datetime | None = None,
-    target_bar_at: datetime | None = None,
-) -> dict[str, Decimal]:
-    """대상별 누적 등락률. 종가·봉이 없으면 그 대상은 결과에 없다.
-
-    기준가는 지평이 달라도 같다 — 예측일 전 영업일 종가다. 지수는 봉 시각 둘을 받는다
-    (KST 경계 계산은 파이썬이 한다).
-    """
-    if not codes:
-        return {}
-    if subject_kind is ThesisSubjectKind.STOCK:
-        statement, parameters = STOCK_HORIZON_RETURN, (run_date, target_date, list(codes))
-    else:
-        if base_bar_at is None or target_bar_at is None:
-            raise ThesisError("index horizon returns need both bar timestamps")
-        statement, parameters = INDEX_HORIZON_RETURN, (base_bar_at, target_bar_at, list(codes))
-
-    with connection.cursor() as cursor:
-        cursor.execute(statement, parameters)
-        rows = cursor.fetchall()
-    return {row[0]: row[4] for row in rows if row[4] is not None}
-
-
-def store_grade(
-    connection: Connection,
-    *,
-    pending: PendingGrade,
-    as_of_at: datetime,
-    dag_run_id: str,
-    return_pct: Decimal,
-    evaluated_at: datetime,
-) -> None:
-    """한 (추론, 지평)의 채점을 쓴다. 이미 매긴 점수는 덮지 않는다(SQL의 WHERE가 막는다)."""
-    outcome = classify_outcome(return_pct, pending.horizon_days)
-    score = brier_score(
-        prob_up=pending.prob_up,
-        prob_down=pending.prob_down,
-        prob_flat=pending.prob_flat,
-        outcome=outcome,
-    )
-    with connection.cursor() as cursor:
-        cursor.execute(
-            INSERT_GRADE,
-            (
-                pending.thesis_id,
-                pending.horizon_days,
-                as_of_at,
-                dag_run_id,
-                evaluated_at,
-                return_pct,
-                outcome.value,
-                score.quantize(Decimal("0.00001")),
-            ),
-        )
 
 
 # ---------------------------------------------------------------------------
@@ -2756,92 +2517,6 @@ PENDING_NARRATIVES = read_sql("postgres", "thesis_outcome", "select_pending_narr
 INSERT_NARRATIVE = read_sql("postgres", "thesis_outcome", "insert_narrative.sql")
 
 
-def pending_narratives(
-    connection: Connection,
-    *,
-    run_date: date,
-    horizon_days: int,
-) -> tuple[NarrativeTarget, ...]:
-    """그 지평에서 아직 해설이 없는 대상. **두 슬롯 모두 온다.**
-
-    채점 값이 있으면 함께 담는다. 프롬프트에 실을지는 `FollowupNarrator`의
-    `include_outcome`이 정한다 — 이 함수는 있는 대로 준다.
-
-    `cited_titles`는 여기서 채우지 않는다. 원 추론이 인용한 근거 제목은
-    `thesis_evidence`에 있고, 부르는 쪽이 필요하면 붙인다.
-    """
-    if horizon_days not in NARRATED_HORIZON_DAYS:
-        raise ThesisError(f"horizon {horizon_days} does not take a narrative; known: {NARRATED_HORIZON_DAYS}")
-    with connection.cursor() as cursor:
-        cursor.execute(PENDING_NARRATIVES, (horizon_days, run_date))
-        rows = cursor.fetchall()
-    return tuple(
-        NarrativeTarget(
-            thesis_id=row[0],
-            run_slot=RunSlot(row[2]),
-            subject=Subject(kind=row[3], code=row[4], label=row[5]),
-            prob_up=row[6],
-            prob_down=row[7],
-            prob_flat=row[8],
-            up_reasoning=row[9],
-            down_reasoning=row[10],
-            flat_reasoning=row[11],
-            actual_return_pct=row[12],
-            actual_outcome=row[13],
-            brier_score=row[14],
-        )
-        for row in rows
-    )
-
-
-def store_narratives(
-    connection: Connection,
-    *,
-    horizon_days: int,
-    as_of_at: datetime,
-    dag_run_id: str,
-    drafts: Sequence[NarrativeDraft],
-    registry: dict[str, Evidence],
-    llm_model: str,
-    prompt_revision: str,
-) -> int:
-    """해설과 그 근거를 한 트랜잭션에 쓴다. 쓴 건수를 돌려준다.
-
-    **해설 갱신과 근거 INSERT가 한 트랜잭션이다.** 해설만 들어가고 근거가 빠진 상태를
-    남기지 않는다 — 근거 없는 판정은 되짚을 수 없다.
-
-    이미 해설이 있는 행은 SQL의 `WHERE narrative IS NULL`이 막는다. 그때 근거를 다시
-    넣지 않도록 `RETURNING`으로 실제 갱신 여부를 확인한다.
-    """
-    if horizon_days not in NARRATED_HORIZON_DAYS:
-        raise ThesisError(f"horizon {horizon_days} does not take a narrative; known: {NARRATED_HORIZON_DAYS}")
-
-    stored = 0
-    with atomic(connection) as transaction, transaction.cursor() as cursor:
-        for draft in drafts:
-            cursor.execute(
-                INSERT_NARRATIVE,
-                (
-                    draft.thesis_id,
-                    horizon_days,
-                    as_of_at,
-                    dag_run_id,
-                    draft.narrative,
-                    draft.verdict.value,
-                    datetime.now(UTC),
-                    llm_model,
-                    prompt_revision,
-                ),
-            )
-            if cursor.rowcount == 0:
-                # 다른 실행이 먼저 썼다. 근거를 덧붙이면 그 해설과 어긋난 인용이 남는다.
-                logger.info("thesis %s already had a T+%s narrative", draft.thesis_id, horizon_days)
-                continue
-            _store_evidence(cursor, draft.thesis_id, draft.evidence_refs, registry, horizon_days)
-            stored += 1
-    return stored
-
-
 # ---------------------------------------------------------------------------
 # Slack 렌더링
 #
@@ -2927,59 +2602,370 @@ class StoredEvidence(BaseModel):
     mechanism: str | None = None
 
 
-def top_evidence(
-    connection: Connection,
-    thesis_ids: Sequence[int],
-    *,
-    outcome_horizon_days: int | None = None,
-    limit: int = EVIDENCE_FETCH_LIMIT,
-) -> dict[int, tuple[StoredEvidence, ...]]:
-    """추론별 상위 근거. `outcome_horizon_days`가 `None`이면 원 추론이 인용한 것이다.
+class ThesisStore:
+    """추론 원장을 읽고 쓴다. **연결이 상태다.**
 
-    기본 상한이 표시 개수(`SLACK_EVIDENCE_LIMIT`)가 아니라 `EVIDENCE_FETCH_LIMIT`인 것은
-    부르는 쪽이 채택 방향으로 한 번 더 거르기 때문이다.
+    전에는 조회·저장 열두 함수가 각각 `connection`을 첫 인자로 받았고, DAG과 흐름 모듈이
+    그 값을 태스크마다 다시 실어 날랐다. 저장소에서 같은 인자가 가장 많이 반복되던 자리다.
+
+    **`run_date`·`run_slot`·`dag_run_id`는 생성자가 아니라 메서드 인자다.** 채점과 해설은
+    이 실행의 날짜가 아니라 *지난* 추론의 날짜를 돌며 부른다 — 생성자에 담으면 그 값이
+    호출마다 거짓이 된다. 연결만이 객체 하나가 사는 동안 안 변한다.
+
+    렌더링(`render_blocks`·`render_text`)과 계산(`classify_outcome`·`brier_score`)은 여기
+    없다. 감쌀 상태가 없어 모듈 함수로 남는다.
     """
-    if not thesis_ids:
-        return {}
-    with connection.cursor() as cursor:
-        cursor.execute(EVIDENCE_SELECT_TOP, (list(thesis_ids), outcome_horizon_days, limit))
-        rows = cursor.fetchall()
-    grouped: dict[int, list[StoredEvidence]] = {}
-    for row in rows:
-        grouped.setdefault(row[0], []).append(
-            StoredEvidence(
-                thesis_id=row[0],
-                evidence_title=row[4],
-                evidence_url=row[5],
-                rank=row[6],
-                direction=row[7],
-                mechanism=row[8],
-            )
-        )
-    return {thesis_id: tuple(items) for thesis_id, items in grouped.items()}
 
+    def __init__(self, connection: Connection) -> None:
+        self._connection = connection
 
-def stored_outcomes(connection: Connection, thesis_ids: Sequence[int]) -> dict[int, tuple[StoredOutcome, ...]]:
-    """추론별 지평 결과 전부."""
-    if not thesis_ids:
-        return {}
-    with connection.cursor() as cursor:
-        cursor.execute(OUTCOME_SELECT_BY_IDS, (list(thesis_ids),))
-        rows = cursor.fetchall()
-    grouped: dict[int, list[StoredOutcome]] = {}
-    for row in rows:
-        grouped.setdefault(row[0], []).append(
-            StoredOutcome(
-                thesis_id=row[0],
-                horizon_days=row[1],
-                actual_return_pct=row[5],
-                actual_outcome=row[6],
-                brier_score=row[7],
-                narrative=row[8],
-                verdict=row[9],
+    def past_theses(self, *, as_of_at: datetime, subject_code: str, n: int) -> list[PastThesis]:
+        """이 대상의 지난 추론과 지평별 결과. **슬롯마다** 최근 것부터 `n`건이다.
+
+        피드백 루프는 이 조회 하나다. 장전 예측(`pre_open`)과 장후 리뷰(`post_close`)를 함께
+        돌려준다 — 리뷰에 붙는 사후 해설이 "그 인과 주장이 이후 보도로 지지됐나"를 담고 있어
+        다음 예측이 볼 값어치가 크다.
+
+        **`n`은 슬롯마다다.** 총량으로 자르면 장후가 섞여 들어온 만큼 장전 예측 이력이 짧아진다.
+
+        **창의 끝은 `as_of_at`이다.** 없으면 장전 슬롯을 오후에 재실행할 때 그날 저녁의 채점이
+        아침 예측에 섞인다. SQL이 술어 셋을 건다.
+
+        `n <= 0`이면 조회하지 않고 빈 목록이다 — `PREFETCHED_PAST_THESES = 0`이 끄는 스위치다.
+        """
+        if n <= 0:
+            return []
+        with self._connection.cursor() as cursor:
+            cursor.execute(PAST_THESES, (as_of_at, subject_code, n))
+            rows = cursor.fetchall()
+        return [
+            PastThesis(
+                id=row[0],
+                run_slot=row[1],
+                run_date=row[2],
+                prob_up=float(row[3]),
+                prob_down=float(row[4]),
+                prob_flat=float(row[5]),
+                up_reasoning=row[6],
+                down_reasoning=row[7],
+                flat_reasoning=row[8],
+                # SQL이 jsonb_agg로 만든 목록. 모양은 `PastOutcome`이 검증한다.
+                outcomes=tuple(PastOutcome.model_validate(outcome) for outcome in row[9]),
             )
+            for row in rows
+        ]
+
+    def subjects(self) -> tuple[Subject, ...]:
+        """이번 실행의 추론 대상. 지수는 코드가, 종목은 `instrument.is_watched`가 정한다.
+
+        종목을 마스터에서 읽는 이유는 추적 종목이 늘 때 이 모듈을 고치지 않기 위해서다.
+        지수는 마스터에 없어(그쪽은 `quote_symbol`이다) 코드에 둔다.
+        """
+        with self._connection.cursor() as cursor:
+            cursor.execute(WATCHED_INSTRUMENTS)
+            watched = cursor.fetchall()
+        return (
+            *(Subject(kind=ThesisSubjectKind.INDEX, code=code, label=label) for code, label in INDEX_SUBJECTS),
+            *(Subject(kind=ThesisSubjectKind.STOCK, code=row[0], label=row[1]) for row in watched),
         )
-    return {thesis_id: tuple(items) for thesis_id, items in grouped.items()}
+
+    def existing_theses(self, *, run_date: date, run_slot: RunSlot) -> tuple[StoredThesis, ...]:
+        """이 (날짜, 슬롯)에 이미 저장된 추론.
+
+        **부르는 쪽은 LLM을 부르기 전에 이것을 먼저 본다.** 비어 있지 않으면 모델을 부르지 않는다
+        (첫 성공본 불변). 재실행은 기존 행을 읽어 다음 태스크로 넘길 뿐이다.
+        """
+        with self._connection.cursor() as cursor:
+            cursor.execute(THESIS_SELECT_BY_RUN, (run_date, run_slot.value))
+            rows = cursor.fetchall()
+        return tuple(_stored(row) for row in rows)
+
+    def store_theses(
+        self,
+        *,
+        run_date: date,
+        run_slot: RunSlot,
+        as_of_at: datetime,
+        dag_run_id: str,
+        drafts: Sequence[ThesisDraft],
+        registry: dict[str, Evidence],
+        observed_state: ObservedState | NxtObservedState,
+        llm_model: str,
+        tool_rounds: int,
+        precedents: Mapping[str, Sequence[int]],
+    ) -> tuple[StoredThesis, ...]:
+        """추론과 근거, 그리고 본 과거 추론을 한 트랜잭션에 쓴다.
+
+        **추론은 `INSERT ... ON CONFLICT DO NOTHING`이다.** 같은 (날짜, 슬롯, subject)에 행이 이미
+        있으면 아무 것도 바꾸지 않는다. `RETURNING`이 0행이면 삽입 직전에 다른 실행이 먼저 넣은
+        것이므로, 그 경우에도 실패로 보지 않고 저장된 행을 읽어 돌려준다.
+
+        thesis와 evidence를 한 트랜잭션에 쓴다 — 추론만 들어가고 근거가 빠진 상태를 남기지 않는다.
+        `precedents`는 subject 코드별로 프롬프트에 실린 과거 thesis ID 목록이고 `thesis_precedent`
+        엣지가 된다. 같은 트랜잭션이다 — "무엇을 보고 냈나"도 추론과 함께 들어가거나 함께 빠진다.
+        """
+        with atomic(self._connection) as transaction, transaction.cursor() as cursor:
+            for draft in drafts:
+                cursor.execute(
+                    THESIS_INSERT,
+                    (
+                        run_slot.value,
+                        run_date,
+                        as_of_at,
+                        dag_run_id,
+                        draft.subject.kind.value,
+                        draft.subject.code,
+                        draft.subject.label,
+                        draft.prob_up,
+                        draft.prob_down,
+                        draft.prob_flat,
+                        draft.up_reasoning,
+                        draft.down_reasoning,
+                        draft.flat_reasoning,
+                        json.dumps(observed_state.model_dump(mode="json"), ensure_ascii=False),
+                        tool_rounds,
+                        llm_model,
+                        PROMPT_VERSION,
+                    ),
+                )
+                returned = cursor.fetchone()
+                if returned is None:
+                    logger.info("thesis for %s %s %s already existed", run_date, run_slot.value, draft.subject.code)
+                    continue
+                _store_evidence(cursor, returned[0], draft.evidence_refs, registry, claims=draft.claims)
+                for precedent_id in precedents.get(draft.subject.code, ()):
+                    cursor.execute(PRECEDENT_INSERT, (returned[0], precedent_id))
+
+        return self.existing_theses(run_date=run_date, run_slot=run_slot)
+
+    def pending_grades(self, horizons: Sequence[int] = HORIZON_DAYS) -> tuple[PendingGrade, ...]:
+        """아직 채점하지 않은 (추론, 지평) 전부. `pre_open`만이다."""
+        with self._connection.cursor() as cursor:
+            cursor.execute(PENDING_GRADES, (list(horizons),))
+            rows = cursor.fetchall()
+        return tuple(
+            PendingGrade(
+                thesis_id=row[0],
+                run_date=row[1],
+                as_of_at=row[2],
+                subject_kind=row[3],
+                subject_code=row[4],
+                prob_up=row[5],
+                prob_down=row[6],
+                prob_flat=row[7],
+                horizon_days=row[8],
+            )
+            for row in rows
+        )
+
+    def nth_open_day(self, base_date: date, horizon_days: int) -> date | None:
+        """`base_date`부터 세어 `horizon_days`번째 KRX 개장일. 달력이 안 채워졌으면 `None`.
+
+        0이면 `base_date` 자신(개장일일 때)이다. **날짜를 우리가 세지 않는다** — 휴장일에서
+        어긋난다. `None`이면 부르는 쪽은 그 조합을 미채점으로 남기고 다음 실행이 다시 집는다.
+        """
+        with self._connection.cursor() as cursor:
+            cursor.execute(NTH_OPEN_DAY, (base_date, horizon_days))
+            row = cursor.fetchone()
+        return row[0] if row else None
+
+    def horizon_returns(
+        self,
+        *,
+        subject_kind: ThesisSubjectKind,
+        run_date: date,
+        target_date: date,
+        codes: Sequence[str],
+        base_bar_at: datetime | None = None,
+        target_bar_at: datetime | None = None,
+    ) -> dict[str, Decimal]:
+        """대상별 누적 등락률. 종가·봉이 없으면 그 대상은 결과에 없다.
+
+        기준가는 지평이 달라도 같다 — 예측일 전 영업일 종가다. 지수는 봉 시각 둘을 받는다
+        (KST 경계 계산은 파이썬이 한다).
+        """
+        if not codes:
+            return {}
+        if subject_kind is ThesisSubjectKind.STOCK:
+            statement, parameters = STOCK_HORIZON_RETURN, (run_date, target_date, list(codes))
+        else:
+            if base_bar_at is None or target_bar_at is None:
+                raise ThesisError("index horizon returns need both bar timestamps")
+            statement, parameters = INDEX_HORIZON_RETURN, (base_bar_at, target_bar_at, list(codes))
+
+        with self._connection.cursor() as cursor:
+            cursor.execute(statement, parameters)
+            rows = cursor.fetchall()
+        return {row[0]: row[4] for row in rows if row[4] is not None}
+
+    def store_grade(
+        self,
+        *,
+        pending: PendingGrade,
+        as_of_at: datetime,
+        dag_run_id: str,
+        return_pct: Decimal,
+        evaluated_at: datetime,
+    ) -> None:
+        """한 (추론, 지평)의 채점을 쓴다. 이미 매긴 점수는 덮지 않는다(SQL의 WHERE가 막는다)."""
+        outcome = classify_outcome(return_pct, pending.horizon_days)
+        score = brier_score(
+            prob_up=pending.prob_up,
+            prob_down=pending.prob_down,
+            prob_flat=pending.prob_flat,
+            outcome=outcome,
+        )
+        with self._connection.cursor() as cursor:
+            cursor.execute(
+                INSERT_GRADE,
+                (
+                    pending.thesis_id,
+                    pending.horizon_days,
+                    as_of_at,
+                    dag_run_id,
+                    evaluated_at,
+                    return_pct,
+                    outcome.value,
+                    score.quantize(Decimal("0.00001")),
+                ),
+            )
+
+    def pending_narratives(
+        self,
+        *,
+        run_date: date,
+        horizon_days: int,
+    ) -> tuple[NarrativeTarget, ...]:
+        """그 지평에서 아직 해설이 없는 대상. **두 슬롯 모두 온다.**
+
+        채점 값이 있으면 함께 담는다. 프롬프트에 실을지는 `FollowupNarrator`의
+        `include_outcome`이 정한다 — 이 함수는 있는 대로 준다.
+
+        `cited_titles`는 여기서 채우지 않는다. 원 추론이 인용한 근거 제목은
+        `thesis_evidence`에 있고, 부르는 쪽이 필요하면 붙인다.
+        """
+        if horizon_days not in NARRATED_HORIZON_DAYS:
+            raise ThesisError(f"horizon {horizon_days} does not take a narrative; known: {NARRATED_HORIZON_DAYS}")
+        with self._connection.cursor() as cursor:
+            cursor.execute(PENDING_NARRATIVES, (horizon_days, run_date))
+            rows = cursor.fetchall()
+        return tuple(
+            NarrativeTarget(
+                thesis_id=row[0],
+                run_slot=RunSlot(row[2]),
+                subject=Subject(kind=row[3], code=row[4], label=row[5]),
+                prob_up=row[6],
+                prob_down=row[7],
+                prob_flat=row[8],
+                up_reasoning=row[9],
+                down_reasoning=row[10],
+                flat_reasoning=row[11],
+                actual_return_pct=row[12],
+                actual_outcome=row[13],
+                brier_score=row[14],
+            )
+            for row in rows
+        )
+
+    def store_narratives(
+        self,
+        *,
+        horizon_days: int,
+        as_of_at: datetime,
+        dag_run_id: str,
+        drafts: Sequence[NarrativeDraft],
+        registry: dict[str, Evidence],
+        llm_model: str,
+        prompt_revision: str,
+    ) -> int:
+        """해설과 그 근거를 한 트랜잭션에 쓴다. 쓴 건수를 돌려준다.
+
+        **해설 갱신과 근거 INSERT가 한 트랜잭션이다.** 해설만 들어가고 근거가 빠진 상태를
+        남기지 않는다 — 근거 없는 판정은 되짚을 수 없다.
+
+        이미 해설이 있는 행은 SQL의 `WHERE narrative IS NULL`이 막는다. 그때 근거를 다시
+        넣지 않도록 `RETURNING`으로 실제 갱신 여부를 확인한다.
+        """
+        if horizon_days not in NARRATED_HORIZON_DAYS:
+            raise ThesisError(f"horizon {horizon_days} does not take a narrative; known: {NARRATED_HORIZON_DAYS}")
+
+        stored = 0
+        with atomic(self._connection) as transaction, transaction.cursor() as cursor:
+            for draft in drafts:
+                cursor.execute(
+                    INSERT_NARRATIVE,
+                    (
+                        draft.thesis_id,
+                        horizon_days,
+                        as_of_at,
+                        dag_run_id,
+                        draft.narrative,
+                        draft.verdict.value,
+                        datetime.now(UTC),
+                        llm_model,
+                        prompt_revision,
+                    ),
+                )
+                if cursor.rowcount == 0:
+                    # 다른 실행이 먼저 썼다. 근거를 덧붙이면 그 해설과 어긋난 인용이 남는다.
+                    logger.info("thesis %s already had a T+%s narrative", draft.thesis_id, horizon_days)
+                    continue
+                _store_evidence(cursor, draft.thesis_id, draft.evidence_refs, registry, horizon_days)
+                stored += 1
+        return stored
+
+    def top_evidence(
+        self,
+        thesis_ids: Sequence[int],
+        *,
+        outcome_horizon_days: int | None = None,
+        limit: int = EVIDENCE_FETCH_LIMIT,
+    ) -> dict[int, tuple[StoredEvidence, ...]]:
+        """추론별 상위 근거. `outcome_horizon_days`가 `None`이면 원 추론이 인용한 것이다.
+
+        기본 상한이 표시 개수(`SLACK_EVIDENCE_LIMIT`)가 아니라 `EVIDENCE_FETCH_LIMIT`인 것은
+        부르는 쪽이 채택 방향으로 한 번 더 거르기 때문이다.
+        """
+        if not thesis_ids:
+            return {}
+        with self._connection.cursor() as cursor:
+            cursor.execute(EVIDENCE_SELECT_TOP, (list(thesis_ids), outcome_horizon_days, limit))
+            rows = cursor.fetchall()
+        grouped: dict[int, list[StoredEvidence]] = {}
+        for row in rows:
+            grouped.setdefault(row[0], []).append(
+                StoredEvidence(
+                    thesis_id=row[0],
+                    evidence_title=row[4],
+                    evidence_url=row[5],
+                    rank=row[6],
+                    direction=row[7],
+                    mechanism=row[8],
+                )
+            )
+        return {thesis_id: tuple(items) for thesis_id, items in grouped.items()}
+
+    def stored_outcomes(self, thesis_ids: Sequence[int]) -> dict[int, tuple[StoredOutcome, ...]]:
+        """추론별 지평 결과 전부."""
+        if not thesis_ids:
+            return {}
+        with self._connection.cursor() as cursor:
+            cursor.execute(OUTCOME_SELECT_BY_IDS, (list(thesis_ids),))
+            rows = cursor.fetchall()
+        grouped: dict[int, list[StoredOutcome]] = {}
+        for row in rows:
+            grouped.setdefault(row[0], []).append(
+                StoredOutcome(
+                    thesis_id=row[0],
+                    horizon_days=row[1],
+                    actual_return_pct=row[5],
+                    actual_outcome=row[6],
+                    brier_score=row[7],
+                    narrative=row[8],
+                    verdict=row[9],
+                )
+            )
+        return {thesis_id: tuple(items) for thesis_id, items in grouped.items()}
 
 
 def _verdicts(thesis: StoredThesis) -> tuple[tuple[str, Decimal], ...]:

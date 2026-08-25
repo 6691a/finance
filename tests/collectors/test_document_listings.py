@@ -3,21 +3,21 @@ from typing import Any, Self
 
 import pytest
 
-from modules.collectors.document.naver_research import (
-    NAVER_RESEARCH_CATEGORIES,
-    NaverResearchCollector,
-    NaverResearchDetail,
-)
-from modules.collectors.document_listings import (
+from modules.collectors.document.document_listings import (
     LISTING_SOURCES,
     parse_fss,
     parse_krx,
 )
-from modules.collectors.documents import (
+from modules.collectors.document.documents import (
     EXISTING_EXTERNAL_IDS,
     WATCHED_INSTRUMENTS,
     DocumentPayloadError,
     FeedSource,
+)
+from modules.collectors.document.naver_research import (
+    NAVER_RESEARCH_CATEGORIES,
+    NaverResearchCollector,
+    NaverResearchDetail,
 )
 
 # 실측 응답(2026-08-20)을 줄인 것. 칸 구성은 실제와 같다.

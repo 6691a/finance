@@ -38,7 +38,7 @@ from collections.abc import Sequence
 from datetime import UTC, date, datetime, time, timedelta
 from decimal import Decimal, InvalidOperation
 from enum import StrEnum
-from typing import Any, Protocol, Self
+from typing import Any, Self
 from urllib.parse import quote, urlencode
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
@@ -54,6 +54,7 @@ from pydantic import (
 )
 from scrapling.fetchers import Fetcher
 
+from modules.db import Connection
 from modules.sql import read_sql
 from modules.upsert import execute_upserts
 
@@ -200,24 +201,6 @@ US_EQUITY_SYMBOLS: frozenset[str] = frozenset(
         QuoteSymbol.SK_HYNIX_ADR.value,
     }
 )
-
-
-class Cursor(Protocol):
-    def __enter__(self) -> Self: ...
-
-    def __exit__(self, *args: object) -> bool | None: ...
-
-    def execute(self, statement: str, parameters: Sequence[Any]) -> object: ...
-
-    def executemany(self, statement: str, parameters: Sequence[Sequence[Any]]) -> object: ...
-
-    def fetchone(self) -> Any: ...
-
-
-class Connection(Protocol):
-    def cursor(self) -> Cursor: ...
-
-
 class YahooHTTPError(RuntimeError):
     """Yahoo가 2xx가 아닌 상태로 응답했다. 재시도 가능 여부는 호출자가 `status`로 판단한다."""
 

@@ -8,7 +8,7 @@ from sqlalchemy import Table
 
 from apps.models.content import Document as DocumentModel
 from apps.models.raw import SourceRecord
-from modules.collectors.documents import (
+from modules.collectors.document.documents import (
     DOCUMENT_UPSERT,
     EXISTING_EXTERNAL_IDS,
     SOURCE_RECORD_INSERT,

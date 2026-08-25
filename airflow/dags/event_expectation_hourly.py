@@ -59,17 +59,15 @@ from pydantic import SecretStr
 from modules.expectation import (
     DEFAULT_BATCH_SIZE,
     ExpectationExtractor,
+    ExpectationStore,
     ExtractionError,
     JudgedOutcome,
     filter_claims,
-    judge_pending,
-    pending_documents,
     render_blocks,
     render_text,
-    store_extraction,
 )
 from modules.llm import LlmError, RetryableLlmError, expectation_model, model_name
-from modules.slack import SlackError, post_message
+from modules.slack import SlackClient, SlackError
 from modules.utility import CONNECTION_ID, KST_TIMEZONE, atomic
 
 logger = logging.getLogger(__name__)
@@ -116,7 +114,7 @@ def event_expectation_hourly():
 
         connection = _connection()
         try:
-            documents = pending_documents(connection, batch_size)
+            documents = ExpectationStore(connection).pending(batch_size)
         finally:
             connection.close()
 
@@ -152,7 +150,9 @@ def event_expectation_hourly():
             claims = filter_claims(response, document)
             # 문서 하나가 트랜잭션 하나다. 앞의 성공을 뒤의 실패가 되돌리지 않는다.
             with closing(_connection()) as store_connection, atomic(store_connection):
-                store_extraction(store_connection, document, claims, model_name(model), extracted_at)
+                ExpectationStore(store_connection).store_extraction(
+                    document, claims, model_name(model), extracted_at
+                )
             stored += 1
             claim_total += len(claims)
 
@@ -178,7 +178,7 @@ def event_expectation_hourly():
         context = get_current_context()
         dag_run_id = str(context["run_id"])
         with closing(_connection()) as connection, atomic(connection):
-            judged = judge_pending(connection, dag_run_id)
+            judged = ExpectationStore(connection).judge(dag_run_id)
         logger.info("Wrote %s new outcome rows", len(judged))
         return [outcome.model_dump(mode="json") for outcome in judged]
 
@@ -193,8 +193,7 @@ def event_expectation_hourly():
         if not token or not channel:
             raise AirflowFailException("SLACK_BOT_TOKEN and SLACK_CHANNEL_MARKET are required")
         try:
-            return post_message(
-                SecretStr(token),
+            return SlackClient(SecretStr(token)).post_message(
                 channel,
                 text=render_text(outcomes),
                 blocks=render_blocks(outcomes),

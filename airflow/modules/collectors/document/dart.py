@@ -69,7 +69,7 @@ from datetime import UTC, date, datetime
 from decimal import Decimal, InvalidOperation
 from enum import StrEnum
 from http.client import HTTPException
-from typing import Any, Protocol, Self
+from typing import Any, Self
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlencode
 from urllib.request import Request, urlopen
@@ -77,6 +77,7 @@ from urllib.request import Request, urlopen
 from pydantic import BaseModel, ConfigDict, SecretStr
 from scrapling import Selector
 
+from modules.db import Connection, Cursor
 from modules.sql import read_sql
 from modules.upsert import execute_upserts
 
@@ -175,26 +176,6 @@ class DartCompany(StrEnum):
 
     SAMSUNG_ELECTRONICS = ("005930", "00126380", "삼성전자")
     SK_HYNIX = ("000660", "00164779", "SK하이닉스")
-
-
-class Cursor(Protocol):
-    def __enter__(self) -> Self: ...
-
-    def __exit__(self, *args: object) -> bool | None: ...
-
-    def execute(self, statement: str, parameters: Any) -> object: ...
-
-    def executemany(self, statement: str, parameters: Any) -> object: ...
-
-    def fetchone(self) -> Any: ...
-
-    def fetchall(self) -> Any: ...
-
-
-class Connection(Protocol):
-    def cursor(self) -> Cursor: ...
-
-
 class DartHTTPError(RuntimeError):
     """OpenDART가 2xx가 아닌 상태로 응답했다. 재시도 여부는 호출자가 `status`로 정한다."""
 

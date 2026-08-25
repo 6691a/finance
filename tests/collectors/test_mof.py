@@ -10,7 +10,7 @@ from sqlalchemy import Table
 
 from apps.models.market import IndicatorObservation
 from apps.models.raw import SourceRecord
-from modules.collectors.mof import (
+from modules.collectors.indicator.mof import (
     ENCODING,
     EXPECTED_HEADER,
     JGB_SERIES,
@@ -364,7 +364,7 @@ def fake_fetch(monkeypatch, bodies: dict[MofFile, bytes]) -> list[MofFile]:
         fetched.append(file)
         return response_for(body=bodies[file], file=file, request=request)
 
-    monkeypatch.setattr("modules.collectors.mof._fetch", _fetch)
+    monkeypatch.setattr("modules.collectors.indicator.mof._fetch", _fetch)
     return fetched
 
 

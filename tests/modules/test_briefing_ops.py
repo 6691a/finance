@@ -72,7 +72,7 @@ def summary(
         NO_THESIS if thesis_rows is None else thesis_rows,
         thesis_backlog,
     )
-    return ops.collect_summary(connection, now)
+    return ops.OpsBriefingReader(connection, now).summary()
 
 
 def test_all_green_reports_every_source_as_healthy():
@@ -176,7 +176,7 @@ def test_unknown_sources_are_folded_into_one_row():
 
 def test_the_window_is_a_full_day():
     connection = FakeConnection(HEALTHY_ROWS, [], NO_BACKLOG, NO_THESIS, NO_THESIS_BACKLOG)
-    ops.collect_summary(connection, TUESDAY)
+    ops.OpsBriefingReader(connection, TUESDAY).summary()
 
     assert connection.cursors[0].calls[0][1][0] == TUESDAY - timedelta(hours=ops.WINDOW_HOURS)
 

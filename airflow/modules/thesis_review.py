@@ -46,20 +46,58 @@ def as_of(run_date: date) -> datetime:
     return thesis_common.close_at(run_date)
 
 
-def check_ready(conn: Any, run_date: date, watched: list[str]) -> None:
-    """확정 종가와 지수 마감 봉이 둘 다 들어왔는지 본다.
+class PostCloseReview:
+    """장후 리뷰 한 번. 연결과 세션 날짜를 들고 돈다.
 
-    확정 종가는 `kis_investor_trade_daily`가 18:10에, 지수 마감 봉은 `kis_quote_intraday`가
-    16:00까지 채운다. 둘 다 없으면 채점도 관측 상태도 설 수 없다.
+    `thesis_nxt_review.NxtAfterHoursReview`와 같은 모양이다 — 슬롯을 아는 것은 이 클래스이고,
+    슬롯을 모르는 조회·저장은 `thesis_common.ThesisRun`이 갖는다.
+
+    **기준 시각 계산(`as_of`·`macro_window_start`)은 모듈 함수로 남는다.** 날짜 하나를 받아
+    시각 하나를 주는 순수 계산이라 감쌀 상태가 없다.
     """
-    thesis_common.require_settled_closes(conn, run_date, watched)
-    with conn.cursor() as cursor:
-        cursor.execute(
-            "SELECT count(*) FROM index_bar WHERE provider = 'kis' AND bar_at = %s AND symbol = ANY(%s)",
-            (as_of(run_date), GUARD_INDEX_SYMBOLS),
+
+    def __init__(self, connection: Any, *, run_date: date) -> None:
+        self._run = thesis_common.ThesisRun(connection, run_date=run_date, as_of_at=as_of(run_date))
+
+    @property
+    def connection(self) -> Any:
+        return self._run.connection
+
+    def check_ready(self, watched: list[str]) -> None:
+        """확정 종가와 지수 마감 봉이 둘 다 들어왔는지 본다.
+
+        확정 종가는 `kis_investor_trade_daily`가 18:10에, 지수 마감 봉은 `kis_quote_intraday`가
+        16:00까지 채운다. 둘 다 없으면 채점도 관측 상태도 설 수 없다.
+        """
+        self._run.require_settled_closes(watched)
+        with self.connection.cursor() as cursor:
+            cursor.execute(
+                "SELECT count(*) FROM index_bar WHERE provider = 'kis' AND bar_at = %s AND symbol = ANY(%s)",
+                (self._run.as_of_at, GUARD_INDEX_SYMBOLS),
+            )
+            if cursor.fetchone()[0] < len(GUARD_INDEX_SYMBOLS):
+                raise thesis_common.ThesisNotReady(f"index closing bars for {self._run.run_date} are missing")
+
+    def run(self, *, dag_run_id: str) -> int:
+        """휴장 판정 → readiness guard → 관측 상태 → LLM → 저장. 저장한 행 수를 준다."""
+        from modules import thesis as market_thesis
+
+        self._run.skip_unless_open()
+
+        targets = market_thesis.ThesisStore(self.connection).subjects()
+        watched = [s.code for s in targets if s.kind is market_thesis.ThesisSubjectKind.STOCK]
+        self.check_ready(watched)
+
+        # 장후가 보는 세션은 **당일**이다. 오늘 장이 이미 끝났다.
+        return self._run.build_and_store(
+            run_slot=market_thesis.RunSlot.POST_CLOSE,
+            macro_window_start=macro_window_start(self._run.run_date),
+            targets=targets,
+            observed=self._run.observed_state(market_thesis, self._run.run_date, targets),
+            # 장후는 예측이 아니라 해석이다. 과거 예측 성적을 실어 줄 자리가 아니다.
+            past={},
+            dag_run_id=dag_run_id,
         )
-        if cursor.fetchone()[0] < len(GUARD_INDEX_SYMBOLS):
-            raise thesis_common.ThesisNotReady(f"index closing bars for {run_date} are missing")
 
 
 def macro_window_start(run_date: date) -> datetime:
@@ -71,34 +109,13 @@ def macro_window_start(run_date: date) -> datetime:
 
 
 def build() -> ThesisRunResult:
-    """오늘 왜 그렇게 움직였는지를 적는다. 관측 상태(SQL) → LLM 추론 → 저장."""
-    from modules import thesis as market_thesis
-
+    """Airflow 태스크 진입점. 컨텍스트를 읽어 리뷰 하나를 돌린다."""
     context = get_current_context()
     run_date = thesis_common.resolve_run_date(context)
-    as_of_at = as_of(run_date)
     dag_run_id = str(context["dag_run"].run_id)
 
     with closing(thesis_common.connection()) as conn:
-        thesis_common.skip_unless_open(conn, run_date)
-
-        targets = market_thesis.subjects(conn)
-        watched = [s.code for s in targets if s.kind is market_thesis.ThesisSubjectKind.STOCK]
-        check_ready(conn, run_date, watched)
-
-        # 장후가 보는 세션은 **당일**이다. 오늘 장이 이미 끝났다.
-        written = thesis_common.build_and_store(
-            conn,
-            run_slot=market_thesis.RunSlot.POST_CLOSE,
-            run_date=run_date,
-            as_of_at=as_of_at,
-            macro_window_start=macro_window_start(run_date),
-            targets=targets,
-            observed=thesis_common.observed_state(conn, market_thesis, run_date, targets, as_of_at=as_of_at),
-            # 장후는 예측이 아니라 해석이다. 과거 예측 성적을 실어 줄 자리가 아니다.
-            past={},
-            dag_run_id=dag_run_id,
-        )
+        written = PostCloseReview(conn, run_date=run_date).run(dag_run_id=dag_run_id)
     return ThesisRunResult(run_date=run_date, slot=SLOT, written=written)
 
 
@@ -107,24 +124,27 @@ def grade_followups() -> int:
 
     대상은 미채점 조합 전부라 이 실행의 `run_date`로 좁히지 않는다. 리뷰가 실패했던 날의
     것도 여기서 회수된다.
+
+    **`ThesisRun`을 쓰지 않는다.** 채점은 이 실행의 세션이 아니라 *지난* 추론의 날짜를 돌기
+    때문에, 세션 날짜를 쥔 객체에 담으면 그 값이 항목마다 거짓이 된다. 연결만 상태다.
     """
     from modules import thesis as market_thesis
 
     dag_run_id = str(get_current_context()["dag_run"].run_id)
     graded = 0
     with closing(thesis_common.connection()) as conn:
-        pending = market_thesis.pending_grades(conn)
+        store = market_thesis.ThesisStore(conn)
+        pending = store.pending_grades()
         for item in pending:
-            target_day = market_thesis.nth_open_day(conn, item.run_date, item.horizon_days)
+            target_day = store.nth_open_day(item.run_date, item.horizon_days)
             if target_day is None:
                 # 달력이 그날까지 안 채워졌다. 다음 실행이 다시 집는다.
                 continue
-            value = _horizon_return(conn, market_thesis, item, target_day)
+            value = _horizon_return(store, market_thesis, item, target_day)
             if value is None:
                 # 종가가 없다. 0으로 꾸미지 않고 미채점으로 남긴다.
                 continue
-            market_thesis.store_grade(
-                conn,
+            store.store_grade(
                 pending=item,
                 as_of_at=thesis_common.close_at(target_day),
                 dag_run_id=dag_run_id,
@@ -150,14 +170,16 @@ def narrate_followups(built: dict[str, Any]) -> int:
     dag_run_id = str(get_current_context()["dag_run"].run_id)
     model = thesis_model()
     written = 0
+    as_of_at = thesis_common.close_at(run_date)
     with closing(thesis_common.connection()) as conn:
+        run = thesis_common.ThesisRun(conn, run_date=run_date, as_of_at=as_of_at)
+        store = market_thesis.ThesisStore(conn)
         for horizon in market_thesis.NARRATED_HORIZON_DAYS:
             # 그 지평의 원 추론일을 거슬러 찾는다. 오늘이 T+N이면 추론일은 N영업일 전이다.
-            origin = thesis_common.origin_day(conn, run_date, horizon)
+            origin = run.origin_day(horizon)
             if origin is None:
                 continue
-            pending = market_thesis.pending_narratives(conn, run_date=origin, horizon_days=horizon)
-            as_of_at = thesis_common.close_at(run_date)
+            pending = store.pending_narratives(run_date=origin, horizon_days=horizon)
             for run_slot in market_thesis.RunSlot:
                 targets = tuple(t for t in pending if t.run_slot is run_slot)
                 if not targets:
@@ -181,8 +203,7 @@ def narrate_followups(built: dict[str, Any]) -> int:
                         raise
                     raise AirflowFailException(str(error)) from error
 
-                written += market_thesis.store_narratives(
-                    conn,
+                written += store.store_narratives(
                     horizon_days=horizon,
                     as_of_at=as_of_at,
                     dag_run_id=dag_run_id,
@@ -196,23 +217,21 @@ def narrate_followups(built: dict[str, Any]) -> int:
 
 
 def _horizon_return(
-    conn: Any,
+    store: Any,
     market_thesis: Any,
     item: "market_thesis_types.PendingGrade",
     target_day: date,
 ) -> Decimal | None:
     """지평 하나의 누적 등락률. 종목은 확정 종가, 지수는 마감 봉을 본다."""
     if item.subject_kind is market_thesis.ThesisSubjectKind.STOCK:
-        returns = market_thesis.horizon_returns(
-            conn,
+        returns = store.horizon_returns(
             subject_kind=item.subject_kind,
             run_date=item.run_date,
             target_date=target_day,
             codes=[item.subject_code],
         )
     else:
-        returns = market_thesis.horizon_returns(
-            conn,
+        returns = store.horizon_returns(
             subject_kind=item.subject_kind,
             run_date=item.run_date,
             target_date=target_day,

@@ -17,6 +17,12 @@ from modules import thesis_common, thesis_forecast
 DAG = dag_module.market_thesis_forecast
 KST_MORNING = datetime(2026, 8, 20, 23, 35, tzinfo=UTC)  # KST 08:35
 AS_OF = KST_MORNING
+RUN_DATE = date(2026, 8, 21)  # AS_OF의 KST 날짜
+
+
+def _run(connection: Any, run_date: date) -> thesis_common.ThesisRun:
+    """슬롯을 모르는 guard를 부르는 최소 객체."""
+    return thesis_common.ThesisRun(connection, run_date=run_date, as_of_at=AS_OF)
 
 
 def test_the_dag_owns_one_slot_only():
@@ -112,7 +118,7 @@ class FakeConnection:
 def test_the_guard_passes_when_assessment_kept_up():
     connection = FakeConnection([(AS_OF - timedelta(minutes=5),)])
 
-    thesis_forecast.check_ready(connection, AS_OF)
+    thesis_forecast.PreOpenForecast(connection, run_date=RUN_DATE).check_ready()
 
 
 # --- 세 슬롯이 함께 쓰는 guard (`thesis_common`) ----------------------------------
@@ -120,18 +126,18 @@ def test_the_guard_passes_when_assessment_kept_up():
 
 def test_a_closed_day_is_skipped_not_failed():
     with pytest.raises(AirflowSkipException, match="KRX is closed"):
-        thesis_common.skip_unless_open(FakeConnection([(False,)]), date(2026, 8, 15))
+        _run(FakeConnection([(False,)]), date(2026, 8, 15)).skip_unless_open()
 
 
 @pytest.mark.parametrize("row", [(True,), None])
 def test_an_open_or_unknown_day_runs(row):
     """달력을 아직 못 채웠으면(`None`) 돌린다. 진짜 거래일을 빠뜨리는 쪽이 더 나쁘다."""
-    thesis_common.skip_unless_open(FakeConnection([row]), date(2026, 8, 21))
+    _run(FakeConnection([row]), date(2026, 8, 21)).skip_unless_open()
 
 
 def test_missing_settled_closes_wait_instead_of_skipping():
     with pytest.raises(thesis_common.ThesisNotReady, match="settled closes"):
-        thesis_common.require_settled_closes(FakeConnection([(1,)]), date(2026, 8, 21), ["005930", "000660"])
+        _run(FakeConnection([(1,)]), date(2026, 8, 21)).require_settled_closes(["005930", "000660"])
 
 
 def test_a_quiet_hour_passes_only_when_collection_is_alive():
@@ -142,7 +148,7 @@ def test_a_quiet_hour_passes_only_when_collection_is_alive():
     """
     alive = FakeConnection([(AS_OF - timedelta(hours=6),), (0, 40)])
 
-    thesis_forecast.check_ready(alive, AS_OF)
+    thesis_forecast.PreOpenForecast(alive, run_date=RUN_DATE).check_ready()
 
 
 def test_a_dead_collector_does_not_pass_the_guard():
@@ -150,7 +156,7 @@ def test_a_dead_collector_does_not_pass_the_guard():
 
     # 근거 없는 추론이 조용히 나가는 것을 막는다.
     with pytest.raises(thesis_common.ThesisNotReady, match="has not caught up"):
-        thesis_forecast.check_ready(dead, AS_OF)
+        thesis_forecast.PreOpenForecast(dead, run_date=RUN_DATE).check_ready()
 
 
 def test_a_backlog_does_not_pass_either():
@@ -158,4 +164,4 @@ def test_a_backlog_does_not_pass_either():
     behind = FakeConnection([(AS_OF - timedelta(hours=6),), (12, 300)])
 
     with pytest.raises(thesis_common.ThesisNotReady):
-        thesis_forecast.check_ready(behind, AS_OF)
+        thesis_forecast.PreOpenForecast(behind, run_date=RUN_DATE).check_ready()

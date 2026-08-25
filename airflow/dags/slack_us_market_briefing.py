@@ -40,7 +40,7 @@ from pydantic import SecretStr
 from modules.briefing import market
 from modules.briefing.market import MarketScope
 from modules.market_session import us_equity_open_day
-from modules.slack import SlackError, post_message
+from modules.slack import SlackClient, SlackError
 from modules.utility import CONNECTION_ID, KST_TIMEZONE
 
 # KST 화~토 08:00 = UTC 월~금 23:00. 미국 마감과 아침 수집이 끝난 뒤다.
@@ -97,7 +97,7 @@ def slack_us_market_briefing():
         text = market.render_text(summary, MarketScope.US)
 
         try:
-            return post_message(token, channel, text=text, blocks=blocks)
+            return SlackClient(token).post_message(channel, text=text, blocks=blocks)
         except SlackError as error:
             raise AirflowFailException(str(error)) from error
 

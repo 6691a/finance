@@ -23,13 +23,14 @@ from collections.abc import Callable, Iterable, Sequence
 from datetime import date, datetime, timedelta
 from decimal import Decimal
 from enum import StrEnum
-from typing import Any, Protocol, Self
+from typing import Any
 
 from pendulum import timezone
 from pydantic import AwareDatetime, BaseModel, ConfigDict
 
 from modules import technical
 from modules.briefing import blocks
+from modules.db import Connection
 from modules.sql import read_sql
 from modules.utility import KST_TIMEZONE
 
@@ -202,22 +203,6 @@ class MarketScope(StrEnum):
     KOREA = "korea"
     KOREA_PREOPEN = "korea_preopen"
     US = "us"
-
-
-class Cursor(Protocol):
-    def __enter__(self) -> Self: ...
-
-    def __exit__(self, *args: object) -> bool | None: ...
-
-    def execute(self, statement: str, parameters: Any) -> object: ...
-
-    def fetchall(self) -> Any: ...
-
-
-class Connection(Protocol):
-    def cursor(self) -> Cursor: ...
-
-
 class QuoteChange(BaseModel):
     model_config = ConfigDict(frozen=True)
 

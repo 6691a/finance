@@ -44,7 +44,7 @@ from airflow.timetables.trigger import MultipleCronTriggerTimetable
 from pydantic import SecretStr
 
 from modules.briefing import documents
-from modules.slack import SlackError, post_message
+from modules.slack import SlackClient, SlackError
 
 if TYPE_CHECKING:
     from modules.briefing.picks import Pick
@@ -107,7 +107,7 @@ def slack_document_briefing():
         text = documents.render_text(summary, picks)
 
         try:
-            return post_message(token, channel, text=text, blocks=blocks)
+            return SlackClient(token).post_message(channel, text=text, blocks=blocks)
         except SlackError as error:
             raise AirflowFailException(str(error)) from error
 

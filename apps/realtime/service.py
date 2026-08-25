@@ -32,7 +32,7 @@ import logging
 import random
 import signal
 import uuid
-from collections.abc import Callable, Coroutine, Mapping
+from collections.abc import Callable, Coroutine
 from datetime import UTC, datetime, time, timedelta
 from decimal import Decimal
 from enum import StrEnum
@@ -188,21 +188,24 @@ class RealtimeSettings(BaseModel):
         return self.websocket_domain.rstrip("/") + "/tryitout"
 
 
-def issue_approval_key(rest_domain: str, app_key: SecretStr, app_secret: SecretStr) -> SecretStr:
+def issue_approval_key(settings: RealtimeSettings) -> SecretStr:
     """WebSocket 접속키를 받는다. REST access token과 서로 대체되지 않는다(문서 3.4).
 
     앱키가 본문에 들어가므로 예외 메시지에 본문을 싣지 않는다. 부르는 쪽이 프로세스
     메모리에 캐시하고, 인증 거절이나 24시간 만료에만 다시 부른다.
+
+    **설정 객체를 통째로 받는다.** 자격 증명 세 조각을 낱개로 넘기면 하나가 늘 때 호출부가
+    같이 바뀐다 — 저장소가 수집기에서 없앤 것과 같은 모양이다.
     """
     body = json.dumps(
         {
             "grant_type": "client_credentials",
-            "appkey": app_key.get_secret_value(),
-            "secretkey": app_secret.get_secret_value(),
+            "appkey": settings.app_key.get_secret_value(),
+            "secretkey": settings.app_secret.get_secret_value(),
         }
     ).encode()
     request = Request(
-        rest_domain.rstrip("/") + APPROVAL_PATH,
+        settings.rest_domain.rstrip("/") + APPROVAL_PATH,
         data=body,
         headers={"content-type": "application/json; charset=utf-8"},
         method="POST",
@@ -279,330 +282,351 @@ def _first_cause(error: BaseException) -> BaseException:
     return error
 
 
-def _subscribe_message(approval_key: SecretStr, subscription: Subscription) -> str:
-    return json.dumps(
-        {
-            "header": {
-                "approval_key": approval_key.get_secret_value(),
-                "custtype": "P",
-                "tr_type": "1",
-                "content-type": "utf-8",
-            },
-            "body": {"input": {"tr_id": subscription.tr_id, "tr_key": subscription.tr_key}},
-        }
-    )
+class KisConnection:
+    """물리 연결 하나가 객체 하나다. 세션 레코드 하나가 이 연결의 계보다(문서 10.1).
 
+    **연결 한 번 동안 안 변하는 것이 생성자에 있다.** 설정·구독 레지스트리·저장소·접속키·
+    heartbeat 다섯이다. 전에는 이 다섯이 `run_connection`의 인자였고, 그 안에서 만든
+    집계기·카운터·세션 ID·전일종가를 `_flush_timer`가 인자 열 개로 다시 받았다. 지금은
+    전부 필드라 flush 하나를 고칠 때 호출부를 같이 고치지 않는다.
 
-async def _flush_timer(
-    aggregator: MinuteAggregator,
-    repository: RealtimeRepository,
-    source_record_id: int,
-    previous_closes: Mapping[str, Decimal],
-    delay_seconds: float,
-    counters: dict[str, int],
-    heartbeat_extra: Callable[[], HeartbeatExtra],
-    heartbeat: Heartbeat,
-    clock: Callable[[], datetime] = lambda: datetime.now(UTC),
-    sleeper: Callable[[float], Coroutine[Any, Any, None]] = asyncio.sleep,
-) -> None:
-    """분 경계 + 지연 뒤 직전 분을 flush한다. 다음 분의 첫 체결을 기다리지 않는다
-    (문서 7.3). `clock`/`sleeper` 주입은 테스트용이다."""
-    while True:
-        now = clock()
-        boundary = minute_of(now) + timedelta(minutes=1)
-        await sleeper((boundary - now).total_seconds() + delay_seconds)
-        bars = aggregator.flush_before(boundary)
-        rows = []
-        for bar in bars:
-            previous_close = previous_closes.get(bar.stock_code)
-            if previous_close is None:
-                # 전일종가가 없으면 NOT NULL을 채울 수 없다. 그 종목만 건너뛴다.
-                counters["skipped_no_previous_close"] += 1
-                continue
-            rows.append(
-                {
-                    "provider": PROVIDER,
-                    "stock_code": bar.stock_code,
-                    "exchange": bar.exchange,
-                    "bar_at": bar.bar_at,
-                    "open": bar.open,
-                    "high": bar.high,
-                    "low": bar.low,
-                    "close": bar.close,
-                    "volume": bar.volume,
-                    "previous_close": previous_close,
-                    "ingest_method": "websocket",
-                    "is_final": False,
-                    "source_record_id": source_record_id,
-                }
-            )
-        if rows:
-            counters["stored_bars"] += await repository.store_bars(rows)
-        heartbeat.update(heartbeat.state, **heartbeat_extra().model_dump(mode="json"))
-
-
-async def _watchdog(
-    last_frame_at: Callable[[], datetime | None],
-    clock: Callable[[], datetime] = lambda: datetime.now(UTC),
-    sleeper: Callable[[float], Coroutine[Any, Any, None]] = asyncio.sleep,
-) -> None:
-    """죽은 소켓과 연결 창 종료를 감시한다."""
-    while True:
-        await sleeper(IDLE_POLL_SECONDS)
-        now = clock()
-        if not in_connect_window(now):
-            raise ConnectWindowClosed
-        seen = last_frame_at()
-        if seen is not None and (now - seen).total_seconds() > STALE_FRAME_SECONDS:
-            raise StaleConnectionError(f"no frame for {STALE_FRAME_SECONDS:.0f}s")
-
-
-async def run_connection(
-    settings: RealtimeSettings,
-    registry: tuple[Subscription, ...],
-    repository: RealtimeRepository,
-    approval_key: SecretStr,
-    heartbeat: Heartbeat,
-) -> None:
-    """물리 연결 하나. 세션 레코드 하나가 이 연결의 계보다(문서 10.1).
-
-    구독 전부가 인증 거절이면 `AuthRejectedError`를 올려 바깥 루프가 approval key를
-    재발급하게 한다. 개별 NACK는 그 시계열만 비활성한다.
+    `clock`·`sleeper`는 테스트 주입이다. 기본값이 실제 시계와 `asyncio.sleep`이다.
     """
-    session_id = uuid.uuid4().hex
-    started_at = datetime.now(UTC)
-    counters = dict(SESSION_COUNTERS)
-    heartbeat.update("connecting", session_id=session_id)
 
-    source_record_id = await repository.open_session(started_at, {"session_id": session_id, "interval": "1m"})
+    def __init__(
+        self,
+        settings: RealtimeSettings,
+        registry: tuple[Subscription, ...],
+        repository: RealtimeRepository,
+        approval_key: SecretStr,
+        heartbeat: Heartbeat,
+        *,
+        clock: Callable[[], datetime] = lambda: datetime.now(UTC),
+        sleeper: Callable[[float], Coroutine[Any, Any, None]] = asyncio.sleep,
+    ) -> None:
+        self._settings = settings
+        self._registry = registry
+        self._repository = repository
+        self._approval_key = approval_key
+        self._heartbeat = heartbeat
+        self._clock = clock
+        self._sleeper = sleeper
+        # 연결 하나가 사는 동안의 상태. 전에는 `run_connection`의 지역 변수와 클로저였다.
+        self._session_id = uuid.uuid4().hex
+        self._counters = dict(SESSION_COUNTERS)
+        self._aggregator = MinuteAggregator()
+        self._previous_closes: dict[str, Decimal] = {}
+        self._source_record_id = 0
+        self._last_frame_at: datetime | None = None
 
-    business_date = started_at.astimezone(KST).date()
-    previous_closes: dict[str, Decimal] = {}
-    for stock in DomesticStock:
-        close = await repository.previous_close(stock.value, business_date)
-        if close is None:
-            logger.warning("No previous close for %s; its provisional bars are disabled", stock.value)
-        else:
-            previous_closes[stock.value] = close
+    def _subscribe_message(self, subscription: Subscription) -> str:
+        return json.dumps(
+            {
+                "header": {
+                    "approval_key": self._approval_key.get_secret_value(),
+                    "custtype": "P",
+                    "tr_type": "1",
+                    "content-type": "utf-8",
+                },
+                "body": {"input": {"tr_id": subscription.tr_id, "tr_key": subscription.tr_key}},
+            }
+        )
 
-    aggregator = MinuteAggregator()
-    subscribed_codes = frozenset(subscription.tr_key for subscription in registry)
-    active: set[tuple[str, str]] = set()
-    ack_results: list[dict[str, str | bool]] = []
-    last_frame_at: datetime | None = None
-    status = SourceStatus.FAILED
-    reason = "unknown"
+    def _heartbeat_extra(self) -> HeartbeatExtra:
+        return HeartbeatExtra(
+            session_id=self._session_id,
+            **self._counters,
+            late_ticks=self._aggregator.late_tick_count,
+        )
 
-    try:
-        async with connect(settings.websocket_url(), ping_interval=None) as socket:
-            for subscription in registry:
-                await socket.send(_subscribe_message(approval_key, subscription))
-
-            pending = {(subscription.tr_id, subscription.tr_key) for subscription in registry}
-            async with asyncio.timeout(SUBSCRIBE_ACK_TIMEOUT_SECONDS):
-                while pending:
-                    raw = await socket.recv()
-                    text = raw if isinstance(raw, str) else raw.decode()
-                    last_frame_at = datetime.now(UTC)
-                    counters["frames"] += 1
-                    if not text.startswith("{"):
-                        # 구독 확인 전의 데이터 프레임. 부분 분이라 버려도 잃는 게 없다.
-                        continue
-                    control = parse_control_frame(text)
-                    if isinstance(control, PingPong):
-                        await socket.send(control.raw)
-                        continue
-                    channel = (control.tr_id, control.tr_key)
-                    pending.discard(channel)
-                    ack_results.append(
-                        {"tr_id": control.tr_id, "tr_key": control.tr_key, "ok": control.ok, "code": control.code}
-                    )
-                    if control.ok:
-                        active.add(channel)
-                    else:
-                        logger.warning(
-                            "Subscription rejected for %s %s: %s %s",
-                            control.tr_id,
-                            control.tr_key,
-                            control.code,
-                            control.message,
-                        )
-
-            if not active:
-                # 전부 거절이면 채널이 아니라 인증이 문제다. 코드 체계는 픽스처로 확정될
-                # 때까지 이 판정(전건 거절 = 인증)으로 간다.
-                raise AuthRejectedError("every subscription was rejected")
-
-            aggregator.mark_connected(datetime.now(UTC))
-            heartbeat.update("ready" if len(active) == len(registry) else "degraded", session_id=session_id)
-
-            def heartbeat_extra() -> HeartbeatExtra:
-                return HeartbeatExtra(session_id=session_id, **counters, late_ticks=aggregator.late_tick_count)
-
-            async with asyncio.TaskGroup() as tasks:
-                tasks.create_task(
-                    _flush_timer(
-                        aggregator,
-                        repository,
-                        source_record_id,
-                        previous_closes,
-                        settings.finalization_delay_seconds,
-                        counters,
-                        heartbeat_extra,
-                        heartbeat,
-                    )
+    async def _flush_timer(self) -> None:
+        """분 경계 + 지연 뒤 직전 분을 flush한다. 다음 분의 첫 체결을 기다리지 않는다
+        (문서 7.3)."""
+        while True:
+            now = self._clock()
+            boundary = minute_of(now) + timedelta(minutes=1)
+            await self._sleeper((boundary - now).total_seconds() + self._settings.finalization_delay_seconds)
+            bars = self._aggregator.flush_before(boundary)
+            rows = []
+            for bar in bars:
+                previous_close = self._previous_closes.get(bar.stock_code)
+                if previous_close is None:
+                    # 전일종가가 없으면 NOT NULL을 채울 수 없다. 그 종목만 건너뛴다.
+                    self._counters["skipped_no_previous_close"] += 1
+                    continue
+                rows.append(
+                    {
+                        "provider": PROVIDER,
+                        "stock_code": bar.stock_code,
+                        "exchange": bar.exchange,
+                        "bar_at": bar.bar_at,
+                        "open": bar.open,
+                        "high": bar.high,
+                        "low": bar.low,
+                        "close": bar.close,
+                        "volume": bar.volume,
+                        "previous_close": previous_close,
+                        "ingest_method": "websocket",
+                        "is_final": False,
+                        "source_record_id": self._source_record_id,
+                    }
                 )
-                tasks.create_task(_watchdog(lambda: last_frame_at))
+            if rows:
+                self._counters["stored_bars"] += await self._repository.store_bars(rows)
+            self._heartbeat.update(self._heartbeat.state, **self._heartbeat_extra().model_dump(mode="json"))
 
-                async for raw in socket:
-                    last_frame_at = datetime.now(UTC)
-                    counters["frames"] += 1
-                    text = raw if isinstance(raw, str) else raw.decode()
-                    if text.startswith("{"):
+    async def _watchdog(self) -> None:
+        """죽은 소켓과 연결 창 종료를 감시한다."""
+        while True:
+            await self._sleeper(IDLE_POLL_SECONDS)
+            now = self._clock()
+            if not in_connect_window(now):
+                raise ConnectWindowClosed
+            seen = self._last_frame_at
+            if seen is not None and (now - seen).total_seconds() > STALE_FRAME_SECONDS:
+                raise StaleConnectionError(f"no frame for {STALE_FRAME_SECONDS:.0f}s")
+
+    async def run(self) -> None:
+        """연결 하나를 끝까지 돈다.
+
+        구독 전부가 인증 거절이면 `AuthRejectedError`를 올려 바깥 루프가 approval key를
+        재발급하게 한다. 개별 NACK는 그 시계열만 비활성한다.
+        """
+        started_at = datetime.now(UTC)
+        self._heartbeat.update("connecting", session_id=self._session_id)
+
+        self._source_record_id = await self._repository.open_session(
+            started_at, {"session_id": self._session_id, "interval": "1m"}
+        )
+
+        business_date = started_at.astimezone(KST).date()
+        for stock in DomesticStock:
+            close = await self._repository.previous_close(stock.value, business_date)
+            if close is None:
+                logger.warning("No previous close for %s; its provisional bars are disabled", stock.value)
+            else:
+                self._previous_closes[stock.value] = close
+
+        subscribed_codes = frozenset(subscription.tr_key for subscription in self._registry)
+        active: set[tuple[str, str]] = set()
+        ack_results: list[dict[str, str | bool]] = []
+        status = SourceStatus.FAILED
+        reason = "unknown"
+
+        try:
+            async with connect(self._settings.websocket_url(), ping_interval=None) as socket:
+                for subscription in self._registry:
+                    await socket.send(self._subscribe_message(subscription))
+
+                pending = {(subscription.tr_id, subscription.tr_key) for subscription in self._registry}
+                async with asyncio.timeout(SUBSCRIBE_ACK_TIMEOUT_SECONDS):
+                    while pending:
+                        raw = await socket.recv()
+                        text = raw if isinstance(raw, str) else raw.decode()
+                        self._last_frame_at = datetime.now(UTC)
+                        self._counters["frames"] += 1
+                        if not text.startswith("{"):
+                            # 구독 확인 전의 데이터 프레임. 부분 분이라 버려도 잃는 게 없다.
+                            continue
                         control = parse_control_frame(text)
                         if isinstance(control, PingPong):
-                            # 받은 프레임을 그대로 되돌린다. 공식 helper와 같은 방식이다.
                             await socket.send(control.raw)
-                        continue
-                    try:
-                        ticks = parse_data_frame(text, subscribed_codes)
-                    except EncryptedFrameError:
-                        counters["quarantined"] += 1
-                        raise
-                    except FrameContractError:
-                        counters["contract_errors"] += 1
-                        if counters["contract_errors"] >= FRAME_ERROR_RECONNECT_THRESHOLD:
-                            raise
-                        logger.warning("Quarantined a contract-violating frame")
-                        continue
-                    counters["data_frames"] += 1
-                    for tick in ticks:
-                        if in_session(tick.exchange, tick.occurred_at):
-                            aggregator.add(tick)
+                            continue
+                        channel = (control.tr_id, control.tr_key)
+                        pending.discard(channel)
+                        ack_results.append(
+                            {"tr_id": control.tr_id, "tr_key": control.tr_key, "ok": control.ok, "code": control.code}
+                        )
+                        if control.ok:
+                            active.add(channel)
                         else:
-                            counters["out_of_session_ticks"] += 1
-                raise _StreamEnded
+                            logger.warning(
+                                "Subscription rejected for %s %s: %s %s",
+                                control.tr_id,
+                                control.tr_key,
+                                control.code,
+                                control.message,
+                            )
 
-        status, reason = SourceStatus.SUCCEEDED, "connection closed"
-    except asyncio.CancelledError:
-        status, reason = SourceStatus.SUCCEEDED, "shutdown"
-        raise
-    except BaseExceptionGroup as group:
-        # TaskGroup을 지나며 ExceptionGroup이 된 사유를 원형으로 되돌려 바깥 루프가
-        # 종류로 판단하게 한다. 첫 예외가 대표 사유다.
-        cause = _first_cause(group)
-        if isinstance(cause, ConnectWindowClosed | _StreamEnded):
-            closed = isinstance(cause, ConnectWindowClosed)
-            status, reason = SourceStatus.SUCCEEDED, "connect window closed" if closed else "connection closed"
-        else:
-            status, reason = SourceStatus.FAILED, str(cause) or type(cause).__name__
-        raise cause from group
-    except ConnectWindowClosed:
-        status, reason = SourceStatus.SUCCEEDED, "connect window closed"
-        raise
-    except _StreamEnded:
-        status, reason = SourceStatus.SUCCEEDED, "connection closed"
-        raise
-    except Exception as error:
-        status, reason = SourceStatus.FAILED, str(error) or type(error).__name__
-        raise
-    finally:
-        # SIGTERM·끊김 어느 쪽이든 열린 분은 저장하지 않는다(문서 7.3).
-        aggregator.drop_open_minutes()
-        metadata = {
-            "session_id": session_id,
-            "reason": reason,
-            "acks": ack_results,
-            "active_channels": sorted(f"{tr_id}:{tr_key}" for tr_id, tr_key in active),
-            **counters,
-            "late_ticks": aggregator.late_tick_count,
-            "skipped_partial_bars": aggregator.skipped_partial_count,
-            "dropped_open_bars": aggregator.dropped_open_count,
-        }
-        # 취소(SIGTERM) 경로에서도 커밋 하나는 끝까지 간다. 추가 취소는 docker의
-        # stop_grace_period(30s) 안에서는 오지 않는다.
-        await repository.close_session(source_record_id, datetime.now(UTC), status, counters["stored_bars"], metadata)
+                if not active:
+                    # 전부 거절이면 채널이 아니라 인증이 문제다. 코드 체계는 픽스처로 확정될
+                    # 때까지 이 판정(전건 거절 = 인증)으로 간다.
+                    raise AuthRejectedError("every subscription was rejected")
+
+                self._aggregator.mark_connected(datetime.now(UTC))
+                self._heartbeat.update(
+                    "ready" if len(active) == len(self._registry) else "degraded",
+                    session_id=self._session_id,
+                )
+
+                async with asyncio.TaskGroup() as tasks:
+                    tasks.create_task(self._flush_timer())
+                    tasks.create_task(self._watchdog())
+
+                    async for raw in socket:
+                        self._last_frame_at = datetime.now(UTC)
+                        self._counters["frames"] += 1
+                        text = raw if isinstance(raw, str) else raw.decode()
+                        if text.startswith("{"):
+                            control = parse_control_frame(text)
+                            if isinstance(control, PingPong):
+                                # 받은 프레임을 그대로 되돌린다. 공식 helper와 같은 방식이다.
+                                await socket.send(control.raw)
+                            continue
+                        try:
+                            ticks = parse_data_frame(text, subscribed_codes)
+                        except EncryptedFrameError:
+                            self._counters["quarantined"] += 1
+                            raise
+                        except FrameContractError:
+                            self._counters["contract_errors"] += 1
+                            if self._counters["contract_errors"] >= FRAME_ERROR_RECONNECT_THRESHOLD:
+                                raise
+                            logger.warning("Quarantined a contract-violating frame")
+                            continue
+                        self._counters["data_frames"] += 1
+                        for tick in ticks:
+                            if in_session(tick.exchange, tick.occurred_at):
+                                self._aggregator.add(tick)
+                            else:
+                                self._counters["out_of_session_ticks"] += 1
+                    raise _StreamEnded
+
+            status, reason = SourceStatus.SUCCEEDED, "connection closed"
+        except asyncio.CancelledError:
+            status, reason = SourceStatus.SUCCEEDED, "shutdown"
+            raise
+        except BaseExceptionGroup as group:
+            # TaskGroup을 지나며 ExceptionGroup이 된 사유를 원형으로 되돌려 바깥 루프가
+            # 종류로 판단하게 한다. 첫 예외가 대표 사유다.
+            cause = _first_cause(group)
+            if isinstance(cause, ConnectWindowClosed | _StreamEnded):
+                closed = isinstance(cause, ConnectWindowClosed)
+                status, reason = SourceStatus.SUCCEEDED, "connect window closed" if closed else "connection closed"
+            else:
+                status, reason = SourceStatus.FAILED, str(cause) or type(cause).__name__
+            raise cause from group
+        except ConnectWindowClosed:
+            status, reason = SourceStatus.SUCCEEDED, "connect window closed"
+            raise
+        except _StreamEnded:
+            status, reason = SourceStatus.SUCCEEDED, "connection closed"
+            raise
+        except Exception as error:
+            status, reason = SourceStatus.FAILED, str(error) or type(error).__name__
+            raise
+        finally:
+            # SIGTERM·끊김 어느 쪽이든 열린 분은 저장하지 않는다(문서 7.3).
+            self._aggregator.drop_open_minutes()
+            metadata = {
+                "session_id": self._session_id,
+                "reason": reason,
+                "acks": ack_results,
+                "active_channels": sorted(f"{tr_id}:{tr_key}" for tr_id, tr_key in active),
+                **self._counters,
+                "late_ticks": self._aggregator.late_tick_count,
+                "skipped_partial_bars": self._aggregator.skipped_partial_count,
+                "dropped_open_bars": self._aggregator.dropped_open_count,
+            }
+            # 취소(SIGTERM) 경로에서도 커밋 하나는 끝까지 간다. 추가 취소는 docker의
+            # stop_grace_period(30s) 안에서는 오지 않는다.
+            await self._repository.close_session(
+                self._source_record_id, datetime.now(UTC), status, self._counters["stored_bars"], metadata
+            )
 
 
-async def run_service(settings: RealtimeSettings, repository: RealtimeRepository) -> None:
-    """바깥 루프. 연결 창 안에서 연결을 유지하고 밖에서는 유휴로 기다린다."""
-    heartbeat = Heartbeat(settings.heartbeat_path)
-    registry = build_registry(settings)
-    logger.info(
-        "kis-realtime 시작: 구독 %d건(%s), NXT=%s, 연결 창 평일 07:50~20:10 KST",
-        len(registry),
-        ", ".join(f"{sub.tr_id}:{sub.tr_key}" for sub in registry),
-        settings.enable_nxt,
-    )
-    approval_key: SecretStr | None = None
-    failure_streak = 0
+class RealtimeService:
+    """바깥 루프. 연결 창 안에서 연결을 유지하고 밖에서는 유휴로 기다린다.
 
-    shutdown = asyncio.Event()
-    loop = asyncio.get_running_loop()
-    for signum in (signal.SIGTERM, signal.SIGINT):
-        loop.add_signal_handler(signum, shutdown.set)
+    **프로세스가 사는 동안 이어지는 것이 여기 있다.** 접속키(24시간 캐시)와 연속 실패
+    횟수는 연결을 넘어 살아남는다 — 전에는 `run_service`의 지역 변수여서 그 사실이
+    시그니처에 안 보였다. 연결 한 번의 상태는 `KisConnection`이 갖는다.
+    """
 
-    try:
-        while not shutdown.is_set():
-            if not in_connect_window(datetime.now(UTC)):
-                heartbeat.update("idle")
-                await _wait_or_shutdown(shutdown, IDLE_POLL_SECONDS)
-                continue
+    def __init__(self, settings: RealtimeSettings, repository: RealtimeRepository) -> None:
+        self._settings = settings
+        self._repository = repository
+        self._heartbeat = Heartbeat(settings.heartbeat_path)
+        self._registry = build_registry(settings)
+        self._approval_key: SecretStr | None = None
+        self._failure_streak = 0
 
-            if approval_key is None:
-                try:
-                    approval_key = await asyncio.to_thread(
-                        issue_approval_key, settings.rest_domain, settings.app_key, settings.app_secret
-                    )
-                except ConnectionError as error:
-                    # 네트워크 문제는 재시도할 값어치가 있다. 발급 거절(ApprovalError)은
-                    # 설정 문제라 그대로 터진다.
-                    logger.warning("Approval key request failed: %s", error)
-                    failure_streak += 1
-                    await _wait_or_shutdown(shutdown, min(BACKOFF_CAP_SECONDS, 2.0**failure_streak))
+    async def run(self) -> None:
+        logger.info(
+            "kis-realtime 시작: 구독 %d건(%s), NXT=%s, 연결 창 평일 07:50~20:10 KST",
+            len(self._registry),
+            ", ".join(f"{sub.tr_id}:{sub.tr_key}" for sub in self._registry),
+            self._settings.enable_nxt,
+        )
+
+        shutdown = asyncio.Event()
+        loop = asyncio.get_running_loop()
+        for signum in (signal.SIGTERM, signal.SIGINT):
+            loop.add_signal_handler(signum, shutdown.set)
+
+        try:
+            while not shutdown.is_set():
+                if not in_connect_window(datetime.now(UTC)):
+                    self._heartbeat.update("idle")
+                    await _wait_or_shutdown(shutdown, IDLE_POLL_SECONDS)
                     continue
 
-            connection = asyncio.create_task(run_connection(settings, registry, repository, approval_key, heartbeat))
-            waiter = asyncio.create_task(shutdown.wait())
-            done, _ = await asyncio.wait({connection, waiter}, return_when=asyncio.FIRST_COMPLETED)
-            if waiter in done:
-                connection.cancel()
+                if self._approval_key is None:
+                    try:
+                        self._approval_key = await asyncio.to_thread(issue_approval_key, self._settings)
+                    except ConnectionError as error:
+                        # 네트워크 문제는 재시도할 값어치가 있다. 발급 거절(ApprovalError)은
+                        # 설정 문제라 그대로 터진다.
+                        logger.warning("Approval key request failed: %s", error)
+                        self._failure_streak += 1
+                        await _wait_or_shutdown(shutdown, min(BACKOFF_CAP_SECONDS, 2.0**self._failure_streak))
+                        continue
+
+                connection = asyncio.create_task(
+                    KisConnection(
+                        self._settings, self._registry, self._repository, self._approval_key, self._heartbeat
+                    ).run()
+                )
+                waiter = asyncio.create_task(shutdown.wait())
+                done, _ = await asyncio.wait({connection, waiter}, return_when=asyncio.FIRST_COMPLETED)
+                if waiter in done:
+                    connection.cancel()
+                    try:
+                        await connection
+                    except asyncio.CancelledError:
+                        pass
+                    break
+                waiter.cancel()
+
                 try:
-                    await connection
-                except asyncio.CancelledError:
-                    pass
-                break
-            waiter.cancel()
+                    connection.result()
+                    self._failure_streak = 0
+                except ConnectWindowClosed:
+                    self._failure_streak = 0
+                    continue
+                except AuthRejectedError:
+                    # approval key를 한 번 재발급하고 재연결한다(문서 7.4).
+                    logger.warning("Authentication rejected; reissuing the approval key")
+                    self._approval_key = None
+                    self._failure_streak += 1
+                except (
+                    TimeoutError,
+                    OSError,
+                    WebSocketException,
+                    StaleConnectionError,
+                    FrameContractError,
+                    EncryptedFrameError,
+                    _StreamEnded,
+                ) as error:
+                    logger.warning("Connection ended: %s", error)
+                    self._failure_streak += 1
+                # 그 밖의 예외(DB 오류 등)는 위로 터진다. 프로세스가 죽고 compose의
+                # restart가 되살린다 — 조용히 도는 것보다 낫다.
 
-            try:
-                connection.result()
-                failure_streak = 0
-            except ConnectWindowClosed:
-                failure_streak = 0
-                continue
-            except AuthRejectedError:
-                # approval key를 한 번 재발급하고 재연결한다(문서 7.4).
-                logger.warning("Authentication rejected; reissuing the approval key")
-                approval_key = None
-                failure_streak += 1
-            except (
-                TimeoutError,
-                OSError,
-                WebSocketException,
-                StaleConnectionError,
-                FrameContractError,
-                EncryptedFrameError,
-                _StreamEnded,
-            ) as error:
-                logger.warning("Connection ended: %s", error)
-                failure_streak += 1
-            # 그 밖의 예외(DB 오류 등)는 위로 터진다. 프로세스가 죽고 compose의
-            # restart가 되살린다 — 조용히 도는 것보다 낫다.
-
-            backoff = min(BACKOFF_CAP_SECONDS, 2.0**failure_streak) * random.uniform(0.5, 1.0)
-            await _wait_or_shutdown(shutdown, backoff)
-    finally:
-        heartbeat.update("idle" if shutdown.is_set() else "failed")
+                backoff = min(BACKOFF_CAP_SECONDS, 2.0**self._failure_streak) * random.uniform(0.5, 1.0)
+                await _wait_or_shutdown(shutdown, backoff)
+        finally:
+            self._heartbeat.update("idle" if shutdown.is_set() else "failed")
 
 
 async def _wait_or_shutdown(shutdown: asyncio.Event, seconds: float) -> None:

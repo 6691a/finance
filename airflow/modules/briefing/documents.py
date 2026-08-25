@@ -18,12 +18,13 @@
 import json
 from collections.abc import Sequence
 from datetime import datetime, timedelta
-from typing import Any, Protocol, Self
+from typing import Any
 
 from pydantic import AwareDatetime, BaseModel, ConfigDict
 
 from modules.briefing import blocks
 from modules.briefing.picks import Pick
+from modules.db import Connection
 from modules.sql import read_sql
 from modules.utility import KST_TIMEZONE
 
@@ -47,24 +48,6 @@ CANDIDATE_DOCUMENTS = 60
 FALLBACK_DOCUMENTS = 5
 
 DIRECTION_MARKS = {"positive": "🟢", "negative": "🔴", "neutral": "⚪"}
-
-
-class Cursor(Protocol):
-    def __enter__(self) -> Self: ...
-
-    def __exit__(self, *args: object) -> bool | None: ...
-
-    def execute(self, statement: str, parameters: Any) -> object: ...
-
-    def fetchone(self) -> Any: ...
-
-    def fetchall(self) -> Any: ...
-
-
-class Connection(Protocol):
-    def cursor(self) -> Cursor: ...
-
-
 class CandidateDocument(BaseModel):
     """선별에 올리는 문서 한 건. 본문은 담지 않는다."""
 

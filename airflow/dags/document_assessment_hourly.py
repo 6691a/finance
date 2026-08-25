@@ -69,12 +69,10 @@ from modules.assessment import (
     DEFAULT_BATCH_SIZE,
     AssessmentBatch,
     AssessmentError,
+    AssessmentStore,
     DocumentAssessor,
     LlmSettings,
     filter_tags,
-    load_candidates,
-    pending_documents,
-    store_assessment,
 )
 from modules.dedup import link_duplicates
 from modules.llm import RetryableLlmError, document_model, model_name
@@ -152,8 +150,9 @@ def document_assessment_hourly():
 
         connection = _connection()
         try:
-            candidates = load_candidates(connection)
-            documents = pending_documents(connection, batch_size, settings.prompt_revision)
+            store = AssessmentStore(connection, settings.prompt_revision)
+            candidates = store.candidates()
+            documents = store.pending(batch_size)
         finally:
             connection.close()
 
@@ -187,15 +186,13 @@ def document_assessment_hourly():
 
             # 문서 하나가 트랜잭션 하나다. 앞의 성공을 뒤의 실패가 되돌리지 않는다.
             with closing(_connection()) as connection, atomic(connection):
-                store_assessment(
-                    connection,
+                AssessmentStore(connection, settings.prompt_revision).store(
                     document,
                     assessment,
                     instruments,
                     indicators,
                     model_name(model),
                     assessed_at,
-                    settings.prompt_revision,
                 )
             assessed += 1
 

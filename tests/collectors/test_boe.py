@@ -10,7 +10,7 @@ from sqlalchemy import Table
 
 from apps.models.market import IndicatorObservation
 from apps.models.raw import SourceRecord
-from modules.collectors.boe import (
+from modules.collectors.indicator.boe import (
     ENCODING,
     EXPECTED_HEADER,
     FETCH_PADDING_DAYS,

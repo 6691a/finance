@@ -30,7 +30,7 @@ from airflow.sdk import Param
 from pydantic import SecretStr
 
 from modules.market_session import krx_open_day
-from modules.slack import SlackError, post_message
+from modules.slack import SlackClient, SlackError
 from modules.thesis_state import (
     IndexObservation,
     NxtObservedState,
@@ -79,27 +79,298 @@ class ThesisNotReady(RuntimeError):
     """선행 DAG의 데이터가 아직 없다. 재시도하면 풀릴 수 있다."""
 
 
-def skip_unless_open(conn: Any, run_date: date) -> None:
-    """휴장일이면 `AirflowSkipException`. 세 슬롯이 같은 판정을 쓴다.
+class ThesisRun:
+    """추론 한 번이 객체 하나다. **연결·세션 날짜·기준 시각이 상태다.**
 
-    휴장 판정은 **모르면 돌린다.** 달력을 아직 못 채웠다는 이유로 진짜 거래일을 빠뜨리는
-    것이 휴장일에 한 번 더 부르는 것보다 나쁘다. NXT 달력은 따로 없어 KRX 것을 본다
-    (`market_session`에 NXT market_code가 없다).
+    세 슬롯 모듈이 전부 이 셋을 들고 돈다. 전에는 조회·판정·저장 일곱 함수가 `conn`을
+    각각 다시 받았고(저장소 최다 반복), `build_and_store`는 인자 아홉 개였다.
+    기준 구현은 `thesis_nxt_review.NxtAfterHoursReview`다.
+
+    **슬롯을 모른다.** 슬롯은 `build_and_store`의 인자로 흘러갈 뿐 여기서 분기하지 않는다.
+    슬롯마다 다른 것(기준 시각 계산, readiness guard, 매크로 창의 시작)은 슬롯별 모듈이 갖는다.
+
+    **`dag_run_id`는 생성자가 아니라 메서드 인자다.** 저장 한 번에만 쓰인다.
     """
-    if krx_open_day(conn, run_date) is False:
-        raise AirflowSkipException(f"KRX is closed on {run_date}")
 
+    def __init__(self, connection: Any, *, run_date: date, as_of_at: datetime) -> None:
+        self._connection = connection
+        self._run_date = run_date
+        self._as_of_at = as_of_at
 
-def require_settled_closes(conn: Any, run_date: date, watched: Sequence[str]) -> None:
-    """감시 종목 전부의 확정 종가가 들어왔는지 본다. 장후·애프터마켓 슬롯의 분모다.
+    @property
+    def connection(self) -> Any:
+        """`thesis.ThesisStore`처럼 같은 연결을 쓰는 쪽에 넘길 때만 쓴다."""
+        return self._connection
 
-    확정 종가는 `kis_investor_trade_daily`가 18:10에 채운다. 하나라도 빠지면
-    `ThesisNotReady` — 기다리면 풀리는 것이라 skip이 아니다.
-    """
-    with conn.cursor() as cursor:
-        cursor.execute(SETTLED_CLOSE_COUNT, (run_date, list(watched)))
-        if cursor.fetchone()[0] < len(watched):
-            raise ThesisNotReady(f"settled closes for {run_date} are not all in yet")
+    @property
+    def run_date(self) -> date:
+        return self._run_date
+
+    @property
+    def as_of_at(self) -> datetime:
+        return self._as_of_at
+
+    def skip_unless_open(self) -> None:
+        """휴장일이면 `AirflowSkipException`. 세 슬롯이 같은 판정을 쓴다.
+
+        휴장 판정은 **모르면 돌린다.** 달력을 아직 못 채웠다는 이유로 진짜 거래일을 빠뜨리는
+        것이 휴장일에 한 번 더 부르는 것보다 나쁘다. NXT 달력은 따로 없어 KRX 것을 본다
+        (`market_session`에 NXT market_code가 없다).
+        """
+        if krx_open_day(self._connection, self._run_date) is False:
+            raise AirflowSkipException(f"KRX is closed on {self._run_date}")
+
+    def require_settled_closes(self, watched: Sequence[str]) -> None:
+        """감시 종목 전부의 확정 종가가 들어왔는지 본다. 장후·애프터마켓 슬롯의 분모다.
+
+        확정 종가는 `kis_investor_trade_daily`가 18:10에 채운다. 하나라도 빠지면
+        `ThesisNotReady` — 기다리면 풀리는 것이라 skip이 아니다.
+        """
+        with self._connection.cursor() as cursor:
+            cursor.execute(SETTLED_CLOSE_COUNT, (self._run_date, list(watched)))
+            if cursor.fetchone()[0] < len(watched):
+                raise ThesisNotReady(f"settled closes for {self._run_date} are not all in yet")
+
+    def previous_open_day(self) -> date | None:
+        with self._connection.cursor() as cursor:
+            cursor.execute(
+                "SELECT session_date FROM market_session "
+                "WHERE market_code = 'KRX' AND session_date < %s AND effective_open_day "
+                "ORDER BY session_date DESC LIMIT 1",
+                (self._run_date,),
+            )
+            row = cursor.fetchone()
+        return row[0] if row else None
+
+    def origin_day(self, horizon_days: int) -> date | None:
+        """이 세션이 T+N이 되는 추론일. 달력이 없으면 `None`."""
+        with self._connection.cursor() as cursor:
+            cursor.execute(
+                "SELECT session_date FROM market_session "
+                "WHERE market_code = 'KRX' AND session_date < %s AND effective_open_day "
+                "ORDER BY session_date DESC OFFSET %s LIMIT 1",
+                (self._run_date, horizon_days - 1),
+            )
+            row = cursor.fetchone()
+        return row[0] if row else None
+
+    def observed_state(self, market_thesis: Any, session: date | None, targets: Any) -> ObservedState:
+        """프롬프트에 주는 관측 상태. **전부 SQL이 계산한다.**
+
+        **어느 세션을 볼지는 부르는 쪽이 정한다.** 장후는 당일, 장전은 전 영업일이고 그 판단은
+        각자의 모듈에 있다. 여기서는 받은 날짜의 마감값만 읽는다. 채점과 같은 원본을 본다.
+
+        기술적 관측(`technical`)을 함께 싣는다. 추론 대상이 곧 지표 대상이라 툴로만 두면
+        모델이 호출 상한 중 대상 수만큼을 같은 조회에 쓰거나 아예 안 본다(기술지표 문서
+        14.1절). 이력과 대상 밖 심볼은 그대로 `daily_history` 툴 몫이다.
+
+        **맨 dict가 아니라 모델을 돌려준다.** 이 값은 프롬프트와 JSONB 컬럼 둘로 나가므로 키
+        오타가 조용히 살아남으면 안 된다(`thesis_state` 모듈 docstring).
+        """
+        if session is None:
+            return ObservedState()
+
+        index: dict[str, IndexObservation] = {}
+        stock: dict[str, StockObservation] = {}
+        index_codes = [s.code for s in targets if s.kind is market_thesis.ThesisSubjectKind.INDEX]
+        stock_codes = [s.code for s in targets if s.kind is market_thesis.ThesisSubjectKind.STOCK]
+        with self._connection.cursor() as cursor:
+            cursor.execute(
+                "SELECT symbol, close, previous_close FROM index_bar "
+                "WHERE provider = 'kis' AND bar_at = %s AND symbol = ANY(%s)",
+                (close_at(session), index_codes),
+            )
+            for symbol, close, previous in cursor.fetchall():
+                if previous:
+                    index[symbol] = IndexObservation(
+                        close=float(close),
+                        return_pct=round(float((close - previous) / previous) * 100, 2),
+                    )
+            cursor.execute(
+                "SELECT stock_code, close_price FROM stock_investor_trade_daily "
+                "WHERE provider = 'kis' AND business_date = %s AND stock_code = ANY(%s)",
+                (session, stock_codes),
+            )
+            for code, close in cursor.fetchall():
+                stock[code] = StockObservation(close=float(close))
+
+        technical = self.technical_state([target.code for target in targets])
+        return ObservedState(session=session, index=index, stock=stock, technical=technical)
+
+    def technical_state(self, subject_codes: Sequence[str]) -> TechnicalState:
+        """추론 대상의 기술적 관측. 지표 다섯 칸과 최근 신호다(문서 14.1절).
+
+        **절대값이 아니라 비율로 준다.** `sma20=3160.2`를 주면 모델이 종가와 비교하는 계산을
+        해야 하고, 그 계산은 틀릴 수 있다. 절대값이 필요하면 `daily_history` 툴이 있다.
+
+        지표를 못 내는 대상은 `None`이다. 빈 dict나 0으로 채우면 모델이 "지표가 중립"으로 읽는다.
+
+        슬롯으로 갈리지 않는다 — 세션과 기준 시각은 부르는 쪽이 이미 정해서 넘겼다.
+        """
+        from modules import technical
+        from modules.thesis import (
+            DAILY_HISTORY,
+            DOMESTIC_MAX_DAILY_CHANGE_PCT,
+            RECENT_SIGNALS,
+            ThesisEvidenceKind,
+            evidence_ref,
+        )
+
+        codes = list(subject_codes)
+        if not codes:
+            return TechnicalState()
+
+        as_of_at = self._as_of_at
+        with self._connection.cursor() as cursor:
+            cursor.execute(
+                DAILY_HISTORY,
+                {
+                    "symbols": codes,
+                    # 대상은 부르는 쪽이 이미 정했다. watched를 다시 끌어오면 추론하지 않는
+                    # 종목의 지표가 프롬프트에 실린다.
+                    "include_watched": False,
+                    "as_of_at": as_of_at,
+                    "limit": technical.TECHNICAL_LOOKBACK_BARS,
+                },
+            )
+            rows = list(cursor.fetchall())
+
+            # 신호는 대상마다 따로 묻는다. 추론 툴과 **같은 SQL**이라 cutoff 규칙이 어긋날 수
+            # 없고, 대상이 두셋뿐이라 왕복을 아끼려고 파일을 하나 더 만들 값어치가 없다.
+            signals: dict[str, tuple[SignalObservation, ...]] = {}
+            for code in codes:
+                cursor.execute(
+                    RECENT_SIGNALS,
+                    {
+                        "symbol": code,
+                        "since_date": (as_of_at - timedelta(days=SIGNAL_STATE_DAYS)).date(),
+                        "as_of_at": as_of_at,
+                        "limit": MAX_STATE_SIGNALS,
+                    },
+                )
+                signals[code] = tuple(
+                    SignalObservation(
+                        # 인용할 수 있게 ref를 붙인다. 툴이 준 ref와 같은 모양이다.
+                        ref=evidence_ref(ThesisEvidenceKind.TECHNICAL_SIGNAL, str(row[0])),
+                        signal_date=row[2],
+                        kind=str(row[3]),
+                        direction=str(row[4]),
+                    )
+                    for row in cursor.fetchall()
+                )
+
+        grouped: dict[str, list[Any]] = {}
+        for row in rows:
+            grouped.setdefault(str(row[1]), []).append(row)
+
+        subjects: dict[str, TechnicalObservation | None] = {}
+        as_of_dates = []
+        for code in codes:
+            subject_rows = grouped.get(code)
+            if not subject_rows:
+                subjects[code] = None
+                continue
+            ascending = list(reversed(subject_rows))
+            snapshot = technical.summarize(
+                code,
+                str(ascending[0][2] or code),
+                [
+                    technical.DailyBar(
+                        business_date=row[5],
+                        open=float(row[6]),
+                        high=float(row[7]),
+                        low=float(row[8]),
+                        close=float(row[9]),
+                        volume=None if row[10] is None else int(row[10]),
+                    )
+                    for row in ascending
+                ],
+                max_abs_daily_change_pct=DOMESTIC_MAX_DAILY_CHANGE_PCT,
+            )
+            if snapshot is None:
+                subjects[code] = None
+                continue
+            as_of_dates.append(snapshot.as_of_date)
+            subjects[code] = TechnicalObservation(
+                close_vs_sma20_pct=round((snapshot.close / snapshot.sma20 - 1) * 100, 2),
+                sma20_vs_sma60_pct=round((snapshot.sma20 / snapshot.sma60 - 1) * 100, 2),
+                rsi14=round(snapshot.rsi14, 1),
+                macd_histogram=round(snapshot.macd_histogram, 2),
+                volume_ratio20=None if snapshot.volume_ratio20 is None else round(snapshot.volume_ratio20, 2),
+                recent_signals=signals.get(code, ()),
+            )
+
+        # 사건 이름(골든크로스 등)을 여기서 붙이지 않는다. 모델은 kind·direction을 그대로 읽고,
+        # 사람이 읽는 표기는 Slack 표와 툴 근거 제목이 갖는다.
+        return TechnicalState(as_of_date=max(as_of_dates) if as_of_dates else None, subjects=subjects)
+
+    def build_and_store(
+        self,
+        *,
+        run_slot: Any,
+        macro_window_start: datetime,
+        targets: Any,
+        observed: ObservedState | NxtObservedState,
+        past: Mapping[str, Sequence[PastThesis]],
+        dag_run_id: str,
+    ) -> int:
+        """추론을 만들고 저장한다. 저장한 행 수를 준다.
+
+        **슬롯으로 갈라지지 않는다.** 슬롯은 값으로 흘러갈 뿐이고, 무엇이 다른지(기준 시각,
+        창의 시작, 관측 세션, 프롬프트에 실을 과거 추론 `past`)는 이미 부르는 쪽이 정해서
+        인자로 넘겼다. `past`는 subject 코드별 `ThesisStore.past_theses` 행이고, 그 `id`가
+        `thesis_precedent` 엣지로 남는다.
+
+        **첫 성공본 불변.** 행이 있으면 모델을 부르지 않는다 — LLM은 재호출마다 답이 달라서
+        덮어쓰면 최초 판단이 사라진다.
+        """
+        from modules import thesis as market_thesis
+        from modules.llm import LlmError, RetryableLlmError, model_name, thesis_model
+
+        store = market_thesis.ThesisStore(self._connection)
+        stored = store.existing_theses(run_date=self._run_date, run_slot=run_slot)
+        if stored:
+            logger.info("thesis for %s %s already exists; skipping the model", self._run_date, run_slot.value)
+            return 0
+
+        model = thesis_model()
+        toolbox = market_thesis.ThesisToolbox(
+            self._connection,
+            as_of_at=self._as_of_at,
+            macro_window_start=macro_window_start,
+            watched_codes=[s.code for s in targets if s.kind is market_thesis.ThesisSubjectKind.STOCK],
+            subject_codes=[s.code for s in targets],
+        )
+        try:
+            drafts, rounds = market_thesis.ThesisBuilder(model, toolbox).run(
+                run_slot=run_slot,
+                as_of_at=self._as_of_at,
+                subjects=targets,
+                observed_state=observed,
+                past_theses=past,
+            )
+        except market_thesis.ThesisError as error:
+            raise AirflowFailException(str(error)) from error
+        except LlmError as error:
+            # 재시도할 값어치가 있는 것은 그대로 올린다. 판단은 여기서 한다.
+            if isinstance(error, RetryableLlmError):
+                raise
+            raise AirflowFailException(str(error)) from error
+
+        rows = store.store_theses(
+            run_date=self._run_date,
+            run_slot=run_slot,
+            as_of_at=self._as_of_at,
+            dag_run_id=dag_run_id,
+            drafts=drafts,
+            registry=toolbox.registry,
+            observed_state=observed,
+            llm_model=model_name(model),
+            tool_rounds=rounds,
+            precedents={code: [row.id for row in rows] for code, rows in past.items()},
+        )
+        logger.info("stored %s theses for %s %s (%s tool rounds)", len(rows), self._run_date, run_slot.value, rounds)
+        return len(rows)
 
 
 def run_date_param() -> dict[str, Param]:
@@ -150,264 +421,6 @@ def close_at(day: date) -> datetime:
     return datetime.combine(day, CLOSE_TIME, tzinfo=KST_TIMEZONE).astimezone(UTC)
 
 
-def previous_open_day(conn: Any, day: date) -> date | None:
-    with conn.cursor() as cursor:
-        cursor.execute(
-            "SELECT session_date FROM market_session "
-            "WHERE market_code = 'KRX' AND session_date < %s AND effective_open_day "
-            "ORDER BY session_date DESC LIMIT 1",
-            (day,),
-        )
-        row = cursor.fetchone()
-    return row[0] if row else None
-
-
-def origin_day(conn: Any, target_day: date, horizon_days: int) -> date | None:
-    """`target_day`가 T+N이 되는 추론일. 달력이 없으면 `None`."""
-    with conn.cursor() as cursor:
-        cursor.execute(
-            "SELECT session_date FROM market_session "
-            "WHERE market_code = 'KRX' AND session_date < %s AND effective_open_day "
-            "ORDER BY session_date DESC OFFSET %s LIMIT 1",
-            (target_day, horizon_days - 1),
-        )
-        row = cursor.fetchone()
-    return row[0] if row else None
-
-
-def observed_state(
-    conn: Any,
-    market_thesis: Any,
-    session: date | None,
-    targets: Any,
-    *,
-    as_of_at: datetime | None = None,
-) -> ObservedState:
-    """프롬프트에 주는 관측 상태. **전부 SQL이 계산한다.**
-
-    **어느 세션을 볼지는 부르는 쪽이 정한다.** 장후는 당일, 장전은 전 영업일이고 그 판단은
-    각자의 모듈에 있다. 여기서는 받은 날짜의 마감값만 읽는다. 채점과 같은 원본을 본다.
-
-    `as_of_at`을 주면 기술적 관측(`technical`)을 함께 싣는다. 추론 대상이 곧 지표 대상이라
-    툴로만 두면 모델이 호출 상한 중 대상 수만큼을 같은 조회에 쓰거나 아예 안 본다
-    (기술지표 문서 14.1절). 이력과 대상 밖 심볼은 그대로 `daily_history` 툴 몫이다.
-
-    **맨 dict가 아니라 모델을 돌려준다.** 이 값은 프롬프트와 JSONB 컬럼 둘로 나가므로 키
-    오타가 조용히 살아남으면 안 된다(`thesis_state` 모듈 docstring).
-    """
-    if session is None:
-        return ObservedState()
-
-    index: dict[str, IndexObservation] = {}
-    stock: dict[str, StockObservation] = {}
-    index_codes = [s.code for s in targets if s.kind is market_thesis.ThesisSubjectKind.INDEX]
-    stock_codes = [s.code for s in targets if s.kind is market_thesis.ThesisSubjectKind.STOCK]
-    with conn.cursor() as cursor:
-        cursor.execute(
-            "SELECT symbol, close, previous_close FROM index_bar "
-            "WHERE provider = 'kis' AND bar_at = %s AND symbol = ANY(%s)",
-            (close_at(session), index_codes),
-        )
-        for symbol, close, previous in cursor.fetchall():
-            if previous:
-                index[symbol] = IndexObservation(
-                    close=float(close),
-                    return_pct=round(float((close - previous) / previous) * 100, 2),
-                )
-        cursor.execute(
-            "SELECT stock_code, close_price FROM stock_investor_trade_daily "
-            "WHERE provider = 'kis' AND business_date = %s AND stock_code = ANY(%s)",
-            (session, stock_codes),
-        )
-        for code, close in cursor.fetchall():
-            stock[code] = StockObservation(close=float(close))
-
-    technical = (
-        TechnicalState()
-        if as_of_at is None
-        else technical_state(conn, [target.code for target in targets], as_of_at=as_of_at)
-    )
-    return ObservedState(session=session, index=index, stock=stock, technical=technical)
-
-
-def technical_state(conn: Any, subject_codes: Sequence[str], *, as_of_at: datetime) -> TechnicalState:
-    """추론 대상의 기술적 관측. 지표 다섯 칸과 최근 신호다(문서 14.1절).
-
-    **절대값이 아니라 비율로 준다.** `sma20=3160.2`를 주면 모델이 종가와 비교하는 계산을
-    해야 하고, 그 계산은 틀릴 수 있다. 절대값이 필요하면 `daily_history` 툴이 있다.
-
-    지표를 못 내는 대상은 `None`이다. 빈 dict나 0으로 채우면 모델이 "지표가 중립"으로 읽는다.
-
-    슬롯으로 갈리지 않는다 — 세션과 기준 시각은 부르는 쪽이 이미 정해서 넘겼다.
-    """
-    from modules import technical
-    from modules.thesis import (
-        DAILY_HISTORY,
-        DOMESTIC_MAX_DAILY_CHANGE_PCT,
-        RECENT_SIGNALS,
-        ThesisEvidenceKind,
-        evidence_ref,
-    )
-
-    codes = list(subject_codes)
-    if not codes:
-        return TechnicalState()
-
-    with conn.cursor() as cursor:
-        cursor.execute(
-            DAILY_HISTORY,
-            {
-                "symbols": codes,
-                # 대상은 부르는 쪽이 이미 정했다. watched를 다시 끌어오면 추론하지 않는
-                # 종목의 지표가 프롬프트에 실린다.
-                "include_watched": False,
-                "as_of_at": as_of_at,
-                "limit": technical.TECHNICAL_LOOKBACK_BARS,
-            },
-        )
-        rows = list(cursor.fetchall())
-
-        # 신호는 대상마다 따로 묻는다. 추론 툴과 **같은 SQL**이라 cutoff 규칙이 어긋날 수
-        # 없고, 대상이 두셋뿐이라 왕복을 아끼려고 파일을 하나 더 만들 값어치가 없다.
-        signals: dict[str, tuple[SignalObservation, ...]] = {}
-        for code in codes:
-            cursor.execute(
-                RECENT_SIGNALS,
-                {
-                    "symbol": code,
-                    "since_date": (as_of_at - timedelta(days=SIGNAL_STATE_DAYS)).date(),
-                    "as_of_at": as_of_at,
-                    "limit": MAX_STATE_SIGNALS,
-                },
-            )
-            signals[code] = tuple(
-                SignalObservation(
-                    # 인용할 수 있게 ref를 붙인다. 툴이 준 ref와 같은 모양이다.
-                    ref=evidence_ref(ThesisEvidenceKind.TECHNICAL_SIGNAL, str(row[0])),
-                    signal_date=row[2],
-                    kind=str(row[3]),
-                    direction=str(row[4]),
-                )
-                for row in cursor.fetchall()
-            )
-
-    grouped: dict[str, list[Any]] = {}
-    for row in rows:
-        grouped.setdefault(str(row[1]), []).append(row)
-
-    subjects: dict[str, TechnicalObservation | None] = {}
-    as_of_dates = []
-    for code in codes:
-        subject_rows = grouped.get(code)
-        if not subject_rows:
-            subjects[code] = None
-            continue
-        ascending = list(reversed(subject_rows))
-        snapshot = technical.summarize(
-            code,
-            str(ascending[0][2] or code),
-            [
-                technical.DailyBar(
-                    business_date=row[5],
-                    open=float(row[6]),
-                    high=float(row[7]),
-                    low=float(row[8]),
-                    close=float(row[9]),
-                    volume=None if row[10] is None else int(row[10]),
-                )
-                for row in ascending
-            ],
-            max_abs_daily_change_pct=DOMESTIC_MAX_DAILY_CHANGE_PCT,
-        )
-        if snapshot is None:
-            subjects[code] = None
-            continue
-        as_of_dates.append(snapshot.as_of_date)
-        subjects[code] = TechnicalObservation(
-            close_vs_sma20_pct=round((snapshot.close / snapshot.sma20 - 1) * 100, 2),
-            sma20_vs_sma60_pct=round((snapshot.sma20 / snapshot.sma60 - 1) * 100, 2),
-            rsi14=round(snapshot.rsi14, 1),
-            macd_histogram=round(snapshot.macd_histogram, 2),
-            volume_ratio20=None if snapshot.volume_ratio20 is None else round(snapshot.volume_ratio20, 2),
-            recent_signals=signals.get(code, ()),
-        )
-
-    # 사건 이름(골든크로스 등)을 여기서 붙이지 않는다. 모델은 kind·direction을 그대로 읽고,
-    # 사람이 읽는 표기는 Slack 표와 툴 근거 제목이 갖는다.
-    return TechnicalState(as_of_date=max(as_of_dates) if as_of_dates else None, subjects=subjects)
-
-
-def build_and_store(
-    conn: Any,
-    *,
-    run_slot: Any,
-    run_date: date,
-    as_of_at: datetime,
-    macro_window_start: datetime,
-    targets: Any,
-    observed: ObservedState | NxtObservedState,
-    past: Mapping[str, Sequence[PastThesis]],
-    dag_run_id: str,
-) -> int:
-    """추론을 만들고 저장한다. 저장한 행 수를 준다.
-
-    **슬롯으로 갈라지지 않는다.** 슬롯은 값으로 흘러갈 뿐이고, 무엇이 다른지(기준 시각,
-    창의 시작, 관측 세션, 프롬프트에 실을 과거 추론 `past`)는 이미 부르는 쪽이 정해서
-    인자로 넘겼다. `past`는 subject 코드별 `thesis.past_theses` 행이고, 그 `id`가
-    `thesis_precedent` 엣지로 남는다.
-
-    **첫 성공본 불변.** 행이 있으면 모델을 부르지 않는다 — LLM은 재호출마다 답이 달라서
-    덮어쓰면 최초 판단이 사라진다.
-    """
-    from modules import thesis as market_thesis
-    from modules.llm import LlmError, RetryableLlmError, model_name, thesis_model
-
-    stored = market_thesis.existing_theses(conn, run_date=run_date, run_slot=run_slot)
-    if stored:
-        logger.info("thesis for %s %s already exists; skipping the model", run_date, run_slot.value)
-        return 0
-
-    model = thesis_model()
-    toolbox = market_thesis.ThesisToolbox(
-        conn,
-        as_of_at=as_of_at,
-        macro_window_start=macro_window_start,
-        watched_codes=[s.code for s in targets if s.kind is market_thesis.ThesisSubjectKind.STOCK],
-        subject_codes=[s.code for s in targets],
-    )
-    try:
-        drafts, rounds = market_thesis.ThesisBuilder(model, toolbox).run(
-            run_slot=run_slot,
-            as_of_at=as_of_at,
-            subjects=targets,
-            observed_state=observed,
-            past_theses=past,
-        )
-    except market_thesis.ThesisError as error:
-        raise AirflowFailException(str(error)) from error
-    except LlmError as error:
-        # 재시도할 값어치가 있는 것은 그대로 올린다. 판단은 여기서 한다.
-        if isinstance(error, RetryableLlmError):
-            raise
-        raise AirflowFailException(str(error)) from error
-
-    rows = market_thesis.store_theses(
-        conn,
-        run_date=run_date,
-        run_slot=run_slot,
-        as_of_at=as_of_at,
-        dag_run_id=dag_run_id,
-        drafts=drafts,
-        registry=toolbox.registry,
-        observed_state=observed,
-        llm_model=model_name(model),
-        tool_rounds=rounds,
-        precedents={code: [row.id for row in rows] for code, rows in past.items()},
-    )
-    logger.info("stored %s theses for %s %s (%s tool rounds)", len(rows), run_date, run_slot.value, rounds)
-    return len(rows)
-
-
 def notify_slack(built: dict[str, Any]) -> str:
     """이번 슬롯의 추론을 보낸다. LLM을 다시 부르지 않는다.
 
@@ -426,14 +439,15 @@ def notify_slack(built: dict[str, Any]) -> str:
     run_slot = market_thesis.RunSlot(result.slot)
 
     with closing(connection()) as conn:
-        theses = market_thesis.existing_theses(conn, run_date=run_date, run_slot=run_slot)
+        store = market_thesis.ThesisStore(conn)
+        theses = store.existing_theses(run_date=run_date, run_slot=run_slot)
         ids = [thesis.id for thesis in theses]
-        evidence = market_thesis.top_evidence(conn, ids)
+        evidence = store.top_evidence(ids)
 
     blocks = market_thesis.render_blocks(run_slot, run_date, theses, evidence)
     text = market_thesis.render_text(run_slot, run_date, theses)
     try:
-        return post_message(token, channel, text=text, blocks=blocks)
+        return SlackClient(token).post_message(channel, text=text, blocks=blocks)
     except SlackError as error:
         # 토큰·채널·블록이 틀렸다. 다시 보내도 같은 결과다.
         raise AirflowFailException(str(error)) from error

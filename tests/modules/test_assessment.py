@@ -21,13 +21,13 @@ from modules.assessment import (
     Assessment,
     AssessmentBatch,
     AssessmentError,
+    AssessmentStore,
     Candidates,
     DocumentAssessor,
     IndicatorTag,
     LlmSettings,
     PendingDocument,
     filter_tags,
-    store_assessment,
 )
 from modules.llm import LlmError, UnsupportedResponseFormat
 
@@ -535,15 +535,13 @@ def test_store_writes_the_assessment_and_both_tag_kinds():
     assessment = DocumentAssessor.parse(VALID)
     instruments, indicators = filter_tags(assessment, CANDIDATES, DOCUMENT.id)
 
-    store_assessment(
-        connection,
+    AssessmentStore(connection, settings().prompt_revision).store(
         DOCUMENT,
         assessment,
         instruments,
         indicators,
         "test-model",
         ASSESSED_AT,
-        settings().prompt_revision,
     )
 
     calls = connection.recorded_cursor.calls
@@ -564,7 +562,9 @@ def test_store_skips_the_tag_statements_when_there_is_nothing_to_tag():
     connection = FakeConnection()
     assessment = DocumentAssessor.parse(VALID)
 
-    store_assessment(connection, DOCUMENT, assessment, (), (), "test-model", ASSESSED_AT, settings().prompt_revision)
+    AssessmentStore(connection, settings().prompt_revision).store(
+        DOCUMENT, assessment, (), (), "test-model", ASSESSED_AT
+    )
 
     statements = [statement for statement, _ in connection.recorded_cursor.calls]
     assert not any("INSERT INTO document_instrument" in statement for statement in statements)

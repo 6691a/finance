@@ -271,25 +271,27 @@ def test_run_hands_build_and_store_every_argument_it_requires(monkeypatch):
     2026-08-23에 형제 브랜치 둘을 합치며 `past`가 필수 인자로 생겼는데 이 호출은 그것을
     모른 채 합쳐져 매 실행 `TypeError`였다. 충돌 없이 합쳐진 자리라 테스트만이 잡는다.
     """
-    signature = inspect.signature(thesis_common.build_and_store)
+    signature = inspect.signature(thesis_common.ThesisRun.build_and_store)
     received: dict[str, Any] = {}
 
-    def fake_build_and_store(conn: Any, **kwargs: Any) -> int:
+    def fake_build_and_store(self: Any, **kwargs: Any) -> int:
         received.update(kwargs)
         return 2
 
-    monkeypatch.setattr(thesis_common, "skip_unless_open", lambda conn, run_date: None)
+    monkeypatch.setattr(thesis_common.ThesisRun, "skip_unless_open", lambda self: None)
     monkeypatch.setattr(NxtAfterHoursReview, "check_ready", lambda self: None)
     monkeypatch.setattr(NxtAfterHoursReview, "observed_state", lambda self: {"session": "2026-08-21"})
     monkeypatch.setattr(NxtAfterHoursReview, "targets", property(lambda self: ()))
-    monkeypatch.setattr(thesis_common, "build_and_store", fake_build_and_store)
+    monkeypatch.setattr(thesis_common.ThesisRun, "build_and_store", fake_build_and_store)
 
-    written = NxtAfterHoursReview(FakeConnection([]), run_date=RUN_DATE).run(dag_run_id="manual__1")
+    review = NxtAfterHoursReview(FakeConnection([]), run_date=RUN_DATE)
+    written = review.run(dag_run_id="manual__1")
 
     assert written == 2
     # 필수 인자가 빠지면 여기서 `TypeError`다.
-    signature.bind(FakeConnection([]), **received)
+    signature.bind(review, **received)
     assert received["run_slot"].value == "post_nxt_close"
-    assert received["as_of_at"] == thesis_nxt_review.as_of(RUN_DATE)
+    # 기준 시각은 이제 인자가 아니라 `ThesisRun`의 상태다.
+    assert review._run.as_of_at == thesis_nxt_review.as_of(RUN_DATE)
     # 리뷰는 해석이라 과거 예측 성적을 싣지 않는다. 장후 리뷰와 같다.
     assert received["past"] == {}

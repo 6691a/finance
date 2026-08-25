@@ -180,7 +180,9 @@ DAG가 쓰는 코드는 **위치는 Airflow를, 규칙은 백엔드를** 따른�
   기준 구현은 `modules/collectors/analyst/kis_opinion.py`의 `KisAnalystOpinionCollector`,
   `modules/collectors/document/naver_research.py`의 `NaverResearchCollector`,
   `modules/assessment.py`의 `DocumentAssessor`, `modules/thesis.py`의 `ThesisToolbox`·
-  `ThesisBuilder`·`FollowupNarrator`다.
+  `ThesisBuilder`·`FollowupNarrator`다. 연결을 쥐는 흐름 코드는
+  `modules/thesis_nxt_review.py`의 `NxtAfterHoursReview`, `modules/thesis_common.py`의
+  `ThesisRun`, `modules/thesis.py`의 `ThesisStore`가 기준이다.
 - **생성자는 그 실행 동안 안 변하는 것만 받는다.** 종목·구간처럼 호출마다 바뀌는 것은
   메서드 인자다.
 - **함수로 둔다**: 파싱·정규화·계산처럼 감쌀 상태가 없는 것, 그리고 그 클래스의 관심사가
@@ -191,11 +193,15 @@ DAG가 쓰는 코드는 **위치는 Airflow를, 규칙은 백엔드를** 따른�
 - **감쌀 상태가 없는 것을 클래스로 만들지 않는다.** 메서드가 전부 `@staticmethod`면 그건
   모듈이다.
 
-**아직 함수인 코드가 있다.** 자격 증명을 쥐는 수집기 10모듈은 클래스로 옮겼고(2026-08-23),
-흐름 코드(2단계)와 폴더 이동(3단계) 계획은
-[docs/collectors-class-migration.md](../docs/collectors-class-migration.md)에 있다. 그 문서가
-목표 폴더 구조(도메인별 `market/`·`document/`·`indicator/`·`calendar/`·`analyst/`)와 단계별
-순서를 갖는다. **새 수집기는 처음부터 그 형태로 쓴다.**
+자격 증명을 쥐는 수집기 10모듈(2026-08-23)과 연결·기준 시각을 쥐는 흐름 코드
+9곳(2026-08-25)은 클래스로 옮겼고, 수집기는 도메인 폴더로 내려갔다(2026-08-25).
+**`connection`을 첫 인자로 받는 모듈 함수는 이제 `modules/dedup.py`·`market_session.py`·
+`technical_signals.py`처럼 진입점이 하나뿐인 곳에만 남아 있다** — 새로 만들 때 그 형태를
+따라가지 않는다. 남은 단계는 없다.
+[docs/collectors-class-migration.md](../docs/collectors-class-migration.md)가 폴더
+구조(도메인별 `market/`·`document/`·`indicator/`·`calendar/`·`analyst/`)와 어디서
+갈랐는지, 그리고 **함수로 두는 것이 맞다고 판정한 모듈과 그 이유**를 갖는다.
+**새 수집기는 처음부터 그 형태로 쓴다.**
 
 ## 수집기 작성
 
@@ -386,6 +392,10 @@ DAG가 쓰는 코드는 **위치는 Airflow를, 규칙은 백엔드를** 따른�
 두 번이 된다. 그 밖의 도메인 값은 **처음부터 모델로 쓴다.**
 
 ### 그 밖의 타입 규칙
+
+- **PEP 249 연결·커서 타입은 `airflow/modules/db.py`의 `Cursor`·`Connection`을 쓴다.**
+  모듈마다 `class Cursor(Protocol)`을 다시 쓰지 않는다 — 전에 스무 개가 조금씩 다른 채로
+  복사돼 있었다(2026-08-25 통합). 스스로 커밋하는 코드만 `TransactionalConnection`이다.
 
 - 값의 종류가 정해진 상태·분류 필드는 일반 `str` 대신 Python `StrEnum`과 SQLAlchemy `Enum`을 쓴다.
 - SQLAlchemy `Enum`은 `native_enum=False, length=20, values_callable=...` 형태로 선언한다.

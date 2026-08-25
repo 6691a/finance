@@ -17,31 +17,34 @@ from modules.collectors import kis
 from modules.collectors.kis import (
     CONTRACT_MONTHS,
     INDEX_BAR_UPSERT,
-    INDEX_FUTURE_BAR_UPSERT,
-    MARKET_MOVEMENT_UPSERT,
-    MAX_BARS_PER_REQUEST,
-    MOVEMENT_INDEXES,
     SESSION_FIRST_BAR,
     SESSION_LAST_BAR,
     SOURCE_RECORD_INSERT,
-    STOCK_BAR_UPSERT,
     TOKEN_REFRESH_MARGIN,
     DomesticFuture,
     DomesticIndex,
     DomesticStock,
     KisPayloadError,
-    KisQuoteCollector,
     KisResponse,
     KisResultError,
     StockExchange,
-    SymbolOutcome,
     access_token,
     expiry_date,
     front_contract,
+    rest_exchanges,
+)
+from modules.collectors.market import kis_quote
+from modules.collectors.market.kis_quote import (
+    INDEX_FUTURE_BAR_UPSERT,
+    MARKET_MOVEMENT_UPSERT,
+    MAX_BARS_PER_REQUEST,
+    MOVEMENT_INDEXES,
+    STOCK_BAR_UPSERT,
+    KisQuoteCollector,
+    SymbolOutcome,
     last_settled_close,
     parse_bars,
     parse_market_movement,
-    rest_exchanges,
 )
 
 KST = ZoneInfo("Asia/Seoul")
@@ -771,7 +774,7 @@ def test_stock_bars_walk_the_session_backwards(monkeypatch):
             [stock_row("115900"), stock_row("090000")],
         ]
     )
-    monkeypatch.setattr(kis, "send_get", send)
+    monkeypatch.setattr(kis_quote, "send_get", send)
 
     fetch = COLLECTOR.fetch_stock_bars(DomesticStock.SAMSUNG_ELECTRONICS, STOCK_DATE, Decimal(268000))
 
@@ -803,7 +806,7 @@ def test_stock_bars_drop_the_previous_session(monkeypatch):
             [stock_row("090000", volume="700")],
         ]
     )
-    monkeypatch.setattr(kis, "send_get", send)
+    monkeypatch.setattr(kis_quote, "send_get", send)
 
     fetch = COLLECTOR.fetch_stock_bars(DomesticStock.SAMSUNG_ELECTRONICS, STOCK_DATE, Decimal(268000))
 
@@ -814,7 +817,7 @@ def test_stock_bars_drop_the_previous_session(monkeypatch):
 def test_stock_bars_keep_only_the_regular_session(monkeypatch):
     """15:32 같은 시간외 체결이 섞이면 한 심볼의 시계열에 성격이 다른 거래가 들어간다."""
     send = fake_stock_send([[stock_row("153200", volume="11196308"), stock_row("153000"), stock_row("090000")]])
-    monkeypatch.setattr(kis, "send_get", send)
+    monkeypatch.setattr(kis_quote, "send_get", send)
 
     fetch = COLLECTOR.fetch_stock_bars(DomesticStock.SAMSUNG_ELECTRONICS, STOCK_DATE, Decimal(268000))
 
@@ -825,7 +828,7 @@ def test_stock_bars_keep_only_the_regular_session(monkeypatch):
 def test_stock_bars_stop_when_a_day_is_empty(monkeypatch):
     """휴장일은 0봉으로 온다. 실패가 아니다."""
     send = fake_stock_send([[]])
-    monkeypatch.setattr(kis, "send_get", send)
+    monkeypatch.setattr(kis_quote, "send_get", send)
 
     fetch = COLLECTOR.fetch_stock_bars(DomesticStock.SAMSUNG_ELECTRONICS, STOCK_DATE, Decimal(268000))
 
@@ -836,7 +839,7 @@ def test_stock_bars_stop_when_a_day_is_empty(monkeypatch):
 def test_stock_bars_never_call_forever(monkeypatch):
     """커서가 나아가지 않아도 호출이 무한히 늘지 않는다."""
     send = fake_stock_send([[stock_row("153000")] for _ in range(20)])
-    monkeypatch.setattr(kis, "send_get", send)
+    monkeypatch.setattr(kis_quote, "send_get", send)
 
     fetch = COLLECTOR.fetch_stock_bars(DomesticStock.SAMSUNG_ELECTRONICS, STOCK_DATE, Decimal(268000))
 
@@ -849,7 +852,7 @@ def test_stock_bars_carry_the_previous_close_given_by_the_caller(monkeypatch):
     그대로 쓰면 백필한 모든 봉에 오늘의 전일종가가 박힌다.
     """
     send = fake_stock_send([[stock_row("090000")]])
-    monkeypatch.setattr(kis, "send_get", send)
+    monkeypatch.setattr(kis_quote, "send_get", send)
 
     fetch = COLLECTOR.fetch_stock_bars(DomesticStock.SAMSUNG_ELECTRONICS, STOCK_DATE, Decimal(111))
 
@@ -863,7 +866,7 @@ def test_stock_bars_stop_before_the_minute_still_forming(monkeypatch):
     부분 봉이 확정으로 남는다. 마감 뒤에 도는 확정 DAG 는 `until` 을 주지 않아 영향이 없다.
     """
     send = fake_stock_send([[stock_row("100000"), stock_row("095900"), stock_row("090000")]])
-    monkeypatch.setattr(kis, "send_get", send)
+    monkeypatch.setattr(kis_quote, "send_get", send)
 
     fetch = COLLECTOR.fetch_stock_bars(
         DomesticStock.SAMSUNG_ELECTRONICS,
@@ -881,7 +884,7 @@ def test_stock_bars_stop_before_the_minute_still_forming(monkeypatch):
 def test_stock_bars_ignore_a_future_cutoff(monkeypatch):
     """기준 시각이 마감보다 뒤면 창은 그대로 마감까지다."""
     send = fake_stock_send([[stock_row("153000"), stock_row("090000")]])
-    monkeypatch.setattr(kis, "send_get", send)
+    monkeypatch.setattr(kis_quote, "send_get", send)
 
     fetch = COLLECTOR.fetch_stock_bars(
         DomesticStock.SAMSUNG_ELECTRONICS,
@@ -897,7 +900,7 @@ def test_stock_bars_ignore_a_future_cutoff(monkeypatch):
 def test_a_cutoff_on_another_day_does_not_cut_the_session(monkeypatch):
     """어제를 백필하는데 오늘 시각으로 창을 자르면 안 된다."""
     send = fake_stock_send([[stock_row("153000"), stock_row("090000")]])
-    monkeypatch.setattr(kis, "send_get", send)
+    monkeypatch.setattr(kis_quote, "send_get", send)
 
     fetch = COLLECTOR.fetch_stock_bars(
         DomesticStock.SAMSUNG_ELECTRONICS,
@@ -917,7 +920,7 @@ def test_stock_bars_can_be_capped_to_one_call(monkeypatch):
     확정 DAG 가 메운다.
     """
     send = fake_stock_send([[stock_row("153000"), stock_row("120000")], [stock_row("115900")]])
-    monkeypatch.setattr(kis, "send_get", send)
+    monkeypatch.setattr(kis_quote, "send_get", send)
 
     fetch = COLLECTOR.fetch_stock_bars(
         DomesticStock.SAMSUNG_ELECTRONICS,
@@ -933,7 +936,7 @@ def test_stock_bars_can_be_capped_to_one_call(monkeypatch):
 def test_a_call_cap_never_exceeds_the_exchange_limit(monkeypatch):
     """상한을 크게 줘도 거래소별 안전장치를 넘지 못한다."""
     send = fake_stock_send([[stock_row("153000")] for _ in range(30)])
-    monkeypatch.setattr(kis, "send_get", send)
+    monkeypatch.setattr(kis_quote, "send_get", send)
 
     fetch = COLLECTOR.fetch_stock_bars(
         DomesticStock.SAMSUNG_ELECTRONICS,
@@ -970,7 +973,7 @@ def test_a_missing_settled_close_is_none():
 def test_store_stock_bars_writes_the_stock_code_as_the_symbol(monkeypatch):
     """봉과 수급을 한 화면에서 겹치려면 심볼이 종목코드여야 한다."""
     send = fake_stock_send([[stock_row("090000"), stock_row("090100")]])
-    monkeypatch.setattr(kis, "send_get", send)
+    monkeypatch.setattr(kis_quote, "send_get", send)
     fetch = COLLECTOR.fetch_stock_bars(DomesticStock.SAMSUNG_ELECTRONICS, STOCK_DATE, Decimal(268000))
     connection = FakeConnection()
 
@@ -986,7 +989,7 @@ def test_store_stock_bars_writes_the_stock_code_as_the_symbol(monkeypatch):
 def test_store_stock_bars_records_the_call_count(monkeypatch):
     """호출 수가 계보에 남아야 한 거래일에 몇 번 물어봤는지 나중에 읽을 수 있다."""
     send = fake_stock_send([[stock_row("153000")], [stock_row("090000")]])
-    monkeypatch.setattr(kis, "send_get", send)
+    monkeypatch.setattr(kis_quote, "send_get", send)
     fetch = COLLECTOR.fetch_stock_bars(DomesticStock.SAMSUNG_ELECTRONICS, STOCK_DATE, Decimal(268000))
     connection = FakeConnection()
     COLLECTOR.store_stock_bars(connection, fetch)
@@ -1067,7 +1070,7 @@ def daily_collector() -> KisQuoteCollector:
 class TestFetchIndexDaily:
     def test_the_request_carries_the_official_contract(self, monkeypatch):
         requests, send = daily_send([(index_daily_payload(("20260821", "20260820")), "")])
-        monkeypatch.setattr(kis, "send_get", send)
+        monkeypatch.setattr(kis_quote, "send_get", send)
 
         fetch = daily_collector().fetch_index_daily(DomesticIndex.KOSPI, DAILY_SPAN_START, DAILY_SPAN_END, sleep=0)
 
@@ -1088,7 +1091,7 @@ class TestFetchIndexDaily:
 
     def test_kosdaq_uses_its_own_index_code(self, monkeypatch):
         requests, send = daily_send([(index_daily_payload(("20260821",)), "")])
-        monkeypatch.setattr(kis, "send_get", send)
+        monkeypatch.setattr(kis_quote, "send_get", send)
 
         daily_collector().fetch_index_daily(DomesticIndex.KOSDAQ, DAILY_SPAN_START, DAILY_SPAN_END, sleep=0)
 
@@ -1101,7 +1104,7 @@ class TestFetchIndexDaily:
                 (index_daily_payload(("20260820",)), ""),
             ]
         )
-        monkeypatch.setattr(kis, "send_get", send)
+        monkeypatch.setattr(kis_quote, "send_get", send)
 
         fetch = daily_collector().fetch_index_daily(DomesticIndex.KOSPI, DAILY_SPAN_START, DAILY_SPAN_END, sleep=0)
 
@@ -1126,7 +1129,7 @@ class TestFetchIndexDaily:
                 (index_daily_payload(("20260105",)), ""),
             ]
         )
-        monkeypatch.setattr(kis, "send_get", send)
+        monkeypatch.setattr(kis_quote, "send_get", send)
 
         fetch = daily_collector().fetch_index_daily(DomesticIndex.KOSPI, span_start, DAILY_SPAN_END, sleep=0)
 
@@ -1142,7 +1145,7 @@ class TestFetchIndexDaily:
         """구간의 시작에 닿았으면 더 부르지 않는다. 걷기가 끝나는 정상 경로다."""
         span_start = date(2026, 8, 19)
         requests, send = daily_send([(index_daily_payload(("20260821", "20260820", "20260819")), "")])
-        monkeypatch.setattr(kis, "send_get", send)
+        monkeypatch.setattr(kis_quote, "send_get", send)
 
         fetch = daily_collector().fetch_index_daily(DomesticIndex.KOSPI, span_start, DAILY_SPAN_END, sleep=0)
 
@@ -1159,7 +1162,7 @@ class TestFetchIndexDaily:
                 (index_daily_payload(()), ""),
             ]
         )
-        monkeypatch.setattr(kis, "send_get", send)
+        monkeypatch.setattr(kis_quote, "send_get", send)
 
         fetch = daily_collector().fetch_index_daily(DomesticIndex.KOSPI, span_start, DAILY_SPAN_END, sleep=0)
 
@@ -1170,46 +1173,46 @@ class TestFetchIndexDaily:
         span_start = date(2026, 8, 1)
         pages = [
             (index_daily_payload(((date(2026, 8, 21) - timedelta(days=page)).strftime("%Y%m%d"),)), "M")
-            for page in range(kis.INDEX_DAILY_MAX_PAGES)
+            for page in range(kis_quote.INDEX_DAILY_MAX_PAGES)
         ]
         requests, send = daily_send(pages)
-        monkeypatch.setattr(kis, "send_get", send)
+        monkeypatch.setattr(kis_quote, "send_get", send)
 
         with pytest.raises(KisPayloadError, match="pages"):
             daily_collector().fetch_index_daily(DomesticIndex.KOSPI, span_start, DAILY_SPAN_END, sleep=0)
-        assert len(requests) == kis.INDEX_DAILY_MAX_PAGES
+        assert len(requests) == kis_quote.INDEX_DAILY_MAX_PAGES
 
     def test_a_result_error_is_raised_as_such(self, monkeypatch):
         _, send = daily_send([(index_daily_payload(("20260821",), rt_cd="1"), "")])
-        monkeypatch.setattr(kis, "send_get", send)
+        monkeypatch.setattr(kis_quote, "send_get", send)
 
         with pytest.raises(KisResultError):
             daily_collector().fetch_index_daily(DomesticIndex.KOSPI, DAILY_SPAN_START, DAILY_SPAN_END, sleep=0)
 
     def test_an_empty_span_is_a_contract_error(self, monkeypatch):
         _, send = daily_send([(index_daily_payload(()), "")])
-        monkeypatch.setattr(kis, "send_get", send)
+        monkeypatch.setattr(kis_quote, "send_get", send)
 
         with pytest.raises(KisPayloadError, match="no daily bars"):
             daily_collector().fetch_index_daily(DomesticIndex.KOSPI, DAILY_SPAN_START, DAILY_SPAN_END, sleep=0)
 
     def test_a_duplicate_date_is_a_contract_error(self, monkeypatch):
         _, send = daily_send([(index_daily_payload(("20260821", "20260821")), "")])
-        monkeypatch.setattr(kis, "send_get", send)
+        monkeypatch.setattr(kis_quote, "send_get", send)
 
         with pytest.raises(KisPayloadError, match="duplicate"):
             daily_collector().fetch_index_daily(DomesticIndex.KOSPI, DAILY_SPAN_START, DAILY_SPAN_END, sleep=0)
 
     def test_a_date_outside_the_span_is_a_contract_error(self, monkeypatch):
         _, send = daily_send([(index_daily_payload(("20260822",)), "")])
-        monkeypatch.setattr(kis, "send_get", send)
+        monkeypatch.setattr(kis_quote, "send_get", send)
 
         with pytest.raises(KisPayloadError, match="outside"):
             daily_collector().fetch_index_daily(DomesticIndex.KOSPI, DAILY_SPAN_START, DAILY_SPAN_END, sleep=0)
 
     def test_a_broken_ohlc_is_a_contract_error(self, monkeypatch):
         _, send = daily_send([(index_daily_payload(("20260821",), highs=("  100.00",), lows=("  3000.00",)), "")])
-        monkeypatch.setattr(kis, "send_get", send)
+        monkeypatch.setattr(kis_quote, "send_get", send)
 
         with pytest.raises(KisPayloadError):
             daily_collector().fetch_index_daily(DomesticIndex.KOSPI, DAILY_SPAN_START, DAILY_SPAN_END, sleep=0)
@@ -1218,7 +1221,7 @@ class TestFetchIndexDaily:
 class TestStoreIndexDaily:
     def test_rows_land_in_column_order_with_the_source_record(self, monkeypatch):
         _, send = daily_send([(index_daily_payload(("20260821", "20260820")), "")])
-        monkeypatch.setattr(kis, "send_get", send)
+        monkeypatch.setattr(kis_quote, "send_get", send)
         collector = daily_collector()
         fetch = collector.fetch_index_daily(DomesticIndex.KOSPI, DAILY_SPAN_START, DAILY_SPAN_END, sleep=0)
 
@@ -1237,7 +1240,7 @@ class TestStoreIndexDaily:
         assert metadata["page_count"] == 1
         assert metadata["bar_count"] == 2
 
-        upserts = [call for call in connection.recorded_cursor.calls if call[0] == kis.INDEX_DAILY_UPSERT]
+        upserts = [call for call in connection.recorded_cursor.calls if call[0] == kis_quote.INDEX_DAILY_UPSERT]
         assert len(upserts) == 2
         provider, symbol, business_date, _open, _high, _low, close, volume, source_record_id = upserts[0][1]
         assert (provider, symbol, business_date) == ("kis", "KOSPI", date(2026, 8, 20))
@@ -1247,7 +1250,7 @@ class TestStoreIndexDaily:
 
     def test_the_index_daily_upsert_matches_the_model(self):
         table = IndexDaily.__table__
-        columns = inserted_columns(kis.INDEX_DAILY_UPSERT)
+        columns = inserted_columns(kis_quote.INDEX_DAILY_UPSERT)
         assert set(columns) <= {column.name for column in table.columns}
         assert required_columns(table) <= set(columns)
-        assert placeholder_count(kis.INDEX_DAILY_UPSERT) == len(columns)
+        assert placeholder_count(kis_quote.INDEX_DAILY_UPSERT) == len(columns)

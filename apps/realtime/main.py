@@ -14,7 +14,7 @@ from pydantic import SecretStr
 
 from apps.realtime.heartbeat import healthcheck
 from apps.realtime.repository import RealtimeRepository
-from apps.realtime.service import DEFAULT_HEARTBEAT_PATH, RealtimeSettings, run_service
+from apps.realtime.service import DEFAULT_HEARTBEAT_PATH, RealtimeService, RealtimeSettings
 
 logger = logging.getLogger(__name__)
 
@@ -104,7 +104,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     async def amain() -> None:
         repository = RealtimeRepository(database.get_session_factory(realtime.db_alias))
         try:
-            await run_service(realtime, repository)
+            await RealtimeService(realtime, repository).run()
         finally:
             await database.dispose()
 

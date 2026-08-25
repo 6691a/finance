@@ -52,7 +52,7 @@ from airflow.exceptions import AirflowFailException
 from airflow.providers.postgres.hooks.postgres import PostgresHook
 from airflow.sdk import Param, dag, get_current_context, task
 
-from modules.collectors.yahoo import (
+from modules.collectors.market.yahoo import (
     DAILY_RANGE,
     DAILY_RANGES,
     QuoteSymbol,

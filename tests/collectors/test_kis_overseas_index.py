@@ -13,7 +13,6 @@ from sqlalchemy import Table
 from apps.models.market import IndexBar
 from apps.models.raw import SourceRecord
 from modules.briefing import market
-from modules.collectors import kis_overseas_index as overseas
 from modules.collectors.kis import (
     INDEX_BAR_UPSERT,
     SOURCE_RECORD_INSERT,
@@ -21,7 +20,8 @@ from modules.collectors.kis import (
     KisPayloadError,
     KisResultError,
 )
-from modules.collectors.kis_overseas_index import (
+from modules.collectors.market import kis_overseas_index as overseas
+from modules.collectors.market.kis_overseas_index import (
     HOUR_CLS_CODE,
     MARKET_DIV_CODE,
     OVERSEAS_INDEX_CHART_PATH,
@@ -33,7 +33,7 @@ from modules.collectors.kis_overseas_index import (
     parse_overseas_index_bars,
     us_session_date,
 )
-from modules.collectors.yahoo import QuoteSymbol
+from modules.collectors.market.yahoo import QuoteSymbol
 
 SESSION = date(2026, 8, 21)
 SOURCE_RECORD_ID = 7

@@ -54,9 +54,8 @@ from urllib.parse import urljoin
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
 
-from modules.collectors.documents import (
+from modules.collectors.document.documents import (
     MAX_ITEMS_PER_FEED,
-    Connection,
     DocumentPayloadError,
     FeedItem,
     FeedResponse,
@@ -67,6 +66,7 @@ from modules.collectors.documents import (
     normalize_text,
     watched_tickers,
 )
+from modules.db import Connection
 
 logger = logging.getLogger(__name__)
 

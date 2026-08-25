@@ -1,8 +1,8 @@
 import pytest
 
 from modules.collectors.kis import DomesticFuture, DomesticIndex, DomesticStock
-from modules.collectors.kis_overseas_index import OverseasIndex
-from modules.collectors.yahoo import QuoteSymbol
+from modules.collectors.market.kis_overseas_index import OverseasIndex
+from modules.collectors.market.yahoo import QuoteSymbol
 from tests.helpers import NO_REVISION_REASON, head_sql, revision_files
 
 pytestmark = pytest.mark.skipif(not revision_files(), reason=NO_REVISION_REASON)

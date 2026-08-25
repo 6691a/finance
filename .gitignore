@@ -3,20 +3,6 @@
 .env
 config.yaml
 
-# 디렉터리째 막으면 안쪽 `!` 예외가 먹지 않는다. 그래서 `docs/*`다.
-docs/*
-!docs/kis-semiconductor-minute-bars.md
-!docs/kis-program-trading.md
-!docs/kis-overseas-index-close.md
-!docs/economic-document-archive-design.md
-!docs/document-assessment-workflow.md
-!docs/us-macro-indicators.md
-!docs/slack-report-design.md
-!docs/market-thesis/
-!docs/collection-map.html
-!docs/collectors-class-migration.md
-!docs/market-technical-indicators.md
-
 # 실행하면 앱키와 시세 응답이 출력에 남는다. 커밋하지 않는다.
 notebooks/
 

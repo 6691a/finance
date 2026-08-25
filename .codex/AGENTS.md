@@ -50,10 +50,16 @@
 | `airflow/dags/` | Airflow DAG |
 | `tests/` | pytest |
 
-`apps/models/`의 모듈은 도메인 단위로 나눈다(`raw.py`, `market.py`, `reference.py`, `content.py`).
+`apps/models/`의 모듈은 도메인 단위로 나눈다(`raw.py`, `reference.py`, `content.py`,
+`analysis.py`). 한 도메인이 커지면 그 안에서 다시 패키지로 나눈다 — `market/`이
+`sessions.py`·`series.py`·`fundamentals.py`·`positioning.py`·`investor_flow.py`다(2026-08-25).
 테이블은 스키마를 지정하지 않고 연결의 `search_path`(PostgreSQL 기본 `public`)를 그대로 따르므로
-파일 이름이 PostgreSQL 스키마와 대응하지 않는다. 새 모델을 추가하면 `apps/models/__init__.py`의
-`__all__`에도 넣는다. 그러지 않으면 Alembic autogenerate가 모델을 보지 못한다.
+파일 이름이 PostgreSQL 스키마와 대응하지 않는다.
+
+**새 모델을 추가하면 `apps/models/__init__.py`의 `__all__`에 넣는다.** 패키지로 나뉜 도메인은
+그 패키지의 `__init__.py`에도 넣어야 한다. 등록은 클래스를 import하는 부수효과라, 한 단계라도
+빠지면 `Base.metadata`에서 그 테이블이 사라지고 autogenerate가 `DROP TABLE`을 낸다.
+`tests/models/test_market_models.py`가 하위 모듈을 훑어 그 누락을 잡는다.
 
 ## 명령어
 

@@ -12,19 +12,19 @@
 
 ## 결론
 
-분리 가치가 확인된 곳은 여섯 곳이다. `briefing/market.py`가 끝났고 `collectors/kis.py`는
-절반이 끝났다. 남은 넷은 아직 그대로다.
+분리 가치가 확인된 곳은 여섯 곳이다. `briefing/market.py`와 `apps/models/market.py`가
+끝났고 `collectors/kis.py`는 절반이 끝났다. 남은 셋은 아직 그대로다.
 
 LOC는 `c10c167` 기준이다. 클래스 전환이 이 파일들을 여럿 건드려 최초 조사 때와 다르다.
 
 | 우선순위 | 파일 | LOC | 판정 |
 | --- | --- | ---: | --- |
-| P0 | `apps/models/market.py` | 1,916 | 세션·시세·기업 이벤트·포지셔닝·수급 모델을 패키지로 분리 |
 | P0 | `airflow/modules/thesis.py` | 3,075 | 도메인·도구·생성·사후평가·렌더링을 역할 모듈로 분리 |
 | P1 | `apps/models/analysis.py` | 986 | thesis·stock event·technical signal 모델을 분리 |
 | P1 | `airflow/modules/expectation.py` | 849 | LLM 추출과 결정론적 판정을 다음 기능 변경 때 분리 |
 | 완료 | `airflow/modules/collectors/kis.py` | 1,622→537 | 전송층과 시세 수집을 갈랐다(2026-08-25). 남은 절반은 P0-3 |
 | 완료 | `airflow/modules/briefing/market.py` | 1,498→739 | 조회를 `market_data.py`(795)로 뺐다(2026-08-25). P0-4 |
+| 완료 | `apps/models/market.py` | 1,916→패키지 | 하위 모듈 다섯으로 나눴다(2026-08-25). P0-1 |
 
 `assessment.py`, `collectors/document/dart.py`, `thesis_tools.py`, `thesis_state.py`는 클래스가
 많아 보여도 지금은 나누지 않는다. 클래스 수가 아니라 **서로 독립적으로 바뀌는 책임이 둘
@@ -50,7 +50,11 @@ LOC는 `c10c167` 기준이다. 클래스 전환이 이 파일들을 여럿 건�
 4. 이미 저장소에 같은 책임 경계를 표현하는 폴더·모듈 관례가 있다.
 5. 이동 뒤에도 각 파일의 소비자와 검증 방법을 명확히 말할 수 있다.
 
-## P0-1. `apps/models/market.py`
+## P0-1. `apps/models/market.py` (완료)
+
+> **2026-08-25에 끝났다.** `apps/models/market/` 패키지의 하위 모듈 다섯이 됐다.
+> `Base.metadata`는 47개 테이블 그대로이고 컬럼·제약·인덱스·주석·`Table.info`까지
+> 이동 전후가 완전히 같다. 아래는 왜 그 경계로 갈랐는지의 기록이다.
 
 ### 문제
 
@@ -87,12 +91,32 @@ apps/models/market/
 `config.yaml`은 `apps.models`를 마이그레이션 모델 모듈로 읽으므로
 `apps/models/__init__.py`의 등록 경로도 유지한다.
 
-### 완료 조건
+### 완료 조건과 그 결과
 
-- `Base.metadata.tables`의 테이블 이름 집합이 이동 전후 동일하다.
-- Alembic autogenerate가 테이블 삭제·재생성을 만들지 않는다.
-- `__tablename__`, 제약 이름, 컬럼 순서, `table_options()`는 바꾸지 않는다.
-- `tests/models/test_market_models.py`는 새 책임 경계와 같이 나누되 동작 단언은 바꾸지 않는다.
+- ~~`Base.metadata.tables`의 테이블 이름 집합이 이동 전후 동일하다.~~ **이름 집합보다 넓게
+  봤다.** 테이블 47개의 컬럼(이름·타입·nullable·기본값·주석·FK)·제약·인덱스·주석·`Table.info`를
+  전부 JSON으로 떠서 대조했고 완전히 같다.
+- ~~Alembic autogenerate가 테이블 삭제·재생성을 만들지 않는다.~~ **돌리지 않았다.**
+  autogenerate는 모든 별칭에 실제로 연결해야 하고 운영 DB는 읽기 전용이다. 위 대조가 더 강한
+  증거다 — autogenerate는 metadata와 실제 DB를 비교하므로, metadata가 같으면 낼 diff가 정의상
+  없다.
+- `__tablename__`, 제약 이름, 컬럼 순서, `table_options()`는 바꾸지 않았다. 코드는 글자 그대로
+  옮겼다.
+- **`tests/models/test_market_models.py`는 나누지 않았다.** 409줄이고, 그중 넷은
+  `source_record`(`raw.py`)와 공통 identity를 함께 보는 테스트라 다섯 갈래로 흩으면 그것이
+  갈 곳이 없어진다. 대신 **등록 경로를 잠그는 테스트 셋을 더했다** — 아래.
+
+### 조용한 사고 경로 하나와 그 방어
+
+파일을 나눈 뒤 남는 위험은 DB가 바뀌는 것이 아니라 **DB를 바꾸라는 리비전이 조용히 생기는
+것**이다. 등록은 클래스를 import하는 부수효과라, 하위 모듈에 모델을 새로 넣고
+`market/__init__.py`에 이름을 안 더하면 `Base.metadata`에서 그 테이블이 사라지고 autogenerate가
+"DB에는 있는데 모델에 없다"로 읽어 `DROP TABLE`을 낸다.
+
+`test_every_model_in_the_package_is_re_exported`가 그것을 잡는다. **하위 모듈을 `pkgutil`로
+훑어서** `EntityBase` 하위 클래스를 찾고 `__all__`과 대조한다 — `__init__.py`의 목록을 읽어
+비교하면 그 목록이 틀린 것을 못 잡기 때문이다. 이름 하나를 빼고 돌려 실제로 실패하는 것을
+확인했다.
 
 ## P0-2. `airflow/modules/thesis.py`
 
@@ -281,15 +305,17 @@ DTO 한 개당 파일 하나를 만드는 방식은 사용하지 않는다. 한 
 각 항목은 독립 변경으로 처리한다. 한 번에 여러 곳을 옮기지 않는다.
 
 1. ~~`briefing/market.py` 조회/렌더 분리~~ — 2026-08-25 완료. 가장 작은 패턴이 검증됐다.
-2. `apps/models/market.py`를 패키지로 옮기고 metadata 무변경을 검증한다.
+2. ~~`apps/models/market.py`를 패키지로~~ — 2026-08-25 완료.
 3. `thesis.py`를 domain → toolbox → generation → outcomes → render 순으로 이동한다.
 4. `apps/models/analysis.py`는 모델 파일 이동만 하는 독립 변경으로 처리한다.
 5. `expectation.py`는 다음 기능 변경과 함께 두 변경 축을 가른다.
 6. KIS 지수 일봉 수집기와 `test_kis.py` 분리는 남은 절반이라 언제 해도 된다(P0-3).
 
-**1번에서 배운 것**: 자를 자리는 AST로 먼저 센다. 최상위 이름마다 조회부에서 쓰이는지
+**1·2번에서 배운 것**: 자를 자리는 AST로 먼저 센다. 최상위 이름마다 조회부에서 쓰이는지
 표시부에서 쓰이는지를 세면 경계가 기계적으로 나오고, 감사 때 눈으로 정한 배치 하나
-(`MarketScope`)가 실제와 달랐다. 자른 뒤 남는 오류는 ruff의 F821 하나뿐이었다.
+(`MarketScope`)가 실제와 달랐다. 자른 뒤 남는 오류는 ruff의 F821 하나뿐이었다. 2번에서는
+F821이 아예 없었다 — 하위 모듈끼리 서로를 참조하지 않는다는 뜻이고, 경계가 맞았다는 신호다.
+그리고 **옮기기 전에 불변량을 스냅샷으로 떠 둔다.** 모델 이동에서는 그것이 곧 완료 증명이다.
 
 **3번은 `ThesisStore`가 이미 들어간 뒤의 파일을 옮긴다.** 클래스 전환과 파일 이동을 섞지
 않기로 한 것이 지켜졌고, 순서는 전환이 먼저였다.

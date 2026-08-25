@@ -1,7 +1,67 @@
+import importlib
+import pkgutil
 from datetime import date
 
 from sqlalchemy import BigInteger, UniqueConstraint
 from sqlalchemy import Enum as SqlEnum
+
+# --- 등록 경로 (2026-08-25 패키지 분리) ---------------------------------------
+
+
+def _models_defined_in_the_package() -> dict[str, type]:
+    """`apps/models/market/` 하위 모듈이 정의한 테이블 모델 전부.
+
+    하위 모듈을 훑어서 찾는다. `__init__.py`의 목록을 읽으면 그 목록이 틀린 것을 못 잡는다.
+    """
+    import apps.models.market as package
+    from apps.core.database import EntityBase
+
+    found: dict[str, type] = {}
+    for info in pkgutil.iter_modules(package.__path__):
+        module = importlib.import_module(f"{package.__name__}.{info.name}")
+        for name, value in vars(module).items():
+            if (
+                isinstance(value, type)
+                and issubclass(value, EntityBase)
+                and value is not EntityBase
+                and value.__module__ == module.__name__
+            ):
+                found[name] = value
+    return found
+
+
+def test_every_model_in_the_package_is_re_exported():
+    """**등록은 클래스를 import하는 부수효과다.**
+
+    `config.yaml`의 `model_modules`가 `apps.models`를 가리키고 `migrations/env.py`가 그것만
+    import한다. 하위 모듈에 모델을 새로 넣고 `market/__init__.py`에 이름을 안 더하면
+    `Base.metadata`에서 그 테이블이 사라지고, autogenerate가 "DB에는 있는데 모델에 없다"로
+    읽어 `DROP TABLE`을 낸다. 파일을 나눈 뒤로 이것이 유일한 조용한 사고 경로다.
+    """
+    import apps.models.market as package
+
+    defined = _models_defined_in_the_package()
+
+    assert defined, "하위 모듈에서 모델을 하나도 못 찾았다. 훑는 방식이 깨졌다"
+    missing = sorted(name for name in defined if name not in package.__all__)
+    assert not missing, f"market/__init__.py의 __all__에 없다: {missing}"
+    assert all(getattr(package, name, None) is model for name, model in defined.items())
+
+
+def test_every_model_in_the_package_reaches_the_metadata():
+    """재수출까지 됐어도 metadata에 실제로 들어갔는지는 따로 본다."""
+    from apps.core.database import Base
+
+    for name, model in _models_defined_in_the_package().items():
+        assert model.__tablename__ in Base.metadata.tables, f"{name}이 metadata에 없다"
+
+
+def test_the_package_re_exports_nothing_that_moved_away():
+    """`apps/models/__init__.py`가 여기서 가져가는 이름이 전부 살아 있는지 본다."""
+    import apps.models.market as package
+
+    for name in package.__all__:
+        assert hasattr(package, name), f"__all__에 있는데 실제로 없다: {name}"
 
 
 def test_market_models_inherit_common_identity_and_utc_timestamps():

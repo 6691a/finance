@@ -1,10 +1,11 @@
-"""장전 전망 DAG와 `modules/thesis_forecast.py`의 순수 함수.
+"""장전 전망 DAG와 `modules/thesis_forecast.py`.
 
 추론의 알맹이는 `modules/thesis.py`에 있고 `tests/modules/test_thesis.py`가 덮는다.
-여기 남은 것은 `@dag`가 만든 객체를 읽어야 알 수 있는 것(스케줄, 태스크 그래프)과
-장전에만 있는 판정 함수다.
+여기 남은 것은 `@dag`가 만든 객체를 읽어야 알 수 있는 것(스케줄, 태스크 그래프),
+장전의 시각 계산, 그리고 `PreOpenForecast`다.
 """
 
+import inspect
 from datetime import UTC, date, datetime, timedelta
 from typing import Any, Self
 
@@ -165,3 +166,77 @@ def test_a_backlog_does_not_pass_either():
 
     with pytest.raises(thesis_common.ThesisNotReady):
         thesis_forecast.PreOpenForecast(behind, run_date=RUN_DATE).check_ready()
+
+
+# --- PreOpenForecast ----------------------------------------------------------
+
+
+def test_the_macro_window_starts_at_the_previous_open_day_close():
+    """창의 시작은 전 개장일 15:30이다. 장후의 창(당일 09:00부터)과 다르다."""
+    forecast = thesis_forecast.PreOpenForecast(FakeConnection([(date(2026, 8, 20),)]), run_date=RUN_DATE)
+
+    assert forecast.macro_window_start() == datetime(2026, 8, 20, 6, 30, tzinfo=UTC)
+
+
+def test_an_unfilled_calendar_falls_back_to_the_run_date():
+    """달력이 아직 없으면 당일 마감으로 둔다. 창이 없어 추론이 멈추는 것보다 낫다."""
+    forecast = thesis_forecast.PreOpenForecast(FakeConnection([None]), run_date=RUN_DATE)
+
+    assert forecast.macro_window_start() == datetime(2026, 8, 21, 6, 30, tzinfo=UTC)
+
+
+class FakeSubject:
+    def __init__(self, code: str) -> None:
+        self.code = code
+
+
+class FakeStore:
+    """`thesis.ThesisStore` 대역. LangChain 경로를 타지 않고 대상과 과거만 준다."""
+
+    def __init__(self, connection: Any) -> None:
+        self.connection = connection
+
+    def subjects(self) -> tuple[FakeSubject, ...]:
+        return (FakeSubject("005930"),)
+
+    def past_theses(self, *, as_of_at: datetime, subject_code: str, n: int) -> tuple:
+        del as_of_at, subject_code, n
+        return ()
+
+
+def test_run_hands_build_and_store_every_argument_it_requires(monkeypatch):
+    """`run()`이 넘기는 kwargs를 `build_and_store`의 시그니처에 묶는다.
+
+    2026-08-23에 형제 브랜치 둘을 합치며 `past`가 필수 인자로 생겼는데 한 호출이 그것을
+    모른 채 합쳐져 매 실행 `TypeError`였다. 충돌 없이 합쳐진 자리라 테스트만이 잡는다.
+    """
+    from modules import thesis as market_thesis
+
+    signature = inspect.signature(thesis_common.ThesisRun.build_and_store)
+    received: dict[str, Any] = {}
+
+    def fake_build_and_store(self: Any, **kwargs: Any) -> int:
+        received.update(kwargs)
+        return 3
+
+    monkeypatch.setattr(thesis_common.ThesisRun, "skip_unless_open", lambda self: None)
+    monkeypatch.setattr(thesis_common.ThesisRun, "previous_open_day", lambda self: date(2026, 8, 20))
+    monkeypatch.setattr(
+        thesis_common.ThesisRun, "observed_state", lambda self, module, session, targets: {"session": str(session)}
+    )
+    monkeypatch.setattr(thesis_forecast.PreOpenForecast, "check_ready", lambda self: None)
+    monkeypatch.setattr(market_thesis, "ThesisStore", FakeStore)
+    monkeypatch.setattr(thesis_common.ThesisRun, "build_and_store", fake_build_and_store)
+
+    forecast = thesis_forecast.PreOpenForecast(FakeConnection([]), run_date=RUN_DATE)
+    written = forecast.run(dag_run_id="manual__1")
+
+    assert written == 3
+    # 필수 인자가 빠지면 여기서 `TypeError`다.
+    signature.bind(forecast._run, **received)
+    assert received["run_slot"].value == "pre_open"
+    # 창의 시작은 전 개장일 마감이다. 장전만의 값이라 여기서 묶는다.
+    assert received["macro_window_start"] == thesis_common.close_at(date(2026, 8, 20))
+    # **장전만 과거 성적을 싣는다.** 리뷰 두 슬롯은 `past={}`다.
+    assert received["past"] == {"005930": ()}
+    assert forecast._run.as_of_at == thesis_forecast.as_of(RUN_DATE)

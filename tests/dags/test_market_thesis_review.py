@@ -1,9 +1,10 @@
-"""장후 리뷰 DAG와 `modules/thesis_review.py`의 순수 함수.
+"""장후 리뷰 DAG와 `modules/thesis_review.py`.
 
 채점·해설의 알맹이는 `modules/thesis.py`에 있고 `tests/modules/test_thesis.py`가 덮는다.
-여기 남은 것은 태스크 그래프와 장후에만 있는 판정 함수다.
+여기 남은 것은 태스크 그래프, 장후의 시각 계산, 그리고 `PostCloseReview`다.
 """
 
+import inspect
 from datetime import UTC, date, datetime, timedelta
 from typing import Any, Self
 
@@ -114,3 +115,73 @@ def test_the_guard_passes_when_both_sources_are_in():
     connection = FakeConnection([(2,), (2,)])
 
     thesis_review.PostCloseReview(connection, run_date=date(2026, 8, 21)).check_ready(["005930", "000660"])
+
+
+def test_the_index_guard_asks_for_the_close_bar_not_the_run_time():
+    """20:30에 돌지만 찾는 봉은 15:30이다. 실행 시각으로 찾으면 영영 못 찾는다."""
+    connection = FakeConnection([(2,), (2,)])
+
+    thesis_review.PostCloseReview(connection, run_date=date(2026, 8, 21)).check_ready(["005930"])
+
+    statement, parameters = connection.cursor().calls[-1]
+    assert "index_bar" in statement
+    assert parameters[0] == thesis_review.as_of(date(2026, 8, 21))
+    assert parameters[1] == thesis_review.GUARD_INDEX_SYMBOLS
+
+
+class FakeSubject:
+    def __init__(self, code: str, kind: Any) -> None:
+        self.code = code
+        self.kind = kind
+
+
+def test_run_hands_build_and_store_every_argument_it_requires(monkeypatch):
+    """`run()`이 넘기는 kwargs를 `build_and_store`의 시그니처에 묶는다.
+
+    2026-08-23에 형제 브랜치 둘을 합치며 `past`가 필수 인자로 생겼는데 한 호출이 그것을
+    모른 채 합쳐져 매 실행 `TypeError`였다. 충돌 없이 합쳐진 자리라 테스트만이 잡는다.
+    """
+    from modules import thesis as market_thesis
+
+    run_date = date(2026, 8, 21)
+    signature = inspect.signature(thesis_common.ThesisRun.build_and_store)
+    received: dict[str, Any] = {}
+    guarded: list[list[str]] = []
+
+    class FakeStore:
+        def __init__(self, connection: Any) -> None:
+            self.connection = connection
+
+        def subjects(self) -> tuple[FakeSubject, ...]:
+            return (
+                FakeSubject("KOSPI", market_thesis.ThesisSubjectKind.INDEX),
+                FakeSubject("005930", market_thesis.ThesisSubjectKind.STOCK),
+            )
+
+    def fake_build_and_store(self: Any, **kwargs: Any) -> int:
+        received.update(kwargs)
+        return 4
+
+    monkeypatch.setattr(thesis_common.ThesisRun, "skip_unless_open", lambda self: None)
+    monkeypatch.setattr(
+        thesis_common.ThesisRun, "observed_state", lambda self, module, session, targets: {"session": str(session)}
+    )
+    monkeypatch.setattr(
+        thesis_review.PostCloseReview, "check_ready", lambda self, watched: guarded.append(list(watched))
+    )
+    monkeypatch.setattr(market_thesis, "ThesisStore", FakeStore)
+    monkeypatch.setattr(thesis_common.ThesisRun, "build_and_store", fake_build_and_store)
+
+    review = thesis_review.PostCloseReview(FakeConnection([]), run_date=run_date)
+    written = review.run(dag_run_id="manual__1")
+
+    assert written == 4
+    # 필수 인자가 빠지면 여기서 `TypeError`다.
+    signature.bind(review._run, **received)
+    assert received["run_slot"].value == "post_close"
+    assert received["macro_window_start"] == thesis_review.macro_window_start(run_date)
+    # **확정 종가 guard는 종목만 본다.** 지수는 확정 종가 테이블에 없다.
+    assert guarded == [["005930"]]
+    # 리뷰는 해석이라 과거 예측 성적을 싣지 않는다. NXT 리뷰와 같다.
+    assert received["past"] == {}
+    assert review._run.as_of_at == thesis_review.as_of(run_date)

@@ -12,7 +12,7 @@ from sqlalchemy import Table
 
 from apps.models.market import IndexBar
 from apps.models.raw import SourceRecord
-from modules.briefing import market
+from modules.briefing import market_data
 from modules.collectors.kis import (
     INDEX_BAR_UPSERT,
     SOURCE_RECORD_INSERT,
@@ -342,4 +342,4 @@ def test_session_date_matches_the_briefing_helper():
     # KST 화요일 07:30 = UTC 월요일 22:30 = 뉴욕 월요일 18:30 → 월요일 세션.
     moment = datetime(2026, 8, 24, 22, 30, tzinfo=UTC)
 
-    assert us_session_date(moment) == market.us_session_date(moment) == date(2026, 8, 24)
+    assert us_session_date(moment) == market_data.us_session_date(moment) == date(2026, 8, 24)

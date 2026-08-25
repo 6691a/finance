@@ -306,7 +306,7 @@ class ThesisEvidenceKind(StrEnum):
     TECHNICAL_SIGNAL = "technical_signal"
 
 
-# 사건 이름. Slack 표(`briefing/market.SIGNAL_LABELS`)와 같은 말을 쓴다. `매수`·`매도`
+# 사건 이름. Slack 표(`briefing/market_data.SIGNAL_LABELS`)와 같은 말을 쓴다. `매수`·`매도`
 # 낱말을 쓰지 않는 이유도 같다 — 사건이지 판정이 아니다.
 SIGNAL_LABELS: dict[tuple[str, str], str] = {
     ("sma_cross", "up"): "골든크로스",

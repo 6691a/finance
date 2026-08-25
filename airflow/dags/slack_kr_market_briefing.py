@@ -59,7 +59,7 @@ from airflow.sdk import dag, get_current_context, task
 from airflow.timetables.trigger import MultipleCronTriggerTimetable
 from pydantic import SecretStr
 
-from modules.briefing import chart, market
+from modules.briefing import chart, market, market_data
 from modules.briefing.market import MarketScope
 from modules.market_session import krx_open_day
 from modules.slack import UPLOAD_PROCESSING_WAIT_SECONDS, SlackClient, SlackError
@@ -157,12 +157,12 @@ def slack_kr_market_briefing():
         connection = _connection()
         try:
             _skip_when_closed(connection, now.astimezone(KST_TIMEZONE).date())
-            reader = market.MarketBriefingReader(connection, now)
+            reader = market_data.MarketBriefingReader(connection, now)
             summary = reader.summary()
             open_hour = (
-                market.NXT_PREMARKET_OPEN_HOUR_KST
+                market_data.NXT_PREMARKET_OPEN_HOUR_KST
                 if scope is MarketScope.KOREA_PREOPEN
-                else market.SESSION_OPEN_HOUR_KST
+                else market_data.SESSION_OPEN_HOUR_KST
             )
             chart_series = reader.chart_series(open_hour=open_hour)
             daily_series = reader.daily_chart_series() if _wants_daily_chart(now) else ()
@@ -182,8 +182,8 @@ def slack_kr_market_briefing():
 
     def _chart(
         client: SlackClient,
-        series: tuple[market.ChartSeries, ...],
-        daily_series: tuple[market.DailyChartSeries, ...],
+        series: tuple[market_data.ChartSeries, ...],
+        daily_series: tuple[market_data.DailyChartSeries, ...],
         now: datetime,
     ) -> tuple[tuple[tuple[str, str], ...] | None, str | None]:
         """계열마다 차트 한 장을 그려 올린다. **실패해도 리포트를 막지 않는다.**

@@ -7,7 +7,7 @@ import pytest
 from airflow.exceptions import AirflowSkipException
 
 from dags import kis_overseas_index_close, slack_us_market_briefing
-from modules.briefing import market
+from modules.briefing import market_data
 
 
 class FakeCursor:
@@ -104,7 +104,7 @@ def test_the_session_date_is_the_new_york_date():
     moment = datetime(2026, 8, 24, 22, 30, tzinfo=UTC)
 
     assert kis_overseas_index_close.us_session_date(moment) == date(2026, 8, 24)
-    assert kis_overseas_index_close.us_session_date(moment) == market.us_session_date(moment)
+    assert kis_overseas_index_close.us_session_date(moment) == market_data.us_session_date(moment)
 
 
 def test_the_session_date_comes_from_the_run_not_the_wall_clock(monkeypatch):

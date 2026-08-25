@@ -81,8 +81,9 @@ def build() -> ThesisRunResult:
         targets = market_thesis.subjects(conn)
         # 장전이 보는 세션은 **전 영업일**이다. 오늘 장은 아직 열리지 않았다.
         session = thesis_common.previous_open_day(conn, run_date)
-        # 같은 대상의 지난 장전 추론과 채점·해설을 프롬프트에 미리 싣는다. 툴에 맡기면
-        # 모델이 부를지도, 불렀는지도 우리 손 밖이다. 여기서 본 것이 `thesis_precedent`가 된다.
+        # 같은 대상의 지난 장전 예측·장후 리뷰와 그 채점·해설을 프롬프트에 미리 싣는다.
+        # 툴에 맡기면 모델이 부를지도, 불렀는지도 우리 손 밖이다. 여기서 본 것이
+        # `thesis_precedent`가 된다. 건수는 슬롯마다다.
         past = {
             target.code: market_thesis.past_theses(
                 conn,

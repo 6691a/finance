@@ -95,7 +95,9 @@ logger = logging.getLogger(__name__)
 #    방향·경로를 담는 `claims`로 바뀌었다(2026-08-21, 둘 다 운영에 나가기 전이라 한 판이다).
 # 3: 기술적 보조지표가 들어왔다(2026-08-24). `daily_history`가 국내 지수·종목 일봉과
 #    technical_snapshot·recent_signals를 함께 주고, 관측 상태에 technical 블록이 실린다.
-PROMPT_VERSION = "3"
+# 4: 과거 추론 절에 장후 리뷰(`post_close`)와 그 사후 해설이 함께 실린다(2026-08-25).
+#    그전에는 장전 예측만 돌아왔고 리뷰 해설은 Slack T+5와 그래프로만 나갔다.
+PROMPT_VERSION = "4"
 
 # 채점 지평. KRX 영업일 수이고 달력일이 아니다. 0은 예측일 세션 하나다.
 HORIZON_DAYS: tuple[int, ...] = (0, 1, 3, 5)
@@ -149,14 +151,16 @@ MAX_WINDOW_HOURS = 72
 MIN_VALUE_SCORE = 0
 MAX_VALUE_SCORE = 100
 
-# `past_theses`가 한 번에 돌려줄 과거 추론 수의 허용 범위. 문맥을 과거로 다 채우지 않는다.
+# `past_theses`가 한 번에 돌려줄 과거 추론 수의 허용 범위. **슬롯마다 세는 값이다**(2026-08-25).
+# 문맥을 과거로 다 채우지 않는다.
 MIN_PAST_THESES = 1
 MAX_PAST_THESES = 10
 
 # 장전 추론의 프롬프트에 **미리 실어 주는** 같은 대상의 과거 추론 수. 툴로 두면 모델이 부를지
 # 말지를 정하고 불렀는지도 DB에 안 남는다. 미리 실으면 본 것이 확정되고 `thesis_precedent`에
 # 엣지로 남는다. 0이면 끄는 것이다 — 과거 추론을 안 싣고 엣지도 안 남긴다.
-# T+5 지평이 한 주라 한 주치를 준다.
+# T+5 지평이 한 주라 한 주치를 준다. **슬롯마다이므로 실제 행 수는 최대 두 배다** — 장전
+# 예측 5건과 장후 리뷰 5건이다.
 PREFETCHED_PAST_THESES = 5
 
 # 이유 문장 하나의 상한. 넘으면 그 필드만 자른다.
@@ -415,7 +419,13 @@ PRECEDENT_INSERT = read_sql("postgres", "thesis_precedent", "insert.sql")
 
 
 def past_theses(connection: Connection, *, as_of_at: datetime, subject_code: str, n: int) -> list[PastThesis]:
-    """이 대상의 지난 장전 추론과 지평별 결과. 최근 것부터 `n`건이다. 피드백 루프는 이 조회 하나다.
+    """이 대상의 지난 추론과 지평별 결과. **슬롯마다** 최근 것부터 `n`건이다.
+
+    피드백 루프는 이 조회 하나다. 장전 예측(`pre_open`)과 장후 리뷰(`post_close`)를 함께
+    돌려준다 — 리뷰에 붙는 사후 해설이 "그 인과 주장이 이후 보도로 지지됐나"를 담고 있어
+    다음 예측이 볼 값어치가 크다.
+
+    **`n`은 슬롯마다다.** 총량으로 자르면 장후가 섞여 들어온 만큼 장전 예측 이력이 짧아진다.
 
     **창의 끝은 `as_of_at`이다.** 없으면 장전 슬롯을 오후에 재실행할 때 그날 저녁의 채점이
     아침 예측에 섞인다. SQL이 술어 셋을 건다.
@@ -430,15 +440,16 @@ def past_theses(connection: Connection, *, as_of_at: datetime, subject_code: str
     return [
         PastThesis(
             id=row[0],
-            run_date=row[1],
-            prob_up=float(row[2]),
-            prob_down=float(row[3]),
-            prob_flat=float(row[4]),
-            up_reasoning=row[5],
-            down_reasoning=row[6],
-            flat_reasoning=row[7],
+            run_slot=row[1],
+            run_date=row[2],
+            prob_up=float(row[3]),
+            prob_down=float(row[4]),
+            prob_flat=float(row[5]),
+            up_reasoning=row[6],
+            down_reasoning=row[7],
+            flat_reasoning=row[8],
             # SQL이 jsonb_agg로 만든 목록. 모양은 `PastOutcome`이 검증한다.
-            outcomes=tuple(PastOutcome.model_validate(outcome) for outcome in row[8]),
+            outcomes=tuple(PastOutcome.model_validate(outcome) for outcome in row[9]),
         )
         for row in rows
     ]
@@ -534,7 +545,7 @@ class PastThesesArgs(ToolArgs):
     subject_code: str = Field(description="이번 실행의 대상 목록 안에 있는 값만. 다른 값은 거절된다.")
     n: int = Field(
         default=MIN_PAST_THESES,
-        description=f"최근 몇 건을 볼지. {MIN_PAST_THESES}~{MAX_PAST_THESES}.",
+        description=f"슬롯마다 최근 몇 건을 볼지. {MIN_PAST_THESES}~{MAX_PAST_THESES}.",
     )
 
 
@@ -614,8 +625,11 @@ TOOL_DESCRIPTIONS: dict[str, str] = {
         "당일 09:00부터라 미국 세션이 창 밖이다."
     ),
     "past_theses": (
-        "이 대상에 대해 전에 낸 장전 추론과 그 결과. 그때의 세 확률·세 이유, 지평별 실제 등락률과 "
-        "Brier 점수, 사후 해설과 판정을 준다. 같은 실수를 반복하고 있는지 볼 수 있다."
+        "이 대상에 대해 전에 낸 추론과 그 결과. 그때의 세 확률·세 이유, 지평별 실제 등락률과 "
+        "Brier 점수, 사후 해설과 판정을 준다. 같은 실수를 반복하고 있는지 볼 수 있다. "
+        "`run_slot`이 `pre_open`이면 그날 장 열리기 전의 예측이라 채점이 붙고, `post_close`면 "
+        "장이 닫힌 뒤 '왜 그렇게 움직였나'를 적은 해석이라 채점 없이 해설·판정만 붙는다. "
+        "슬롯마다 최근 n건씩 준다."
     ),
     "macro_indicators": (
         "각국 국채 금리 곡선과 물가·실물 지표의 최신 관측값, 그리고 직전 값 대비 변화. "
@@ -1713,9 +1727,17 @@ INSTRUCTION = """{slot_instruction}
 ```
 
 ## 과거 추론과 결과
-같은 대상에 대해 전에 낸 장전 추론과 그 채점·해설이다. 채점은 실제 등락이고, 해설은 사실이
-아니라 **그때의 해석**이다. 같은 이유로 같은 방향을 고르고 있다면 그 이유가 이번에도 맞는지
-따로 확인하라. 과거 문장을 베끼지 마라.
+같은 대상에 대해 전에 낸 추론과 그 채점·해설이다. `run_slot`이 두 가지를 가른다.
+
+- `pre_open` — 그날 장 열리기 전의 **예측**이다. `outcomes`의 `actual_return_pct`가 실제
+  등락이고 `brier_score`가 그 예측의 점수다(낮을수록 맞은 것). 네가 지금 내는 것과 같은 종류다.
+- `post_close` — 장이 닫힌 뒤 "왜 그렇게 움직였나"를 적은 **해석**이다. 예측이 아니라
+  채점이 없다. 채점 칸이 비어 있다고 빗나간 예측으로 읽지 마라.
+
+`outcomes`의 `narrative`는 며칠 뒤의 보도로 되돌아본 사후 해설이고 `verdict`는 그때의 이유가
+이후 보도로 지지됐는지다(`supported`/`contradicted`/`unresolved`). **해설도 사실이 아니라
+그때의 해석이다.** 같은 이유로 같은 방향을 고르고 있다면 그 이유가 이번에도 맞는지 따로
+확인하라. 과거 문장을 베끼지 마라.
 {past_theses}
 """
 

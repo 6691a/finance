@@ -154,14 +154,20 @@ class ThesisRunResult(BaseModel):
 
 
 class PastThesis(BaseModel):
-    """지난 장전 추론 하나와 그 결과. 피드백 루프가 프롬프트에 싣는 것이다.
+    """지난 추론 하나와 그 결과. 피드백 루프가 프롬프트에 싣는 것이다.
 
     `id`는 `thesis_precedent` 엣지가 되므로 그대로 들고 간다.
+
+    `run_slot`은 `pre_open`(그날의 예측, 채점이 붙는다)과 `post_close`(장이 닫힌 뒤의 해석,
+    채점 없이 해설·판정만 붙는다)를 가른다. **모델이 이 둘을 구분해야 하므로 값으로 싣는다** —
+    채점이 없는 행을 "빗나간 예측"으로 읽으면 안 된다. `RunSlot`이 아니라 `str`인 것은 이
+    모듈이 `thesis.py`(LangChain)를 모듈 수준에서 import할 수 없어서다.
     """
 
     model_config = ConfigDict(frozen=True)
 
     id: int
+    run_slot: str
     run_date: date
     prob_up: float
     prob_down: float

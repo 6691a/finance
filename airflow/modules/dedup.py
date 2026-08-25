@@ -1,12 +1,22 @@
-"""제목 유사도로 같은 기사를 `canonical_document_id`에 연결한다.
+"""같은 기사를 `canonical_document_id`에 연결한다.
 
-`docs/economic-document-archive-design.md` §6.4의 최소 구현이다. 같은 출처에서 발행 시각이
-가까운 문서의 제목을 정규화해 비교하고, 임계를 넘으면 본문이 가장 긴 문서를 대표로 삼아
-나머지를 연결한다. 연결된 문서는 LLM 평가와 브리핑에서 빠진다. 삭제는 하지 않는다 —
-오판이면 컬럼을 NULL로 되돌리면 끝이다.
+`docs/economic-document-archive-design.md` §6.4의 ①②를 구현한다. 판정은 둘이다.
 
-# ponytail: stdlib difflib 제목 비교. 출처 간 중복·회색지대 LLM 판정이 필요해지면
-# §6.4의 pgvector+BM25 하이브리드로 승격한다.
+- **본문 해시(②)**: `content_hash`가 같으면 출처가 달라도 같은 문서다. 해시는 제목·요약·
+  본문을 이어 붙인 SHA-256이라 값이 같으면 셋이 글자 그대로 같다. 제목을 보지 않는다.
+- **제목 유사도(①의 연장)**: 같은 출처에서 발행 시각이 가까운 문서의 제목을 정규화해
+  비교하고 임계를 넘으면 같은 기사로 본다.
+
+어느 쪽이든 본문이 가장 긴 문서를 대표로 삼아 나머지를 연결한다. 연결된 문서는 LLM 평가와
+브리핑에서 빠진다. 삭제는 하지 않는다 — 오판이면 컬럼을 NULL로 되돌리면 끝이다.
+
+해시 판정에도 시각 창(±72시간)이 있다. 이유는 실측이다(2026-08-25 운영 DB, 문서 2,332건):
+해시가 겹치는 48묶음 중 출처가 둘 이상인 것은 0이었고, 창 없이 걸면 33일에 걸친 BOJ 통계
+항목 4건(요약·본문이 비어 제목만 같다)과 6일 간격 KIND 공시 2건이 한 문서로 묶인다.
+전재는 시간 단위 안에서 일어나므로 72시간이면 덮는다. 창은 조회 SQL이 갖는다.
+
+# ponytail: stdlib difflib 제목 비교 + 해시 완전일치. 회색지대(같은 사건인데 글자가 다른
+# 문서) 판정이 필요해지면 §6.4 ③의 pgvector+BM25 하이브리드로 승격한다.
 
 대표를 "먼저 발행된 쪽"이 아니라 "본문이 긴 쪽"으로 두는 이유: 속보 스텁이 대표가 되면
 본문이 있는 본기사가 평가·브리핑에서 빠져, LLM이 한 줄짜리 스텁만 읽게 된다.
@@ -73,6 +83,7 @@ class DedupDocument(BaseModel):
     published_at: AwareDatetime | None
     detected_at: AwareDatetime
     content_length: int
+    content_hash: str
     canonical_document_id: int | None = None
 
 
@@ -125,6 +136,18 @@ def _anchor(document: DedupDocument) -> datetime:
     return document.published_at or document.detected_at
 
 
+def _duplicates(document: DedupDocument, candidate: DedupDocument) -> bool:
+    """같은 문서인가. 해시가 같으면 제목을 보지 않는다(설계 §6.4 ②).
+
+    해시는 제목·요약·본문을 이어 붙인 SHA-256이라 값이 같으면 셋이 글자 그대로 같다.
+    전재 기사는 제목이 갈릴 수 있어 제목 유사도만으로는 잡히지 않는다. 반대로 해시 판정에
+    시각·출처 조건을 다시 걸지 않는다 — 그 좁히기는 조회 SQL이 이미 했다.
+    """
+    if document.content_hash == candidate.content_hash:
+        return True
+    return titles_duplicate(document.title, candidate.title)
+
+
 def resolve_links(
     document: DedupDocument,
     candidates: tuple[DedupDocument, ...],
@@ -136,7 +159,7 @@ def resolve_links(
     새 root로 옮기되, 무리 밖에 연결된 문서는 건드리지 않는다 — 오판을 밖으로 번지게 하지
     않기 위해서다.
     """
-    matches = [candidate for candidate in candidates if titles_duplicate(document.title, candidate.title)]
+    matches = [candidate for candidate in candidates if _duplicates(document, candidate)]
     if not matches:
         return ()
 
@@ -170,26 +193,34 @@ def pending_dedup(connection: Connection, limit: int = DEFAULT_DEDUP_BATCH) -> t
             published_at=row[3],
             detected_at=row[4],
             content_length=row[5],
+            content_hash=row[6],
         )
         for row in rows
     )
 
 
 def find_candidates(connection: Connection, document: DedupDocument) -> tuple[DedupDocument, ...]:
-    """같은 출처, 발행 ±12시간 창의 이웃 문서."""
+    """후보 두 갈래. 같은 출처의 발행 ±12시간 이웃과, 출처와 무관하게 해시가 같은 ±72시간 문서.
+
+    해시 쪽 후보는 출처가 다를 수 있어 `source_slug`도 응답에서 읽는다.
+    """
     anchor = _anchor(document)
     with connection.cursor() as cursor:
-        cursor.execute(DEDUP_CANDIDATES, (document.source_slug, document.id, anchor, anchor))
+        cursor.execute(
+            DEDUP_CANDIDATES,
+            (document.id, document.source_slug, anchor, anchor, document.content_hash, anchor, anchor),
+        )
         rows = cursor.fetchall()
     return tuple(
         DedupDocument(
             id=row[0],
-            source_slug=document.source_slug,
-            title=row[1],
-            published_at=row[2],
-            detected_at=row[3],
-            content_length=row[4],
-            canonical_document_id=row[5],
+            source_slug=row[1],
+            title=row[2],
+            published_at=row[3],
+            detected_at=row[4],
+            content_length=row[5],
+            canonical_document_id=row[6],
+            content_hash=row[7],
         )
         for row in rows
     )

@@ -1,7 +1,8 @@
-"""제목 유사도 기반 중복 연결 규칙 검증.
+"""중복 연결 규칙 검증.
 
-`docs/economic-document-archive-design.md` §6.4의 최소 구현이다. 같은 출처에서 제목만 조금
-다른 같은 기사([속보] 스텁 vs 본기사)를 `canonical_document_id`로 연결한다.
+`docs/economic-document-archive-design.md` §6.4의 ①②다. 같은 출처에서 제목만 조금 다른 같은
+기사([속보] 스텁 vs 본기사)는 제목 유사도로, 본문 해시가 같은 문서는 제목과 무관하게
+`canonical_document_id`로 연결한다.
 """
 
 from datetime import UTC, datetime, timedelta
@@ -30,14 +31,19 @@ def document(
     published_minutes: int | None = 0,
     content_length: int = 100,
     canonical_document_id: int | None = None,
+    source_slug: str = "yonhap",
+    content_hash: str | None = None,
 ) -> DedupDocument:
+    # 해시 기본값은 문서마다 다르다. 같은 값으로 두면 모든 픽스처가 §6.4 ②로 묶여 제목
+    # 판정 테스트가 무엇을 검증하는지 알 수 없게 된다.
     return DedupDocument(
         id=document_id,
-        source_slug="yonhap",
+        source_slug=source_slug,
         title=title,
         published_at=None if published_minutes is None else BASE_AT + timedelta(minutes=published_minutes),
         detected_at=BASE_AT + timedelta(minutes=published_minutes or 0),
         content_length=content_length,
+        content_hash=content_hash or f"hash-{document_id}",
         canonical_document_id=canonical_document_id,
     )
 
@@ -174,6 +180,36 @@ class TestResolveLinks:
         assert all(member != 1 for member, _ in links)
         assert links == ((2, 99), (3, 99))
 
+    def test_links_a_reprint_with_a_different_title_by_hash(self):
+        # 전재 기사는 제목이 갈린다. 해시가 같으면 제목·요약·본문이 글자 그대로 같다는 뜻이라
+        # 제목 유사도를 보지 않는다(설계 §6.4 ②).
+        origin = document(
+            1,
+            "코스피 5~6%대 급락…매도 사이드카 발동",
+            content_length=900,
+            source_slug="yonhap",
+            content_hash="same",
+        )
+        reprint = document(
+            2,
+            "[전재] 유가증권시장 급락 관련",
+            published_minutes=30,
+            content_length=900,
+            source_slug="einfomax",
+            content_hash="same",
+        )
+        # 해시가 같으면 본문 길이도 같아 대표는 늘 동률 규칙(늦게 발행된 쪽)이 정한다. 글자가
+        # 똑같은 두 문서라 어느 쪽이 대표든 읽는 쪽이 잃는 것이 없다.
+        assert resolve_links(reprint, (origin,)) == ((1, 2),)
+
+    def test_a_different_hash_falls_back_to_the_title_rule(self):
+        # 해시가 다르면 예전 규칙 그대로다. 출처가 다른 무관한 기사를 끌어오지 않는다.
+        other_source = document(
+            1, "원/달러 환율 1,400원 돌파…9개월 만에 최고", source_slug="einfomax", content_length=900
+        )
+        pending = document(2, "코스피 5~6%대 급락…매도 사이드카 발동", published_minutes=30)
+        assert resolve_links(pending, (other_source,)) == ()
+
     def test_returns_nothing_without_a_similar_candidate(self):
         pending = document(1, "코스피 5~6%대 급락…매도 사이드카 발동")
         unrelated = document(2, "원/달러 환율 1,400원 돌파…9개월 만에 최고", published_minutes=5)
@@ -211,16 +247,35 @@ class FakeConnection:
 
 
 def row(doc: DedupDocument) -> tuple:
-    return (doc.id, doc.title, doc.published_at, doc.detected_at, doc.content_length, doc.canonical_document_id)
+    return (
+        doc.id,
+        doc.source_slug,
+        doc.title,
+        doc.published_at,
+        doc.detected_at,
+        doc.content_length,
+        doc.canonical_document_id,
+        doc.content_hash,
+    )
+
+
+def pending_row(doc: DedupDocument) -> tuple:
+    return (
+        doc.id,
+        doc.source_slug,
+        doc.title,
+        doc.published_at,
+        doc.detected_at,
+        doc.content_length,
+        doc.content_hash,
+    )
 
 
 class TestLinkDuplicates:
     def test_links_and_commits_per_document(self):
         stub = document(1, "[속보] 코스피 5~6%대 급락…매도 사이드카 발동", content_length=30)
         full = document(2, "코스피, 장초반 5~6%대 급락…매도 사이드카 발동", published_minutes=40, content_length=900)
-        pending_rows = [
-            (full.id, full.source_slug, full.title, full.published_at, full.detected_at, full.content_length)
-        ]
+        pending_rows = [pending_row(full)]
         connection = FakeConnection(results=[pending_rows, [row(stub)]])
 
         outcome = link_duplicates(connection)
@@ -233,16 +288,7 @@ class TestLinkDuplicates:
 
     def test_does_not_commit_without_a_link(self):
         pending = document(1, "코스피 5~6%대 급락…매도 사이드카 발동")
-        pending_rows = [
-            (
-                pending.id,
-                pending.source_slug,
-                pending.title,
-                pending.published_at,
-                pending.detected_at,
-                pending.content_length,
-            )
-        ]
+        pending_rows = [pending_row(pending)]
         connection = FakeConnection(results=[pending_rows, []])
 
         outcome = link_duplicates(connection)
@@ -251,24 +297,24 @@ class TestLinkDuplicates:
         assert outcome.linked == 0
         assert connection.commits == 0
 
-    def test_passes_the_anchor_and_source_to_the_candidate_query(self):
+    def test_passes_the_anchor_source_and_hash_to_the_candidate_query(self):
         pending = document(1, "코스피 5~6%대 급락…매도 사이드카 발동")
-        pending_rows = [
-            (
-                pending.id,
-                pending.source_slug,
-                pending.title,
-                pending.published_at,
-                pending.detected_at,
-                pending.content_length,
-            )
-        ]
+        pending_rows = [pending_row(pending)]
         connection = FakeConnection(results=[pending_rows, []])
 
         link_duplicates(connection)
 
         candidate_call = connection.recorded_cursor.calls[1]
-        assert candidate_call[1] == ("yonhap", 1, pending.published_at, pending.published_at)
+        # 두 갈래가 같은 기준 시각을 쓴다. 제목 창에 둘, 해시 창에 둘이다.
+        assert candidate_call[1] == (
+            1,
+            "yonhap",
+            pending.published_at,
+            pending.published_at,
+            pending.content_hash,
+            pending.published_at,
+            pending.published_at,
+        )
 
 
 class TestSqlFiles:
@@ -291,6 +337,18 @@ class TestSqlFiles:
         candidates = read_sql("postgres", "document", "select_dedup_candidates.sql")
         assert "12 hours" in candidates
         assert "coalesce(published_at, detected_at)" in candidates
+
+    def test_the_hash_branch_keeps_its_own_window(self):
+        """해시 갈래에 창이 없으면 33일 간격 BOJ 통계 4건이 한 문서로 묶인다(2026-08-25 실측)."""
+        candidates = read_sql("postgres", "document", "select_dedup_candidates.sql")
+        assert "content_hash = %s" in candidates
+        assert "72 hours" in candidates
+        # 해시 갈래는 출처를 걸지 않는다. 전재는 출처가 다른 것이 요점이다.
+        assert candidates.count("source_slug = %s") == 1
+
+    def test_pending_carries_the_hash_used_by_the_rule(self):
+        pending = read_sql("postgres", "document", "select_dedup_pending.sql")
+        assert "content_hash" in pending
 
     def test_pending_targets_only_unassessed_unlinked_documents(self):
         pending = read_sql("postgres", "document", "select_dedup_pending.sql")

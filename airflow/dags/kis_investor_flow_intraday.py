@@ -213,15 +213,15 @@ def kis_investor_flow_intraday():
                     if error.status in KIS_UNRECOVERABLE_STATUSES:
                         raise AirflowFailException(f"{name}: {error}") from error
                     logger.warning("%s failed with HTTP %s", name, error.status)
-                    failures.append(name)
+                    failures.append(f"{name}({error})")
                     continue
                 except (KisResultError, KisPayloadError) as error:
                     logger.warning("%s failed: %s", name, error)
-                    failures.append(name)
+                    failures.append(f"{name}({error})")
                     continue
                 except ConnectionError as error:
                     logger.warning("%s failed to connect: %s", name, error)
-                    failures.append(name)
+                    failures.append(f"{name}({error})")
                     continue
 
                 with atomic(connection):
@@ -231,7 +231,7 @@ def kis_investor_flow_intraday():
                 logger.info("Stored %s rows for %s", rows, name)
 
         if failures:
-            raise AirflowFailException(f"{len(failures)} of {len(jobs)} KIS calls failed: {', '.join(failures)}")
+            raise AirflowFailException(f"{len(failures)} of {len(jobs)} KIS calls failed: {'; '.join(failures)}")
 
         logger.info("Stored %s investor flow rows at %s", stored, observed_at.isoformat())
         return stored

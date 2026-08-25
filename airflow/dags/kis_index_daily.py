@@ -12,7 +12,7 @@ SMA60과 EMA 안정화에 120거래일이 필요하다. 연휴가 포함된 구�
 ## 페이지 이어받기
 
 응답 헤더 `tr_cont`가 오면 연속조회로, 헤더 없이 요청 구간의 시작에 못 닿은 응답이 오면
-(확정 수급 API의 행태) 날짜 창을 뒤로 옮겨 받는다. 판단은 `fetch_index_daily`가 한다.
+(확정 수급 API의 행태) 날짜 창을 뒤로 옮겨 받는다. 판단은 `KisIndexDailyCollector.fetch`가 한다.
 한 장의 봉 수로 잘림을 재지 않는다 — 그 상한은 문서에 없고 제공처가 바꿔도 알려 주지 않는다.
 마지막 장까지 받고도 남았으면 그 심볼은 저장하지 않고 실패한다 — 잘린 구간은 지표 계산
 창에 구멍을 남긴다.
@@ -58,10 +58,8 @@ from modules.collectors.kis import (
     KisResultError,
     access_token,
 )
-from modules.collectors.market.kis_quote import (
-    MOVEMENT_INDEXES,
-    KisQuoteCollector,
-)
+from modules.collectors.market.kis_index_daily import KisIndexDailyCollector
+from modules.collectors.market.kis_quote import MOVEMENT_INDEXES
 from modules.market_session import krx_open_day
 from modules.utility import CONNECTION_ID, KIS_UNRECOVERABLE_STATUSES, KST_TIMEZONE, atomic
 
@@ -148,14 +146,14 @@ def kis_index_daily():
                 raise AirflowSkipException(f"KRX is closed on {end_date}")
 
         app_key, app_secret = _credentials()
-        collector = KisQuoteCollector(access_token(Variable, app_key, app_secret), app_key, app_secret)
+        collector = KisIndexDailyCollector(access_token(Variable, app_key, app_secret), app_key, app_secret)
 
         stored = 0
         failures: list[str] = []
         with closing(_connection()) as connection:
             for index in MOVEMENT_INDEXES:
                 try:
-                    fetch = collector.fetch_index_daily(index, start_date, end_date)
+                    fetch = collector.fetch(index, start_date, end_date)
                 except KisHTTPError as error:
                     if error.status in KIS_UNRECOVERABLE_STATUSES:
                         raise AirflowFailException(f"{index.value}: {error}") from error
@@ -172,7 +170,7 @@ def kis_index_daily():
                     continue
 
                 with atomic(connection):
-                    rows = collector.store_index_daily(connection, fetch)
+                    rows = collector.store(connection, fetch)
                 stored += rows
                 logger.info("Stored %s daily bars for %s in %s pages", rows, index.value, fetch.page_count)
 

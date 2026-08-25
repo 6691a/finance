@@ -99,6 +99,7 @@ airflow/modules/collectors/
 | `collectors/document/dart.py` | `DartCollector` | 2026-08-23 |
 | `collectors/market/kis_positioning.py` | `KisPositioningCollector` | 2026-08-23 |
 | `collectors/market/kis_quote.py` | `KisQuoteCollector` | 2026-08-23 (`kis.py`에서 분리 2026-08-25) |
+| `collectors/market/kis_index_daily.py` | `KisIndexDailyCollector` | 2026-08-25 (`kis_quote.py`에서 분리) |
 
 ### 1단계 — 자격 증명을 인자로 도는 수집기 (완료, 2026-08-23)
 
@@ -176,15 +177,19 @@ airflow/modules/collectors/
     calendar/kis_market_calendar.py  nyse_calendar.py
     document/dart.py  naver_research.py  documents.py  document_listings.py
     indicator/fred.py  ecos.py  bbk.py  boe.py  ecb.py  ecb_irs.py  mof.py
-    market/kis_quote.py  kis_investor_flow.py  kis_positioning.py
-           kis_overseas_index.py  yahoo.py
+    market/kis_quote.py  kis_index_daily.py  kis_investor_flow.py
+           kis_positioning.py  kis_overseas_index.py  yahoo.py
 ```
 
 **`kis.py`만 루트에 남는다.** 그 판단은 이렇게 갈랐다:
 
-- **`market/kis_quote.py`로 내려간 것** — 분봉·일봉 조회에만 쓰는 것. 차트 엔드포인트
-  상수, 응답 모델과 파서(`parse_bars`·`parse_market_movement`·`_daily_index_*`), 봉 테이블
-  upsert, `last_settled_close`, 그리고 `KisQuoteCollector`.
+- **`market/kis_quote.py`로 내려간 것** — 분봉 조회와 시장 등락에 쓰는 것. 차트 엔드포인트
+  상수, 응답 모델과 파서(`parse_bars`·`parse_market_movement`), 봉 테이블 upsert,
+  `last_settled_close`, 그리고 `KisQuoteCollector`.
+- **`market/kis_index_daily.py`로 다시 갈린 것**(2026-08-25) — 지수 확정 일봉. 조회 단위가
+  시각이 아니라 구간이고, 이어받기 규칙과 잘림 판정이 이 API에만 있다. 분봉을 고칠 때 읽지
+  않아도 되는 코드라 뗐다. 같은 경계로 `tests/collectors/test_kis_index_daily_collector.py`도
+  갈랐다 — 수집기마다 테스트 파일 하나가 이 저장소의 관례이고 가짜 커서도 파일마다 자기 것을 둔다.
 - **`kis.py`에 남은 것** — KIS를 부르는 **다섯 수집기가 함께 쓰는 층**. 토큰 발급·캐시
   (`issue_token`·`access_token`), 전송(`send_get`), 오류 종류(`KisHTTPError`·
   `KisResultError`·`KisPayloadError`), 식별자 Enum(`DomesticFuture`·`DomesticIndex`·

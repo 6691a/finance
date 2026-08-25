@@ -148,7 +148,7 @@ def kis_investor_flow_intraday():
                 except KisTimeWindowError as error:
                     # 제공처가 지금은 이 조회를 받지 않는다(응답 본문이 창을 말해 준다). 재시도는 같은
                     # 답을 받으며 예산만 태우므로 즉시 죽인다. 사람이 시각을 맞춰 다시 트리거한다.
-                    raise AirflowFailException(f"{name}: {error}. 제한 시각 뒤에 다시 트리거한다.") from error
+                    raise AirflowFailException(f"{market.value}: {error}. 제한 시각 뒤에 다시 트리거한다.") from error
                 except (KisResultError, KisPayloadError) as error:
                     logger.warning("%s failed: %s", market.value, error)
                     failures.append(f"{market.value}({error})")

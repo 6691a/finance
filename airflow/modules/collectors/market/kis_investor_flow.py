@@ -126,9 +126,18 @@
 
 둘 다 실측으로 성립했고 `MarketFlowRow.from_payload`가 매 응답 검증한다. 시장 전체는
 닫혀 있어서 누가 팔면 누군가는 받는다. 닫히지 않으면 분류를 빠뜨렸거나 필드를 잘못 읽은
-것이다. 다만 수량이 칸마다 따로 반올림되어 와서(실측: 코스닥 외국인 매수-매도와 순매수가
-1 차이) 정확한 등호가 아니라 반올림 항 수만큼의 오차를 봐준다. 칸이 밀린 응답은 그 폭을
-훨씬 넘으므로 검증의 목적은 그대로다.
+것이다.
+
+**다만 정확한 등호가 아니다.** KIS는 12개 분류를 한 시점 스냅샷으로 주지 않는다. 몇 초에서
+1분쯤 어긋난 집계가 한 응답에 섞여 오고, 그 어긋남은 거래 규모를 따라 커진다(실측
+2026-08-25: 코스피 잔차 170에 총거래 345천, 주식선물 잔차 8831에 총거래 10.2백만 — 둘 다
+0.1% 아래이고, 앞뒤 5분 슬롯은 잔차 0이었다). 그래서 허용 폭을 상수가 아니라 그 응답의
+총거래량 비례로 둔다(`identity_tolerance`). 상수로 두었을 때는 5분마다 도는 이 DAG의 태스크
+13%가 재시도로 살아났다. 칸이 밀린 응답은 잔차가 순매수 값 자체 크기(총거래의 3~4%)라 이
+폭의 20배를 넘으므로 검증의 목적은 그대로다.
+
+이 완화는 장중 시장 조회에만 적용한다. 확정 일별(`StockTradeDailyRow`)은 마감 뒤 집계라
+네 항등식이 정확히 0이었고 지금도 정확한 등호로 본다.
 
 **접미사가 분류마다 다르다.** 사모펀드·기타법인·기타단체만 `_ntby_vol`이고 나머지는
 `_ntby_qty`다. `f"{prefix}_ntby_qty"` 한 벌로 조립하면 그 셋이 오류 없이 0이 된다.
@@ -281,6 +290,19 @@ OTHER_PARTS: tuple[tuple[str, str], ...] = (
     ("other_organization", "etc_orgt_ntby_vol"),
 )
 
+# 항등식 잔차를 얼마까지 봐줄지. **절대 상수가 아니라 그 응답의 총거래량에 비례한다.**
+# KIS가 12개 분류를 한 시점 스냅샷으로 주지 않아서, 몇 초~1분 어긋난 집계가 한 응답에 섞여
+# 온다(실측 2026-08-25: 코스피 잔차 170/총거래 345천, 주식선물 8831/총거래 10.2백만 —
+# 둘 다 0.1% 아래). 상수로 두면 규모가 큰 시장에서 정상 응답이 매일 거절된다.
+# 칸이 밀린 응답은 잔차가 순매수 값 자체 크기(총거래의 3~4%)라 이 폭의 20배를 넘는다.
+IDENTITY_TOLERANCE_DIVISOR = 500  # 총거래량의 0.2%
+IDENTITY_TOLERANCE_FLOOR = 4
+
+
+def identity_tolerance(gross: int) -> int:
+    """이 응답에서 항등식 잔차를 봐줄 폭. 거래가 없는 이른 슬롯을 위해 바닥값을 둔다."""
+    return max(IDENTITY_TOLERANCE_FLOOR, gross // IDENTITY_TOLERANCE_DIVISOR)
+
 
 class StockEstimateRow(BaseModel):
     """종목 추정 응답의 한 슬롯."""
@@ -346,31 +368,34 @@ class MarketFlowRow(BaseModel):
     @classmethod
     def from_payload(cls, row: dict[str, Any]) -> "MarketFlowRow":
         values: dict[str, Any] = {}
-        for name, prefix in (("foreign", "frgn"), ("institution", "orgn"), ("individual", "prsn")):
-            sell = _int(row.get(f"{prefix}_seln_vol"), f"{prefix}_seln_vol")
-            buy = _int(row.get(f"{prefix}_shnu_vol"), f"{prefix}_shnu_vol")
-            net = _int(row.get(f"{prefix}_ntby_qty"), f"{prefix}_ntby_qty")
-            # 매수 - 매도 = 순매수. 수량 필드가 칸마다 따로 반올림되어 오므로(실측: 코스닥
-            # 외국인이 1 차이) 항이 3개인 이 식은 2까지 봐준다. 칸이 밀린 응답은 이 폭을
-            # 훨씬 넘는다.
-            if abs(buy - sell - net) > 2:
-                raise KisPayloadError(f"{name} net buy does not add up: {buy} - {sell} != {net}")
+        groups = (("foreign", "frgn"), ("institution", "orgn"), ("individual", "prsn"))
+        for name, prefix in groups:
             values |= {
-                f"{name}_sell_qty": sell,
-                f"{name}_buy_qty": buy,
-                f"{name}_net_buy_qty": net,
+                f"{name}_sell_qty": _int(row.get(f"{prefix}_seln_vol"), f"{prefix}_seln_vol"),
+                f"{name}_buy_qty": _int(row.get(f"{prefix}_shnu_vol"), f"{prefix}_shnu_vol"),
+                f"{name}_net_buy_qty": _int(row.get(f"{prefix}_ntby_qty"), f"{prefix}_ntby_qty"),
                 f"{name}_net_buy_amount": _decimal(row.get(f"{prefix}_ntby_tr_pbmn"), f"{prefix}_ntby_tr_pbmn"),
             }
 
         for name, field in INSTITUTION_PARTS + OTHER_PARTS:
             values[f"{name}_net_buy_qty"] = _int(row.get(field), field)
 
-        # 세부 일곱 + 기관계, 반올림 항 8개라 4까지 봐준다.
+        # 세 항등식이 같은 폭을 쓴다. 어긋남의 원인이 셋 다 같기 때문이다(§`identity_tolerance`).
+        gross = sum(values[f"{name}_sell_qty"] + values[f"{name}_buy_qty"] for name, _ in groups)
+        tolerance = identity_tolerance(gross)
+
+        # 매수 - 매도 = 순매수.
+        for name, _ in groups:
+            sell, buy, net = (values[f"{name}_{key}"] for key in ("sell_qty", "buy_qty", "net_buy_qty"))
+            if abs(buy - sell - net) > tolerance:
+                raise KisPayloadError(f"{name} net buy does not add up: {buy} - {sell} != {net}")
+
+        # 기관계 = 세부 일곱.
         parts = sum(values[f"{name}_net_buy_qty"] for name, _ in INSTITUTION_PARTS)
-        if abs(parts - values["institution_net_buy_qty"]) > 4:
+        if abs(parts - values["institution_net_buy_qty"]) > tolerance:
             raise KisPayloadError(f"institution parts do not add up: {parts} != {values['institution_net_buy_qty']}")
 
-        # 시장 전체는 닫혀 있다. 누가 팔면 누군가는 받는다. 반올림 항 5개라 3까지 봐준다.
+        # 시장 전체는 닫혀 있다. 누가 팔면 누군가는 받는다.
         closed = (
             values["individual_net_buy_qty"]
             + values["foreign_net_buy_qty"]
@@ -378,7 +403,7 @@ class MarketFlowRow(BaseModel):
             + values["other_corporation_net_buy_qty"]
             + values["other_organization_net_buy_qty"]
         )
-        if abs(closed) > 3:
+        if abs(closed) > tolerance:
             raise KisPayloadError(f"investor categories do not close to zero: {closed}")
 
         return cls(**values)

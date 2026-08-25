@@ -280,7 +280,7 @@ def render_blocks(summary: OpsSummary) -> list[dict[str, Any]]:
 
     rendered += blocks.table_section(
         f"최근 {summary.window_hours}시간 수집",
-        ("소스", "실행", "실패", "건수"),
+        ("소스", "실행", "실패", "건수", "마지막"),
         _activity_rows(summary),
     )
     if summary.silent:
@@ -361,27 +361,52 @@ def render_text(summary: OpsSummary) -> str:
     return "수집 운영 현황 · " + " · ".join(problems)
 
 
-def _activity_rows(summary: OpsSummary) -> list[tuple[str, str, str, str]]:
+def _activity_rows(summary: OpsSummary) -> list[tuple[str, str, str, str, str]]:
     """기대 소스는 한 줄씩, 나머지(문서 피드)는 한 줄로 접는다.
 
     피드는 `document_source` 테이블이 정하고 수십 개라 하나씩 그리면 표가 화면을 넘는다.
+
+    **마지막 열은 시각이 아니라 경과 시간이다.** 창이 24시간이라 `05:12`만 찍으면 오늘인지
+    어제인지 읽는 사람이 뺄셈을 해야 한다. 무소식 섹션은 창 안에 한 번도 안 돈 소스만 잡으므로,
+    "돌긴 돌았는데 20시간째 조용하다"를 보여 주는 자리가 이 열이다.
+
+    **성공 열은 싣지 않는다.** 실행에서 실패를 빼면 나오는 값이라 한 칸을 더 쓸 값어치가 없다.
     """
     rows = [
-        (EXPECTED_BY_NAME[item.source].label, f"{item.runs:,}", f"{item.failed:,}", f"{item.records:,}")
+        (
+            EXPECTED_BY_NAME[item.source].label,
+            f"{item.runs:,}",
+            f"{item.failed:,}",
+            f"{item.records:,}",
+            _hours_ago(item.last_completed_at, summary.generated_at),
+        )
         for item in summary.activity
         if item.source in EXPECTED_BY_NAME
     ]
     others = [item for item in summary.activity if item.source not in EXPECTED_BY_NAME]
     if others:
+        latest = [item.last_completed_at for item in others if item.last_completed_at]
         rows.append(
             (
                 f"문서 피드({len(others)})",
                 f"{sum(item.runs for item in others):,}",
                 f"{sum(item.failed for item in others):,}",
                 f"{sum(item.records for item in others):,}",
+                _hours_ago(max(latest) if latest else None, summary.generated_at),
             )
         )
     return rows
+
+
+def _hours_ago(moment: datetime | None, now: datetime) -> str:
+    """마지막 완료로부터 몇 시간이 지났는지. 완료한 실행이 없으면 `-`.
+
+    창 안에서 방금 끝났으면 `0h`다. 음수는 시계 어긋남이라 0으로 접는다.
+    """
+    if moment is None:
+        return "-"
+    hours = int((now - moment).total_seconds() // 3600)
+    return f"{max(hours, 0)}h"
 
 
 def _failure_line(item: FailureDetail) -> str:

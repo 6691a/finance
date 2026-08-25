@@ -33,13 +33,16 @@ KIS에는 종목 분봉 조회가 둘이다. 장중 조회(`FHKST03010200`)와 �
 | 이름 | 기본값 | 뜻 |
 | --- | --- | --- |
 | `business_date` | `null` | 받을 거래일(YYYY-MM-DD). 비우면 실행일(KST) |
-| `days` | `1` | 그 날짜부터 과거로 며칠을 받을지. 백필에만 쓴다 |
+| `days` | `1` | 그 날짜부터 과거로 며칠을 받을지. 백필에만 쓴다. 한 run에 최대 31일 |
 
     airflow dags trigger kis_stock_minute_bars_daily \\
       --conf '{"business_date": "2026-08-14", "days": 5}'
 
 `days`를 늘리면 달력 날짜를 하루씩 뒤로 걷는다. 휴장일은 0봉으로 와서 건너뛴다. 거래일만
 세는 계산을 하지 않는 이유는 그 계산이 곧 휴장일 달력의 사본이 되기 때문이다.
+
+**한 run에 31일까지다.** `max_active_runs=1`이라 긴 백필 run이 그날 마감 확정 run을 직접
+점유한다. 더 넓은 구간은 run을 나눠 명시적으로 돌린다.
 
 ## 실패와 재시도
 
@@ -88,6 +91,11 @@ CALENDAR_DAY_PATTERN = re.compile(r"\d{4}-\d{2}-\d{2}")
 BUSINESS_DATE_PARAM = "business_date"
 DAYS_PARAM = "days"
 
+# 한 run이 걸을 수 있는 최대 달력 일수. 분봉 문서 §9가 백필 한 run에 정한 상한과 같은 값이다.
+# 이 DAG는 `max_active_runs=1`이라 긴 백필 run이 그날 마감 확정 run을 직접 점유한다. 상한이
+# 없으면 `days` 오타 하나(3650)가 정규 확정을 며칠 멈춘다. 더 넓은 구간은 run을 나눈다.
+MAX_DAYS = 31
+
 PREVIOUS_CLOSE_SELECT = read_sql("postgres", "stock_investor_trade_daily", "select_previous_close.sql")
 
 
@@ -128,11 +136,16 @@ def requested_days(params: dict[str, Any]) -> int:
 
     `or 1`로 기본값을 주지 않는다. 0이 falsy라 조용히 1이 되고, 운영자는 아무것도 받지 않기를
     바랐는데 하루치를 받게 된다.
+
+    상한도 여기서 막는다. `Param`의 `maximum`은 UI와 API 트리거만 검사하고, 태스크가 직접
+    받은 값(`conf` 없이 넘어온 경우, 다른 코드가 부르는 경우)은 지나간다.
     """
     given = params.get(DAYS_PARAM)
     days = 1 if given is None else int(given)
     if days < 1:
         raise AirflowFailException(f"{DAYS_PARAM} must be at least 1, got {days}")
+    if days > MAX_DAYS:
+        raise AirflowFailException(f"{DAYS_PARAM} must be at most {MAX_DAYS}, got {days}")
     return days
 
 
@@ -167,8 +180,13 @@ def previous_close(connection: Any, stock_code: str, business_date: date) -> Dec
             1,
             type="integer",
             minimum=1,
+            maximum=MAX_DAYS,
             title="일수",
-            description="그 날짜부터 과거로 며칠을 받을지. 휴장일은 0봉으로 와서 건너뛴다.",
+            description=(
+                f"그 날짜부터 과거로 며칠을 받을지. 휴장일은 0봉으로 와서 건너뛴다. "
+                f"한 run에 최대 {MAX_DAYS}일이고, 더 넓은 구간은 run을 나눈다 — "
+                f"긴 run 하나가 그날 마감 확정을 점유한다."
+            ),
         ),
     },
     doc_md=__doc__,

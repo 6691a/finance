@@ -13,6 +13,10 @@ from typing import Any
 # Slack의 한 블록 텍스트 상한은 3000자다. 넘으면 메시지 전체가 거절되므로 여기서 자른다.
 MAX_SECTION_CHARS = 2900
 
+# `table` 블록의 열 상한. 넘으면 Slack이 메시지 전체를 `invalid_blocks`로 거절한다.
+# 자르지 않고 죽인다 — 조용히 잘린 표는 빠진 열이 화면에서 보이지 않는다.
+MAX_TABLE_COLUMNS = 20
+
 # 요일 표기. `strftime("%a")`는 실행 환경의 `LC_TIME`을 타서 컨테이너 로케일이 바뀌면
 # 조용히 `Tue`가 된다. 표를 직접 둔다.
 WEEKDAY_NAMES = ("월", "화", "수", "목", "금", "토", "일")
@@ -38,6 +42,8 @@ def table_section(title: str, headers: Sequence[str], rows: Sequence[Sequence[st
     `table` 블록에는 제목 칸이 없어 두 블록으로 나눈다. 첫 열은 이름이라 좌측 정렬에
     줄바꿈을 허용하고 나머지는 숫자라 우측 정렬이다. 자릿수가 세로로 맞아야 눈으로 비교된다.
     """
+    if len(headers) > MAX_TABLE_COLUMNS:
+        raise ValueError(f"table '{title}' has {len(headers)} columns, Slack allows {MAX_TABLE_COLUMNS}")
     return [
         section(f"*{title}*"),
         {

@@ -20,7 +20,7 @@ from apps.models.market import (
     StockInvestorTradeDaily,
 )
 from apps.models.reference import IndicatorSeries, QuoteSymbol
-from modules.briefing import market, market_data
+from modules.briefing import blocks, market, market_data
 from modules.briefing.market import MarketScope
 
 # KST 2026-08-18(화) 08:00. 이때 뉴욕은 아직 8월 17일(월) 저녁이다.
@@ -487,14 +487,15 @@ def test_rows_are_ordered_for_reading_not_alphabetically():
     assert [row[0]["text"] for row in table["rows"]] == ["구분", "코스피", "코스피200 선물", "삼성전자", "SK하이닉스"]
 
 
+def _table_rows(rendered: list[dict], title: str) -> list[list[str]]:
+    """제목 section 바로 뒤 table의 칸 텍스트."""
+    index = next(i for i, block in enumerate(rendered) if block.get("text", {}).get("text") == f"*{title}*")
+    return [[cell["text"] for cell in row] for row in rendered[index + 1]["rows"]]
+
+
 def test_the_institution_detail_table_pairs_each_column_with_the_previous_day():
     """열 이름을 필드 이름에서 만들어 쓰므로 짝이 어긋나면 여기서 죽는다."""
-    rendered = market.render_blocks(summary(), MarketScope.KOREA)
-    index = next(
-        i for i, block in enumerate(rendered) if block.get("text", {}).get("text") == "*기관 세부·기타(주·KRX)*"
-    )
-    table = rendered[index + 1]
-    rows = [[cell["text"] for cell in row] for row in table["rows"]]
+    rows = _table_rows(market.render_blocks(summary(), MarketScope.KOREA), "기관 세부(주·KRX)")
 
     assert rows[0] == [
         "종목",
@@ -512,16 +513,28 @@ def test_the_institution_detail_table_pairs_each_column_with_the_previous_day():
         "직전 종금",
         "연기금",
         "직전 연기금",
-        "기타법인",
-        "직전 기타법인",
-        "기타단체",
-        "직전 기타단체",
         "직전 기준",
         "기준",
     ]
     # 값은 STOCK_TRADE_ROWS의 당일·직전 짝 그대로다.
     assert rows[1][:5] == ["삼성전자", "+500,000", "+300,000", "+120,000", "+90,000"]
+    assert rows[1][-4:] == ["+155,000", "+83,000", "08/17", "08/18"]
+
+
+def test_other_entities_are_a_separate_table():
+    """기타법인·기타단체를 기관 세부에 붙이면 21열이라 Slack이 메시지 전체를 거절한다."""
+    rows = _table_rows(market.render_blocks(summary(), MarketScope.KOREA), "기타(주·KRX)")
+
+    assert rows[0] == ["종목", "기타법인", "직전 기타법인", "기타단체", "직전 기타단체", "직전 기준", "기준"]
     assert rows[1][-4:] == ["+1,000", "+500", "08/17", "08/18"]
+
+
+def test_no_table_exceeds_the_slack_column_limit():
+    """열 상한을 넘긴 표는 메시지 전체를 `invalid_blocks`로 만든다."""
+    for scope in MarketScope:
+        for block in market.render_blocks(summary(), scope):
+            if block.get("type") == "table":
+                assert len(block["rows"][0]) <= blocks.MAX_TABLE_COLUMNS
 
 
 def test_the_korea_report_draws_the_realtime_fx_table():

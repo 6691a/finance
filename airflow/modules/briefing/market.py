@@ -41,7 +41,10 @@ ASIA_COUNTRIES = frozenset({"JP", "TW", "HK", "CN"})
 INDEX_FUTURE = "index_future"
 
 # 기관 세부·기타 표의 열. 필드 이름과 머리글을 한 곳에 둔다 — 둘을 따로 적으면 순서가
-# 어긋나 값이 옆 칸으로 밀린다. 앞 일곱만 더해야 기관계이고 뒤 둘은 기관계 밖이다.
+# 어긋나 값이 옆 칸으로 밀린다. 기관 일곱만 더해야 기관계이고 기타 둘은 기관계 밖이다.
+#
+# **표를 둘로 나눈 것은 Slack의 열 상한 때문이다**(`blocks.MAX_TABLE_COLUMNS`). 아홉을
+# 한 표에 당일·직전 짝으로 그리면 21열이라 메시지 전체가 `invalid_blocks`로 거절된다.
 INSTITUTION_DETAIL_COLUMNS = (
     ("securities", "금융투자"),
     ("investment_trust", "투신"),
@@ -50,6 +53,8 @@ INSTITUTION_DETAIL_COLUMNS = (
     ("insurance", "보험"),
     ("merchant_bank", "종금"),
     ("pension_fund", "연기금"),
+)
+OTHER_ENTITY_COLUMNS = (
     ("other_corporation", "기타법인"),
     ("other_organization", "기타단체"),
 )
@@ -553,8 +558,10 @@ def _stock_trade_sections(summary: MarketSummary) -> list[dict[str, Any]]:
     제목에 KRX를 밝힌다. 시세 표가 15:30 이후 NXT 봉을 보이므로, 여기 종가가 그와 다른
     이유(KRX 정규장 확정치이고 NXT 체결은 이 집계에 없음)가 제목에서 보여야 한다.
 
-    기타법인·기타단체(KIS 화면의 `기타기관`)는 **기관계 밖이라** 앞 일곱과 합이 기관계가
-    아니다. 그래서 제목이 `기관 세부·기타`다. 앞 일곱만 더하면 기관계가 된다.
+    기타법인·기타단체(KIS 화면의 `기타기관`)는 **기관계 밖이라** 기관 세부 일곱과 합이
+    기관계가 아니다. 그래서 표를 나누고 제목도 `기관 세부`와 `기타`로 가른다. 나눈 이유는
+    Slack 열 상한(`blocks.MAX_TABLE_COLUMNS`)이기도 하다 — 아홉을 당일·직전 짝으로 한 표에
+    그리면 21열이라 메시지 전체가 거절된다.
     """
     trades = _closed_trades(summary)
     if not trades:
@@ -571,23 +578,6 @@ def _stock_trade_sections(summary: MarketSummary) -> list[dict[str, Any]]:
             _quantity(trade.previous_institution_net_buy_qty),
             f"{trade.individual_net_buy_qty:+,}",
             _quantity(trade.previous_individual_net_buy_qty),
-            _session_stamp(trade.previous_business_date),
-            f"{trade.business_date:%m/%d}",
-        )
-        for trade in trades
-    ]
-    # 모든 표에는 기준이 있어야 한다. 확정 일별 수급이라 시각이 아니라 거래일이다.
-    detail_rows = [
-        (
-            trade.label,
-            *(
-                cell
-                for name, _ in INSTITUTION_DETAIL_COLUMNS
-                for cell in (
-                    f"{getattr(trade, f'{name}_net_buy_qty'):+,}",
-                    _quantity(getattr(trade, f"previous_{name}_net_buy_qty")),
-                )
-            ),
             _session_stamp(trade.previous_business_date),
             f"{trade.business_date:%m/%d}",
         )
@@ -612,17 +602,43 @@ def _stock_trade_sections(summary: MarketSummary) -> list[dict[str, Any]]:
             ),
             closing_rows,
         ),
-        *blocks.table_section(
-            "기관 세부·기타(주·KRX)",
-            (
-                "종목",
-                *(label for _, header in INSTITUTION_DETAIL_COLUMNS for label in (header, f"직전 {header}")),
-                "직전 기준",
-                "기준",
-            ),
-            detail_rows,
-        ),
+        *_net_buy_table("기관 세부(주·KRX)", INSTITUTION_DETAIL_COLUMNS, trades),
+        *_net_buy_table("기타(주·KRX)", OTHER_ENTITY_COLUMNS, trades),
     ]
+
+
+def _net_buy_table(
+    title: str,
+    columns: Sequence[tuple[str, str]],
+    trades: Sequence[StockTradeSnapshot],
+) -> list[dict[str, Any]]:
+    """투자자 구분마다 당일·직전 순매수 짝을 그리는 표.
+
+    모든 표에는 기준이 있어야 한다. 확정 일별 수급이라 시각이 아니라 거래일이다.
+    """
+    rows = [
+        (
+            trade.label,
+            *(
+                cell
+                for name, _ in columns
+                for cell in (
+                    f"{getattr(trade, f'{name}_net_buy_qty'):+,}",
+                    _quantity(getattr(trade, f"previous_{name}_net_buy_qty")),
+                )
+            ),
+            _session_stamp(trade.previous_business_date),
+            f"{trade.business_date:%m/%d}",
+        )
+        for trade in trades
+    ]
+    headers = (
+        "종목",
+        *(label for _, header in columns for label in (header, f"직전 {header}")),
+        "직전 기준",
+        "기준",
+    )
+    return blocks.table_section(title, headers, rows)
 
 
 def _ordered[T](items: Iterable[T], key: Callable[[T], str], order: Sequence[str]) -> tuple[T, ...]:

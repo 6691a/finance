@@ -131,6 +131,19 @@ STOCK_TRADE_ROWS = [
         30_000,
         5_000,
         155_000,
+        # 기관계 밖의 기타법인·기타단체.
+        -20_000,
+        1_000,
+        # 직전 거래일(08/17)의 기관 세부 일곱과 기타 둘.
+        300_000,
+        90_000,
+        4_000,
+        2_000,
+        20_000,
+        1_000,
+        83_000,
+        -9_000,
+        500,
     )
 ]
 
@@ -474,6 +487,43 @@ def test_rows_are_ordered_for_reading_not_alphabetically():
     assert [row[0]["text"] for row in table["rows"]] == ["구분", "코스피", "코스피200 선물", "삼성전자", "SK하이닉스"]
 
 
+def test_the_institution_detail_table_pairs_each_column_with_the_previous_day():
+    """열 이름을 필드 이름에서 만들어 쓰므로 짝이 어긋나면 여기서 죽는다."""
+    rendered = market.render_blocks(summary(), MarketScope.KOREA)
+    index = next(
+        i for i, block in enumerate(rendered) if block.get("text", {}).get("text") == "*기관 세부·기타(주·KRX)*"
+    )
+    table = rendered[index + 1]
+    rows = [[cell["text"] for cell in row] for row in table["rows"]]
+
+    assert rows[0] == [
+        "종목",
+        "금융투자",
+        "직전 금융투자",
+        "투신",
+        "직전 투신",
+        "사모",
+        "직전 사모",
+        "은행",
+        "직전 은행",
+        "보험",
+        "직전 보험",
+        "종금",
+        "직전 종금",
+        "연기금",
+        "직전 연기금",
+        "기타법인",
+        "직전 기타법인",
+        "기타단체",
+        "직전 기타단체",
+        "직전 기준",
+        "기준",
+    ]
+    # 값은 STOCK_TRADE_ROWS의 당일·직전 짝 그대로다.
+    assert rows[1][:5] == ["삼성전자", "+500,000", "+300,000", "+120,000", "+90,000"]
+    assert rows[1][-4:] == ["+1,000", "+500", "08/17", "08/18"]
+
+
 def test_the_korea_report_draws_the_realtime_fx_table():
     """환율은 장외 실시간(fx_bar)만 그린다. 하나은행 고시 수집은 2026-08에 끝났다."""
     korea = _block_text(market.render_blocks(summary(), MarketScope.KOREA))
@@ -761,7 +811,15 @@ def test_stock_estimates_are_counted_in_shares_not_won():
         (
             market_data.LATEST_STOCK_TRADES,
             StockInvestorTradeDaily.__table__,
-            ("stock_code", "business_date", "close_price", "institution_net_buy_qty", "pension_fund_net_buy_qty"),
+            (
+                "stock_code",
+                "business_date",
+                "close_price",
+                "institution_net_buy_qty",
+                "pension_fund_net_buy_qty",
+                "other_corporation_net_buy_qty",
+                "other_organization_net_buy_qty",
+            ),
         ),
         (market_data.INTRADAY_SERIES, IndexBar.__table__, ("provider", "symbol", "bar_at", "close")),
         (market_data.INTRADAY_SERIES, QuoteSymbol.__table__, ("label",)),
@@ -772,7 +830,11 @@ def test_stock_estimates_are_counted_in_shares_not_won():
             ("provider", "stock_code", "exchange", "close", "previous_close", "bar_at"),
         ),
         (market_data.LATEST_DOMESTIC_STOCKS, QuoteSymbol.__table__, ("label", "kind", "country")),
-        (market_data.DOMESTIC_STOCK_SERIES, StockBar.__table__, ("provider", "stock_code", "exchange", "bar_at", "close")),
+        (
+            market_data.DOMESTIC_STOCK_SERIES,
+            StockBar.__table__,
+            ("provider", "stock_code", "exchange", "bar_at", "close"),
+        ),
         (market_data.DOMESTIC_STOCK_SERIES, QuoteSymbol.__table__, ("label",)),
         (
             market_data.LATEST_MARKET_FUNDS,
@@ -789,7 +851,11 @@ def test_stock_estimates_are_counted_in_shares_not_won():
             KrxStockSecuritiesLendingDaily.__table__,
             ("balance_quantity", "balance_change_quantity"),
         ),
-        (market_data.SPREAD_PAIRS, IndicatorObservation.__table__, ("provider", "series_id", "observation_date", "value")),
+        (
+            market_data.SPREAD_PAIRS,
+            IndicatorObservation.__table__,
+            ("provider", "series_id", "observation_date", "value"),
+        ),
     ],
 )
 def test_queries_name_columns_that_exist(statement: str, table: Table, columns: tuple[str, ...]):

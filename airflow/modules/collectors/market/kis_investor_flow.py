@@ -183,6 +183,8 @@ DAILY_TRADE_ROWS_PER_CALL = 30
 
 STOCK_ESTIMATE_UPSERT = read_sql("postgres", "stock_investor_estimate_snapshot", "upsert.sql")
 DAILY_TRADE_UPSERT = read_sql("postgres", "stock_investor_trade_daily", "upsert.sql")
+DAILY_TRADE_COUNT_STORED = read_sql("postgres", "stock_investor_trade_daily", "count_stored.sql")
+DAILY_TRADE_MISSING_OPEN_DAYS = read_sql("postgres", "stock_investor_trade_daily", "select_missing_open_days.sql")
 MARKET_FLOW_UPSERT = read_sql("postgres", "market_investor_flow_snapshot", "upsert.sql")
 SOURCE_RECORD_INSERT = read_sql("postgres", "source_record", "insert.sql")
 
@@ -527,6 +529,21 @@ class StockTradeDailyFetch(BaseModel):
     completed_at: datetime
 
 
+class StoreVerificationError(RuntimeError):
+    """upsert가 응답 행 수만큼 남지 않았다.
+
+    응답은 멀쩡했는데 저장이 덜 된 상태다. 조용히 넘어가면 원장에는 30행이 적히고 테이블에는
+    한 행만 남는다(2026-08-20 실측). 무엇이 덜 들어갔는지는 사람이 봐야 한다.
+    """
+
+
+def missing_open_days(connection: Connection, stock_code: str, start: date, end: date) -> tuple[date, ...]:
+    """구간 안에서 KRX가 열었는데 일봉이 없는 거래일. KIS 자격 증명과 무관해 함수로 둔다."""
+    with connection.cursor() as cursor:
+        cursor.execute(DAILY_TRADE_MISSING_OPEN_DAYS, (stock_code, start, end))
+        return tuple(row[0] for row in cursor.fetchall())
+
+
 class KisInvestorFlowCollector:
     """KIS 투자자 매매동향 수집기. 자격 증명과 토큰을 들고 세 조회를 돈다.
 
@@ -786,6 +803,15 @@ class KisInvestorFlowCollector:
                     )
                     for row in rows
                 ],
+            )
+            # upsert가 실제로 남았는지 되센다. 이 값을 세지 않고 len(rows)를 돌려주면
+            # 덜 들어간 실행이 성공으로 남는다(count_stored.sql 주석 참고).
+            cursor.execute(DAILY_TRADE_COUNT_STORED, (fetch.stock_code, covered, source_record_id))
+            stored = cursor.fetchone()[0]
+        if stored != len(rows):
+            raise StoreVerificationError(
+                f"{fetch.stock_code}: upserted {len(rows)} daily trade rows but {stored} remain "
+                f"for {covered[0]}~{covered[-1]}"
             )
         return len(rows)
 

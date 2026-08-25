@@ -50,14 +50,63 @@ DOMESTIC_STOCK_ROWS = [
     ("kis", "000660", "SK하이닉스", "equity", "KR", Decimal(298000), Decimal(295500), MIDDAY, "KRX"),
 ]
 
+# 마지막 두 칸이 직전 관측값과 그 관측일이다. 관측이 매일 있는 것이 아니라 직전이 전일이
+# 아닐 수 있어 날짜가 함께 온다.
 RATE_ROWS = [
-    ("fred", "DGS10", "US", "미국", "미국 10년물", date(2026, 8, 17), Decimal("4.21"), Decimal("4.18")),
-    ("ecos", "KTB10Y", "KR", "한국", "국고채 10년", date(2026, 8, 17), Decimal("3.05"), Decimal("3.09")),
+    (
+        "fred",
+        "DGS10",
+        "US",
+        "미국",
+        "미국 10년물",
+        date(2026, 8, 17),
+        Decimal("4.21"),
+        Decimal("4.18"),
+        date(2026, 8, 14),
+    ),
+    (
+        "ecos",
+        "KTB10Y",
+        "KR",
+        "한국",
+        "국고채 10년",
+        date(2026, 8, 17),
+        Decimal("3.05"),
+        Decimal("3.09"),
+        date(2026, 8, 14),
+    ),
 ]
 
-FLOW_ROWS = [("KOSPI", MIDDAY, Decimal(-152300000000), Decimal(88400000000), Decimal(61200000000))]
+# 마지막 네 칸이 직전 거래일 마감 스냅샷이다(세션 날짜와 세 분류).
+FLOW_ROWS = [
+    (
+        "KOSPI",
+        MIDDAY,
+        Decimal(-152300000000),
+        Decimal(88400000000),
+        Decimal(61200000000),
+        date(2026, 8, 17),
+        Decimal(-40000000000),
+        Decimal(25000000000),
+        Decimal(15000000000),
+    )
+]
 
-STOCK_FLOW_ROWS = [("005930", "삼성전자", date(2026, 8, 18), 1_971_000, -648_000, 1_323_000, MIDDAY)]
+STOCK_FLOW_ROWS = [
+    (
+        "005930",
+        "삼성전자",
+        date(2026, 8, 18),
+        1_971_000,
+        -648_000,
+        1_323_000,
+        MIDDAY,
+        date(2026, 8, 17),
+        800_000,
+        -200_000,
+        600_000,
+    )
+]
 
 # 마감 확정: 종가·전일종가와 12분류 중 브리핑이 읽는 몫. 거래일이 실행일과 같아야 그려진다.
 STOCK_TRADE_ROWS = [
@@ -67,6 +116,11 @@ STOCK_TRADE_ROWS = [
         date(2026, 8, 18),
         Decimal(268500),
         Decimal(281500),
+        # 직전 거래일(08/17)의 날짜와 수급 세 칸. 종가 다음에 온다.
+        date(2026, 8, 17),
+        -300_000,
+        150_000,
+        150_000,
         -1_500_000,
         820_000,
         640_000,
@@ -80,16 +134,27 @@ STOCK_TRADE_ROWS = [
     )
 ]
 
-MOVEMENT_ROWS = [("KOSPI", MIDDAY, 512, 61, 341)]
+MOVEMENT_ROWS = [("KOSPI", MIDDAY, 512, 61, 341, date(2026, 8, 17), 430, 70, 414)]
 
-# 증시자금 최신 2영업일. 신용융자·미수금 증감은 전일 행과의 차이로 계산된다.
+# 증시자금 최신 2영업일. 증감은 세 항목 모두 전일 행과의 차이로 계산된다.
 FUNDS_ROWS = [
     (date(2026, 8, 18), Decimal("512345.00"), Decimal("-2345.00"), Decimal("205000.00"), Decimal("9100.00")),
     (date(2026, 8, 17), Decimal("514690.00"), Decimal("1000.00"), Decimal("203500.00"), Decimal("9500.00")),
 ]
 
+# 직전 수집일(08/17)의 값은 SQL의 LAG가 준다. 공매도·대차 둘 다 그 행에서 온다.
 SHORT_POSITION_ROWS = [
-    ("005930", "삼성전자", date(2026, 8, 18), 1_200_000, Decimal("3.42"), 25_000_000, -350_000),
+    (
+        "005930",
+        "삼성전자",
+        date(2026, 8, 18),
+        date(2026, 8, 17),
+        1_200_000,
+        1_050_000,
+        Decimal("3.42"),
+        25_000_000,
+        25_350_000,
+    ),
 ]
 
 # 스프레드 다리. 미국 10-2 = 53bp(전일 48bp), 한미 10년 = -116bp.
@@ -145,7 +210,7 @@ def summary(now: datetime = MIDDAY):
         SHORT_POSITION_ROWS,
         SPREAD_ROWS,
     )
-    return market.collect_summary(connection, now)
+    return market.MarketBriefingReader(connection, now).summary()
 
 
 def test_change_is_computed_from_the_stored_previous_close():
@@ -188,13 +253,13 @@ def test_every_row_carries_its_own_as_of_time():
         [],
         [],
     )
-    blocks_out = market.render_blocks(market.collect_summary(connection, MIDDAY), MarketScope.KOREA)
+    blocks_out = market.render_blocks(market.MarketBriefingReader(connection, MIDDAY).summary(), MarketScope.KOREA)
     table = next(block for block in blocks_out if block["type"] == "table")
     rows = [[cell["text"] for cell in row] for row in table["rows"]]
 
     assert rows[0][-1] == "기준"  # 열 제목
-    assert rows[1] == ["코스피", "2,687.45", "▲ +0.82%", "08/15 12:30"]  # 묵은 줄
-    assert rows[2] == ["코스닥", "745.10", "▼ -0.31%", "08/18 12:30"]  # 최신 줄
+    assert rows[1] == ["코스피", "2,687.45", "2,665.60", "▲ +0.82%", "08/15 12:30"]  # 묵은 줄
+    assert rows[2] == ["코스닥", "745.10", "747.42", "▼ -0.31%", "08/18 12:30"]  # 최신 줄
 
 
 def test_nxt_bars_are_labeled_so_they_do_not_read_as_krx_closes():
@@ -218,15 +283,15 @@ def test_nxt_bars_are_labeled_so_they_do_not_read_as_krx_closes():
         [],
         [],
     )
-    result = market.collect_summary(connection, after_hours)
+    result = market.MarketBriefingReader(connection, after_hours).summary()
     table = next(block for block in market.render_blocks(result, MarketScope.KOREA) if block["type"] == "table")
     rows = [[cell["text"] for cell in row] for row in table["rows"]]
     by_label = {row[0]: row for row in rows[1:]}
 
-    assert rows[0] == ["구분", "종가", "등락", "거래소", "기준"]
-    assert by_label["삼성전자"][3] == "NXT"
-    assert by_label["SK하이닉스"][3] == "KRX"
-    assert by_label["코스피"][3] == "-"
+    assert rows[0] == ["구분", "종가", "전일 종가", "등락", "거래소", "기준"]
+    assert by_label["삼성전자"][4] == "NXT"
+    assert by_label["SK하이닉스"][4] == "KRX"
+    assert by_label["코스피"][4] == "-"
 
 
 def test_tables_without_exchange_rows_do_not_grow_an_exchange_column():
@@ -237,7 +302,7 @@ def test_tables_without_exchange_rows_do_not_grow_an_exchange_column():
         table for table in tables if any(cell["text"] == "S&P500 선물" for row in table["rows"] for cell in row)
     )
 
-    assert [cell["text"] for cell in overseas["rows"][0]] == ["구분", "종가", "등락", "기준"]
+    assert [cell["text"] for cell in overseas["rows"][0]] == ["구분", "종가", "전일 종가", "등락", "기준"]
 
 
 def test_the_context_flags_the_oldest_value():
@@ -257,7 +322,7 @@ def test_yields_are_not_drawn_as_percent_moves():
         [("yahoo", "US10Y", "미국 10년물 금리", "rate", "US", Decimal("4.70"), Decimal("4.65"), MIDDAY)],
         *([[]] * 9),
     )
-    result = market.collect_summary(connection, MORNING)
+    result = market.MarketBriefingReader(connection, MORNING).summary()
 
     assert "미국 10년물 금리" not in _block_text(market.render_blocks(result, MarketScope.US))
 
@@ -304,7 +369,7 @@ def test_preopen_report_shows_premarket_stocks_and_skips_us_briefing_sections():
         SHORT_POSITION_ROWS,
         SPREAD_ROWS,
     )
-    result = market.collect_summary(connection, preopen)
+    result = market.MarketBriefingReader(connection, preopen).summary()
     rendered = market.render_blocks(result, MarketScope.KOREA_PREOPEN)
     text = _block_text(rendered)
 
@@ -312,8 +377,8 @@ def test_preopen_report_shows_premarket_stocks_and_skips_us_briefing_sections():
     # 프리마켓 봉은 거래소 열이 NXT를 밝힌다.
     stock_table = next(block for block in rendered if block["type"] == "table")
     rows = [[cell["text"] for cell in row] for row in stock_table["rows"]]
-    assert rows[0] == ["구분", "종가", "등락", "거래소", "기준"]
-    assert {row[3] for row in rows[1:]} == {"NXT"}
+    assert rows[0] == ["구분", "종가", "전일 종가", "등락", "거래소", "기준"]
+    assert {row[4] for row in rows[1:]} == {"NXT"}
     assert "원/달러(장외)" in text
     # 전일 확정치는 08:00 미국장 리포트에 없어서 실린다.
     assert "고객예탁금" in text
@@ -340,7 +405,7 @@ def test_preopen_fallback_text_leads_with_premarket_stocks():
 def test_preopen_chart_window_opens_with_the_nxt_premarket():
     """프리마켓 발송의 차트 창은 09:00이 아니라 NXT 프리마켓 08:00에서 시작한다."""
     connection = FakeConnection([], [])
-    market.collect_chart_series(connection, MIDDAY, open_hour=market.NXT_PREMARKET_OPEN_HOUR_KST)
+    market.MarketBriefingReader(connection, MIDDAY).chart_series(open_hour=market.NXT_PREMARKET_OPEN_HOUR_KST)
 
     since = connection.cursors[0].calls[0][1][2]
     assert (since.hour, since.minute) == (8, 0)
@@ -428,7 +493,7 @@ def test_empty_us_sections_are_not_drawn():
         DOMESTIC_STOCK_ROWS,
         *([[]] * 8),
     )
-    result = market.collect_summary(connection, MORNING)
+    result = market.MarketBriefingReader(connection, MORNING).summary()
 
     titles = [title for title, _ in _us_tables(result)]
     assert "미국 지수·선물" in titles
@@ -486,16 +551,25 @@ def test_crypto_is_drawn_in_both_reports_despite_having_no_country():
 
 
 def test_market_funds_are_drawn_with_computed_deltas():
-    """예탁금 증감은 API 값이고 신용융자·미수금 증감은 전일 행과의 차이다."""
+    """세 항목 모두 전일 행과의 차이이고, 등락률은 그 차이를 전일 잔고로 나눈 값이다."""
     rendered = market.render_blocks(summary(), MarketScope.KOREA)
     table = next(
         block for block in rendered if block["type"] == "table" and block["rows"][1][0]["text"] == "고객예탁금"
     )
     rows = [[cell["text"] for cell in row] for row in table["rows"][1:]]
 
-    assert rows[0] == ["고객예탁금", "512,345", "-2,345", "08/18"]
-    assert rows[1] == ["신용융자 잔고", "205,000", "+1,500", "08/18"]
-    assert rows[2] == ["미수금", "9,100", "-400", "08/18"]
+    assert rows[0] == ["고객예탁금", "512,345", "514,690", "-2,345", "-0.46%", "08/17", "08/18"]
+    assert rows[1] == ["신용융자 잔고", "205,000", "203,500", "+1,500", "+0.74%", "08/17", "08/18"]
+    assert rows[2] == ["미수금", "9,100", "9,500", "-400", "-4.21%", "08/17", "08/18"]
+
+
+def test_the_first_collection_day_falls_back_to_the_api_delta():
+    """전일 행이 없으면 예탁금만 API 전일대비로 그리고 나머지 둘은 `-`다."""
+    funds = market.MarketBriefingReader(FakeConnection(FUNDS_ROWS[:1]), MIDDAY)._market_funds()
+
+    assert funds.customer_deposit_change == Decimal("-2345.00")
+    assert funds.credit_loan_change is None
+    assert funds.unsettled_change is None
 
 
 def test_every_table_ends_with_a_reference_stamp():
@@ -518,7 +592,18 @@ def test_short_sale_and_lending_share_one_table():
     )
     rows = [[cell["text"] for cell in row] for row in table["rows"][1:]]
 
-    assert rows[0] == ["삼성전자", "3.42%", "1,200,000", "25,000,000", "-350,000", "08/18"]
+    assert rows[0] == [
+        "삼성전자",
+        "3.42%",
+        "1,200,000",
+        "1,050,000",
+        "+14.29%",
+        "25,000,000",
+        "25,350,000",
+        "-1.38%",
+        "08/17",
+        "08/18",
+    ]
 
 
 def test_rate_spreads_are_measured_in_bp_and_show_inversion_as_negative():
@@ -547,12 +632,14 @@ def test_chart_series_keep_the_symbol_order_and_skip_empty_ones():
         ("kis", "005930", "삼성전자", MIDDAY - timedelta(minutes=1), Decimal(267500), "KRX"),
         ("kis", "005930", "삼성전자", MIDDAY, Decimal(268000), "KRX"),
     ]
-    series = market.collect_chart_series(FakeConnection(view_rows, stock_rows), MIDDAY)
+    series = market.MarketBriefingReader(FakeConnection(view_rows, stock_rows), MIDDAY).chart_series()
 
     assert [one.symbol for one in series] == ["KOSPI", "005930"]  # CHART_SYMBOLS 순서
     assert len(series[0].points) == 2
     assert series[0].label == "코스피"
-    assert series[1].label == "삼성전자(KRX)"
+    assert series[0].venue == "KRX"  # 거래소 열이 없는 지수는 제공처(kis)의 시장을 적는다
+    assert series[1].label == "삼성전자"
+    assert series[1].venue == "KRX"
 
 
 def test_a_single_bar_is_also_skipped_as_an_empty_chart():
@@ -562,15 +649,15 @@ def test_a_single_bar_is_also_skipped_as_an_empty_chart():
         ("kis", "005930", "삼성전자", MIDDAY - timedelta(minutes=1), Decimal(267500), "KRX"),
         ("kis", "005930", "삼성전자", MIDDAY, Decimal(268000), "KRX"),
     ]
-    series = market.collect_chart_series(FakeConnection(view_rows, stock_rows), MIDDAY)
+    series = market.MarketBriefingReader(FakeConnection(view_rows, stock_rows), MIDDAY).chart_series()
 
     assert [one.symbol for one in series] == ["005930"]
 
 
-def test_chart_labels_name_the_exchange_of_their_bars():
-    """종목 차트 라벨은 어느 거래소 봉인지 밝힌다. 프리마켓은 (NXT), 하루가 섞이면 (KRX·NXT).
+def test_chart_series_name_the_exchange_of_their_bars():
+    """계열은 어느 거래소 봉인지 밝힌다. 프리마켓은 NXT, 하루가 섞이면 KRX·NXT다.
 
-    거래소 개념이 없는 지수·환율 라벨은 그대로다.
+    거래소 열이 없는 지수·환율은 제공처의 시장을 적는다. 차트 제목이 이 값을 그대로 찍는다.
     """
     premarket = [
         ("kis", "005930", "삼성전자", MIDDAY - timedelta(minutes=1), Decimal(267500), "NXT"),
@@ -581,11 +668,12 @@ def test_chart_labels_name_the_exchange_of_their_bars():
         ("kis", "005930", "삼성전자", MIDDAY, Decimal(268000), "NXT"),
     ]
 
-    nxt_series = market.collect_chart_series(FakeConnection([], premarket), MIDDAY)
-    mixed_series = market.collect_chart_series(FakeConnection([], mixed), MIDDAY)
+    nxt_series = market.MarketBriefingReader(FakeConnection([], premarket), MIDDAY).chart_series()
+    mixed_series = market.MarketBriefingReader(FakeConnection([], mixed), MIDDAY).chart_series()
 
-    assert nxt_series[0].label == "삼성전자(NXT)"
-    assert mixed_series[0].label == "삼성전자(KRX·NXT)"
+    assert nxt_series[0].venue == "NXT"
+    assert mixed_series[0].venue == "KRX·NXT"
+    assert nxt_series[0].label == "삼성전자"
 
 
 def test_each_chart_file_gets_its_own_image_block_after_the_domestic_table():
@@ -595,7 +683,7 @@ def test_each_chart_file_gets_its_own_image_block_after_the_domestic_table():
 
     images = [block for block in with_chart if block["type"] == "image"]
     assert [image["slack_file"]["id"] for image in images] == ["F0AAA", "F0BBB"]
-    assert images[0]["alt_text"] == "코스피 당일 분봉 차트"
+    assert images[0]["alt_text"] == "코스피 차트"
     assert with_chart[with_chart.index(images[0]) - 1]["type"] == "table"
 
 
@@ -619,8 +707,12 @@ def test_stock_estimates_are_counted_in_shares_not_won():
     assert [cell["text"] for cell in table["rows"][1]] == [
         "삼성전자",
         "+1,971,000",
+        "+800,000",
         "-648,000",
+        "-200,000",
         "+1,323,000",
+        "+600,000",
+        "08/17",
         "08/18 12:30",
     ]
 
@@ -751,7 +843,39 @@ def summary_with_technicals(
         technical_history_rows() if technical_rows is None else technical_rows,
         SIGNAL_ROWS if signal_rows is None else signal_rows,
     )
-    return market.collect_summary(connection, now)
+    return market.MarketBriefingReader(connection, now).summary()
+
+
+def test_daily_chart_series_follows_the_subject_list_not_the_query():
+    """일봉 차트 대상은 `DAILY_CHART_SUBJECTS`가 정한다. 조회에는 그 밖의 대상도 온다."""
+    connection = FakeConnection(technical_history_rows())
+
+    series = market.MarketBriefingReader(connection, MIDDAY).daily_chart_series()
+
+    assert [one.subject_code for one in series] == ["KOSPI", "005930"]
+    # 계산기는 오름차순을 받는다. 조회는 최신순이라 여기서 뒤집혀 있어야 한다.
+    assert series[0].bars[0].business_date < series[0].bars[-1].business_date
+
+
+def test_the_chart_query_asks_only_for_the_chart_subjects():
+    """차트 조회는 watched를 켜지 않는다. 종목이 늘어도 이미지가 따라 늘면 안 된다."""
+    connection = FakeConnection(technical_history_rows())
+
+    market.MarketBriefingReader(connection, MIDDAY).daily_chart_series()
+
+    _, parameters = connection.cursors[0].calls[0]
+    assert parameters["symbols"] == list(market.DAILY_CHART_SUBJECTS)
+    assert parameters["include_watched"] is False
+    # 환율은 표에 없고 차트에만 있다.
+    assert "USDKRW" in parameters["symbols"]
+
+
+def test_a_subject_without_enough_bars_is_not_drawn():
+    """봉이 모자란 대상은 표에서 빠지듯 차트에서도 빠진다. 짧은 선을 그리지 않는다."""
+    rows = [row for row in technical_history_rows() if row[1] == "KOSPI"][:10]
+    connection = FakeConnection(rows)
+
+    assert market.MarketBriefingReader(connection, MIDDAY).daily_chart_series() == ()
 
 
 def test_the_technical_query_asks_for_the_watched_stocks_too():
@@ -769,7 +893,7 @@ def test_the_technical_query_asks_for_the_watched_stocks_too():
         SPREAD_ROWS,
         technical_history_rows(),
     )
-    market.collect_summary(connection, MIDDAY)
+    market.MarketBriefingReader(connection, MIDDAY).summary()
 
     statement, parameters = next(
         (statement, parameters)
@@ -796,8 +920,8 @@ def test_the_korea_report_shows_the_technical_table():
     text = _block_text(rendered)
 
     assert "기술적 관측" in text
-    assert "SMA20/SMA60" in text
-    assert "RSI14" in text
+    assert "20일선/60일선" in text
+    assert "RSI(14일)" in text
     # 판정 열은 두지 않는다. 표는 수치와 기준일만 말한다.
     table = json.dumps(_technical_table_rows(rendered), ensure_ascii=False)
     assert "매수" not in table
@@ -826,7 +950,7 @@ def test_no_snapshot_drops_the_whole_table():
 
 
 def _technical_table_rows(rendered) -> list[list[str]]:
-    """"기술적 관측" 섹션 바로 뒤 table 블록의 셀 값."""
+    """ "기술적 관측" 섹션 바로 뒤 table 블록의 셀 값."""
     for index, block in enumerate(rendered):
         if block.get("type") == "section" and "기술적 관측" in json.dumps(block, ensure_ascii=False):
             return [[cell["text"] for cell in row] for row in rendered[index + 1]["rows"]]
@@ -839,7 +963,7 @@ def test_a_missing_volume_ratio_shows_a_dash():
     rendered = market.render_blocks(summary_with_technicals(technical_rows=rows), MarketScope.KOREA)
 
     header, *body_rows = _technical_table_rows(rendered)
-    column = header.index("거래량/20일")
+    column = header.index("거래량/20일평균")
     assert {row[column] for row in body_rows} == {"-"}
 
 
@@ -847,7 +971,16 @@ def test_the_table_shows_ratios_and_the_reference_day():
     rendered = market.render_blocks(summary_with_technicals(), MarketScope.KOREA)
 
     header, *body_rows = _technical_table_rows(rendered)
-    assert header == ["대상", "종가/SMA20", "SMA20/SMA60", "RSI14", "MACD hist", "거래량/20일", "신호", "기준"]
+    assert header == [
+        "대상",
+        "종가/20일선",
+        "20일선/60일선",
+        "RSI(14일)",
+        "MACD 히스토그램",
+        "거래량/20일평균",
+        "신호",
+        "기준",
+    ]
     row = next(row for row in body_rows if row[0] == "코스피")
     assert row[1].endswith("%")
     assert row[3].replace(".", "").isdigit()
@@ -890,7 +1023,7 @@ def test_the_signal_window_is_asked_for_in_days():
         technical_history_rows(),
         SIGNAL_ROWS,
     )
-    market.collect_summary(connection, MIDDAY)
+    market.MarketBriefingReader(connection, MIDDAY).summary()
 
     statement, parameters = next(
         (statement, parameters)

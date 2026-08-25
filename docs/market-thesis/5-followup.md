@@ -267,7 +267,7 @@ Toolbox는 2단계의 것을 그대로 쓴다. `as_of_at`만 그 지평의 장�
 ## 5. 피드백 루프 — 과거 추론 프리페치와 `thesis_precedent`
 
 조회는 하나다(`thesis/select_past_with_outcomes.sql`, `thesis.past_theses`): 그 subject의
-최근 `pre_open` 추론 `n`건 — 예측일, 세 확률, 세 이유, 지평별 `actual_outcome`·`brier_score`,
+최근 추론 — 추론일, 슬롯, 세 확률, 세 이유, 지평별 `actual_outcome`·`brier_score`,
 지평별 `narrative`·`verdict`. 같은 조회를 두 길로 쓴다.
 
 | 길 | 누가 정하나 | 기록 |
@@ -290,6 +290,19 @@ Toolbox는 2단계의 것을 그대로 쓴다. `as_of_at`만 그 지평의 장�
   아니다. 절은 `(없음)`으로 남는다 — 절을 빼면 프롬프트 모양이 슬롯마다 달라진다.
 - 툴 쪽 상한은 그대로다: `1 <= n <= 10`, `subject_code`는 이번 실행의 subject 목록
   안의 값만. 넘으면 잘라 실행하거나 "상한 초과" `ToolMessage`로 돌린다(2단계 계약 그대로).
+  **`n`이 세는 단위는 슬롯마다다**(아래).
+- **조회가 돌려주는 것은 `pre_open`과 `post_close` 둘이다**(2026-08-25 변경, 프롬프트 판 `4`).
+  처음에는 `pre_open`만 돌려줬다. 그러면 4절이 `post_close`에도 붙인 사후 해설이 Slack T+5
+  섹션과 그래프로만 나가고 **예측으로는 한 번도 돌아오지 않는다.** 그 해설은 "그날 왜
+  움직였나"라는 인과 주장을 며칠 뒤 보도로 검증한 것이라 다음 예측이 볼 값어치가 오히려 크다.
+  - `PastThesis.run_slot`이 값으로 실린다. 채점이 없는 리뷰 행을 모델이 빗나간 예측으로
+    읽으면 안 되므로 프롬프트가 두 슬롯의 뜻을 명시한다.
+  - **건수 상한은 슬롯마다 적용한다**(SQL의 `row_number() OVER (PARTITION BY run_slot …)`).
+    총량으로 자르면 장후가 섞여 들어온 만큼 장전 예측 이력이 짧아져, 슬롯을 늘린 것이
+    조용히 예측 이력을 반으로 줄인다. `PREFETCHED_PAST_THESES = 5`면 최대 10행이다.
+  - `thesis_precedent` 엣지는 `post_close` 추론도 가리킨다. 테이블은 `thesis`로 FK를 걸
+    뿐이라 스키마 변경이 없다.
+  - `post_nxt_close`는 여전히 빠진다. 그 슬롯은 해설 루프에도 없어(4절) 실을 결과가 없다.
 - **창의 끝은 두 길 다 `as_of_at`이다.** `thesis.run_date < as_of_at의 KST 날짜`,
   `thesis_outcome.evaluated_at <= as_of_at`, `narrative_at <= as_of_at`. 이게 없으면
   장전 슬롯을 재실행할 때 그날 저녁의 채점 결과가 아침 예측에 섞인다.
@@ -363,7 +376,7 @@ T+5가 해설이 가장 굳은 시점이기도 하다. `notify_slack`의 기존 
 | `thesis_outcome/select_pending_narratives.sql` | 한 지평에서 `narrative IS NULL`인 대상 + 원 추론의 확률·이유. **`thesis`에서 LEFT JOIN한다** — `post_close`는 채점을 안 받아 행이 아예 없다 |
 | `thesis_outcome/insert_narrative.sql` | 해설 다섯 칸 채움. **UPDATE가 아니라 조건부 upsert다** — `post_close`는 해설이 행을 새로 만든다. `WHERE thesis_outcome.narrative IS NULL` |
 | `thesis_outcome/select_by_thesis_ids.sql` | 4단계 그래프 동기화, Slack T+5 섹션 |
-| `thesis/select_past_with_outcomes.sql` | `past_theses` 툴. 지평별 결과를 jsonb 배열로 접어 추론당 한 행을 지킨다 |
+| `thesis/select_past_with_outcomes.sql` | 장전 프리페치와 `past_theses` 툴. `pre_open`·`post_close`를 슬롯마다 `n`건씩 준다. 지평별 결과를 jsonb 배열로 접어 추론당 한 행을 지킨다 |
 | `stock_investor_trade_daily/select_horizon_return.sql` | 종목 T+N 누적 등락률(기준가 = 예측일 전 영업일 종가) |
 | `index_bar/select_horizon_return.sql` | 지수 T+N 누적 등락률 |
 

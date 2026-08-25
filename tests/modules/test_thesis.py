@@ -580,7 +580,7 @@ def _statement_key(statement: str) -> str:
         return "narrative_insert" if "narrative" in query else "grade_insert"
     if query.startswith("INSERT INTO thesis"):
         return "thesis_insert"
-    if "FROM thesis\nCROSS JOIN bounds" in query:
+    if "FROM thesis" in query and "CROSS JOIN bounds" in query:
         return "past"
     # 투자의견 조회가 리포트 요약을 LATERAL로 붙이느라 `FROM document`를 품고 있다.
     # 문서 툴보다 먼저 본다 — 순서가 바뀌면 투자의견이 문서 결과를 받는다.
@@ -2147,9 +2147,10 @@ def test_every_target_unusable_triggers_one_repair_then_raises():
 # --- past_theses 툴 ----------------------------------------------------------
 
 
-def past_thesis_row(run_date: date = date(2026, 8, 20)) -> tuple:
+def past_thesis_row(run_date: date = date(2026, 8, 20), run_slot: str = "pre_open") -> tuple:
     return (
         7,
+        run_slot,
         run_date,
         Decimal("0.6200"),
         Decimal("0.2300"),
@@ -2223,10 +2224,35 @@ def test_past_theses_cuts_its_window_at_the_slot_time():
     query = body(PAST_THESES)
 
     # 없으면 장전 슬롯을 오후에 재실행할 때 그날 저녁의 채점이 아침 예측에 섞인다.
-    assert "run_slot = 'pre_open'" in query
     assert "outcome.evaluated_at <= bounds.as_of_at" in query
     assert "outcome.narrative_at <= bounds.as_of_at" in query
     assert "thesis.run_date < (bounds.as_of_at AT TIME ZONE 'Asia/Seoul')::date" in query
+
+
+def test_past_theses_returns_reviews_beside_forecasts():
+    query = body(PAST_THESES)
+
+    # 장후 리뷰의 사후 해설이 다음 예측으로 돌아오는 길이 이것 하나다.
+    assert "thesis.run_slot IN ('pre_open', 'post_close')" in query
+    # 건수 상한은 슬롯마다다. 총량으로 자르면 장후가 들어온 만큼 장전 예측 이력이 짧아진다.
+    assert "PARTITION BY thesis.run_slot" in query
+    assert "WHERE slot_rank <= %s" in query
+
+
+def test_past_theses_tells_the_model_which_slot_each_row_came_from():
+    connection = FakeConnection({"past": [past_thesis_row(run_slot="post_close")]})
+    box = ThesisToolbox(
+        connection,
+        as_of_at=AS_OF,
+        macro_window_start=MACRO_WINDOW_START,
+        watched_codes=["005930"],
+        subject_codes=["KOSPI"],
+    )
+
+    body_text = box.run("past_theses", {"subject_code": "KOSPI", "n": 3})
+
+    # 채점이 없는 리뷰를 빗나간 예측으로 읽지 않으려면 슬롯이 값으로 실려야 한다.
+    assert "post_close" in body_text
 
 
 # --- 해설 저장 ---------------------------------------------------------------

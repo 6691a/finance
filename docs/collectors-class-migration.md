@@ -223,7 +223,7 @@ import하므로 이제 `monkeypatch.setattr(kis_quote, "send_get", ...)`다. 형
 전환 대상이 아니다. 감쌀 상태가 없다. **왜 아닌지를 같이 적는다** — 반복 인자만 보고
 다시 후보로 올리는 일이 없어야 한다.
 
-`blocks.py`·`trend.py`·`chart.py`·`schema.py`·`sql.py`·`period.py`·`utility.py`·`upsert.py`·
+`blocks.py`·`chart.py`·`schema.py`·`sql.py`·`period.py`·`utility.py`·`upsert.py`·
 `apps/realtime/frames.py` — 순수 변환뿐이고 반복 인자가 없거나 값이다.
 
 검토해서 제외한 것(2026-08-25):

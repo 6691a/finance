@@ -60,7 +60,7 @@ from airflow.sdk import Variable, dag, get_current_context, task
 from pydantic import SecretStr
 
 from modules.collectors.kis import KisHTTPError, KisPayloadError, KisResultError, access_token
-from modules.collectors.kis_overseas_index import (
+from modules.collectors.market.kis_overseas_index import (
     KisOverseasIndexCollector,
     OverseasIndex,
     OverseasIndexFetch,

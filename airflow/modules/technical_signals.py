@@ -11,11 +11,12 @@ import logging
 from collections.abc import Sequence
 from datetime import datetime
 from decimal import Decimal
-from typing import Any, Protocol, Self
+from typing import Any
 
 from pydantic import BaseModel, ConfigDict
 
 from modules import technical
+from modules.db import Connection
 from modules.sql import read_sql
 from modules.technical import TECHNICAL_LOOKBACK_BARS
 from modules.upsert import execute_upserts
@@ -34,24 +35,6 @@ DOMESTIC_MAX_DAILY_CHANGE_PCT = 35.0
 
 class TechnicalSignalError(RuntimeError):
     """신호를 낼 수 있는 대상이 하나도 없었다. 조용한 성공으로 넘기지 않는다."""
-
-
-class Cursor(Protocol):
-    def __enter__(self) -> Self: ...
-
-    def __exit__(self, *args: object) -> bool | None: ...
-
-    def execute(self, statement: str, parameters: Any) -> object: ...
-
-    def executemany(self, statement: str, parameters: Sequence[Sequence[Any]]) -> object: ...
-
-    def fetchall(self) -> Any: ...
-
-
-class Connection(Protocol):
-    def cursor(self) -> Cursor: ...
-
-
 class SignalRun(BaseModel):
     """한 번의 검출 결과. 저장한 사건 수와 표본이 모자라 건너뛴 대상 이름이다."""
 

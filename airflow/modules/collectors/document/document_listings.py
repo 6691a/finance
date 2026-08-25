@@ -39,16 +39,10 @@ from pydantic import BaseModel, ConfigDict, field_validator
 from scrapling import Selector
 from scrapling.fetchers import Fetcher
 
-from modules.collectors.document.naver_research import (
-    NAVER_RESEARCH_CATEGORIES,
-    NAVER_RESEARCH_SLUG_PREFIX,
-    NaverResearchCollector,
-)
-from modules.collectors.documents import (
+from modules.collectors.document.documents import (
     IMPERSONATE,
     MAX_ITEMS_PER_FEED,
     REQUEST_TIMEOUT_SECONDS,
-    Connection,
     DocumentHTTPError,
     DocumentPayloadError,
     FeedItem,
@@ -57,6 +51,12 @@ from modules.collectors.documents import (
     kst_midnight_utc,
     normalize_text,
 )
+from modules.collectors.document.naver_research import (
+    NAVER_RESEARCH_CATEGORIES,
+    NAVER_RESEARCH_SLUG_PREFIX,
+    NaverResearchCollector,
+)
+from modules.db import Connection
 
 logger = logging.getLogger(__name__)
 

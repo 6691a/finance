@@ -61,12 +61,24 @@ def test_evaluate_saves_successes_before_raising_provider_error(monkeypatch, ret
 
     monkeypatch.setattr(module, "get_current_context", lambda: {"params": {}})
     monkeypatch.setattr(module, "_connection", lambda: connections.append(FakeConnection()) or connections[-1])
-    monkeypatch.setattr(module, "load_candidates", lambda connection: CANDIDATES)
-    monkeypatch.setattr(module, "pending_documents", lambda connection, limit, prompt: (DOCUMENT, other))
+
+    class FakeStore:
+        def __init__(self, connection, prompt_revision) -> None:
+            self.connection = connection
+
+        def candidates(self):
+            return CANDIDATES
+
+        def pending(self, limit):
+            return (DOCUMENT, other)
+
+        def store(self, document, *args) -> None:
+            persisted.append(document.id)
+
+    monkeypatch.setattr(module, "AssessmentStore", FakeStore)
     monkeypatch.setattr(module, "document_model", lambda: object())
     monkeypatch.setattr(module, "DocumentAssessor", lambda model, settings: object())
     monkeypatch.setattr(module, "AssessmentBatch", FakeBatch)
-    monkeypatch.setattr(module, "store_assessment", lambda connection, document, *args: persisted.append(document.id))
     monkeypatch.setattr(module, "model_name", lambda model: "test-model")
 
     task = module.document_assessment_hourly.task_dict["evaluate"]

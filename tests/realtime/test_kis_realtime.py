@@ -530,7 +530,9 @@ async def test_connection_echoes_pingpong_and_closes_the_session(monkeypatch, tm
     heartbeat = heartbeat_module.Heartbeat(tmp_path / "heartbeat.json")
 
     with pytest.raises(service._StreamEnded):
-        await service.run_connection(settings, build_registry(settings), repository, SecretStr("approval"), heartbeat)
+        await service.KisConnection(
+            settings, build_registry(settings), repository, SecretStr("approval"), heartbeat
+        ).run()
 
     # 구독 2건 + PINGPONG 회신 1건. 받은 프레임을 그대로 되돌린다.
     assert len(socket.sent) == 3
@@ -552,9 +554,41 @@ async def test_all_rejected_subscriptions_mean_an_auth_problem(monkeypatch, tmp_
     heartbeat = heartbeat_module.Heartbeat(tmp_path / "heartbeat.json")
 
     with pytest.raises(AuthRejectedError):
-        await service.run_connection(settings, build_registry(settings), repository, SecretStr("approval"), heartbeat)
+        await service.KisConnection(
+            settings, build_registry(settings), repository, SecretStr("approval"), heartbeat
+        ).run()
 
     assert repository.closed[0][1] == SourceStatus.FAILED
+
+
+
+def _connection(
+    repository,
+    heartbeat,
+    *,
+    aggregator=None,
+    previous_closes=None,
+    clock=None,
+    sleeper=None,
+    source_record_id: int = 77,
+):
+    """flush·watchdog만 보는 테스트용 `KisConnection`. 소켓은 열지 않는다."""
+    settings = make_settings(enable_nxt=False)
+    connection = service.KisConnection(
+        settings,
+        build_registry(settings),
+        repository,
+        SecretStr("approval"),
+        heartbeat,
+        clock=clock or (lambda: datetime.now(UTC)),
+        sleeper=sleeper or asyncio.sleep,
+    )
+    if aggregator is not None:
+        connection._aggregator = aggregator
+    if previous_closes is not None:
+        connection._previous_closes = dict(previous_closes)
+    connection._source_record_id = source_record_id
+    return connection
 
 
 @pytest.mark.asyncio
@@ -563,7 +597,6 @@ async def test_flush_timer_stores_bars_after_the_delay(tmp_path):
     aggregator.mark_connected(datetime(2026, 8, 18, 9, 0, 0, tzinfo=KST))
     aggregator.add(tick(minute=2, second=10))
     repository = FakeRepository()
-    counters = dict(service.SESSION_COUNTERS)
     heartbeat = heartbeat_module.Heartbeat(tmp_path / "heartbeat.json")
     now = datetime(2026, 8, 18, 9, 2, 40, tzinfo=KST).astimezone(UTC)
     slept: list[float] = []
@@ -573,19 +606,14 @@ async def test_flush_timer_stores_bars_after_the_delay(tmp_path):
         if len(slept) > 1:
             raise asyncio.CancelledError
 
+    connection = _connection(
+        repository, heartbeat, aggregator=aggregator, previous_closes={"005930": Decimal(150000)},
+        clock=lambda: now, sleeper=sleeper,
+    )
+    counters = connection._counters
+
     with pytest.raises(asyncio.CancelledError):
-        await service._flush_timer(
-            aggregator,
-            repository,
-            77,
-            {"005930": Decimal(150000)},
-            3.0,
-            counters,
-            lambda: service.HeartbeatExtra(session_id="s1", **counters, late_ticks=0),
-            heartbeat,
-            clock=lambda: now,
-            sleeper=sleeper,
-        )
+        await connection._flush_timer()
 
     # 9:02:40 기준 다음 경계는 9:03:00, 지연 3초를 더해 23초를 기다린다.
     assert slept[0] == pytest.approx(23.0)
@@ -605,26 +633,21 @@ async def test_flush_timer_skips_series_without_a_previous_close(tmp_path):
     aggregator = MinuteAggregator()
     aggregator.add(tick(minute=2))
     repository = FakeRepository()
-    counters = dict(service.SESSION_COUNTERS)
     heartbeat = heartbeat_module.Heartbeat(tmp_path / "heartbeat.json")
+    counters: dict[str, int] = {}
 
     async def sleeper(seconds: float) -> None:
         if counters["skipped_no_previous_close"]:
             raise asyncio.CancelledError
 
+    connection = _connection(
+        repository, heartbeat, aggregator=aggregator, previous_closes={},
+        clock=lambda: datetime(2026, 8, 18, 9, 2, 40, tzinfo=KST).astimezone(UTC), sleeper=sleeper,
+    )
+    counters = connection._counters
+
     with pytest.raises(asyncio.CancelledError):
-        await service._flush_timer(
-            aggregator,
-            repository,
-            77,
-            {},
-            3.0,
-            counters,
-            lambda: service.HeartbeatExtra(session_id="s1", **counters, late_ticks=0),
-            heartbeat,
-            clock=lambda: datetime(2026, 8, 18, 9, 2, 40, tzinfo=KST).astimezone(UTC),
-            sleeper=sleeper,
-        )
+        await connection._flush_timer()
 
     assert counters["skipped_no_previous_close"] == 1
     assert repository.rows == []
@@ -638,8 +661,11 @@ async def test_watchdog_raises_when_frames_go_stale():
     async def sleeper(seconds: float) -> None:
         return None
 
+    connection = _connection(FakeRepository(), None, clock=lambda: now, sleeper=sleeper)
+    connection._last_frame_at = last_seen
+
     with pytest.raises(service.StaleConnectionError):
-        await service._watchdog(lambda: last_seen, clock=lambda: now, sleeper=sleeper)
+        await connection._watchdog()
 
 
 @pytest.mark.asyncio
@@ -649,8 +675,11 @@ async def test_watchdog_stops_at_the_connect_window_edge():
     async def sleeper(seconds: float) -> None:
         return None
 
+    connection = _connection(FakeRepository(), None, clock=lambda: after_close, sleeper=sleeper)
+    connection._last_frame_at = after_close
+
     with pytest.raises(service.ConnectWindowClosed):
-        await service._watchdog(lambda: after_close, clock=lambda: after_close, sleeper=sleeper)
+        await connection._watchdog()
 
 
 # ---------------------------------------------------------------- heartbeat

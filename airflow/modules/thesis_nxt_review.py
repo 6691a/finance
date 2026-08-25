@@ -134,6 +134,7 @@ class NxtAfterHoursReview:
     """
 
     def __init__(self, connection: Any, *, run_date: date) -> None:
+        self._run = thesis_common.ThesisRun(connection, run_date=run_date, as_of_at=as_of(run_date))
         self._connection = connection
         self._run_date = run_date
         self._bars: tuple[AfterHoursBar, ...] | None = None
@@ -145,7 +146,7 @@ class NxtAfterHoursReview:
         if self._targets is None:
             from modules import thesis as market_thesis
 
-            subjects = market_thesis.subjects(self._connection)
+            subjects = market_thesis.ThesisStore(self._connection).subjects()
             self._targets = tuple(s for s in subjects if s.kind is market_thesis.ThesisSubjectKind.STOCK)
         return self._targets
 
@@ -184,7 +185,7 @@ class NxtAfterHoursReview:
                 f"NXT bars for {self._run_date} are all provisional; the REST backfill has not run"
             )
 
-        thesis_common.require_settled_closes(self._connection, self._run_date, self.watched)
+        self._run.require_settled_closes(self.watched)
 
     def observed_state(self) -> NxtObservedState:
         """프롬프트에 주는 관측 상태. 정규장·애프터마켓·지수 맥락 셋이다.
@@ -200,13 +201,7 @@ class NxtAfterHoursReview:
         """
         from modules import thesis as market_thesis
 
-        regular = thesis_common.observed_state(
-            self._connection,
-            market_thesis,
-            self._run_date,
-            self.targets,
-            as_of_at=as_of(self._run_date),
-        )
+        regular = self._run.observed_state(market_thesis, self._run_date, self.targets)
         return NxtObservedState(
             session=self._run_date,
             regular=regular.stock,
@@ -229,13 +224,10 @@ class NxtAfterHoursReview:
         """휴장 판정 → readiness guard → 관측 상태 → LLM → 저장. 저장한 행 수를 준다."""
         from modules import thesis as market_thesis
 
-        thesis_common.skip_unless_open(self._connection, self._run_date)
+        self._run.skip_unless_open()
         self.check_ready()
-        return thesis_common.build_and_store(
-            self._connection,
+        return self._run.build_and_store(
             run_slot=market_thesis.RunSlot.POST_NXT_CLOSE,
-            run_date=self._run_date,
-            as_of_at=as_of(self._run_date),
             macro_window_start=macro_window_start(self._run_date),
             targets=self.targets,
             observed=self.observed_state(),

@@ -40,6 +40,7 @@ from modules.thesis import (
     ThesisDirection,
     ThesisError,
     ThesisEvidenceKind,
+    ThesisStore,
     ThesisSubjectKind,
     ThesisToolbox,
     ThesisVerdict,
@@ -47,14 +48,9 @@ from modules.thesis import (
     brier_score,
     classify_outcome,
     evidence_ref,
-    existing_theses,
     normalize_probabilities,
-    past_theses,
-    pending_narratives,
     render_blocks,
     render_text,
-    store_narratives,
-    store_theses,
 )
 from modules.thesis_state import IndexObservation, ObservedState, StockObservation
 from modules.thesis_tools import DocumentDetail, MacroDetail
@@ -1814,7 +1810,7 @@ def draft_for(builder_connection: FakeConnection) -> Any:
 def test_existing_theses_is_what_the_caller_checks_before_paying_for_a_model():
     connection = FakeConnection({"select_by_run": [stored_row()]})
 
-    rows = existing_theses(connection, run_date=date(2026, 8, 21), run_slot=RunSlot.PRE_OPEN)
+    rows = ThesisStore(connection).existing_theses(run_date=date(2026, 8, 21), run_slot=RunSlot.PRE_OPEN)
 
     assert [row.subject_code for row in rows] == ["KOSPI"]
     assert rows[0].run_slot is RunSlot.PRE_OPEN
@@ -1826,8 +1822,8 @@ def test_storing_writes_the_thesis_and_its_evidence_in_one_transaction():
     drafts, registry = draft_for(FakeConnection())
     connection = FakeConnection({"thesis_insert": [(11,)], "select_by_run": [stored_row(11)]})
 
-    store_theses(
-        connection,
+    ThesisStore(connection).store_theses(
+        
         run_date=date(2026, 8, 21),
         run_slot=RunSlot.PRE_OPEN,
         as_of_at=AS_OF,
@@ -1852,8 +1848,8 @@ def test_storing_never_updates_and_falls_back_to_the_stored_row_on_conflict():
     # RETURNING이 0행이면 삽입 직전에 다른 실행이 먼저 넣은 것이다.
     connection = FakeConnection({"thesis_insert": [], "select_by_run": [stored_row(11)]})
 
-    rows = store_theses(
-        connection,
+    rows = ThesisStore(connection).store_theses(
+        
         run_date=date(2026, 8, 21),
         run_slot=RunSlot.PRE_OPEN,
         as_of_at=AS_OF,
@@ -1921,8 +1917,7 @@ def test_evidence_ranks_follow_the_citation_order():
     )
 
     writer = FakeConnection({"thesis_insert": [(11,)], "select_by_run": [stored_row(11)]})
-    store_theses(
-        writer,
+    ThesisStore(writer).store_theses(
         run_date=date(2026, 8, 21),
         run_slot=RunSlot.PRE_OPEN,
         as_of_at=AS_OF,
@@ -2291,7 +2286,7 @@ def test_pending_narratives_carry_their_slot():
 
     connection = FakeConnection({"select_by_run": [row(11, "post_close"), row(12, "pre_open")]})
 
-    targets = pending_narratives(connection, run_date=date(2026, 8, 21), horizon_days=1)
+    targets = ThesisStore(connection).pending_narratives(run_date=date(2026, 8, 21), horizon_days=1)
 
     assert [(t.thesis_id, t.run_slot) for t in targets] == [(11, RunSlot.POST_CLOSE), (12, RunSlot.PRE_OPEN)]
 
@@ -2366,8 +2361,7 @@ def test_storing_a_narrative_writes_its_evidence_in_the_same_transaction():
         evidence_refs=("document:7",),
     )
 
-    stored = store_narratives(
-        writer,
+    stored = ThesisStore(writer).store_narratives(
         horizon_days=1,
         as_of_at=REVIEW_AS_OF,
         dag_run_id="manual__run",
@@ -2400,8 +2394,7 @@ def test_an_already_written_narrative_gets_no_new_evidence():
         evidence_refs=("document:7",),
     )
 
-    stored = store_narratives(
-        writer,
+    stored = ThesisStore(writer).store_narratives(
         horizon_days=1,
         as_of_at=REVIEW_AS_OF,
         dag_run_id="manual__run",
@@ -2421,8 +2414,7 @@ def test_an_already_written_narrative_gets_no_new_evidence():
 def test_a_horizon_that_takes_no_narrative_is_refused(horizon):
     # 지평 0은 그날의 후속 보도가 아직 쌓이지 않아 해설을 쓸 재료가 없다.
     with pytest.raises(ThesisError, match="does not take a narrative"):
-        store_narratives(
-            FakeConnection(),
+        ThesisStore(FakeConnection()).store_narratives(
             horizon_days=horizon,
             as_of_at=REVIEW_AS_OF,
             dag_run_id="manual__run",
@@ -2657,7 +2649,7 @@ def test_thesis_precedent_insert_matches_the_model():
 def test_past_theses_carries_the_id_the_edge_needs():
     connection = FakeConnection({"past": [past_thesis_row()]})
 
-    rows = past_theses(connection, as_of_at=AS_OF, subject_code="KOSPI", n=PREFETCHED_PAST_THESES)
+    rows = ThesisStore(connection).past_theses(as_of_at=AS_OF, subject_code="KOSPI", n=PREFETCHED_PAST_THESES)
 
     # 프롬프트에 실리는 행과 엣지 끝이 같은 조회에서 나온다. 따로 조회하면 둘이 어긋날 수 있다.
     assert [row.id for row in rows] == [7]
@@ -2670,14 +2662,14 @@ def test_past_theses_carries_the_id_the_edge_needs():
 def test_past_theses_zero_is_the_off_switch():
     connection = FakeConnection({"past": [past_thesis_row()]})
 
-    assert past_theses(connection, as_of_at=AS_OF, subject_code="KOSPI", n=0) == []
+    assert ThesisStore(connection).past_theses(as_of_at=AS_OF, subject_code="KOSPI", n=0) == []
     # 조회조차 하지 않는다. 상수 하나를 0으로 두면 프롬프트 절과 엣지가 같이 꺼진다.
     assert connection.calls == []
 
 
 def test_the_prompt_carries_the_past_theses_it_was_given():
     source = FakeConnection({"past": [past_thesis_row()]})
-    past = {"KOSPI": past_theses(source, as_of_at=AS_OF, subject_code="KOSPI", n=3)}
+    past = {"KOSPI": ThesisStore(source).past_theses(as_of_at=AS_OF, subject_code="KOSPI", n=3)}
 
     prompt = ThesisBuilder.build_messages(
         run_slot=RunSlot.PRE_OPEN,
@@ -2713,8 +2705,8 @@ def test_storing_writes_the_precedent_edges_in_the_same_transaction():
     drafts, registry = draft_for(FakeConnection())
     connection = FakeConnection({"thesis_insert": [(11,)], "select_by_run": [stored_row(11)]})
 
-    store_theses(
-        connection,
+    ThesisStore(connection).store_theses(
+        
         run_date=date(2026, 8, 21),
         run_slot=RunSlot.PRE_OPEN,
         as_of_at=AS_OF,
@@ -2739,8 +2731,8 @@ def test_a_thesis_that_already_existed_gets_no_new_edges():
     drafts, registry = draft_for(FakeConnection())
     connection = FakeConnection({"thesis_insert": [], "select_by_run": [stored_row(11)]})
 
-    store_theses(
-        connection,
+    ThesisStore(connection).store_theses(
+        
         run_date=date(2026, 8, 21),
         run_slot=RunSlot.PRE_OPEN,
         as_of_at=AS_OF,
@@ -2840,8 +2832,8 @@ def test_stored_evidence_carries_the_claim_and_narrative_citations_do_not():
     drafts, registry = draft_for(FakeConnection())
     connection = FakeConnection({"thesis_insert": [(11,)], "select_by_run": [stored_row(11)]})
 
-    store_theses(
-        connection,
+    ThesisStore(connection).store_theses(
+        
         run_date=date(2026, 8, 21),
         run_slot=RunSlot.PRE_OPEN,
         as_of_at=AS_OF,
@@ -2871,8 +2863,8 @@ def test_narrative_citations_leave_direction_and_mechanism_empty():
         )
     }
 
-    store_narratives(
-        connection,
+    ThesisStore(connection).store_narratives(
+        
         horizon_days=1,
         as_of_at=AS_OF,
         dag_run_id="manual__run",

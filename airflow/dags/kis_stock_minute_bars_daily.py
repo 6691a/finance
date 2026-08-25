@@ -86,11 +86,13 @@ from modules.collectors.kis import (
     DomesticStock,
     KisHTTPError,
     KisPayloadError,
-    KisQuoteCollector,
     KisResultError,
     access_token,
-    last_settled_close,
     rest_exchanges,
+)
+from modules.collectors.market.kis_quote import (
+    KisQuoteCollector,
+    last_settled_close,
 )
 from modules.utility import CONNECTION_ID, KIS_UNRECOVERABLE_STATUSES, KST_TIMEZONE
 

@@ -36,7 +36,7 @@ from pydantic import BaseModel, ConfigDict
 from scrapling import Selector
 from scrapling.fetchers import Fetcher
 
-from modules.collectors.kis import Connection
+from modules.db import Connection
 from modules.sql import read_sql
 from modules.upsert import execute_upserts
 

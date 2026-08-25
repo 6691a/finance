@@ -42,6 +42,7 @@ from modules.expectation import (
     ClaimRow,
     EarningsFactRow,
     ExpectationExtractor,
+    ExpectationStore,
     ExtractionError,
     ExtractionResponse,
     PendingExtractionDocument,
@@ -50,14 +51,12 @@ from modules.expectation import (
     classify_surprise,
     filter_claims,
     format_krw,
-    judge_pending,
     normalize_amount,
     period_end_for,
     render_blocks,
     render_text,
     resolve_actual,
     resolve_earnings_actual,
-    store_extraction,
 )
 from modules.expectation import (
     PERIOD_KEY_PATTERN as MODULE_PERIOD_KEY_PATTERN,
@@ -579,7 +578,7 @@ def test_a_document_with_no_claims_still_lands_in_the_ledger():
     """ "뽑았는데 없었다"와 "아직 안 뽑았다"가 구분돼야 매시간 같은 문서를 다시 뽑지 않는다."""
     connection = FakeConnection()
 
-    store_extraction(connection, DOCUMENT, (), "gpt-5.6-luna", EXTRACTED_AT)
+    ExpectationStore(connection).store_extraction(DOCUMENT, (), "gpt-5.6-luna", EXTRACTED_AT)
 
     (statement, parameters) = connection.recorded_cursor.calls[-1]
     assert _statement_key(statement) == "extraction_upsert"
@@ -592,7 +591,7 @@ def test_the_claim_time_comes_from_the_document_not_the_model():
     connection = FakeConnection()
     claims = filter_claims(response_with(), DOCUMENT)
 
-    store_extraction(connection, DOCUMENT, claims, "gpt-5.6-luna", EXTRACTED_AT)
+    ExpectationStore(connection).store_extraction(DOCUMENT, claims, "gpt-5.6-luna", EXTRACTED_AT)
 
     (_, parameters) = connection.recorded_cursor.calls[0]
     assert parameters[8] == DOCUMENT.published_at
@@ -604,7 +603,7 @@ def test_the_claim_time_comes_from_the_document_not_the_model():
 def test_a_stored_claim_carries_the_document_and_never_a_source_record():
     connection = FakeConnection()
 
-    store_extraction(connection, DOCUMENT, filter_claims(response_with(), DOCUMENT), "m", EXTRACTED_AT)
+    ExpectationStore(connection).store_extraction(DOCUMENT, filter_claims(response_with(), DOCUMENT), "m", EXTRACTED_AT)
 
     (_, parameters) = connection.recorded_cursor.calls[0]
     assert parameters[10] == DOCUMENT.id
@@ -688,7 +687,7 @@ def test_judging_writes_one_row_and_reports_it_for_slack():
         }
     )
 
-    (judged,) = judge_pending(connection, "manual__2026-08-22")
+    (judged,) = ExpectationStore(connection).judge("manual__2026-08-22")
 
     assert judged.verdict == "miss"
     assert judged.expected_value == Decimal(9500000000000)
@@ -708,7 +707,7 @@ def test_a_judgment_written_by_another_run_is_not_sent_again():
     )
     connection.recorded_cursor.blocked_inserts.add(("005930", "shareholder_return", "2026", "total_return_amount"))
 
-    assert judge_pending(connection, "run") == ()
+    assert ExpectationStore(connection).judge("run") == ()
 
 
 def test_an_event_without_pre_announcement_expectations_is_skipped():
@@ -721,7 +720,7 @@ def test_an_event_without_pre_announcement_expectations_is_skipped():
         }
     )
 
-    assert judge_pending(connection, "run") == ()
+    assert ExpectationStore(connection).judge("run") == ()
     # 판정 행을 쓰지 않았다. 다음 실행이 다시 본다.
     assert not [call for call in connection.recorded_cursor.calls if _statement_key(call[0]) == "outcome_insert"]
 
@@ -749,7 +748,7 @@ def test_earnings_are_judged_against_the_parsed_disclosure_not_a_claim():
         }
     )
 
-    (judged,) = judge_pending(connection, "run")
+    (judged,) = ExpectationStore(connection).judge("run")
 
     assert judged.verdict == "beat"
     assert judged.actual_value == Decimal(12000000000000)
@@ -772,7 +771,7 @@ def test_the_slack_line_shows_both_sides_and_the_verdict():
             ]
         }
     )
-    judged = judge_pending(connection, "run")
+    judged = ExpectationStore(connection).judge("run")
 
     text = render_text(judged)
     blocks = render_blocks(judged)

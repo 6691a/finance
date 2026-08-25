@@ -30,7 +30,7 @@ import re
 from collections.abc import Sequence
 from datetime import UTC, date, datetime
 from email.utils import parsedate_to_datetime
-from typing import Any, Protocol, Self
+from typing import Any, Self
 from urllib.parse import urljoin
 from xml.etree import ElementTree
 from zoneinfo import ZoneInfo
@@ -39,6 +39,7 @@ from curl_cffi.curl import CurlError
 from pydantic import AwareDatetime, BaseModel, ConfigDict, field_validator, model_validator
 from scrapling.fetchers import Fetcher
 
+from modules.db import Connection
 from modules.sql import read_sql
 from modules.upsert import execute_upserts
 
@@ -95,26 +96,6 @@ NOISE_PATTERNS: tuple[re.Pattern[str], ...] = (
 
 # 추적용 질의 문자열. 같은 문서가 캠페인마다 다른 URL로 와서 `external_id`가 갈린다.
 TRACKING_PARAMS = re.compile(r"[?&](?:utm_[^=]+|fbclid|gclid|igshid)=[^&]*")
-
-
-class Cursor(Protocol):
-    def __enter__(self) -> Self: ...
-
-    def __exit__(self, *args: object) -> bool | None: ...
-
-    def execute(self, statement: str, parameters: Sequence[Any] = ()) -> object: ...
-
-    def executemany(self, statement: str, parameters: Sequence[Sequence[Any]]) -> object: ...
-
-    def fetchone(self) -> Any: ...
-
-    def fetchall(self) -> Any: ...
-
-
-class Connection(Protocol):
-    def cursor(self) -> Cursor: ...
-
-
 class DocumentHTTPError(RuntimeError):
     """피드가 2xx가 아닌 상태로 응답했다. 재시도 가능 여부는 호출자가 `status`로 판단한다."""
 

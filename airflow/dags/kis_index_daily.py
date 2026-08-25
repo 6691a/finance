@@ -53,12 +53,14 @@ from airflow.sdk import Param, Variable, dag, get_current_context, task
 from pydantic import SecretStr
 
 from modules.collectors.kis import (
-    MOVEMENT_INDEXES,
     KisHTTPError,
     KisPayloadError,
-    KisQuoteCollector,
     KisResultError,
     access_token,
+)
+from modules.collectors.market.kis_quote import (
+    MOVEMENT_INDEXES,
+    KisQuoteCollector,
 )
 from modules.market_session import krx_open_day
 from modules.utility import CONNECTION_ID, KIS_UNRECOVERABLE_STATUSES, KST_TIMEZONE, atomic

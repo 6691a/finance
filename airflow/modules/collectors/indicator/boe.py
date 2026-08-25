@@ -53,11 +53,10 @@ IADB는 요청 구간에 데이터가 한 행도 없으면 CSV가 아니라 **HT
 """
 
 import json
-from collections.abc import Sequence
 from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal, InvalidOperation
 from enum import StrEnum
-from typing import Any, Protocol, Self
+from typing import Self
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlencode
 from urllib.request import Request, urlopen
@@ -70,6 +69,7 @@ from pydantic import (
     model_validator,
 )
 
+from modules.db import Connection
 from modules.sql import read_sql
 
 BOE_URL = "https://www.bankofengland.co.uk/boeapps/iadb/fromshowcolumns.asp"
@@ -163,22 +163,6 @@ MONTH_NUMBERS: dict[str, int] = {name: number for number, name in enumerate(MONT
 
 # 그날 그 만기의 고시가 없는 칸. 결측이지 오류가 아니다.
 MISSING_VALUES = frozenset({"", "-", "ND", "n/a"})
-
-
-class Cursor(Protocol):
-    def __enter__(self) -> Self: ...
-
-    def __exit__(self, *args: object) -> bool | None: ...
-
-    def execute(self, statement: str, parameters: Sequence[Any]) -> object: ...
-
-    def fetchone(self) -> Any: ...
-
-
-class Connection(Protocol):
-    def cursor(self) -> Cursor: ...
-
-
 class BoeHTTPError(RuntimeError):
     """IADB가 2xx가 아닌 상태로 응답했다. 재시도 가능 여부는 호출자가 `status`로 판단한다."""
 

@@ -27,7 +27,7 @@ from apps.models.market import (
     StockExchange,
 )
 from apps.models.raw import SourceRecord
-from modules.collectors.yahoo import (
+from modules.collectors.market.yahoo import (
     BAR_RETENTION_DAYS,
     DAILY_RANGE,
     DAILY_SOURCE_KEY,

@@ -61,11 +61,11 @@ from pydantic import BaseModel, ConfigDict, SecretStr, ValidationError
 
 from modules.collectors.kis import (
     SOURCE,
-    Connection,
     KisPayloadError,
     result_error,
     send_get,
 )
+from modules.db import Connection
 from modules.sql import read_sql
 from modules.upsert import execute_upserts
 

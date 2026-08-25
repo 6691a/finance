@@ -8,30 +8,14 @@
 """
 
 from datetime import date
-from typing import Any, Protocol, Self
 
+from modules.db import Connection
 from modules.sql import read_sql
 
 MARKET_SESSION_SELECT = read_sql("postgres", "market_session", "select_open_day.sql")
 
 KRX = "KRX"
 US_EQUITY = "US_EQUITY"
-
-
-class Cursor(Protocol):
-    def __enter__(self) -> Self: ...
-
-    def __exit__(self, *args: object) -> bool | None: ...
-
-    def execute(self, statement: str, parameters: Any) -> object: ...
-
-    def fetchone(self) -> Any: ...
-
-
-class Connection(Protocol):
-    def cursor(self) -> Cursor: ...
-
-
 def market_open_day(connection: Connection, market_code: str, session_date: date) -> bool | None:
     """그 시장의 그 날짜 개장 여부. 행이 없거나 아직 판정하지 않았으면 `None`."""
     with connection.cursor() as cursor:

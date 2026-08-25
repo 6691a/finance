@@ -1,13 +1,13 @@
 import pytest
 
-from modules.collectors.bbk import BundSeries
-from modules.collectors.boe import GiltSeries
-from modules.collectors.ecb import EuroYieldSeries
-from modules.collectors.ecb_irs import MATURITY_MONTHS as CONVERGENCE_MATURITY_MONTHS
-from modules.collectors.ecb_irs import ConvergenceSeries
+from modules.collectors.indicator.bbk import BundSeries
+from modules.collectors.indicator.boe import GiltSeries
+from modules.collectors.indicator.ecb import EuroYieldSeries
+from modules.collectors.indicator.ecb_irs import MATURITY_MONTHS as CONVERGENCE_MATURITY_MONTHS
+from modules.collectors.indicator.ecb_irs import ConvergenceSeries
 from modules.collectors.indicator.ecos import MarketRateSeries
 from modules.collectors.indicator.fred import MACRO_SERIES, TREASURY_SERIES
-from modules.collectors.mof import JgbSeries
+from modules.collectors.indicator.mof import JgbSeries
 from tests.helpers import NO_REVISION_REASON, head_sql, revision_files
 
 pytestmark = pytest.mark.skipif(not revision_files(), reason=NO_REVISION_REASON)

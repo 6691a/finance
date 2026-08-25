@@ -10,7 +10,7 @@ from typing import Self
 import pytest
 
 from dags import kis_quote_intraday, market_calendar_daily, yahoo_quote_intraday
-from modules.collectors.yahoo import US_EQUITY_SYMBOLS, QuoteSymbol
+from modules.collectors.market.yahoo import US_EQUITY_SYMBOLS, QuoteSymbol
 
 
 class FakeCursor:

@@ -50,66 +50,69 @@ class SlackError(RuntimeError):
     """Slack이 거절했고 다시 불러도 같은 결과다."""
 
 
-def post_message(
-    token: SecretStr,
-    channel: str,
-    *,
-    text: str,
-    blocks: Sequence[dict[str, Any]] | None = None,
-) -> str:
-    """메시지 한 건을 보내고 `ts`를 돌려준다.
+class SlackClient:
+    """토큰 하나가 상태다. 그 토큰으로 만든 `WebClient`도 같이 산다.
 
-    `text`는 블록을 못 그리는 자리(알림, 검색 결과)에 뜨는 대체 문구라 항상 채운다.
+    전에는 `post_message`·`upload_file`이 각각 토큰을 인자로 받아 **똑같은 `WebClient`를
+    매번 다시 만들었다.** 한 브리핑이 차트 여러 장을 올리고 메시지를 보내면 그만큼
+    객체가 생겼고, 타임아웃이나 재시도 정책을 고칠 자리도 둘로 갈렸다.
     """
-    client = WebClient(
-        token=token.get_secret_value(),
-        timeout=REQUEST_TIMEOUT_SECONDS,
-        # 재시도는 Airflow가 한다. 위 모듈 docstring 참고.
-        retry_handlers=[],
-    )
-    payload: dict[str, Any] = {"channel": channel, "text": text}
-    if blocks:
-        payload["blocks"] = list(blocks)
 
-    try:
-        response = client.chat_postMessage(**payload)
-    except SlackApiError as error:
-        raise classify(error) from error
-    except SlackClientError as error:
-        # 응답이 없는 실패. 코드가 없어 가를 수 없으니 재시도할 값어치가 있는 쪽으로 둔다.
-        raise ConnectionError(f"slack request failed: {error}") from error
+    def __init__(self, token: SecretStr) -> None:
+        self._client = WebClient(
+            token=token.get_secret_value(),
+            timeout=REQUEST_TIMEOUT_SECONDS,
+            # 재시도는 Airflow가 한다. 위 모듈 docstring 참고.
+            retry_handlers=[],
+        )
 
-    timestamp = response.get("ts")
-    if not timestamp:
-        raise SlackError(f"slack accepted the message but returned no ts: {channel}")
-    return str(timestamp)
+    def post_message(
+        self,
+        channel: str,
+        *,
+        text: str,
+        blocks: Sequence[dict[str, Any]] | None = None,
+    ) -> str:
+        """메시지 한 건을 보내고 `ts`를 돌려준다.
 
+        `text`는 블록을 못 그리는 자리(알림, 검색 결과)에 뜨는 대체 문구라 항상 채운다.
+        """
+        payload: dict[str, Any] = {"channel": channel, "text": text}
+        if blocks:
+            payload["blocks"] = list(blocks)
 
-def upload_file(token: SecretStr, *, filename: str, title: str, content: bytes) -> str:
-    """파일 하나를 채널 공유 없이 올리고 file ID를 돌려준다. `files:write` 스코프가 필요하다.
+        try:
+            response = self._client.chat_postMessage(**payload)
+        except SlackApiError as error:
+            raise classify(error) from error
+        except SlackClientError as error:
+            # 응답이 없는 실패. 코드가 없어 가를 수 없으니 재시도할 값어치가 있는 쪽으로 둔다.
+            raise ConnectionError(f"slack request failed: {error}") from error
 
-    메시지 블록이 `slack_file`로 이 ID를 참조한다. 업로드 뒤 발송이 실패해 태스크가
-    재시도되면 파일이 한 번 더 올라가지만, 메시지에 실리는 것은 마지막 ID뿐이라
-    중복 발송은 아니다.
-    """
-    client = WebClient(
-        token=token.get_secret_value(),
-        timeout=REQUEST_TIMEOUT_SECONDS,
-        # 재시도는 Airflow가 한다. 위 모듈 docstring 참고.
-        retry_handlers=[],
-    )
-    try:
-        response = client.files_upload_v2(file=content, filename=filename, title=title)
-    except SlackApiError as error:
-        raise classify(error) from error
-    except SlackClientError as error:
-        raise ConnectionError(f"slack upload failed: {error}") from error
+        timestamp = response.get("ts")
+        if not timestamp:
+            raise SlackError(f"slack accepted the message but returned no ts: {channel}")
+        return str(timestamp)
 
-    files = response.get("files") or []
-    file_id = files[0].get("id") if files else None
-    if not file_id:
-        raise SlackError(f"slack accepted the upload but returned no file id: {filename}")
-    return str(file_id)
+    def upload_file(self, *, filename: str, title: str, content: bytes) -> str:
+        """파일 하나를 채널 공유 없이 올리고 file ID를 돌려준다. `files:write` 스코프가 필요하다.
+
+        메시지 블록이 `slack_file`로 이 ID를 참조한다. 업로드 뒤 발송이 실패해 태스크가
+        재시도되면 파일이 한 번 더 올라가지만, 메시지에 실리는 것은 마지막 ID뿐이라
+        중복 발송은 아니다.
+        """
+        try:
+            response = self._client.files_upload_v2(file=content, filename=filename, title=title)
+        except SlackApiError as error:
+            raise classify(error) from error
+        except SlackClientError as error:
+            raise ConnectionError(f"slack upload failed: {error}") from error
+
+        files = response.get("files") or []
+        file_id = files[0].get("id") if files else None
+        if not file_id:
+            raise SlackError(f"slack accepted the upload but returned no file id: {filename}")
+        return str(file_id)
 
 
 def classify(error: SlackApiError) -> Exception:

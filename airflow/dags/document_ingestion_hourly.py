@@ -49,8 +49,8 @@ from airflow.exceptions import AirflowFailException
 from airflow.providers.postgres.hooks.postgres import PostgresHook
 from airflow.sdk import dag, task
 
-from modules.collectors.document_listings import LISTING_SOURCES
-from modules.collectors.documents import (
+from modules.collectors.document.document_listings import LISTING_SOURCES
+from modules.collectors.document.documents import (
     DocumentHTTPError,
     DocumentPayloadError,
     FeedSource,

@@ -70,7 +70,7 @@ import operator
 import os
 from collections.abc import Sequence
 from datetime import UTC, datetime
-from typing import Annotated, Any, Literal, Protocol, Self, TypedDict
+from typing import Annotated, Any, Literal, Self, TypedDict
 
 from langchain_core.language_models import BaseChatModel
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, SystemMessage
@@ -79,6 +79,7 @@ from langgraph.types import Send
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
 
 from modules import llm
+from modules.db import Connection
 from modules.llm import UnsupportedResponseFormat
 from modules.schema import SchemaError, json_object, response_format
 from modules.sql import read_sql
@@ -123,24 +124,6 @@ DEFAULT_MAX_CONCURRENCY = 4
 
 # 점수 항목. 각 0~2점이고 합이 `value_score`다.
 SCORE_FIELDS = ("relevance", "novelty", "specificity", "impact")
-
-
-class Cursor(Protocol):
-    def __enter__(self) -> Self: ...
-
-    def __exit__(self, *args: object) -> bool | None: ...
-
-    def execute(self, statement: str, parameters: Sequence[Any] = ()) -> object: ...
-
-    def executemany(self, statement: str, parameters: Sequence[Sequence[Any]]) -> object: ...
-
-    def fetchall(self) -> Any: ...
-
-
-class Connection(Protocol):
-    def cursor(self) -> Cursor: ...
-
-
 class AssessmentError(RuntimeError):
     """모델이 우리가 아는 모양으로 답하지 않았다. 문서는 태그 없이 남는다."""
 
@@ -613,79 +596,91 @@ DOCUMENT_INSTRUMENT_UPSERT = read_sql("postgres", "document_instrument", "upsert
 DOCUMENT_INDICATOR_UPSERT = read_sql("postgres", "document_indicator", "upsert.sql")
 
 
-def load_candidates(connection: Connection) -> Candidates:
-    """프롬프트에 넣을 허용 값을 마스터에서 읽는다."""
-    with connection.cursor() as cursor:
-        cursor.execute(INSTRUMENT_CANDIDATES)
-        instruments = tuple((row[0], row[1]) for row in cursor.fetchall())
-        cursor.execute(INDICATOR_CANDIDATES)
-        indicators = tuple((row[0], row[1], row[2]) for row in cursor.fetchall())
-    return Candidates(instruments=instruments, indicators=indicators)
+class AssessmentStore:
+    """평가 원장을 읽고 쓴다. **연결과 프롬프트 리비전이 상태다.**
 
+    전에는 조회 둘과 저장 하나가 각각 `connection`을 받고, 그중 둘이 `prompt_revision`까지
+    다시 받았다. 관점을 하나 더 얹으면 그 인자가 세 자리에서 같이 늘어난다.
 
-def pending_documents(
-    connection: Connection,
-    limit: int = DEFAULT_BATCH_SIZE,
-    prompt_revision: str = f"{PROMPT_VERSION}/{DEFAULT_PERSPECTIVE}",
-) -> tuple[PendingDocument, ...]:
-    """아직 평가하지 않았거나 본문·프롬프트가 바뀐 문서.
-
-    `prompt_revision`에는 관점이 함께 들어 있다(`LlmSettings.prompt_revision`). 관점을 바꾸면
-    같은 문서라도 점수가 달라지므로 전부 재평가 대상이 된다.
+    **연결은 생성자가 받는다.** 수집기와 달리 여기서는 트랜잭션 하나가 객체 하나다 —
+    DAG이 문서마다 새 연결을 열어 저장하므로(앞의 성공을 뒤의 실패가 되돌리지 않게)
+    그 연결의 수명이 곧 이 객체의 수명이다.
     """
-    with connection.cursor() as cursor:
-        cursor.execute(PENDING_DOCUMENTS, (prompt_revision, limit))
-        rows = cursor.fetchall()
-    return tuple(
-        PendingDocument(
-            id=row[0],
-            source_slug=row[1],
-            title=row[2],
-            summary=row[3],
-            body=row[4],
-            language=row[5],
-            published_at=row[6],
-            content_hash=row[7],
-        )
-        for row in rows
-    )
 
+    def __init__(
+        self,
+        connection: Connection,
+        prompt_revision: str = f"{PROMPT_VERSION}/{DEFAULT_PERSPECTIVE}",
+    ) -> None:
+        self._connection = connection
+        self._prompt_revision = prompt_revision
 
-def store_assessment(
-    connection: Connection,
-    document: PendingDocument,
-    assessment: Assessment,
-    instruments: Sequence[str],
-    indicators: Sequence[IndicatorTag],
-    model: str,
-    assessed_at: datetime | None = None,
-    prompt_revision: str = f"{PROMPT_VERSION}/{DEFAULT_PERSPECTIVE}",
-) -> None:
-    """평가 결과와 태그를 저장한다. 문서 하나가 트랜잭션 하나다(커밋은 호출자가 한다)."""
-    payload = assessment.model_dump()
-    with connection.cursor() as cursor:
-        cursor.execute(
-            UPDATE_ASSESSMENT,
-            (
-                assessment.direction,
-                assessment.scores.total,
-                json.dumps(payload, ensure_ascii=False),
-                model,
-                prompt_revision,
-                document.content_hash,
-                assessed_at or datetime.now(UTC),
-                document.id,
-            ),
+    def candidates(self) -> Candidates:
+        """프롬프트에 넣을 허용 값을 마스터에서 읽는다."""
+        with self._connection.cursor() as cursor:
+            cursor.execute(INSTRUMENT_CANDIDATES)
+            instruments = tuple((row[0], row[1]) for row in cursor.fetchall())
+            cursor.execute(INDICATOR_CANDIDATES)
+            indicators = tuple((row[0], row[1], row[2]) for row in cursor.fetchall())
+        return Candidates(instruments=instruments, indicators=indicators)
+
+    def pending(self, limit: int = DEFAULT_BATCH_SIZE) -> tuple[PendingDocument, ...]:
+        """아직 평가하지 않았거나 본문·프롬프트가 바뀐 문서.
+
+        `prompt_revision`에는 관점이 함께 들어 있다(`LlmSettings.prompt_revision`). 관점을 바꾸면
+        같은 문서라도 점수가 달라지므로 전부 재평가 대상이 된다.
+        """
+        with self._connection.cursor() as cursor:
+            cursor.execute(PENDING_DOCUMENTS, (self._prompt_revision, limit))
+            rows = cursor.fetchall()
+        return tuple(
+            PendingDocument(
+                id=row[0],
+                source_slug=row[1],
+                title=row[2],
+                summary=row[3],
+                body=row[4],
+                language=row[5],
+                published_at=row[6],
+                content_hash=row[7],
+            )
+            for row in rows
         )
-        if instruments:
-            execute_upserts(
-                cursor,
-                DOCUMENT_INSTRUMENT_UPSERT,
-                [(document.id, ticker) for ticker in instruments],
+
+    def store(
+        self,
+        document: PendingDocument,
+        assessment: Assessment,
+        instruments: Sequence[str],
+        indicators: Sequence[IndicatorTag],
+        model: str,
+        assessed_at: datetime | None = None,
+    ) -> None:
+        """평가 결과와 태그를 저장한다. 문서 하나가 트랜잭션 하나다(커밋은 호출자가 한다)."""
+        payload = assessment.model_dump()
+        with self._connection.cursor() as cursor:
+            cursor.execute(
+                UPDATE_ASSESSMENT,
+                (
+                    assessment.direction,
+                    assessment.scores.total,
+                    json.dumps(payload, ensure_ascii=False),
+                    model,
+                    self._prompt_revision,
+                    document.content_hash,
+                    assessed_at or datetime.now(UTC),
+                    document.id,
+                ),
             )
-        if indicators:
-            execute_upserts(
-                cursor,
-                DOCUMENT_INDICATOR_UPSERT,
-                [(document.id, tag.provider, tag.series_id) for tag in indicators],
-            )
+            if instruments:
+                execute_upserts(
+                    cursor,
+                    DOCUMENT_INSTRUMENT_UPSERT,
+                    [(document.id, ticker) for ticker in instruments],
+                )
+            if indicators:
+                execute_upserts(
+                    cursor,
+                    DOCUMENT_INDICATOR_UPSERT,
+                    [(document.id, tag.provider, tag.series_id) for tag in indicators],
+                )

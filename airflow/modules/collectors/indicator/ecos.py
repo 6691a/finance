@@ -30,11 +30,10 @@
 """
 
 import json
-from collections.abc import Sequence
 from datetime import UTC, date, datetime
 from decimal import Decimal
 from enum import StrEnum
-from typing import Any, Protocol, Self
+from typing import Self
 from urllib.error import HTTPError, URLError
 from urllib.parse import quote
 from urllib.request import urlopen
@@ -50,6 +49,7 @@ from pydantic import (
     model_validator,
 )
 
+from modules.db import Connection
 from modules.sql import read_sql
 
 ECOS_URL = "https://ecos.bok.or.kr/api/StatisticSearch"
@@ -112,22 +112,6 @@ DAILY_TIME_LENGTH = 8
 MAX_ROWS_PER_REQUEST = 100000
 
 REQUEST_TIMEOUT_SECONDS = 30
-
-
-class Cursor(Protocol):
-    def __enter__(self) -> Self: ...
-
-    def __exit__(self, *args: object) -> bool | None: ...
-
-    def execute(self, statement: str, parameters: Sequence[Any]) -> object: ...
-
-    def fetchone(self) -> Any: ...
-
-
-class Connection(Protocol):
-    def cursor(self) -> Cursor: ...
-
-
 class EcosHTTPError(RuntimeError):
     """ECOS가 2xx가 아닌 상태로 응답했다. 재시도 가능 여부는 호출자가 `status`로 판단한다."""
 

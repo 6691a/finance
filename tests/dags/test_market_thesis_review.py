@@ -100,17 +100,17 @@ def test_the_guard_waits_for_every_settled_close():
     connection = FakeConnection([(1,)])
 
     with pytest.raises(thesis_common.ThesisNotReady, match="settled closes"):
-        thesis_review.check_ready(connection, date(2026, 8, 21), ["005930", "000660"])
+        thesis_review.PostCloseReview(connection, run_date=date(2026, 8, 21)).check_ready(["005930", "000660"])
 
 
 def test_the_guard_waits_for_the_index_closing_bars():
     connection = FakeConnection([(2,), (1,)])
 
     with pytest.raises(thesis_common.ThesisNotReady, match="index closing bars"):
-        thesis_review.check_ready(connection, date(2026, 8, 21), ["005930", "000660"])
+        thesis_review.PostCloseReview(connection, run_date=date(2026, 8, 21)).check_ready(["005930", "000660"])
 
 
 def test_the_guard_passes_when_both_sources_are_in():
     connection = FakeConnection([(2,), (2,)])
 
-    thesis_review.check_ready(connection, date(2026, 8, 21), ["005930", "000660"])
+    thesis_review.PostCloseReview(connection, run_date=date(2026, 8, 21)).check_ready(["005930", "000660"])

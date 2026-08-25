@@ -10,7 +10,7 @@ from sqlalchemy import Table
 
 from apps.models.market import IndicatorObservation
 from apps.models.raw import SourceRecord
-from modules.collectors.bbk import (
+from modules.collectors.indicator.bbk import (
     BUND_SERIES,
     DATASET,
     ENCODING,
@@ -196,7 +196,7 @@ def test_series_ids_are_readable():
 
 def test_the_german_curve_lines_up_with_the_euro_area_curve():
     # 만기가 어긋나면 독일 곡선과 유로 지역 AAA 곡선을 겹쳐 볼 수 없다.
-    from modules.collectors.ecb import EuroYieldSeries
+    from modules.collectors.indicator.ecb import EuroYieldSeries
 
     euro_area_years = {series.maturity_months for series in EuroYieldSeries if series.maturity_months >= 12}
     assert {series.maturity_months for series in BundSeries} == euro_area_years

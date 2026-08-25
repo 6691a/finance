@@ -278,7 +278,7 @@ def test_market_movement_snapshot_keeps_its_natural_key_and_lineage():
 
 def test_market_movement_symbol_matches_the_quote_bar_vocabulary():
     from apps.models.market import KrxMarket
-    from modules.collectors.kis import MOVEMENT_INDEXES
+    from modules.collectors.market.kis_quote import MOVEMENT_INDEXES
 
     # 값이 quote_bar.symbol 과 글자 그대로 같아야 두 테이블을 한 키로 잇는다.
     assert {member.value for member in KrxMarket} == {index.value for index in MOVEMENT_INDEXES}

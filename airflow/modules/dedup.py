@@ -30,10 +30,10 @@ import logging
 import re
 from datetime import datetime
 from difflib import SequenceMatcher
-from typing import Protocol, Self
 
 from pydantic import AwareDatetime, BaseModel, ConfigDict
 
+from modules.db import TransactionalConnection as Connection
 from modules.sql import read_sql
 
 logger = logging.getLogger(__name__)
@@ -54,24 +54,6 @@ _LEADING_TAGS = re.compile(rf"^(?:\s*{_BRACKET_TAG})+")
 _TRAILING_TAGS = re.compile(rf"(?:{_BRACKET_TAG}\s*)+$")
 # 물결 표기가 기사마다 갈린다(∼ U+223C, ～ U+FF5E, 〜 U+301C).
 _TILDES = str.maketrans({"∼": "~", "～": "~", "〜": "~"})
-
-
-class Cursor(Protocol):
-    def __enter__(self) -> Self: ...
-
-    def __exit__(self, *args: object) -> object: ...
-
-    def execute(self, statement: str, parameters: tuple = ()) -> object: ...
-
-    def fetchall(self) -> list[tuple]: ...
-
-
-class Connection(Protocol):
-    def cursor(self) -> Cursor: ...
-
-    def commit(self) -> None: ...
-
-
 class DedupDocument(BaseModel):
     """중복 판정에 필요한 문서 조각. `content_length`는 요약+본문 길이다."""
 

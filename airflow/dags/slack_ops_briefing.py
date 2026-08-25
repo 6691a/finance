@@ -35,7 +35,7 @@ from airflow.sdk import dag, task
 from pydantic import SecretStr
 
 from modules.briefing import ops
-from modules.slack import SlackError, post_message
+from modules.slack import SlackClient, SlackError
 from modules.utility import CONNECTION_ID, KST_TIMEZONE
 
 logger = logging.getLogger(__name__)
@@ -76,7 +76,7 @@ def slack_ops_briefing():
 
         connection = _connection()
         try:
-            summary = ops.collect_summary(connection, now)
+            summary = ops.OpsBriefingReader(connection, now).summary()
         finally:
             connection.close()
 
@@ -84,7 +84,7 @@ def slack_ops_briefing():
         text = ops.render_text(summary)
 
         try:
-            return post_message(token, channel, text=text, blocks=blocks)
+            return SlackClient(token).post_message(channel, text=text, blocks=blocks)
         except SlackError as error:
             raise AirflowFailException(str(error)) from error
 

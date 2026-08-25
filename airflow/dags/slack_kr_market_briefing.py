@@ -59,7 +59,7 @@ from pydantic import SecretStr
 from modules.briefing import chart, market
 from modules.briefing.market import MarketScope
 from modules.market_session import krx_open_day
-from modules.slack import UPLOAD_PROCESSING_WAIT_SECONDS, SlackError, post_message, upload_file
+from modules.slack import UPLOAD_PROCESSING_WAIT_SECONDS, SlackClient, SlackError
 from modules.utility import CONNECTION_ID, KST_TIMEZONE
 
 logger = logging.getLogger(__name__)
@@ -149,18 +149,19 @@ def slack_kr_market_briefing():
         finally:
             connection.close()
 
-        chart_files, chart_error = _chart(token, chart_series, daily_series, now)
+        client = SlackClient(token)
+        chart_files, chart_error = _chart(client, chart_series, daily_series, now)
         blocks = market.render_blocks(summary, scope, chart_files=chart_files, chart_error=chart_error)
         text = market.render_text(summary, scope)
 
         try:
-            return post_message(token, channel, text=text, blocks=blocks)
+            return client.post_message(channel, text=text, blocks=blocks)
         except SlackError as error:
             # 토큰·채널·블록이 틀렸다. 다시 보내도 같은 결과다.
             raise AirflowFailException(str(error)) from error
 
     def _chart(
-        token: SecretStr,
+        client: SlackClient,
         series: tuple[market.ChartSeries, ...],
         daily_series: tuple[market.DailyChartSeries, ...],
         now: datetime,
@@ -179,8 +180,7 @@ def slack_kr_market_briefing():
         try:
             uploads = tuple(
                 (
-                    upload_file(
-                        token,
+                    client.upload_file(
                         filename=f"kr-{one.symbol}-{local:%Y%m%d-%H%M}.png",
                         title=f"{one.label}({one.venue}) 당일 흐름 {local:%m/%d %H:%M} KST",
                         content=chart.render_series_png(one),
@@ -190,8 +190,7 @@ def slack_kr_market_briefing():
                 for one in series
             ) + tuple(
                 (
-                    upload_file(
-                        token,
+                    client.upload_file(
                         filename=f"kr-daily-{one.subject_code}-{local:%Y%m%d}.png",
                         title=f"{one.label}({one.venue}) 확정 일봉 {one.bars[-1].business_date:%m/%d}",
                         content=chart.render_daily_png(one),

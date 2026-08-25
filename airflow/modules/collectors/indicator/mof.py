@@ -51,11 +51,10 @@
 
 import json
 import re
-from collections.abc import Sequence
 from datetime import UTC, date, datetime
 from decimal import Decimal, InvalidOperation
 from enum import StrEnum
-from typing import Any, Protocol, Self
+from typing import Self
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
@@ -67,6 +66,7 @@ from pydantic import (
     model_validator,
 )
 
+from modules.db import Connection
 from modules.sql import read_sql
 
 MOF_URL = "https://www.mof.go.jp/jgbs/reference/interest_rate"
@@ -177,22 +177,6 @@ MAX_YEAR = 2100
 
 # 그 만기가 아직 발행되지 않았거나 그날 고시가 없는 칸. 결측이지 오류가 아니다.
 MISSING_VALUES = frozenset({"", "-", "－"})
-
-
-class Cursor(Protocol):
-    def __enter__(self) -> Self: ...
-
-    def __exit__(self, *args: object) -> bool | None: ...
-
-    def execute(self, statement: str, parameters: Sequence[Any]) -> object: ...
-
-    def fetchone(self) -> Any: ...
-
-
-class Connection(Protocol):
-    def cursor(self) -> Cursor: ...
-
-
 class MofHTTPError(RuntimeError):
     """재무성이 2xx가 아닌 상태로 응답했다. 재시도 가능 여부는 호출자가 `status`로 판단한다."""
 

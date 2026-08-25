@@ -32,13 +32,13 @@ from modules.collectors.kis import (
     INDEX_BAR_UPSERT,
     SOURCE,
     SOURCE_RECORD_INSERT,
-    Connection,
     KisPayloadError,
     QuoteBar,
     _decimal,
     result_error,
     send_get,
 )
+from modules.db import Connection
 from modules.upsert import execute_upserts
 
 OVERSEAS_INDEX_CHART_PATH = "/uapi/overseas-price/v1/quotations/inquire-time-indexchartprice"

@@ -105,7 +105,8 @@ def both_subjects(count: int = 120) -> list[tuple]:
 
 
 def state(connection: FakeConnection) -> ObservedState:
-    return thesis_common.observed_state(connection, market_thesis, SESSION, TARGETS, as_of_at=AS_OF)
+    run = thesis_common.ThesisRun(connection, run_date=SESSION, as_of_at=AS_OF)
+    return run.observed_state(market_thesis, SESSION, TARGETS)
 
 
 def test_the_state_is_a_model_not_a_bare_dict():
@@ -206,7 +207,8 @@ def test_the_technical_query_asks_only_for_the_targets():
 
 def test_no_session_gives_an_empty_state():
     """휴장·미판정이면 관측 상태 자체가 비어 있다."""
-    result = thesis_common.observed_state(FakeConnection(), market_thesis, None, TARGETS, as_of_at=AS_OF)
+    run = thesis_common.ThesisRun(FakeConnection(), run_date=SESSION, as_of_at=AS_OF)
+    result = run.observed_state(market_thesis, None, TARGETS)
 
     assert result == ObservedState()
     assert result.session is None

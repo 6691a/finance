@@ -27,11 +27,12 @@ Airflow 메타데이터를 봐야 한다.
 """
 
 from datetime import datetime, timedelta
-from typing import Any, NamedTuple, Protocol, Self
+from typing import Any
 
 from pydantic import AwareDatetime, BaseModel, ConfigDict
 
 from modules.briefing import blocks, documents
+from modules.db import Connection, Cursor
 from modules.sql import read_sql
 from modules.utility import KST_TIMEZONE
 
@@ -60,12 +61,14 @@ RECENT_FAILURE_LIMIT = 5
 ASSESSMENT_BACKLOG_LIMIT = 200
 
 
-class ExpectedSource(NamedTuple):
+class ExpectedSource(BaseModel):
     """하루에 한 번은 돌아야 하는 수집원.
 
     `weekdays_only`는 주말에 조용해도 정상인 곳이다. 국내 시장과 공시는 주말에 열지 않아
     이 표시가 없으면 매주 토·일 거짓 경보가 뜬다.
     """
+
+    model_config = ConfigDict(frozen=True)
 
     name: str
     label: str
@@ -75,39 +78,21 @@ class ExpectedSource(NamedTuple):
 # 문서 피드는 여기 넣지 않는다. `document_source` 테이블이 정하고 수십 개라, 코드 상수와
 # DB 목록이 어긋나는 순간 거짓 경보가 된다. 피드의 건강은 2부 문서 브리핑이 본다.
 EXPECTED_SOURCES: tuple[ExpectedSource, ...] = (
-    ExpectedSource("fred", "미국 지표", weekdays_only=True),
-    ExpectedSource("ecos", "국내 시장금리", weekdays_only=True),
-    ExpectedSource("mof", "일본 국채", weekdays_only=True),
-    ExpectedSource("boe", "영국 국채", weekdays_only=True),
-    ExpectedSource("bbk", "독일 국채", weekdays_only=True),
-    ExpectedSource("ecb", "유로 국채", weekdays_only=True),
-    ExpectedSource("kis", "국내 시세·수급", weekdays_only=True),
-    ExpectedSource("dart", "공시", weekdays_only=True),
-    ExpectedSource("yahoo", "해외 시세"),
-    ExpectedSource("nyse", "미국 거래일"),
+    ExpectedSource(name="fred", label="미국 지표", weekdays_only=True),
+    ExpectedSource(name="ecos", label="국내 시장금리", weekdays_only=True),
+    ExpectedSource(name="mof", label="일본 국채", weekdays_only=True),
+    ExpectedSource(name="boe", label="영국 국채", weekdays_only=True),
+    ExpectedSource(name="bbk", label="독일 국채", weekdays_only=True),
+    ExpectedSource(name="ecb", label="유로 국채", weekdays_only=True),
+    ExpectedSource(name="kis", label="국내 시세·수급", weekdays_only=True),
+    ExpectedSource(name="dart", label="공시", weekdays_only=True),
+    ExpectedSource(name="yahoo", label="해외 시세"),
+    ExpectedSource(name="nyse", label="미국 거래일"),
 )
 
 EXPECTED_BY_NAME = {source.name: source for source in EXPECTED_SOURCES}
 
 SATURDAY = 5
-
-
-class Cursor(Protocol):
-    def __enter__(self) -> Self: ...
-
-    def __exit__(self, *args: object) -> bool | None: ...
-
-    def execute(self, statement: str, parameters: Any) -> object: ...
-
-    def fetchone(self) -> Any: ...
-
-    def fetchall(self) -> Any: ...
-
-
-class Connection(Protocol):
-    def cursor(self) -> Cursor: ...
-
-
 class SourceActivity(BaseModel):
     model_config = ConfigDict(frozen=True)
 
@@ -191,74 +176,88 @@ class OpsSummary(BaseModel):
         )
 
 
-def collect_summary(connection: Connection, now: datetime) -> OpsSummary:
-    since = now - timedelta(hours=WINDOW_HOURS)
-    with connection.cursor() as cursor:
-        cursor.execute(BRIEFING_WINDOW, (since,))
-        activity_rows = cursor.fetchall()
-        cursor.execute(RECENT_FAILURES, (since, RECENT_FAILURE_LIMIT))
-        failure_rows = cursor.fetchall()
-        # 문서 평가는 source_record를 안 남긴다. 2부와 같은 질문이라 같은 쿼리를 쓴다.
-        cursor.execute(documents.BRIEFING_SUMMARY, (since,))
-        document_counts = cursor.fetchone()
-        thesis = _thesis_health(cursor, now)
+class OpsBriefingReader:
+    """운영 리포트 한 통에 들어갈 값을 읽는다. 연결과 기준 시각이 상태다.
 
-    activity = tuple(
-        SourceActivity(
-            source=row[0],
-            runs=row[1],
-            succeeded=row[2],
-            failed=row[3],
-            records=row[4],
-            last_completed_at=row[5],
-        )
-        for row in activity_rows
-    )
-    return OpsSummary(
-        generated_at=now,
-        window_hours=WINDOW_HOURS,
-        activity=activity,
-        silent=silent_sources(activity, now),
-        failures=tuple(
-            FailureDetail(source=row[0], source_key=row[1], started_at=row[2], detail=row[3]) for row in failure_rows
-        ),
-        assessment_backlog=document_counts[5] if document_counts else 0,
-        thesis=thesis,
-    )
+    `briefing.market.MarketBriefingReader`와 같은 모양이다. 조회 셋이 전부 그 둘을 쓰고,
+    한 번의 발송 동안 둘 다 바뀌지 않는다.
 
-
-def _thesis_health(cursor: Cursor, now: datetime) -> ThesisHealth:
-    """추론 품질과 밀린 건수.
-
-    **DB 오류를 삼키지 않는다.** `thesis_outcome`이 없다는 것은 마이그레이션이 안 됐다는
-    뜻이고, 그건 운영 리포트가 조용히 넘길 일이 아니라 소리쳐야 할 일이다. 빈 섹션으로
-    바꾸면 테이블이 없는 상태가 "아직 추론이 없다"와 구분되지 않는다.
-
-    추론이 정말 없는 날은 조회가 0행을 주고 섹션이 안 그려진다. 그건 정상 흐름이다.
+    **렌더링과 판정은 여기 없다.** `render_blocks`·`render_text`와 `silent_sources`는
+    읽은 값만 보고 답하므로 감쌀 상태가 없어 모듈 함수로 남는다.
     """
-    since = (now.astimezone(KST_TIMEZONE) - timedelta(days=THESIS_WINDOW_DAYS)).date()
-    today = now.astimezone(KST_TIMEZONE).date()
-    cursor.execute(THESIS_CALIBRATION, (since,))
-    rows = cursor.fetchall()
-    cursor.execute(THESIS_BACKLOG, (list(THESIS_HORIZONS), since, today))
-    backlog = cursor.fetchone()
-    return ThesisHealth(
-        horizons=tuple(
-            ThesisHorizon(
-                horizon_days=row[0],
-                graded=row[1],
-                mean_brier=float(row[2]) if row[2] is not None else None,
-                flat_outcomes=row[3],
-                narrated=row[4],
-                supported=row[5],
-                contradicted=row[6],
-                unresolved=row[7],
+
+    def __init__(self, connection: Connection, now: datetime) -> None:
+        self.connection = connection
+        self.now = now
+
+    def summary(self) -> OpsSummary:
+        since = self.now - timedelta(hours=WINDOW_HOURS)
+        with self.connection.cursor() as cursor:
+            cursor.execute(BRIEFING_WINDOW, (since,))
+            activity_rows = cursor.fetchall()
+            cursor.execute(RECENT_FAILURES, (since, RECENT_FAILURE_LIMIT))
+            failure_rows = cursor.fetchall()
+            # 문서 평가는 source_record를 안 남긴다. 2부와 같은 질문이라 같은 쿼리를 쓴다.
+            cursor.execute(documents.BRIEFING_SUMMARY, (since,))
+            document_counts = cursor.fetchone()
+            thesis = self._thesis_health(cursor)
+
+        activity = tuple(
+            SourceActivity(
+                source=row[0],
+                runs=row[1],
+                succeeded=row[2],
+                failed=row[3],
+                records=row[4],
+                last_completed_at=row[5],
             )
-            for row in rows
-        ),
-        ungraded=backlog[0] if backlog else 0,
-        unnarrated=backlog[1] if backlog else 0,
-    )
+            for row in activity_rows
+        )
+        return OpsSummary(
+            generated_at=self.now,
+            window_hours=WINDOW_HOURS,
+            activity=activity,
+            silent=silent_sources(activity, self.now),
+            failures=tuple(
+                FailureDetail(source=row[0], source_key=row[1], started_at=row[2], detail=row[3])
+                for row in failure_rows
+            ),
+            assessment_backlog=document_counts[5] if document_counts else 0,
+            thesis=thesis,
+        )
+
+    def _thesis_health(self, cursor: Cursor) -> ThesisHealth:
+        """추론 품질과 밀린 건수.
+
+        **DB 오류를 삼키지 않는다.** `thesis_outcome`이 없다는 것은 마이그레이션이 안 됐다는
+        뜻이고, 그건 운영 리포트가 조용히 넘길 일이 아니라 소리쳐야 할 일이다. 빈 섹션으로
+        바꾸면 테이블이 없는 상태가 "아직 추론이 없다"와 구분되지 않는다.
+
+        추론이 정말 없는 날은 조회가 0행을 주고 섹션이 안 그려진다. 그건 정상 흐름이다.
+        """
+        since = (self.now.astimezone(KST_TIMEZONE) - timedelta(days=THESIS_WINDOW_DAYS)).date()
+        today = self.now.astimezone(KST_TIMEZONE).date()
+        cursor.execute(THESIS_CALIBRATION, (since,))
+        rows = cursor.fetchall()
+        cursor.execute(THESIS_BACKLOG, (list(THESIS_HORIZONS), since, today))
+        backlog = cursor.fetchone()
+        return ThesisHealth(
+            horizons=tuple(
+                ThesisHorizon(
+                    horizon_days=row[0],
+                    graded=row[1],
+                    mean_brier=float(row[2]) if row[2] is not None else None,
+                    flat_outcomes=row[3],
+                    narrated=row[4],
+                    supported=row[5],
+                    contradicted=row[6],
+                    unresolved=row[7],
+                )
+                for row in rows
+            ),
+            ungraded=backlog[0] if backlog else 0,
+            unnarrated=backlog[1] if backlog else 0,
+        )
 
 
 def silent_sources(activity: tuple[SourceActivity, ...], now: datetime) -> tuple[ExpectedSource, ...]:

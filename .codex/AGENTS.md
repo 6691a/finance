@@ -88,12 +88,12 @@ uv run ruff check apps airflow migrations tests
 
 **상태를 쥔 동작은 클래스로 묶고, 상태 없는 변환은 함수로 둔다.** 저장소 전체 규칙이다.
 
-- 클래스로 묶는 것: 자격 증명·토큰·DB 연결·기준 시각·출처 행처럼 여러 호출에 걸쳐 안 변하는 값을 들고 도는 동작. 그 값이 함수마다 인자로 다시 들어가고 있으면 그게 신호다. 기준 구현은 `collectors/analyst/kis_opinion.py`의 `KisAnalystOpinionCollector`, `collectors/document/naver_research.py`의 `NaverResearchCollector`, `assessment.py`의 `DocumentAssessor`, `thesis.py`의 `ThesisToolbox`·`ThesisBuilder`·`FollowupNarrator`.
+- 클래스로 묶는 것: 자격 증명·토큰·DB 연결·기준 시각·출처 행처럼 여러 호출에 걸쳐 안 변하는 값을 들고 도는 동작. 그 값이 함수마다 인자로 다시 들어가고 있으면 그게 신호다. 기준 구현은 `collectors/analyst/kis_opinion.py`의 `KisAnalystOpinionCollector`, `collectors/document/naver_research.py`의 `NaverResearchCollector`, `assessment.py`의 `DocumentAssessor`, `thesis.py`의 `ThesisToolbox`·`ThesisBuilder`·`FollowupNarrator`. 연결을 쥐는 흐름 코드는 `thesis_nxt_review.py`의 `NxtAfterHoursReview`, `thesis_common.py`의 `ThesisRun`, `thesis.py`의 `ThesisStore`가 기준이다.
 - 생성자는 그 실행 동안 안 변하는 것만 받는다. 종목·구간처럼 호출마다 바뀌는 것은 메서드 인자다.
 - 함수로 두는 것: 파싱·정규화·계산처럼 감쌀 상태가 없는 것, 그 클래스의 관심사가 아닌 조회(`watched_stocks`). 클래스 안이 읽기 좋으면 `@staticmethod`.
 - 데이터 모양은 언제나 Pydantic 모델이다. 수집기 클래스 안에 중첩하지 않는다.
 - **감쌀 상태가 없는 것을 클래스로 만들지 않는다.** 메서드가 전부 `@staticmethod`면 그건 모듈이다.
-- 자격 증명을 쥐는 수집기 10모듈은 클래스로 옮겼다(2026-08-23). 흐름 코드(2단계)와 폴더 이동(3단계)이 남았다. 목표 폴더 구조(도메인별 `market/`·`document/`·`indicator/`·`calendar/`·`analyst/`)와 단계별 순서는 `docs/collectors-class-migration.md`에 있다. **새 수집기는 처음부터 그 형태로 쓴다.**
+- 자격 증명을 쥐는 수집기 10모듈(2026-08-23)과 연결·기준 시각을 쥐는 흐름 코드 9곳(2026-08-25)은 클래스로 옮겼고, 수집기는 도메인 폴더로 내려갔다(2026-08-25). `connection`을 첫 인자로 받는 모듈 함수는 진입점이 하나뿐인 곳(`dedup.py`·`market_session.py`·`technical_signals.py`)에만 남아 있다. 남은 단계는 없다. 폴더 구조(도메인별 `market/`·`document/`·`indicator/`·`calendar/`·`analyst/`)와 단계별 순서, 함수로 두는 것이 맞다고 판정한 모듈과 그 이유는 `docs/collectors-class-migration.md`에 있다. **새 수집기는 처음부터 그 형태로 쓴다.**
 
 ## 수집기 작성 규칙
 
@@ -122,7 +122,7 @@ uv run ruff check apps airflow migrations tests
 - 응답이 페이지 단위로 잘릴 수 있으면 제공처가 알려 준 전체 건수와 받은 행 수를 대조해 잘림을 실패로 만든다. 조용히 잘린 응답은 조회 구간에 구멍을 남긴다.
 - HTML 수집은 scrapling을 쓴다. 요청은 `Fetcher`(curl_cffi), 파싱은 `Selector`다. `impersonate`로 실제 브라우저 지문을 흉내 내므로 앞단 WAF에 막히지 않는다. 페이지가 JavaScript로 표를 그릴 때만 `DynamicFetcher`나 `StealthyFetcher`를 쓴다. 이건 브라우저를 띄우므로 기본값이 아니다.
 - 표를 위치(index)로 읽으면 칸 수를 상수로 두고 응답마다 검증한다. 사이트가 열을 추가하면 값이 조용히 옆 칸으로 밀린다. 칸 수 검사가 먼저 실패해야 그걸 알 수 있다. CSV도 같고, 저장하지 않는 열까지 헤더 전체를 대조한다(`mof.EXPECTED_HEADER`).
-- 기준 예시는 `airflow/modules/collectors/indicator/fred.py`와 `airflow/dags/fred_treasury_daily.py`다. 본문으로 실패를 알리는 API는 `airflow/modules/collectors/indicator/ecos.py`와 `airflow/dags/ecos_market_rate_daily.py`, 인증 없는 CSV 파일은 `airflow/modules/collectors/mof.py`와 `airflow/dags/mof_jgb_daily.py`, `boe.py`, `ecb.py`를 본다.
+- 기준 예시는 `airflow/modules/collectors/indicator/fred.py`와 `airflow/dags/fred_treasury_daily.py`다. 본문으로 실패를 알리는 API는 `airflow/modules/collectors/indicator/ecos.py`와 `airflow/dags/ecos_market_rate_daily.py`, 인증 없는 CSV 파일은 `airflow/modules/collectors/indicator/mof.py`와 `airflow/dags/mof_jgb_daily.py`, `boe.py`, `ecb.py`를 본다.
 
 ## 마이그레이션 라우팅 규칙
 
@@ -202,6 +202,7 @@ uv run ruff check apps airflow migrations tests
 
 ### 그 밖의 타입 규칙
 
+- PEP 249 연결·커서 타입은 `airflow/modules/db.py`의 `Cursor`·`Connection`을 쓴다. 모듈마다 `class Cursor(Protocol)`을 다시 쓰지 않는다(2026-08-25 스무 개 통합). 스스로 커밋하는 코드만 `TransactionalConnection`이다.
 - 값의 종류가 정해진 상태·분류 필드는 일반 `str` 대신 Python `StrEnum`과 SQLAlchemy `Enum`을 사용한다.
 - SQLAlchemy `Enum`은 `native_enum=False, length=20, values_callable=...` 형태로 선언한다. PostgreSQL native enum은 값 추가·삭제 마이그레이션 비용이 커서 쓰지 않는다.
 - Enum 컬럼에는 허용 값을 제한하는 데이터베이스 `CHECK` 제약을 함께 둔다.

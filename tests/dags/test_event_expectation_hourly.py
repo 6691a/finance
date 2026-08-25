@@ -44,13 +44,21 @@ class FakeConnection:
 def _prepare(monkeypatch, documents, extract, stored: list[int]):
     monkeypatch.setattr(module, "get_current_context", lambda: {"params": {}, "run_id": "manual__x"})
     monkeypatch.setattr(module, "_connection", FakeConnection)
-    monkeypatch.setattr(module, "pending_documents", lambda connection, limit: documents)
+
+    class FakeStore:
+        def __init__(self, connection) -> None:
+            self.connection = connection
+
+        def pending(self, limit):
+            return documents
+
+        def store_extraction(self, document, *args, **kwargs) -> None:
+            stored.append(document.id)
+
+    monkeypatch.setattr(module, "ExpectationStore", FakeStore)
     monkeypatch.setattr(module, "expectation_model", lambda: object())
     monkeypatch.setattr(module, "model_name", lambda model: "test-model")
     monkeypatch.setattr(module, "filter_claims", lambda response, document: ())
-    monkeypatch.setattr(
-        module, "store_extraction", lambda connection, document, *args, **kwargs: stored.append(document.id)
-    )
 
     class FakeExtractor:
         def __init__(self, model) -> None:
@@ -151,7 +159,16 @@ def test_one_broken_document_does_not_stop_the_others(monkeypatch):
 def test_no_new_outcome_means_no_slack_call(monkeypatch):
     """재실행은 판정을 다시 쓰지 않는다. 같은 알림을 매시간 보내면 안 된다."""
     sent: list[str] = []
-    monkeypatch.setattr(module, "post_message", lambda *args, **kwargs: sent.append("x") or "ts")
+
+    class FakeSlackClient:
+        def __init__(self, token) -> None:
+            self.token = token
+
+        def post_message(self, *args, **kwargs) -> str:
+            sent.append("x")
+            return "ts"
+
+    monkeypatch.setattr(module, "SlackClient", FakeSlackClient)
 
     assert module.event_expectation_hourly.task_dict["notify_slack"].python_callable([]) == ""
     assert sent == []

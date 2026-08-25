@@ -38,6 +38,7 @@ from modules.collectors.kis import (
     access_token,
     expiry_date,
     front_contract,
+    last_settled_close,
     parse_bars,
     parse_market_movement,
 )
@@ -128,6 +129,17 @@ class FakeCursor:
 
     def fetchone(self) -> tuple[int]:
         return (SOURCE_RECORD_ID,)
+
+
+class RowCursor(FakeCursor):
+    """조회 한 건을 돌려주는 커서. 기본 `FakeCursor`는 source_record id 만 준다."""
+
+    def __init__(self, row) -> None:
+        super().__init__()
+        self.row = row
+
+    def fetchone(self):
+        return self.row
 
 
 class FakeConnection:
@@ -808,6 +820,117 @@ def test_stock_bars_carry_the_previous_close_given_by_the_caller(monkeypatch):
     fetch = COLLECTOR.fetch_stock_bars(DomesticStock.SAMSUNG_ELECTRONICS, STOCK_DATE, Decimal(111))
 
     assert fetch.bars[0].previous_close == Decimal(111)
+
+
+def test_stock_bars_stop_before_the_minute_still_forming(monkeypatch):
+    """장중 조정은 진행 중인 분을 저장하지 않는다.
+
+    REST upsert 가 `is_final=true` 로 굳히기 때문에, 아직 체결이 더 붙을 분을 저장하면 그
+    부분 봉이 확정으로 남는다. 마감 뒤에 도는 확정 DAG 는 `until` 을 주지 않아 영향이 없다.
+    """
+    send = fake_stock_send([[stock_row("100000"), stock_row("095900"), stock_row("090000")]])
+    monkeypatch.setattr(kis, "send_get", send)
+
+    fetch = COLLECTOR.fetch_stock_bars(
+        DomesticStock.SAMSUNG_ELECTRONICS,
+        STOCK_DATE,
+        Decimal(268000),
+        until=datetime(2026, 8, 14, 10, 0, 30, tzinfo=KST),
+    )
+
+    # 커서가 마감(15:30)이 아니라 기준 시각의 분으로 시작한다. 미래 시각을 물으면 KIS 가
+    # 무엇을 돌려주는지 계약에 없다.
+    assert send.sent[0]["query"]["FID_INPUT_HOUR_1"] == "100000"
+    assert [bar.bar_at.astimezone(KST).strftime("%H%M%S") for bar in fetch.bars] == ["090000", "095900"]
+
+
+def test_stock_bars_ignore_a_future_cutoff(monkeypatch):
+    """기준 시각이 마감보다 뒤면 창은 그대로 마감까지다."""
+    send = fake_stock_send([[stock_row("153000"), stock_row("090000")]])
+    monkeypatch.setattr(kis, "send_get", send)
+
+    fetch = COLLECTOR.fetch_stock_bars(
+        DomesticStock.SAMSUNG_ELECTRONICS,
+        STOCK_DATE,
+        Decimal(268000),
+        until=datetime(2026, 8, 14, 20, 5, tzinfo=KST),
+    )
+
+    assert send.sent[0]["query"]["FID_INPUT_HOUR_1"] == "153000"
+    assert len(fetch.bars) == 2
+
+
+def test_a_cutoff_on_another_day_does_not_cut_the_session(monkeypatch):
+    """어제를 백필하는데 오늘 시각으로 창을 자르면 안 된다."""
+    send = fake_stock_send([[stock_row("153000"), stock_row("090000")]])
+    monkeypatch.setattr(kis, "send_get", send)
+
+    fetch = COLLECTOR.fetch_stock_bars(
+        DomesticStock.SAMSUNG_ELECTRONICS,
+        STOCK_DATE,
+        Decimal(268000),
+        until=datetime(2026, 8, 15, 9, 30, tzinfo=KST),
+    )
+
+    assert send.sent[0]["query"]["FID_INPUT_HOUR_1"] == "153000"
+    assert len(fetch.bars) == 2
+
+
+def test_stock_bars_can_be_capped_to_one_call(monkeypatch):
+    """5분마다 도는 조정이 하루치를 매번 다시 받으면 호출이 12배가 된다.
+
+    한 번에 120봉이 오므로 한 호출이면 최근 두 시간을 덮는다. 그보다 오래된 구멍은 마감 뒤
+    확정 DAG 가 메운다.
+    """
+    send = fake_stock_send([[stock_row("153000"), stock_row("120000")], [stock_row("115900")]])
+    monkeypatch.setattr(kis, "send_get", send)
+
+    fetch = COLLECTOR.fetch_stock_bars(
+        DomesticStock.SAMSUNG_ELECTRONICS,
+        STOCK_DATE,
+        Decimal(268000),
+        max_calls=1,
+    )
+
+    assert fetch.call_count == 1
+    assert len(fetch.bars) == 2
+
+
+def test_a_call_cap_never_exceeds_the_exchange_limit(monkeypatch):
+    """상한을 크게 줘도 거래소별 안전장치를 넘지 못한다."""
+    send = fake_stock_send([[stock_row("153000")] for _ in range(30)])
+    monkeypatch.setattr(kis, "send_get", send)
+
+    fetch = COLLECTOR.fetch_stock_bars(
+        DomesticStock.SAMSUNG_ELECTRONICS,
+        STOCK_DATE,
+        Decimal(268000),
+        max_calls=99,
+    )
+
+    assert fetch.call_count == kis.MAX_STOCK_BAR_CALLS
+
+
+def test_the_last_settled_close_is_read_for_the_day_before():
+    """그날 종가를 분모로 쓰면 변동률이 항상 0에 가깝게 나온다."""
+    connection = FakeConnection()
+    connection.recorded_cursor = RowCursor((Decimal(268000),))
+
+    value = last_settled_close(connection, "005930", STOCK_DATE)
+
+    statement, parameters = connection.recorded_cursor.calls[0]
+    assert value == Decimal(268000)
+    assert parameters == ("005930", STOCK_DATE)
+    assert "business_date < %s" in statement
+    assert "ORDER BY business_date DESC" in statement
+
+
+def test_a_missing_settled_close_is_none():
+    """확정 일별 수급이 그 구간을 아직 안 채웠다는 뜻이다. 분모를 지어내지 않는다."""
+    connection = FakeConnection()
+    connection.recorded_cursor = RowCursor(None)
+
+    assert last_settled_close(connection, "005930", STOCK_DATE) is None
 
 
 def test_store_stock_bars_writes_the_stock_code_as_the_symbol(monkeypatch):

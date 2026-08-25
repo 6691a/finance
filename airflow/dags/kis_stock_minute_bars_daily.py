@@ -59,7 +59,6 @@ import logging
 import os
 import re
 from datetime import UTC, date, datetime, timedelta
-from decimal import Decimal
 from typing import Any
 
 import pendulum
@@ -76,8 +75,8 @@ from modules.collectors.kis import (
     KisResultError,
     StockExchange,
     access_token,
+    last_settled_close,
 )
-from modules.sql import read_sql
 from modules.utility import CONNECTION_ID, KIS_UNRECOVERABLE_STATUSES, KST_TIMEZONE
 
 logger = logging.getLogger(__name__)
@@ -87,8 +86,6 @@ CALENDAR_DAY_PATTERN = re.compile(r"\d{4}-\d{2}-\d{2}")
 
 BUSINESS_DATE_PARAM = "business_date"
 DAYS_PARAM = "days"
-
-PREVIOUS_CLOSE_SELECT = read_sql("postgres", "stock_investor_trade_daily", "select_previous_close.sql")
 
 
 def _credentials() -> tuple[SecretStr, SecretStr]:
@@ -134,14 +131,6 @@ def requested_days(params: dict[str, Any]) -> int:
     if days < 1:
         raise AirflowFailException(f"{DAYS_PARAM} must be at least 1, got {days}")
     return days
-
-
-def previous_close(connection: Any, stock_code: str, business_date: date) -> Decimal | None:
-    """직전 거래일 종가. 없으면 `None`."""
-    with connection.cursor() as cursor:
-        cursor.execute(PREVIOUS_CLOSE_SELECT, (stock_code, business_date))
-        row = cursor.fetchone()
-    return Decimal(str(row[0])) if row else None
 
 
 @dag(
@@ -194,7 +183,7 @@ def kis_stock_minute_bars_daily():
             for stock in DomesticStock:
                 connection = _connection()
                 try:
-                    base = previous_close(connection, stock.value, target)
+                    base = last_settled_close(connection, stock.value, target)
                 finally:
                     connection.close()
                 if base is None:

@@ -33,7 +33,8 @@ NXT 마지막 봉(20:00)은 20:05에 도는 확정 DAG의 몫이라 여기서 20
 - **한 번에 한 호출만 한다**(`max_calls=1`). 두 시간보다 오래된 구멍은 마감 확정 DAG가 메운다.
 
 거래소는 봉이 생기고 있거나 방금 마감한 쪽만 부른다(`active_exchanges`). KRX는 09:00~15:35,
-NXT는 08:00~20:05다.
+NXT는 08:00~20:05다. NXT는 `KIS_ENABLE_NXT_REST`로 뗄 수 있고, 그 판정은 마감 확정 DAG와
+같은 `rest_exchanges()`가 한 벌로 갖는다.
 
 ## 전일종가
 
@@ -81,6 +82,7 @@ from modules.collectors.kis import (
     StockExchange,
     access_token,
     last_settled_close,
+    rest_exchanges,
 )
 from modules.market_session import krx_open_day
 from modules.utility import CONNECTION_ID, KIS_UNRECOVERABLE_STATUSES, KST_TIMEZONE, atomic
@@ -124,13 +126,17 @@ def _collector(app_key: SecretStr, app_secret: SecretStr, force: bool = False) -
 
 
 def active_exchanges(now_kst: datetime) -> tuple[StockExchange, ...]:
-    """지금 봉이 생기고 있거나 방금 마감한 거래소.
+    """지금 봉이 생기고 있고 손잡이가 켜져 있는 거래소.
 
     휴지 구간에 부르면 KIS 호출만 늘고 새 봉은 없다. 창은 거래소가 스스로 아는 값
     (`first_bar`·`last_bar`)에 마감 유예를 더한 것이다.
+
+    `KIS_ENABLE_NXT_REST`가 꺼져 있으면 NXT는 창 안이어도 빠진다. 마감 확정 DAG와 같은
+    손잡이를 같은 함수(`rest_exchanges`)로 읽어, 한쪽만 NXT를 계속 부르는 일이 없게 한다.
+    모르는 값이면 `ValueError`가 올라오고 태스크가 그것을 즉시 실패로 바꾼다.
     """
     moment = now_kst.time()
-    return tuple(exchange for exchange in StockExchange if exchange.first_bar <= moment <= _grace_end(exchange))
+    return tuple(exchange for exchange in rest_exchanges() if exchange.first_bar <= moment <= _grace_end(exchange))
 
 
 def _grace_end(exchange: StockExchange) -> time:
@@ -193,7 +199,10 @@ def kis_equity_bar_reconcile():
         now_kst = now.astimezone(KST_TIMEZONE)
         today_kst = now_kst.date()
 
-        exchanges = active_exchanges(now_kst)
+        try:
+            exchanges = active_exchanges(now_kst)
+        except ValueError as error:
+            raise AirflowFailException(str(error)) from error
         if not exchanges:
             raise AirflowSkipException(f"No exchange session is live at {now_kst:%H:%M} KST")
 

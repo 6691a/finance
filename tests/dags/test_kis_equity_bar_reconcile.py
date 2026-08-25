@@ -9,6 +9,7 @@ from datetime import UTC, datetime
 import pytest
 
 from dags import kis_equity_bar_reconcile
+from modules.collectors import kis
 from modules.collectors.kis import StockExchange
 from modules.utility import KST_TIMEZONE
 
@@ -62,3 +63,19 @@ def test_only_the_exchanges_with_a_live_or_just_closed_session_are_called(moment
     now_kst = datetime(2026, 8, 25, *moment, tzinfo=KST_TIMEZONE)
 
     assert kis_equity_bar_reconcile.active_exchanges(now_kst) == expected
+
+
+def test_the_nxt_flag_drops_nxt_here_too(monkeypatch):
+    """마감 확정 DAG와 같은 손잡이를 본다. 한쪽만 NXT를 계속 부르면 손잡이가 거짓이 된다."""
+    monkeypatch.setenv(kis.NXT_REST_FLAG, "false")
+    now_kst = datetime(2026, 8, 25, 10, 0, tzinfo=KST_TIMEZONE)
+
+    assert kis_equity_bar_reconcile.active_exchanges(now_kst) == (StockExchange.KRX,)
+
+
+def test_a_dropped_nxt_leaves_its_pre_market_window_empty(monkeypatch):
+    """08:30은 NXT만 열리는 시각이다. 손잡이를 내리면 부를 거래소가 없어 태스크는 skip 한다."""
+    monkeypatch.setenv(kis.NXT_REST_FLAG, "false")
+    now_kst = datetime(2026, 8, 25, 8, 30, tzinfo=KST_TIMEZONE)
+
+    assert kis_equity_bar_reconcile.active_exchanges(now_kst) == ()

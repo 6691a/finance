@@ -105,24 +105,44 @@ SCHEDULE = MultipleCronTriggerTimetable(
 
 ## 4. Slack 알림
 
-방향별 확률·이유 문장과 **상위 근거 1~3개**를 보인다. 근거 없이 확률만 보내면 읽는 사람이
+**결론 하나와 그 판단에 쓴 근거**를 보인다. 근거 없이 확률만 보내면 읽는 사람이
 검증할 수 없는 시장 서사가 된다 — "어떤 정보로 어떤 결론을 냈는가"가 이 기능의 목적
 (README 0절)이라 Slack에서도 보여야 한다. 헤더는 `장전 전망`(pre_open) / `장후 리뷰`
 (post_close) / `애프터마켓 리뷰`(post_nxt_close, [7-nxt-review.md](7-nxt-review.md)).
-subject마다 `section()` 블록 하나:
+subject마다 `section()`(결론·이유)과 `context()`(근거) 둘:
 
 ```
-*{label}*  ▲ 상승 {prob_up:.0%} · ▼ 하락 {prob_down:.0%} · – 횡보 {prob_flat:.0%}
-▲ {up_reasoning}
-▼ {down_reasoning}
-– {flat_reasoning}
-근거: <{url}|{title}> · <{url}|{title}> · {title}
+*{label}*
+*▼ 하락 62%*
+> {down_reasoning}
+
+📎 *판단 근거*
+• <{url}|{title}>
+    {mechanism}
+• {title}
+    {mechanism}
 ```
 
-- 근거 줄은 `rank` 순 상위 3개. URL이 있는 것(문서·공시)은 `slack_document_briefing`과 같은
-  `<url|title>` 링크, 매크로는 제목만. 근거 0건이면 `근거: 없음 (관측 상태만으로 추론)`.
-- 세 확률·세 이유를 전부 그린다(사용자가 요청한 "오를 확률/이유, 내릴 확률/이유,
-  횡보 확률/이유" 그대로).
+- **처음에는 세 확률·세 이유를 전부 그렸다**(사용자가 요청한 "오를 확률/이유, 내릴 확률/
+  이유, 횡보 확률/이유" 그대로). 2026-08-25에 결론형으로 바꿨다. 확률이 균등 근처에 몰려
+  있어(`pre_open` 12건 전부 최고 확률 0.32~0.44) 세 값을 나란히 두면 어느 것이 판단인지
+  읽는 사람이 매번 골라야 했고, 반대 방향 이유가 결론과 같은 무게로 읽혔다. 보이지 않는
+  확률과 이유는 `thesis` 테이블에 그대로 남고 채점(`brier_score`)은 셋을 다 쓴다 — 바뀐
+  것은 표시뿐이다. 같은 커밋에서 프롬프트도 고쳤다(`PROMPT_VERSION` 5,
+  [2-agent.md](2-agent.md) 4절) — 결론 하나만 보이려면 그 값이 맞아야 한다.
+- **확률이 붙어 있으면 붙은 것을 전부 보인다.** 최고 확률에서 `VERDICT_TIE_GAP`(0.05)
+  안에 있는 방향이 함께 나오고, 그때만 이유마다 `*▼*` 표시가 붙는다. 하락 41%·횡보 38%를
+  하나로 접으면 모델이 고르지 못한 것을 우리가 대신 골라 준 셈이 된다. **0.05는 실측이
+  아니라 시작값이다** — 매번 둘이 나오면 좁히고 한 번도 안 나오면 넓힌다.
+- 근거는 `rank` 순이되 **결론 방향(`thesis_evidence.direction`)과 같은 것만** 상위 3개다.
+  결론이 하나면 방향 표시를 생략하고, 둘이거나 폴백이면 `(하락)`처럼 밝힌다. 제목 아래
+  줄에 `mechanism`을 붙여 "왜 그것이 근거인가"를 남긴다. URL이 있는 것(문서·공시)은
+  `slack_document_briefing`과 같은 `<url|title>` 링크, 매크로는 제목만.
+- **폴백**: 결론 방향의 근거가 0건이면 방향을 가리지 않고 상위 3개를 방향 표시와 함께
+  보인다(모델이 `claims`에 안 담고 `evidence_refs`로만 올린 근거는 `direction`이 비어
+  있다). 인용 자체가 0건이면 `📎 근거 없음 — 관측 상태만으로 추론`.
+- 조회는 표시 개수(`SLACK_EVIDENCE_LIMIT` 3)가 아니라 `EVIDENCE_FETCH_LIMIT`(12)으로
+  받는다. 방향으로 거른 뒤에도 3개가 남아야 하기 때문이다.
 - subject 일부가 목록 밖 값으로 버려져 0건이면 "추론 결과 없음" 한 줄로 보낸다
   (`slack_document_briefing`의 0건 관례).
 - 승인·보류 상태 머신을 두지 않는다는 원칙 그대로, 인터랙티브 버튼이나 스레드 피드백
@@ -132,8 +152,9 @@ subject마다 `section()` 블록 하나:
   (`briefing/market.py`가 자기 도메인 렌더링을 갖는 것과 같다 — thesis는 정기 리포트
   3부작과 다른 도메인이라 `briefing/` 아래 두지 않는다).
 - **Slack 한도**: 메시지당 블록 50개, `section` 텍스트 3,000자. 지금은 subject 4개 ×
-  section 1개 + 헤더라 여유가 크다. 이유 세 문장(각 ≤ 500자) + 근거 줄이 3,000자를 넘지
-  않도록 `render_blocks`가 section 단위로 자른다. watched 종목이 늘어 블록 50개에 가까워지면
+  section 1개 + context 1개 + 헤더라 여유가 크다. 결론이 둘일 때의 이유 두 문장
+  (각 ≤ 500자)과 근거 3개 × (제목 + 경로 200자)가 각각 3,000자·2,900자를 넘지 않도록
+  `render_blocks`가 블록 단위로 자른다. watched 종목이 늘어 블록 50개에 가까워지면
   메시지를 나눈다 — 그때 일이다.
 
 ## 5. 환경
@@ -150,9 +171,11 @@ subject마다 `section()` 블록 하나:
 ## 6. 테스트
 
 - `tests/modules/test_thesis.py`에 추가 — 렌더링(`render_blocks`/`render_text`):
-  슬롯별 헤더 분기, 세 확률·세 이유가 전부 나오는지, 확률 퍼센트 반올림,
-  근거 줄이 `rank` 순 상위 3개·URL 있는 것만 링크·0건이면 "근거: 없음", subject 0건일 때
-  "추론 결과 없음" 짧은 형태.
+  슬롯별 헤더 분기, **결론 하나만 나오고 나머지 두 확률·이유는 안 나오는지**,
+  **확률이 붙으면 붙은 것이 다 나오고 그때만 이유에 방향 표시가 붙는지**, 확률 퍼센트
+  반올림, 근거가 결론 방향의 것만 `rank` 순 상위 3개인지·`mechanism`이 실리는지·
+  맞는 방향이 없으면 방향 표시와 함께 폴백하는지·URL 있는 것만 링크·0건이면 "근거 없음",
+  subject 0건일 때 "추론 결과 없음" 짧은 형태.
 - `tests/dags/test_market_thesis_forecast.py`·`test_market_thesis_review.py`·
   `test_market_thesis_nxt_review.py` — 스케줄 고정(`35 8`·`30 20`·`0 21`),
   `max_active_runs=1`, 태스크 구조, `as_of_at`이 슬롯으로 고정되는지,

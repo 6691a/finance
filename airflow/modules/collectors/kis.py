@@ -347,6 +347,32 @@ class KisResultError(RuntimeError):
         self.message = message
 
 
+class KisTimeWindowError(KisResultError):
+    """지금은 그 조회를 받아 주지 않는 시각이다. **기다려서 풀릴 문제가 아니다.**
+
+    확정 일별 수급(`FHPTJ04160001`)을 KST 15:40 전에 부르면 `rt_cd=2`에
+    `TIME LIMIT 00:00 ~ 15:40`이 온다(2026-08-25 실측). 재시도는 그 시각이 될 때까지
+    같은 답을 받을 뿐이라 태스크의 재시도 예산만 태운다. DAG는 이것을 즉시 실패로 바꾸고
+    사람이 시각을 맞춰 다시 트리거한다.
+
+    조회 날짜(`end_date`)와 무관하다 — 제공처가 보는 것은 **호출 시각**이다.
+    """
+
+
+# 시각 제한 응답을 가려내는 표시. 제공처가 코드가 아니라 문구로 알린다(`rt_cd`는 흔한 `2`다).
+TIME_LIMIT_MARKER = "TIME LIMIT"
+
+
+def result_error(code: str, message: str) -> KisResultError:
+    """본문으로 온 실패를 우리 예외로 바꾼다. 시각 제한만 종류를 가른다.
+
+    나머지 실패는 코드가 워낙 여러 가지라 DAG가 `code`로 판단한다.
+    """
+    if TIME_LIMIT_MARKER in message.upper():
+        return KisTimeWindowError(code, message)
+    return KisResultError(code, message)
+
+
 class KisPayloadError(ValueError):
     """응답이 분봉 계약을 지키지 않았다. 재시도해도 같은 결과다.
 
@@ -675,7 +701,7 @@ def parse_bars(body: bytes, since: datetime | None = None) -> ParsedBars:
         raise KisPayloadError("KIS response is not a valid chart payload") from error
 
     if payload.rt_cd and payload.rt_cd != "0":
-        raise KisResultError(payload.msg_cd, payload.msg1.strip())
+        raise result_error(payload.msg_cd, payload.msg1.strip())
     if not payload.output2:
         raise KisPayloadError("KIS returned an empty chart")
 
@@ -808,7 +834,7 @@ def _stock_bar_rows(body: bytes) -> tuple[KisRawBar, ...]:
     except ValidationError as error:
         raise KisPayloadError("KIS response is not a valid chart payload") from error
     if payload.rt_cd and payload.rt_cd != "0":
-        raise KisResultError(payload.msg_cd, payload.msg1.strip())
+        raise result_error(payload.msg_cd, payload.msg1.strip())
     return payload.output2
 
 
@@ -855,7 +881,7 @@ def parse_market_movement(response: KisResponse, observed_at: datetime) -> Marke
 
     code = str(payload.get("rt_cd", ""))
     if code != "0":
-        raise KisResultError(code, str(payload.get("msg1", "")).strip())
+        raise result_error(code, str(payload.get("msg1", "")).strip())
 
     output = payload.get("output")
     if not isinstance(output, dict):
@@ -981,7 +1007,7 @@ def _daily_index_rows(body: bytes) -> tuple[KisDailyIndexRow, ...]:
 
     code = str(payload.get("rt_cd", ""))
     if code != "0":
-        raise KisResultError(code, str(payload.get("msg1", "")).strip())
+        raise result_error(code, str(payload.get("msg1", "")).strip())
 
     output = payload.get("output2")
     if not isinstance(output, list):

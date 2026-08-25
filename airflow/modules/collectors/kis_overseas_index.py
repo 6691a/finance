@@ -34,9 +34,9 @@ from modules.collectors.kis import (
     SOURCE_RECORD_INSERT,
     Connection,
     KisPayloadError,
-    KisResultError,
     QuoteBar,
     _decimal,
+    result_error,
     send_get,
 )
 from modules.upsert import execute_upserts
@@ -157,7 +157,7 @@ def parse_overseas_index_bars(
         raise KisPayloadError("KIS response is not a valid overseas index chart") from error
 
     if payload.rt_cd and payload.rt_cd != "0":
-        raise KisResultError(payload.msg_cd, payload.msg1.strip())
+        raise result_error(payload.msg_cd, payload.msg1.strip())
     if not payload.output2:
         raise KisPayloadError(f"KIS returned an empty chart for {index.value} ({index.kis_code})")
 

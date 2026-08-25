@@ -15,7 +15,7 @@ from apps.models.market import (
     StockInvestorTradeDaily,
 )
 from apps.models.raw import SourceRecord
-from modules.collectors.kis import KisPayloadError, KisResultError
+from modules.collectors.kis import KisPayloadError, KisResultError, KisTimeWindowError
 from modules.collectors.market import kis_investor_flow
 from modules.collectors.market.kis_investor_flow import (
     DAILY_TRADE_UPSERT,
@@ -546,6 +546,25 @@ def test_daily_trade_rejects_rows_after_the_end_date(monkeypatch):
 
     with pytest.raises(KisPayloadError, match="returned rows after"):
         COLLECTOR.fetch_stock_trade_daily(SAMSUNG, BUSINESS_DATE)
+
+
+def test_the_time_window_refusal_gets_its_own_type(monkeypatch):
+    """KST 15:40 전에는 이 조회가 `rt_cd=2`로 거절한다(2026-08-25 실측).
+
+    재시도로 풀리지 않는 실패라 종류를 갈라 올린다. 죽일지 넘길지는 DAG가 정한다.
+    """
+    monkeypatch.setattr(
+        kis_investor_flow,
+        "send_get",
+        fake_send_get(body(rt_cd="2", msg1="TIME LIMIT 00:00 ~ 15:40")),
+    )
+
+    with pytest.raises(KisTimeWindowError) as error:
+        COLLECTOR.fetch_stock_trade_daily(SAMSUNG, BUSINESS_DATE)
+
+    # 같은 본문 실패라 KisResultError로도 잡힌다. 기존 처리 경로를 깨지 않는다.
+    assert isinstance(error.value, KisResultError)
+    assert "TIME LIMIT" in error.value.message
 
 
 def test_daily_trade_rejects_duplicated_business_dates(monkeypatch):

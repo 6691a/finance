@@ -136,11 +136,11 @@ def render_blocks(
     elif scope is MarketScope.KOREA:
         rendered = [
             blocks.header(f"📈 한국장 브리핑 · {blocks.timestamp(local)} · {session_state(summary.generated_at)}"),
-            *_quote_section("국내 지수·선물", _korea_quotes(summary)),
+            *_quote_section("국내 지수·선물", _korea_quotes(summary), show_open=True),
             *_chart_section(chart_files, chart_error),
             *_technical_section(summary),
-            *_quote_section("장중 해외", _intraday_overseas(summary)),
-            *_quote_section("환율(실시간·장외)", _fx_quotes(summary)),
+            *_quote_section("장중 해외", _intraday_overseas(summary), show_open=True),
+            *_quote_section("환율(실시간·장외)", _fx_quotes(summary), show_open=True),
             *_flow_section(summary),
             *_stock_flow_section(summary),
             *_stock_trade_sections(summary),
@@ -275,7 +275,7 @@ def _fx_quotes(summary: MarketSummary) -> tuple[QuoteChange, ...]:
     )
 
 
-def _quote_section(title: str, quotes: Sequence[QuoteChange]) -> list[dict[str, Any]]:
+def _quote_section(title: str, quotes: Sequence[QuoteChange], *, show_open: bool = False) -> list[dict[str, Any]]:
     """시세 표.
 
     **기준 시각을 행마다 적는다.** 심볼마다 마지막 봉 시각이 다르다. 국내는 KRX 마감,
@@ -285,35 +285,40 @@ def _quote_section(title: str, quotes: Sequence[QuoteChange]) -> list[dict[str, 
     **거래소를 아는 행이 하나라도 있으면 거래소 열을 넣는다.** 국내 종목은 같은 분에도
     KRX·NXT 값이 다르므로 어느 거래소 봉인지 행에 보여야 한다(차트 라벨과 같은 이유).
     거래소 개념이 없는 지수·환율·해외 표는 열 자체가 없다.
+
+    **`show_open`은 정규장 발송(10:00~20:15)만 켠다.** 개장 전 발송에는 그날 시가가 아직
+    없어 열이 통째로 `-`가 되고, 그때 읽는 사람이 궁금한 것도 전일 종가 대비다. 어느
+    발송인지는 `render_blocks`가 `MarketScope`로 안다 — 여기서 시각을 다시 보지 않는다.
     """
     if not quotes:
         return []
     # 전일 종가는 봉에 실려 오는 값이라 그 자체에 날짜가 없다. 그래서 `직전 기준` 열을 두지
     # 않고 열 이름으로 뜻을 닫는다 — 다른 표의 `직전`이 직전 **수집일**인 것과 다르다.
-    if any(quote.exchange for quote in quotes):
-        rows = [
-            (
-                quote.label,
-                _number(quote.close),
-                _number(quote.previous_close),
-                _percent(quote.change_percent),
-                quote.exchange or "-",
-                _day_stamp(quote.bar_at),
-            )
-            for quote in quotes
-        ]
-        return blocks.table_section(title, ("구분", "종가", "전일 종가", "등락", "거래소", "기준"), rows)
-    rows = [
-        (
+    # `시가`도 같다. 그날 세션의 첫 봉 값이라 행의 `기준` 시각과 같은 날이다.
+    with_exchange = any(quote.exchange for quote in quotes)
+    headers = ["구분", "종가", "전일 종가", "등락"]
+    if show_open:
+        headers += ["시가", "시가대비"]
+    if with_exchange:
+        headers.append("거래소")
+    headers.append("기준")
+
+    rows = []
+    for quote in quotes:
+        row = [
             quote.label,
             _number(quote.close),
             _number(quote.previous_close),
             _percent(quote.change_percent),
-            _day_stamp(quote.bar_at),
-        )
-        for quote in quotes
-    ]
-    return blocks.table_section(title, ("구분", "종가", "전일 종가", "등락", "기준"), rows)
+        ]
+        if show_open:
+            row.append("-" if quote.session_open is None else _number(quote.session_open))
+            row.append(_percent(quote.change_from_open_percent))
+        if with_exchange:
+            row.append(quote.exchange or "-")
+        row.append(_day_stamp(quote.bar_at))
+        rows.append(tuple(row))
+    return blocks.table_section(title, tuple(headers), rows)
 
 
 def _chart_section(files: Sequence[tuple[str, str]] | None, error: str | None) -> list[dict[str, Any]]:

@@ -863,11 +863,19 @@ class ThesisToolbox:
         return body
 
     def _charge(self) -> None:
-        """호출 한 번을 상한에 단다. 넘으면 실행하지 않고 `ToolLimitExceeded`다."""
+        """호출 한 번을 상한에 단다. 넘으면 실행하지 않고 `ToolLimitExceeded`다.
+
+        **걸린 사실을 로그로 남긴다.** 이 예외는 `ToolNode`가 오류 `ToolMessage`로 바꿔
+        모델에게 돌려주므로 태스크는 성공으로 끝난다. 상한에 걸려 근거를 덜 보고 답한
+        실행과 다 보고 답한 실행이 `thesis` 행에서 구분되지 않고, LangSmith 공개 공유는
+        루트 run만 노출해 툴 메시지를 볼 수 없다. Airflow 로그가 유일한 단서다.
+        """
         self._calls += 1
         if self._calls > MAX_TOOL_CALLS:
+            logger.warning("tool call budget exhausted: %s calls, %s chars", self._calls, self._chars)
             raise ToolLimitExceeded(f"상한 초과: 이 실행의 tool call이 {MAX_TOOL_CALLS}회를 넘었다. 조사를 끝내라")
         if self._chars >= MAX_TOOL_RESULT_CHARS:
+            logger.warning("tool result budget exhausted: %s calls, %s chars", self._calls, self._chars)
             raise ToolLimitExceeded(
                 f"상한 초과: 툴 결과가 누적 {MAX_TOOL_RESULT_CHARS}자에 이르렀다. 이미 받은 것으로 답하라"
             )

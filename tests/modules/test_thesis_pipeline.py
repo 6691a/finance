@@ -2478,10 +2478,20 @@ def test_evidence_refs_are_built_from_the_kind_itself():
     assert item.ref.split(":", 1)[0] == item.kind.value
 
 
-def test_the_character_budget_constant_leaves_room_for_the_answer_step():
-    # 컨텍스트가 근거로 가득 차면 답변 단계에 쓸 자리가 없다. 상한은 툴 결과가 한 요청의
-    # 절반을 넘지 않는 선이다 — 한 호출이 최대 20건 × 600자(12,000자)라 그 서넛까지다.
-    assert MAX_TOOL_RESULT_CHARS <= 4 * MAX_TOOL_RESULTS * MAX_ITEM_DETAIL_CHARS
+# 툴 14개를 한 번씩 부르면 나오는 결과 문자 수. 2026-08-26 장전 `as_of_at`
+# (`2026-08-25T23:35:00Z`), 대상 KOSPI·KOSDAQ·000660·005930으로 운영 DB에 읽기 전용으로
+# 붙어 실측한 값이다. 가짜 연결로는 잴 수 없어 상수로 박는다 — **툴을 늘리면 다시 잰다.**
+# 내역은 `docs/market-thesis/TUNING.md` 5절에 있다.
+MEASURED_FULL_SWEEP_CHARS = 44_340
+
+
+def test_the_character_budget_covers_one_sweep_of_every_tool():
+    # 아래: 실측한 한 바퀴보다 커야 한다. 작으면 모델이 툴을 한 번씩 도는 것조차 못 끝내고,
+    # 어느 툴이 잘리는지가 중요도가 아니라 호출 순서 운이 된다.
+    assert MAX_TOOL_RESULT_CHARS > MEASURED_FULL_SWEEP_CHARS
+    # 위: 호출 상한 × 호출당 상한이 이 예산의 실제 천장이다. 그보다 크면 도달할 수 없어
+    # 상한이 없는 것과 같다.
+    assert MAX_TOOL_RESULT_CHARS <= MAX_TOOL_CALLS * MAX_TOOL_RESULTS * MAX_ITEM_DETAIL_CHARS
 
 
 # --- Slack 렌더링 -------------------------------------------------------------

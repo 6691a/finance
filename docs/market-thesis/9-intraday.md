@@ -262,8 +262,7 @@ uv run pyrefly check
 
 [TUNING.md](TUNING.md) 3절에 손잡이 넷이 늘었다. +4주에 본다.
 
-- **`FLAT_THRESHOLD_PCT[0]`** — 14:35 슬롯의 T+0 창은 55분뿐이라 0.3% 임계로 `flat`이
-  과다해질 수 있다. **슬롯별로** `flat` 비율을 본다
+- **`FLAT_THRESHOLD_PCT[0]`** — 아래 11절. **슬롯별로** `flat` 비율을 본다
 - **장중 스케줄** — readiness 재시도가 잦으면 늦춘다
 - **`BAR_STALENESS`** — guard가 정상인 날 막으면 늘린다
 - **`PREFETCHED_PAST_THESES`** — 2로 내린 것이 예측을 나쁘게 했는지. 슬롯별 Brier 추이
@@ -271,3 +270,84 @@ uv run pyrefly check
 그리고 **슬롯별 T+0 Brier**가 처음으로 "어느 시간대 예측이 나은가"를 말해 준다. 15:00
 슬롯이 08:35보다 나은 것은 당연하고(남은 시간이 짧다), 볼 것은 그 격차가 시간에 비례하는지
 아니면 특정 슬롯이 유독 나쁜지다.
+
+## 11. `FLAT_THRESHOLD_PCT[0]`이 슬롯마다 안 맞는다 (미해결)
+
+**임계 하나가 창 길이 다섯 개를 재고 있다.** `classify_outcome`은 `|누적 등락률| < 0.3%`면
+실제 결과를 `flat`으로 찍는데, 그 0.3%는 **하루 창**(전일 종가 → 당일 종가, 390분) 기준으로
+정해진 값이다. 장중 슬롯이 붙으면서 같은 지평 0의 창이 다섯 가지가 됐다.
+
+| 슬롯 | T+0 창 | 길이 |
+| --- | --- | --- |
+| `pre_open` | 전일 종가 → 당일 종가 | 390분 |
+| `intraday_morning` | 10:34 가격 → 마감 | 295분 |
+| `intraday_midday` | 12:34 → 마감 | 175분 |
+| `intraday_afternoon` | 14:34 → 마감 | 55분 |
+| `pre_close` | 14:59 → 마감 | 30분 |
+
+가격 변동폭은 대략 시간의 제곱근을 따른다. 30분 창은 하루의 1/13이라 전형적 변동이
+`sqrt(1/13) ≈ 0.28`배다. 하루 |등락| 중앙값이 0.8%면 30분 창은 0.22%이고, **임계 0.3%
+아래라 절반 넘게 `flat`으로 찍힌다.**
+
+### 왜 문제인가
+
+- **Brier가 왜곡된다.** 프롬프트는 `FLAT_BASE_RATE_PCT`로 "코스피 6%·코스닥 11%·종목 6%가
+  실제 `flat` 빈도"라고 알려 준다. 그 값은 **하루 창 실측**이다(`index_daily` 132거래일).
+  15:00 슬롯의 실제 빈도가 50%인데 모델이 기준선대로 `prob_flat ≈ 0.06`을 주면, 방향을
+  맞혔든 아니든 점수가 나빠진다. **모델이 틀린 것이 아니라 라벨 정의가 창과 안 맞는 것이다.**
+- **슬롯 비교가 깨진다.** 슬롯 다섯을 만든 목적 중 하나가 "어느 시간대 예측이 나은가"인데,
+  임계가 늦은 슬롯을 대부분 `flat`으로 만들면 그 비교는 모델이 아니라 임계를 재게 된다.
+
+### 실측 (2026-08-26, 표본 6세션 — **결론 아님**)
+
+`index_bar` 1분봉이 2026-08-18에 시작해 지금 7세션뿐이다. 방향은 보이지만 값을 정하기엔
+모자란다. 게다가 이 주는 변동이 컸다 — KOSPI 하루 창 |등락| 중앙값이 2.34%로,
+`FLAT_BASE_RATE_PCT`를 잰 132거래일 평균보다 훨씬 높다.
+
+| 슬롯 | KOSPI 중앙 \|등락\| | KOSPI `flat` | KOSDAQ 중앙 \|등락\| | KOSDAQ `flat` |
+| --- | --- | --- | --- | --- |
+| `pre_open` (390분) | 2.337% | 0% | 1.851% | 0% |
+| `intraday_morning` (295분) | 1.309% | 0% | 0.711% | 33% |
+| `intraday_midday` (175분) | 0.192% | 83% | 0.677% | 50% |
+| `intraday_afternoon` (55분) | 0.224% | 67% | 0.370% | 50% |
+| `pre_close` (30분) | 0.296% | 50% | 0.176% | 67% |
+
+**창이 짧아질수록 `flat`이 는다는 방향은 둘 다 같다.** 다만 KOSPI의 midday(83%) > afternoon
+(67%) > pre_close(50%)는 창 길이와 반대라, 6세션으로는 순서를 못 가린다.
+
+### 왜 지금 안 고쳤나
+
+1. **값이 실측이 아니라 추측이 된다.** 기존 지평별 값도 `0.3 × sqrt(N)` 반올림이라고 코드가
+   밝혀 뒀지만, `FLAT_BASE_RATE_PCT`는 **실측**이다. 슬롯 축 임계를 넣으려면 그 base rate도
+   슬롯마다 다시 재야 프롬프트가 거짓말을 안 한다 — 상수 하나가 아니라 측정 두 벌이다.
+2. **축을 늘리는 것이 상수 수정이 아니다.** `FLAT_THRESHOLD_PCT`는 `horizon_days` 키다.
+   슬롯 축을 더하면 `classify_outcome`이 슬롯을 받고, `store_grade`가 넘기고,
+   `select_calibration.sql`이 슬롯으로 그룹하고, 테스트 경계값이 다섯 배가 된다.
+3. **한 번에 한 손잡이**([TUNING.md](TUNING.md) 1절). 슬롯 넷·프롬프트 판 6·`PREFETCHED`
+   5→2가 같은 배포에 들어간다. 여기에 임계까지 흔들면 4주 뒤 어느 것이 무엇을 바꿨는지
+   못 가린다.
+
+지금 한 것은 **프롬프트에 창 길이를 알린 것 하나**다(`## 확률` 절). 모델이 "남은 시간이
+짧으면 `flat`이 기준선보다 흔하다"를 읽고 스스로 올릴 수 있다. 숫자는 안 준다 — 없으니까.
+
+### +4주에 무엇을 보고 무엇을 당기나
+
+```sql
+SELECT thesis.run_slot,
+       count(*)                                                    AS graded,
+       round(avg((outcome.actual_outcome = 'flat')::int) * 100)     AS flat_pct,
+       round(avg(outcome.brier_score), 3)                           AS mean_brier
+FROM thesis_outcome AS outcome
+JOIN thesis ON thesis.id = outcome.thesis_id
+WHERE outcome.horizon_days = 0
+  AND outcome.evaluated_at IS NOT NULL
+GROUP BY thesis.run_slot
+ORDER BY thesis.run_slot;
+```
+
+- **`flat_pct`가 슬롯 간에 20%p 넘게 벌어지면** 임계가 창을 안 따라가고 있다는 뜻이다.
+  그때 슬롯 축 임계를 넣고 `FLAT_BASE_RATE_PCT`도 슬롯마다 다시 잰다.
+- **벌어지지 않으면 아무 것도 안 한다.** 코스피 하루 변동이 지금보다 잠잠해지면 `flat`이
+  전 슬롯에서 고르게 늘 수도 있고, 그건 임계가 아니라 시장 이야기다.
+- `mean_brier`는 `flat_pct`를 본 **뒤에** 읽는다. 순서를 바꾸면 라벨 왜곡을 모델 성능으로
+  잘못 읽는다.

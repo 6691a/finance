@@ -137,7 +137,7 @@ GROUP BY run_slot;
 
 | 손잡이 | 지금 값 | 사는 곳 | 무엇을 보고 | 어느 방향 |
 | --- | --- | --- | --- | --- |
-| `FLAT_THRESHOLD_PCT` | `{0:0.3, 1:0.3, 3:0.5, 5:0.7}` | `thesis.py` | 지평별 **그리고 슬롯별** `flat` 비율 | 한 지평만 5% 아래면 그 값을 **올리고** 60% 위면 **낮춘다**(2026-08-25 정정 — 반대로 적혀 있었다. 임계를 낮추면 `flat`이 더 희귀해진다). 고치면 `FLAT_BASE_RATE_PCT`도 다시 잰다. **실측이 아니라 `0.3 × sqrt(N)` 반올림이다** — 조정 조건은 코드 주석이 원본. **2026-08-26부터 T+0 창이 슬롯마다 다르다** — 14:35 슬롯은 55분뿐이라 같은 임계로 `flat`이 과다해질 수 있다. 슬롯별로 비율을 갈라 보고, 갈리면 그때 지평이 아니라 슬롯 축으로 임계를 나눌지 정한다 |
+| `FLAT_THRESHOLD_PCT` | `{0:0.3, 1:0.3, 3:0.5, 5:0.7}` | `thesis.py` | 지평별 **그리고 슬롯별** `flat` 비율 | 한 지평만 5% 아래면 그 값을 **올리고** 60% 위면 **낮춘다**(2026-08-25 정정 — 반대로 적혀 있었다. 임계를 낮추면 `flat`이 더 희귀해진다). 고치면 `FLAT_BASE_RATE_PCT`도 다시 잰다. **실측이 아니라 `0.3 × sqrt(N)` 반올림이다** — 조정 조건은 코드 주석이 원본. **2026-08-26부터 T+0 창이 슬롯마다 다르다**(390·295·175·55·30분). 6세션 예비 실측에서 창이 짧을수록 `flat`이 늘었다(코스피 0%→83%). **표본이 모자라 값은 안 고쳤다** — 근거·쿼리·발동 조건은 [9-intraday.md](9-intraday.md) 11절 |
 | `INDEX_SUBJECTS` + `instrument.is_watched` | KOSPI·코스닥 + watched 종목 | `thesis.py` / `instrument` 테이블 | 표본 수 | **표본을 늘리는 가장 싼 손잡이다.** LLM 호출 수는 그대로고 날짜당 건수만 는다([5-followup.md](5-followup.md) 12절). 단 독립 사건 수는 안 는다 — 1절 |
 | `NarrativeVariant` 기본 | `INFORMED` | `thesis.py`, `FollowupNarrator.__init__` | 분기 Brier + `verdict` 분포 | 노트북 재실행으로 재검증. `BLIND`가 남아 있어 되돌리기가 인자 하나다 |
 | `HORIZON_DAYS` | `(0,1,3,5)` | `thesis.py` `HORIZON_DAYS`·`NARRATED_HORIZON_DAYS`, `ops.py` `THESIS_HORIZONS`, DB CHECK — **네 곳** | LLM 호출 비용 | 비용이 문제면 **해설만** T+5 하나로 줄인다. 채점은 SQL이라 공짜다. 네 곳을 같은 커밋에서 만진다 |

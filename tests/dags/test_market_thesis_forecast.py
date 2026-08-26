@@ -229,7 +229,7 @@ def test_run_hands_build_and_store_every_argument_it_requires(monkeypatch):
     monkeypatch.setattr(thesis_common.ThesisRun, "build_and_store", fake_build_and_store)
 
     forecast = thesis_forecast.PreOpenForecast(FakeConnection([]), run_date=RUN_DATE)
-    written = forecast.run(dag_run_id="manual__1")
+    written = forecast.run(dag_run_id="manual__1", try_number=1)
 
     assert written == 3
     # 필수 인자가 빠지면 여기서 `TypeError`다.

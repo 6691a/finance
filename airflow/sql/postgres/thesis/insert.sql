@@ -12,6 +12,9 @@
 -- `up_return_pct`·`down_return_pct`는 방향별 **조건부** 크기다(판 7부터). 모델이 안 주거나
 -- 규칙을 어기면 NULL이고 확률·이유는 그대로 들어간다.
 --
+-- `llm_run_id`는 이 추론을 만든 대화다(13단계). 원장이 없던 때의 행은 NULL이라 nullable이고,
+-- 원장 쓰기가 실패해도 추론은 들어가야 하므로 여기서 강제하지 않는다.
+--
 -- 정의의 원본은 `apps/models/analysis/thesis.py`의 `Thesis`이고
 -- `tests/modules/test_thesis.py`가 여기 컬럼을 그 모델 metadata와 대조한다.
 INSERT INTO thesis (
@@ -33,7 +36,8 @@ INSERT INTO thesis (
     input_state,
     tool_rounds,
     llm_model,
-    prompt_version
-) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+    prompt_version,
+    llm_run_id
+) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
 ON CONFLICT ON CONSTRAINT uq_thesis_natural_key DO NOTHING
 RETURNING id

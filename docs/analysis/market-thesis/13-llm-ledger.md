@@ -2,7 +2,9 @@
 
 - 상위: [README.md](README.md)
 - 날짜: 2026-08-26
-- 상태: **설계만. 구현 전.** 사용자 재승인 뒤 착수한다.
+- 상태: **구현 완료**(2026-08-26). 리비전 `a8c5f207d1e6`은 **운영 반영 전**이고 올릴 창은
+  [11-expected-return.md](11-expected-return.md) 7절과 같다. 검증은 `uv run pytest tests -q`와
+  `uv run ruff check`.
 - 의존: [2-agent.md](2-agent.md)(툴박스와 그래프), [5-followup.md](5-followup.md)(해설 흐름),
   [7-nxt-review.md](7-nxt-review.md)(NXT 리뷰). [12-api.md](12-api.md)가 이 원장을 응답에
   싣는다 — **12보다 먼저 나가는 것이 낫다.**

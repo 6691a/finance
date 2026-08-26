@@ -22,7 +22,7 @@ from airflow.exceptions import AirflowFailException
 from airflow.sdk import get_current_context
 
 from modules import thesis_common
-from modules.thesis_domain import ThesisSubjectKind
+from modules.thesis_domain import LlmRunKind, ThesisSubjectKind
 from modules.thesis_state import INTRADAY_SLOTS, RunSlot, ThesisRunResult
 
 if TYPE_CHECKING:
@@ -75,7 +75,7 @@ class PostCloseReview:
             if cursor.fetchone()[0] < len(GUARD_INDEX_SYMBOLS):
                 raise thesis_common.ThesisNotReady(f"index closing bars for {self._run.run_date} are missing")
 
-    def run(self, *, dag_run_id: str) -> int:
+    def run(self, *, dag_run_id: str, try_number: int) -> int:
         """휴장 판정 → readiness guard → 관측 상태 → LLM → 저장. 저장한 행 수를 준다."""
         from modules.thesis_store import ThesisStore
 
@@ -87,6 +87,8 @@ class PostCloseReview:
 
         # 장후가 보는 세션은 **당일**이다. 오늘 장이 이미 끝났다.
         return self._run.build_and_store(
+            try_number=try_number,
+            run_kind=LlmRunKind.REVIEW,
             run_slot=RunSlot.POST_CLOSE,
             macro_window_start=macro_window_start(self._run.run_date),
             targets=targets,
@@ -111,9 +113,11 @@ def build() -> ThesisRunResult:
     context = get_current_context()
     run_date = thesis_common.resolve_run_date(context)
     dag_run_id = str(context["dag_run"].run_id)
+    # 재시도는 새 대화다. dag_run_id는 재시도에도 같아 이 칸이 없으면 구분할 수 없다.
+    try_number = int(context["ti"].try_number)
 
     with closing(thesis_common.connection()) as conn:
-        written = PostCloseReview(conn, run_date=run_date).run(dag_run_id=dag_run_id)
+        written = PostCloseReview(conn, run_date=run_date).run(dag_run_id=dag_run_id, try_number=try_number)
     return ThesisRunResult(run_date=run_date, slot=SLOT, written=written)
 
 
@@ -162,13 +166,16 @@ def narrate_followups(built: dict[str, Any]) -> int:
     대상을 가져 한 호출에 섞으면 응답을 대상에 되돌릴 수 없다.
     """
     from modules.llm import LlmError, RetryableLlmError, model_name, thesis_model
-    from modules.thesis_domain import NARRATED_HORIZON_DAYS, ThesisError
+    from modules.thesis_domain import NARRATED_HORIZON_DAYS, LlmRunStatus, ThesisError
     from modules.thesis_outcomes import FollowupNarrator
     from modules.thesis_store import ThesisStore
     from modules.thesis_toolbox import ThesisToolbox
 
     run_date = ThesisRunResult.model_validate(built).run_date
-    dag_run_id = str(get_current_context()["dag_run"].run_id)
+    context = get_current_context()
+    dag_run_id = str(context["dag_run"].run_id)
+    # 재시도는 새 대화다. dag_run_id는 재시도에도 같아 이 칸이 없으면 구분할 수 없다.
+    try_number = int(context["ti"].try_number)
     model = thesis_model()
     written = 0
     attempted = 0
@@ -196,19 +203,48 @@ def narrate_followups(built: dict[str, Any]) -> int:
                 )
                 narrator = FollowupNarrator(model, toolbox)
                 attempted += 1
+                # 원장(13단계)은 (지평, 슬롯)마다 하나다 — 그 단위가 곧 대화 하나다.
+                # `run_date`는 실행일이 아니라 **원 추론일**이라 thesis와 같은 축으로 조인된다.
+                llm_run_id = store.start_llm_run(
+                    kind=LlmRunKind.NARRATION,
+                    run_date=origin,
+                    run_slot=run_slot,
+                    horizon_days=horizon,
+                    as_of_at=as_of_at,
+                    dag_run_id=dag_run_id,
+                    try_number=try_number,
+                    llm_model=model_name(model),
+                    prompt_version=narrator.prompt_revision,
+                )
                 try:
                     drafts = narrator.run(run_date=origin, horizon_days=horizon, as_of_at=as_of_at, targets=targets)
-                except ThesisError as error:
-                    # 그 (지평, 슬롯)만 없던 것으로 남는다. 다음 실행이 다시 집는다.
-                    # 다만 **세고 나서 판정한다** — 전부 실패했는데 written=0으로 성공하면
-                    # 해설이 통째로 빠진 실행이 UI에서 초록으로 보인다.
-                    logger.warning("T+%s %s narration failed for %s: %s", horizon, run_slot.value, origin, error)
-                    failures.append(f"T+{horizon} {run_slot.value} {origin}({error})")
-                    continue
-                except LlmError as error:
-                    if isinstance(error, RetryableLlmError):
-                        raise
-                    raise AirflowFailException(str(error)) from error
+                # 넓게 잡되 **반드시 다시 올리거나 실패로 센다.** 잡는 이유는 원장을 닫는 것뿐이다.
+                except BaseException as error:
+                    store.finish_llm_run(
+                        llm_run_id,
+                        status=LlmRunStatus.FAILED,
+                        records=thesis_common.closed_records(toolbox),
+                        tool_rounds=toolbox.round_count,
+                        error=f"{type(error).__name__}: {error}",
+                    )
+                    if isinstance(error, ThesisError):
+                        # 그 (지평, 슬롯)만 없던 것으로 남는다. 다음 실행이 다시 집는다.
+                        # 다만 **세고 나서 판정한다** — 전부 실패했는데 written=0으로 성공하면
+                        # 해설이 통째로 빠진 실행이 UI에서 초록으로 보인다.
+                        logger.warning(
+                            "T+%s %s narration failed for %s: %s", horizon, run_slot.value, origin, error
+                        )
+                        failures.append(f"T+{horizon} {run_slot.value} {origin}({error})")
+                        continue
+                    if isinstance(error, LlmError) and not isinstance(error, RetryableLlmError):
+                        raise AirflowFailException(str(error)) from error
+                    raise
+                store.finish_llm_run(
+                    llm_run_id,
+                    status=LlmRunStatus.SUCCEEDED,
+                    records=thesis_common.closed_records(toolbox),
+                    tool_rounds=toolbox.round_count,
+                )
 
                 written += store.store_narratives(
                     horizon_days=horizon,
@@ -218,6 +254,7 @@ def narrate_followups(built: dict[str, Any]) -> int:
                     registry=toolbox.registry,
                     llm_model=model_name(model),
                     prompt_revision=narrator.prompt_revision,
+                    narration_run_id=llm_run_id,
                 )
     # 해설을 시도한 (지평, 슬롯)이 전부 실패했으면 프롬프트나 앞단 데이터가 깨진 것이다.
     # 다음 실행도 같은 자리에서 멈추므로 여기서 죽는 편이 낫다.

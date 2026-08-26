@@ -45,6 +45,7 @@ from modules.thesis_domain import (
     ThesisEvidenceKind,
     ThesisSubjectKind,
     ThesisVerdict,
+    ToolCallErrorKind,
     brier_score,
     classify_outcome,
     evidence_ref,
@@ -80,6 +81,7 @@ from modules.thesis_store import (
 from modules.thesis_toolbox import (
     ThesisToolbox,
     ToolLimitExceeded,
+    tool_node,
 )
 from modules.thesis_tools import DocumentDetail, MacroDetail
 
@@ -115,6 +117,9 @@ PENDING_NARRATIVES = read_sql("postgres", "thesis_outcome", "select_pending_narr
 THESIS_BACKLOG = read_sql("postgres", "thesis_outcome", "select_backlog.sql")
 NXT_AFTER_HOURS = read_sql("postgres", "stock_bar", "select_nxt_after_hours.sql")
 INSERT_NARRATIVE = read_sql("postgres", "thesis_outcome", "insert_narrative.sql")
+LLM_RUN_INSERT = read_sql("postgres", "thesis_llm_run", "insert.sql")
+LLM_RUN_FINISH = read_sql("postgres", "thesis_llm_run", "update_finish.sql")
+TOOL_CALL_INSERT = read_sql("postgres", "thesis_tool_call", "insert.sql")
 
 
 def inserted_columns(statement: str) -> tuple[str, ...]:
@@ -3482,3 +3487,161 @@ def test_the_conclusion_line_falls_back_when_the_size_is_missing():
 
     assert "하락 62%" in rendered
     assert "예상" not in rendered
+
+
+# --- LLM 실행 원장 -------------------------------------------------------------
+
+
+def _ledger_box(connection: FakeConnection | None = None) -> ThesisToolbox:
+    return toolbox(connection or FakeConnection({"documents": [document_row(7)]}))
+
+
+def test_a_successful_call_records_what_the_model_sent_and_what_came_back():
+    """모델이 보낸 원본 인자와 검증 뒤 실제 인자를 **둘 다** 남긴다. 하나만 남기면
+    기본값이 채워진 자리인지 모델이 보낸 값인지 못 가른다."""
+    box = _ledger_box()
+
+    box.run("recent_documents", {"hours": 6, "min_score": 5})
+
+    record = box.tool_calls[0]
+    assert record.tool_name == "recent_documents"
+    assert record.arguments == {"hours": 6, "min_score": 5}
+    assert record.validated_arguments == {"hours": 6, "min_score": 5}
+    assert record.result is not None
+    assert record.result_chars > 0
+    assert record.error is None and record.error_kind is None
+    assert record.delivered is True
+    assert record.duration_ms is not None
+
+
+def test_the_hidden_call_id_never_reaches_the_model_schema():
+    """`InjectedToolCallId`가 붙은 칸은 모델에게 보이지 않아야 한다.
+
+    보이면 모델이 그 자리를 채우려 들고, 우리는 위조된 id로 요청과 결과를 잇게 된다.
+    """
+    box = _ledger_box()
+    tool = next(item for item in box.tools if item.name == "recent_documents")
+
+    assert "tool_call_id" not in tool.args
+    assert "tool_call_id" not in tool.tool_call_schema.model_fields
+
+
+def test_a_limit_rejection_is_recorded_as_its_own_kind():
+    """상한은 함수에 **진입한 뒤** 거절이라 실제 인자가 남는다. 문자열을 파싱해 분류하지 않는다."""
+    box = _ledger_box()
+    for _ in range(MAX_TOOL_CALLS):
+        box.run("market_breadth", {})
+
+    with pytest.raises(ToolLimitExceeded):
+        box.run("market_breadth", {})
+
+    record = box.tool_calls[-1]
+    assert record.error_kind is ToolCallErrorKind.LIMIT
+    assert record.result is None
+    assert record.validated_arguments is not None
+
+
+def test_an_open_record_is_closed_before_it_reaches_the_database():
+    """결과도 오류도 없는 행은 DB CHECK를 어긴다. sibling 예외로 실행조차 못 한 호출이다."""
+    box = _ledger_box()
+    box.begin_round([{"name": "market_breadth", "args": {}, "id": "call_1"}])
+
+    box.close_open_records()
+
+    record = box.tool_calls[0]
+    assert record.error_kind is ToolCallErrorKind.CANCELLED
+    assert record.error
+    assert record.delivered is False
+
+
+def test_a_result_the_model_never_saw_is_not_an_error():
+    """`ToolNode`가 sibling 예외로 결과를 버려도 그 결과는 진짜다.
+
+    `executor.map`이 tool_call을 전부 먼저 submit하므로 이미 시작된 sibling은 취소되지
+    않고 끝까지 돈다. 오류로 적으면 "모델이 봤나"를 못 읽고, 인용 분석이 그 구분 위에 선다.
+    """
+    box = _ledger_box()
+    box.run("market_breadth", {})
+
+    record = box.tool_calls[0]
+    assert record.result is not None
+    assert record.error_kind is None
+    # `finish_round`가 안 불린 기록은 전달되지 않은 것으로 남는다.
+    other = _ledger_box()
+    other.begin_round([{"name": "market_breadth", "args": {}, "id": "call_9"}])
+    assert other.tool_calls[0].delivered is False
+
+
+def test_an_unknown_tool_is_classified_without_parsing_the_message():
+    """모르는 툴은 함수에 도달하지 않는다. 래퍼가 못 보므로 `finish_round`가 채워야 한다."""
+    from langchain_core.messages import ToolMessage
+
+    box = _ledger_box()
+    box.begin_round([{"name": "nope", "args": {}, "id": "call_1"}])
+
+    box.finish_round([ToolMessage(content="Error: nope is not a valid tool", tool_call_id="call_1", name="nope")])
+
+    record = box.tool_calls[0]
+    assert record.error_kind is ToolCallErrorKind.UNKNOWN_TOOL
+    assert record.validated_arguments is None
+    assert record.duration_ms is None
+    assert record.delivered is True
+
+
+def test_a_validation_failure_is_told_apart_from_an_unknown_tool():
+    """등록된 툴인데 래퍼 진입 없이 오류가 왔으면 인자 검증 실패다."""
+    from langchain_core.messages import ToolMessage
+
+    box = _ledger_box()
+    box.begin_round([{"name": "recent_documents", "args": {"hours": "bad"}, "id": "call_1"}])
+
+    box.finish_round([ToolMessage(content="Error: ToolInvocationError(...)", tool_call_id="call_1", name="recent_documents")])
+
+    assert box.tool_calls[0].error_kind is ToolCallErrorKind.VALIDATION
+
+
+def test_the_tool_node_lets_the_model_fix_its_own_arguments():
+    """인자 오류는 모델이 고쳐 부를 수 있어야 하고, DB 오류는 태스크를 죽여야 한다."""
+    from langgraph.prebuilt.tool_node import ToolInvocationError
+
+    node = tool_node(_ledger_box())
+
+    assert ToolLimitExceeded in node._handle_tool_errors
+    assert ToolInvocationError in node._handle_tool_errors
+
+
+def test_the_ledger_inserts_match_their_models():
+    """SQL 컬럼과 모델 metadata를 대조한다. 가짜 연결은 컬럼 이름이 틀려도 통과한다."""
+    from apps.models.analysis import ThesisLlmRun, ThesisToolCall
+
+    for statement, table in ((LLM_RUN_INSERT, ThesisLlmRun.__table__), (TOOL_CALL_INSERT, ThesisToolCall.__table__)):
+        columns = inserted_columns(statement)
+        assert set(columns) <= {column.name for column in table.columns}
+        # `status`·총량 셋은 리터럴이라 placeholder가 컬럼 수보다 적다.
+        assert placeholder_count(statement) <= len(columns)
+
+
+def test_a_llm_run_opens_without_a_natural_key_and_returns_its_id():
+    # 실패한 대화도 남기고 재시도는 새 대화다. upsert면 그 사실이 사라진다.
+    assert "ON CONFLICT" not in body(LLM_RUN_INSERT)
+    assert "RETURNING id" in LLM_RUN_INSERT
+    assert "'running'" in LLM_RUN_INSERT
+
+
+def test_finishing_a_run_never_reopens_a_closed_one():
+    # 같은 대화를 두 번 닫는 경로는 없어야 하고, 생기면 조용히 덮는 것보다 0행이 낫다.
+    assert "WHERE id = %s" in LLM_RUN_FINISH
+    assert "AND status = 'running'" in LLM_RUN_FINISH
+
+
+def test_a_tool_call_insert_refuses_to_swallow_a_duplicate():
+    # 같은 (llm_run_id, seq)를 두 번 쓰는 경로가 없어야 한다. UNIQUE 위반으로 죽는 편이 낫다.
+    assert "ON CONFLICT" not in body(TOOL_CALL_INSERT)
+
+
+def test_the_narrative_insert_links_its_conversation():
+    columns = set(inserted_columns(INSERT_NARRATIVE))
+
+    assert "narration_run_id" in columns
+    # 채점 칸은 여전히 이 문장이 안 건드린다.
+    assert not columns & {"evaluated_at", "actual_return_pct", "brier_score"}

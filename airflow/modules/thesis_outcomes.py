@@ -439,8 +439,15 @@ class FollowupNarrator:
 
     def _tools(self, state: NarrativeState) -> dict[str, Any]:
         """`ThesisBuilder._tools`와 같은 노드다. 여기는 왕복을 세지 않고 상한은
-        `ThesisToolbox.call_count`가 본다(`_after_investigate`)."""
-        return {"messages": self._tool_node.invoke(state)["messages"]}
+        `ThesisToolbox.call_count`가 본다(`_after_investigate`).
+
+        원장(13단계)도 같은 자리에서 열고 닫는다 — 해설 대화의 툴 호출도 남긴다.
+        """
+        reply = state["messages"][-1]
+        self._toolbox.begin_round(getattr(reply, "tool_calls", None) or [])
+        update = self._tool_node.invoke(state)
+        self._toolbox.finish_round(update["messages"])
+        return {"messages": update["messages"]}
 
     def _answer(self, state: NarrativeState) -> dict[str, Any]:
         messages = state["messages"]

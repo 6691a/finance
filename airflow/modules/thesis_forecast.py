@@ -83,9 +83,9 @@ class PreOpenForecast:
         previous = self._run.previous_open_day()
         return thesis_common.close_at(previous or self._run.run_date)
 
-    def run(self, *, dag_run_id: str) -> int:
+    def run(self, *, dag_run_id: str, try_number: int) -> int:
         """휴장 판정 → readiness guard → 관측 상태 → LLM → 저장. 저장한 행 수를 준다."""
-        from modules.thesis_domain import PREFETCHED_PAST_THESES
+        from modules.thesis_domain import PREFETCHED_PAST_THESES, LlmRunKind
         from modules.thesis_store import ThesisStore
 
         self._run.skip_unless_open()
@@ -107,6 +107,8 @@ class PreOpenForecast:
             for target in targets
         }
         return self._run.build_and_store(
+            try_number=try_number,
+            run_kind=LlmRunKind.FORECAST,
             run_slot=RunSlot.PRE_OPEN,
             macro_window_start=self.macro_window_start(),
             targets=targets,
@@ -121,7 +123,9 @@ def build() -> ThesisRunResult:
     context = get_current_context()
     run_date = thesis_common.resolve_run_date(context)
     dag_run_id = str(context["dag_run"].run_id)
+    # 재시도는 새 대화다. dag_run_id는 재시도에도 같아 이 칸이 없으면 구분할 수 없다.
+    try_number = int(context["ti"].try_number)
 
     with closing(thesis_common.connection()) as conn:
-        written = PreOpenForecast(conn, run_date=run_date).run(dag_run_id=dag_run_id)
+        written = PreOpenForecast(conn, run_date=run_date).run(dag_run_id=dag_run_id, try_number=try_number)
     return ThesisRunResult(run_date=run_date, slot=SLOT, written=written)

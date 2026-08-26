@@ -35,7 +35,7 @@ from airflow.sdk import Param, get_current_context
 from modules import thesis_common
 from modules.db import Connection
 from modules.sql import read_sql
-from modules.thesis_domain import SLOT_LABELS, ThesisSubjectKind
+from modules.thesis_domain import SLOT_LABELS, LlmRunKind, ThesisSubjectKind
 from modules.thesis_state import (
     INTRADAY_SLOT_TIMES,
     IntradayObservation,
@@ -318,7 +318,7 @@ class IntradayForecast:
 
     # -- 실행 ----------------------------------------------------------------
 
-    def run(self, *, dag_run_id: str) -> int:
+    def run(self, *, dag_run_id: str, try_number: int) -> int:
         """휴장 판정 → readiness guard → 관측 상태 → 되짚기 → LLM → 저장. 저장한 행 수를 준다."""
         from modules.thesis_domain import PREFETCHED_PAST_THESES
         from modules.thesis_store import ThesisStore
@@ -339,6 +339,8 @@ class IntradayForecast:
             for target in targets
         }
         return self._run.build_and_store(
+            try_number=try_number,
+            run_kind=LlmRunKind.FORECAST,
             run_slot=self._slot,
             macro_window_start=self.macro_window_start(),
             targets=targets,
@@ -363,8 +365,10 @@ def build() -> ThesisRunResult:
     run_date = thesis_common.resolve_run_date(context)
     run_slot = resolve_slot(context)
     dag_run_id = str(context["dag_run"].run_id)
+    # 재시도는 새 대화다. dag_run_id는 재시도에도 같아 이 칸이 없으면 구분할 수 없다.
+    try_number = int(context["ti"].try_number)
     logger.info("building the %s thesis for %s", SLOT_LABELS[run_slot], run_date)
 
     with closing(thesis_common.connection()) as conn:
-        written = IntradayForecast(conn, run_date=run_date, run_slot=run_slot).run(dag_run_id=dag_run_id)
+        written = IntradayForecast(conn, run_date=run_date, run_slot=run_slot).run(dag_run_id=dag_run_id, try_number=try_number)
     return ThesisRunResult(run_date=run_date, slot=run_slot, written=written)

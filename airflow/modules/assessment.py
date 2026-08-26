@@ -238,10 +238,12 @@ class Assessment(BaseModel):
     reason: str = ""
 
 
+# **`llm.NUMBER_STYLE`을 f-string으로 끼우지 않는다.** 이 상수는 `.format(perspective=...)`으로
+# 채우는 템플릿이라 규칙 문장에 중괄호가 하나라도 있으면 `KeyError`로 죽는다. 그래서 이어 붙인다.
 SYSTEM_PROMPT_TEMPLATE = (
     "당신은 경제 문서 분석기다. {perspective} "
     "주어진 문서를 읽고 어떤 종목과 지표에 관련되는지, 얼마나 값있는 정보인지 판단한다. "
-    "반드시 JSON 객체 하나만 출력한다. 설명이나 코드 펜스를 붙이지 않는다."
+    "반드시 JSON 객체 하나만 출력한다. 설명이나 코드 펜스를 붙이지 않는다.\n\n" + llm.NUMBER_STYLE
 )
 
 # 사람이 읽는 지시. 후보 목록은 실행 시점에 마스터에서 채운다.

@@ -7,8 +7,11 @@ import pytest
 from langchain_core.messages import AIMessage
 from pydantic import BaseModel, ConfigDict, Field
 
-from modules.assessment import Assessment
+from modules.assessment import SYSTEM_PROMPT_TEMPLATE, Assessment
+from modules.briefing import picks
+from modules.expectation_extraction import SYSTEM_PROMPT as EXTRACTION_PROMPT
 from modules.llm import (
+    NUMBER_STYLE,
     REQUEST_TIMEOUT_SECONDS,
     THESIS_TIMEOUT_SECONDS,
     LlmError,
@@ -22,6 +25,8 @@ from modules.llm import (
     thesis_model,
 )
 from modules.schema import response_format, strict_json_schema
+from modules.thesis_generation import SYSTEM_PROMPT as THESIS_PROMPT
+from modules.thesis_outcomes import NARRATIVE_SYSTEM_PROMPT
 
 
 class ScriptedModel:
@@ -210,3 +215,30 @@ def test_response_format_is_shaped_for_the_api(model):
     assert formatted["type"] == "json_schema"
     assert formatted["json_schema"]["name"] == "thing"
     assert formatted["json_schema"]["strict"] is True
+
+
+# --- 숫자 표기 규칙 -------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "prompt",
+    [THESIS_PROMPT, NARRATIVE_SYSTEM_PROMPT, picks.SYSTEM_PROMPT, SYSTEM_PROMPT_TEMPLATE],
+)
+def test_every_prose_prompt_carries_the_number_style(prompt):
+    """산문을 내는 프롬프트 넷이 같은 한 벌을 쓴다. 네 곳에 따로 적으면 반드시 어긋난다."""
+    assert NUMBER_STYLE in prompt
+
+
+def test_the_number_style_has_no_braces():
+    """`assessment.SYSTEM_PROMPT_TEMPLATE`이 `.format()` 템플릿이다.
+
+    규칙 문장에 중괄호가 하나라도 섞이면 문서 평가가 통째로 `KeyError`로 죽는다.
+    """
+    assert "{" not in NUMBER_STYLE
+    assert "}" not in NUMBER_STYLE
+    SYSTEM_PROMPT_TEMPLATE.format(perspective="관점")
+
+
+def test_the_extraction_prompt_stays_out_of_it():
+    """추출 프롬프트의 숫자는 산문이 아니라 JSON 숫자 칸으로 간다. 쉼표가 파싱을 깬다."""
+    assert NUMBER_STYLE not in EXTRACTION_PROMPT

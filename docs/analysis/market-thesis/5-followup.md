@@ -5,8 +5,8 @@
 - 상태: 구현 완료 (2026-08-21). 스키마·다지평 채점·`FollowupNarrator`·`past_theses`·DAG 태스크 둘
 - 의존: [1-storage.md](1-storage.md), [2-agent.md](2-agent.md), [3-dag-slack.md](3-dag-slack.md).
   4단계와는 병렬 가능하나 그래프 반영 절(6절)은 [4-graph.md](4-graph.md)를 전제한다.
-- 산출물: `apps/models/analysis.py`에 `ThesisOutcome` 추가와 `thesis`·`thesis_evidence` 수정,
-  수기 리비전, `thesis_outcome/*.sql`과 T+N 등락률 SQL, `thesis.py`에 `FollowupNarrator`와
+- 산출물: `apps/models/analysis/thesis.py`에 `ThesisOutcome` 추가와 `thesis`·`thesis_evidence` 수정,
+  수기 리비전, `thesis_outcome/*.sql`과 T+N 등락률 SQL, `FollowupNarrator`(지금 `airflow/modules/thesis_outcomes.py`)와
   `past_theses` 툴, `market_thesis_review.py`에 태스크 둘, 테스트
 
 ## 0. 왜 — 하루로는 "왜"를 모른다
@@ -141,7 +141,7 @@ FLAT_THRESHOLD_PCT = {0: 0.3, 1: 0.3, 3: 0.5, 5: 0.7}
 - 값의 근거는 `0.3 × sqrt(N)`을 반올림한 것뿐이다. **실측이 아니다.** 4주 뒤 지평별
   `actual_outcome` 분포를 보고 조정한다 — `flat` 비율이 한 지평에서만 5% 아래거나 60% 위면
   그 값이 틀린 것이다.
-- 상수는 `airflow/modules/thesis.py`에 두고 `classify_outcome(return_pct, horizon_days)`가
+- 상수는 `airflow/modules/thesis_domain.py`에 두고 `classify_outcome(return_pct, horizon_days)`가
   받는다. 1단계의 시그니처에 인자 하나가 붙는다.
 
 ## 3. 채점 태스크 — `grade_followups`
@@ -393,7 +393,7 @@ T+5가 해설이 가장 굳은 시점이기도 하다. `notify_slack`의 기존 
   `select_by_thesis_ids.sql`. `insert_grade.sql`에 `ON CONFLICT DO NOTHING`이 있고
   `DO UPDATE`가 없는지. `select_horizon_return.sql`이 `stock_investor_trade_daily`를 보고
   `stock_bar`를 안 보는지.
-- `tests/modules/test_thesis.py`에 추가:
+- `tests/modules/test_thesis_pipeline.py`에 추가:
   - `classify_outcome(return_pct, horizon_days)` 경계 — 지평 0·1에서 0.29 `flat`/0.30 `up`,
     지평 3에서 0.49 `flat`/0.50 `up`, 지평 5에서 0.69 `flat`/0.70 `up`, 음수 대칭.
   - 지평 상수가 `{0,1,3,5}`이고 CHECK 문자열과 일치하는지.
@@ -442,7 +442,7 @@ T+5가 해설이 가장 굳은 시점이기도 하다. `notify_slack`의 기존 
 
 - **`flat` 임계값** — 2절의 `{0: 0.3, 1: 0.3, 3: 0.5, 5: 0.7}`은 실측이 아니다. 배포 4주 뒤
   지평별 `actual_outcome` 분포를 보고 정한다. **조정 조건(한 지평만 5% 아래 또는 60% 위)의
-  원본은 `thesis.py`의 `FLAT_THRESHOLD_PCT` 주석이다** — 값을 고치는 사람이 보는 곳이라
+  원본은 `thesis_domain.py`의 `FLAT_THRESHOLD_PCT` 주석이다** — 값을 고치는 사람이 보는 곳이라
   거기 둔다. 언제 보는지는 [TUNING.md](TUNING.md) 3·4절.
 - **해설의 근거가 될 문서 소스** — 이 문서를 쓸 때는 `einfomax`·`cnbc`·`bbc_business`와
   KRX·FSS 공시, 각국 정부·중앙은행 발표뿐이었고 증권사 리서치 리포트 소스가 없었다.

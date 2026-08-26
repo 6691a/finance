@@ -28,7 +28,7 @@
 **Pydantic 모델을 클래스 안에 중첩하지 않는다** — 테스트와 다른 모듈이 import한다.
 
 기준 구현은 `collectors/analyst/kis_opinion.py`이고 나머지 수집기의 전환 계획은
-`docs/collectors-class-migration.md`에 있다.
+`docs/convention/collectors-class-migration.md`에 있다.
 
 아래 계약은 2026-08-14 장중에 운영 키로 확인했다.
 

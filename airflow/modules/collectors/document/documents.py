@@ -1,6 +1,6 @@
 """공식기관·언론 피드에서 경제 문서를 발견해 정규화한다.
 
-`docs/economic-document-archive-design.md` 2단계의 수집 절반이다. LLM 태깅은 별도 모듈이
+`docs/analysis/economic-document-archive-design.md` 2단계의 수집 절반이다. LLM 태깅은 별도 모듈이
 맡는다. **모델 장애가 원문 수집을 막지 않게** 둘을 나눈 것이 설계의 첫 결정이다.
 
 시세 수집기들과 다른 점이 셋이다.

@@ -1,6 +1,6 @@
 """중복 연결 규칙 검증.
 
-`docs/economic-document-archive-design.md` §6.4의 ①②다. 같은 출처에서 제목만 조금 다른 같은
+`docs/analysis/economic-document-archive-design.md` §6.4의 ①②다. 같은 출처에서 제목만 조금 다른 같은
 기사([속보] 스텁 vs 본기사)는 제목 유사도로, 본문 해시가 같은 문서는 제목과 무관하게
 `canonical_document_id`로 연결한다.
 """

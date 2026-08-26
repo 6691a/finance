@@ -24,7 +24,7 @@
 `LISTING_SOURCES`가 slug로 수집 방법을 고른다. KRX·금감원은 아직 이 파일에 함수로 있고,
 네이버 증권 리서치는 클래스로 `collectors/document/naver_research.py`에 있다. 목록만 읽는
 KRX·금감원과 달리 네이버는 **상세를 한 번 더 받아** 요약을 채우고 그것이 `ListingSource.enrich`
-단계다. 나머지를 클래스로 옮기는 계획은 `docs/collectors-class-migration.md`에 있다.
+단계다. 나머지를 클래스로 옮기는 계획은 `docs/convention/collectors-class-migration.md`에 있다.
 """
 
 import json
@@ -264,7 +264,7 @@ def _naver_research_sources() -> dict[str, ListingSource]:
 
     레지스트리는 콜러블을 들고 있고 수집기는 클래스라, 출처마다 객체를 만들어 주는 클래스
     메서드를 끼운다. 다른 출처도 클래스로 옮기면 이 레지스트리 자체를 수집기 팩토리로 바꾼다
-    (`docs/collectors-class-migration.md`).
+    (`docs/convention/collectors-class-migration.md`).
     """
     return {
         f"{NAVER_RESEARCH_SLUG_PREFIX}{category}": ListingSource(

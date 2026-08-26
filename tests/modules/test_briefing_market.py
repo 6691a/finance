@@ -1067,7 +1067,7 @@ def _block_text(blocks) -> str:
     return json.dumps(blocks, ensure_ascii=False)
 
 
-# --- 기술적 관측 (docs/market-technical-indicators.md 7.2절) --------------------
+# --- 기술적 관측 (docs/analysis/market-technical-indicators.md 7.2절) --------------------
 
 
 def technical_history_rows() -> list[tuple]:

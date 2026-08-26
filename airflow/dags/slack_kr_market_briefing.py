@@ -1,6 +1,6 @@
 """국내 정규장 시장 브리핑을 Slack에 보낸다.
 
-`docs/slack-report-design.md` 1부의 한국장 절반이다. 표는 SQL 집계가 만든다.
+`docs/briefing/slack-report-design.md` 1부의 한국장 절반이다. 표는 SQL 집계가 만든다.
 LLM 요약은 없다 — 2026-08-19까지 붙였지만 표가 이미 말하는 것 이상을 쓰지 못해 뺐다.
 
 한국 주식의 실제 끝은 KRX 15:30이 아니라 NXT 애프터마켓 20:00이다. 그래서 발송이

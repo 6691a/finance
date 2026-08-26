@@ -1,6 +1,6 @@
 """최근에 평가한 문서를 묶어 Slack에 보낸다.
 
-`docs/slack-report-design.md` 2부다. `document_assessment_hourly`가 매시 채우는
+`docs/briefing/slack-report-design.md` 2부다. `document_assessment_hourly`가 매시 채우는
 `value_score`를 여기서 처음으로 읽는다. 저장 단계는 점수로 문서를 버리지 않고, 무엇을
 보여 줄지는 이 리포트가 정한다.
 

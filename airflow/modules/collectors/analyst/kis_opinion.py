@@ -3,7 +3,7 @@
 뉴스는 "무슨 일이 있었다"까지고, 그 사건이 종목 가치에 어떤 뜻인지는 애널리스트가 쓴다.
 이 모듈은 그 판단 중 **숫자**(투자의견, 목표주가, 괴리율)만 받는다. 리포트 본문은 KIS에
 없다. 글은 `collectors/document/naver_research.py`가 문서로 흡수하고, 추론 툴이 둘을
-발표일·증권사로 이어 읽는다. 설계는 `docs/market-thesis/6-analyst.md`다.
+발표일·증권사로 이어 읽는다. 설계는 `docs/analysis/market-thesis/6-analyst.md`다.
 
 토큰 발급과 HTTP는 `collectors/kis.py`가 갖고 있어 그대로 쓴다. 모듈을 나눈 것은 스케줄과
 실패 성격이 다르기 때문이다 — 포지션 지표는 전 영업일 확정치라 화~토 아침에 받지만,
@@ -21,7 +21,7 @@
 `@staticmethod`나 모듈 함수로 둔다 — 감쌀 상태가 없는 것을 클래스로 만들지 않는다.
 
 이 형태가 수집기 전체의 목표 구조다. 나머지 수집기의 전환 계획은
-`docs/collectors-class-migration.md`에 있다.
+`docs/convention/collectors-class-migration.md`에 있다.
 
 아래 계약은 2026-08-22에 운영 키로 확인했다.
 

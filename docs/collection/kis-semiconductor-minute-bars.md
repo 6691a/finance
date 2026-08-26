@@ -1,41 +1,44 @@
-# 개발 문서 1 — 삼성전자·SK하이닉스 KIS 1분봉
+# 삼성전자·SK하이닉스 KIS 1분봉
 
-> 작성 기준: 2026-08-11  
-> 상태: 미구현 기능의 확정 실행 계획  
+> 작성 기준: 2026-08-11 / 본문 구현 반영: 2026-08-26
+> 상태: **대부분 구현 완료. 남은 것은 9절 `kis_equity_backfill` 백필 DAG 하나다.**
 > 대상: 삼성전자(`005930`), SK하이닉스(`000660`)의 KRX·NXT 체결
 
-> **2026-08-18 갱신**: 저장 스키마는 이 문서와 다르게 확정됐다. `krx_equity_bar`/`nxt_equity_bar`
-> 물리 테이블 분리 대신 단일 `stock_bar`에 `exchange`(KRX/NXT) 컬럼을 자연키 축으로 둔다
-> (`apps/models/market.py`, 커밋 `e6cf001`). 마감 후 REST 확정본은 `kis_stock_minute_bars_daily`
-> DAG로 구현됐다. `kis_quote_intraday`의 5분 REST 조정, `kis_equity_backfill` 백필 DAG는
-> 여전히 미구현이다. 이후 절의 테이블 이름과 SQL 경로는 구현 시 `stock_bar` 기준으로 바꿔 읽는다.
+**무엇이 있고 무엇이 없나**
 
-> **2026-08-18 갱신 2 — 7장 WebSocket 구현됨** (2026-08-19 위치 확정): 상주 수집기는
-> **`apps/realtime/`**(백엔드 트리)다. Airflow가 실행하지 않는 코드는 `airflow/`에 두지
-> 않는 규칙이 새로 확정돼, 문서 7.1·11.1의 `airflow/modules/collectors/kis_realtime.py`·
-> Airflow 이미지 공유 배포는 대체됐다. 실행은 `python -m apps.realtime.main`, 배포는 별도
-> 스택 `compose/prod/`(개발은 `compose/local/realtime/`), 설정은 FastAPI와 같은
-> `config.yaml`(`apps.core.config`), 저장은 `apps.models` ORM
-> (`apps/realtime/repository.py`)이다. `stock_bar`에 `ingest_method`/`is_final` 컬럼이
-> 붙었고(리비전 `d41f7c9b3a12`), WS는 `provisional_upsert`(ORM)로 `is_final=false` 행만
-> 갱신하며 REST(`airflow/sql/postgres/stock_bar/upsert.sql`)는 무조건 덮고
-> `is_final=true`로 확정한다. 문서와 다른 구현 결정: ① `previous_close`는 시작 시 REST가
-> 아니라 일별 DAG처럼 `stock_investor_trade_daily`에서 읽는다 — REST access token이
-> 필요 없고 approval key만 쓴다. ② 세션 필터는 4.2의 NXT 3분할 창(애프터 15:40~) 대신
-> REST 수집과 같은 단일 창(KRX 09:00~15:30, NXT 08:00~20:00)이다 — 실측(`kis.py`: 애프터
-> 15:30~20:00)이 문서와 어긋났고, REST 저장 범위와 같아야 WS에만 구멍이 생기지 않는다.
-> ③ Airflow 수집기와 겹치는 종목·세션 상수는 의도적 중복이고
-> `tests/realtime/test_kis_realtime.py`가 대조한다. 인증 거절 코드가 픽스처로 확정되기
-> 전까지 "구독 전건 거절 = 인증 문제"로 판정해 approval key를 1회 재발급한다.
+| 절 | 무엇 | 상태 |
+| --- | --- | --- |
+| 3 | KIS REST·WebSocket API 계약 | 유효 — 지금 코드가 이 계약을 지킨다 |
+| 5 | 저장 모델과 우선순위 | 구현 완료(`apps/models/market/series.py`의 `StockBar`) |
+| 7 | WebSocket 상주 수집기 | 구현 완료 — **위치는 `apps/realtime/`이다**(아래) |
+| 8 | 마감 후 REST 확정 | 구현 완료(`kis_stock_minute_bars_daily`, 30분 백업은 `kis_equity_bar_reconcile`) |
+| 9 | 백필 DAG | **미구현.** 이 문서에서 아직 안 만든 유일한 부분이다 |
+| 11 | 배포 | 구현 완료 — 별도 스택 `compose/prod/`다(아래) |
+
+**작성 당시 계획과 실제가 갈린 곳 셋.** 아래 본문은 전부 실제 기준으로 고쳐 뒀고, 왜 갈렸는지만
+여기 남긴다.
+
+1. **저장은 거래소별 물리 테이블이 아니라 단일 `stock_bar` + `exchange` 자연키 축이다**
+   (커밋 `e6cf001`, 2026-08-18). 컬럼이 같은 테이블 둘을 두는 것보다 축 하나가 싸고, 브리핑과
+   추론이 두 거래소를 한 쿼리로 읽는다.
+2. **상주 수집기는 `airflow/modules/collectors/kis_realtime.py`가 아니라 `apps/realtime/`이다**
+   (2026-08-19). Airflow가 실행하지 않는 코드는 `airflow/` 아래 두지 않는다는 규칙이 그 뒤에
+   확정됐다. 실행은 `python -m apps.realtime.main`, 배포는 별도 스택 `compose/prod/`
+   (개발은 `compose/local/realtime/`), 설정은 FastAPI와 같은 `config.yaml`(`apps.core.config`),
+   저장은 `apps.models` ORM(`apps/realtime/repository.py`)이다.
+3. **WS 세션 필터는 4.2가 적었던 NXT 3분할 창이 아니라 단일 창이다**(KRX 09:00~15:30,
+   NXT 08:00~20:00). 실측에서 애프터마켓이 15:40이 아니라 15:30부터였고, **REST 저장 범위와
+   같아야 WS에만 구멍이 생기지 않는다.** `apps/realtime/aggregator.py`의 `SESSION_WINDOWS`가
+   원본이고 `tests/realtime/test_kis_realtime.py`가 Airflow 수집기 상수와 대조한다.
 
 ## 1. 결론
 
 삼성전자와 SK하이닉스의 KRX·NXT 체결을 거래소별 1분 OHLCV로 저장한다. 실시간 주 경로는
 WebSocket이고, REST는 **완료된 과거 분봉만** 다시 받아 누락과 불완전 봉을 확정한다.
 
-- 저장 테이블: `krx_equity_bar`, `nxt_equity_bar`
-- 저장 심볼: 두 테이블 모두 `SAMSUNG_ELECTRONICS`, `SK_HYNIX`
-- 거래소: KRX(`J`)와 NXT(`NX`)를 물리 테이블로 분리
+- 저장 테이블: `stock_bar` 하나. 거래소는 `exchange`(KRX/NXT) 컬럼이고 자연키의 한 축이다
+- 저장 코드: `stock_code`에 6자리 종목코드(`005930`, `000660`). `instrument.ticker`·수급·공시와 같은 체계라 한 화면에서 조인된다
+- 거래소: KRX(`J`)와 NXT(`NX`)를 `exchange` 값으로 분리. 통합 `UN`은 받지 않는다
 - 장중 수집: 공용 `kis-realtime` 서비스가 WebSocket 체결을 1분 OHLCV로 집계
 - 누락 복구: 기존 `kis_quote_intraday` DAG가 5분마다 REST **완료 봉**을 확정 upsert
 - 과거 백필: 정규 수집과 격리된 `kis_equity_backfill` 수동 DAG가 담당
@@ -58,7 +61,7 @@ WebSocket이고, REST는 **완료된 과거 분봉만** 다시 받아 누락과 
   KST→UTC 변환, `source_record` 저장, 분봉 upsert 패턴
 - `airflow/dags/kis_quote_intraday.py`: 평일 08:00~16:59 KST, 5분 폴링,
   종목별 HTTP 실패 기록과 401 토큰 재발급
-- `apps/models/market.py`: OHLCV·계보·멱등 키 패턴인 `QuoteBar`
+- `apps/models/market/series.py`: OHLCV·계보·멱등 키 패턴인 매크로 봉 테이블들
 - `apps/models/raw.py`: `source_type=websocket`, `status=running|succeeded|failed|quarantined`
 - `apps/models/reference.py`: `QuoteSymbolKind.EQUITY`
 - `websockets` 백엔드 의존성과 `kis_websocket_domain` 애플리케이션 설정
@@ -173,9 +176,13 @@ feature flag로 끄고 KRX·정규 수집은 계속 배포한다.
 | `low` | `stck_lwpr` |
 | `close` | `stck_prpr` |
 | `volume` | `cntg_vol` |
-| `previous_close` | `output1.stck_prdy_clpr` |
+| `previous_close` | **REST 응답이 아니라 `stock_investor_trade_daily`의 직전 거래일 종가** |
 
-새 주식 테이블에는 선물 월물 개념이 없으므로 `contract_code` 컬럼을 만들지 않는다.
+`stock_bar`에는 선물 월물 개념이 없으므로 `contract_code` 컬럼을 만들지 않는다.
+
+**`previous_close`를 KIS 응답(`output1.stck_prdy_clpr`)에서 읽지 않는다.** REST 경로도
+WebSocket 경로도 일별 DAG처럼 `stock_investor_trade_daily`에서 읽는다. 그래야 상주 수집기가
+REST access token 없이 approval key만으로 돌고, 두 경로의 분모가 어긋나지 않는다.
 
 ### 3.4 WebSocket approval key와 구독
 
@@ -228,7 +235,7 @@ REST access token과 WebSocket approval key는 서로 대체할 수 없다. appr
 | KRX | [국내주식 실시간체결가 KRX](https://github.com/koreainvestment/open-trading-api/blob/main/examples_llm/domestic_stock/ccnl_krx/ccnl_krx.py) | `H0STCNT0` | 2종목 |
 | NXT | [국내주식 실시간체결가 NXT](https://github.com/koreainvestment/open-trading-api/blob/main/examples_llm/domestic_stock/ccnl_nxt/ccnl_nxt.py) | `H0NXCNT0` | 2종목 |
 
-공식 helper의 한 연결 구독 상한은 40개다. 이번 범위는 4개지만 다른 KIS 개발 문서가 같은 공용
+공식 helper의 한 연결 구독 상한은 40개다. 이번 범위는 4개지만 다른 KIS 수집이 같은 공용
 연결에 채널을 추가하므로 구독 registry가 시작 전에 합계를 검증한다.
 
 ### 3.5 WebSocket 프레임 계약
@@ -279,8 +286,8 @@ class DomesticEquity(StrEnum):
     SK_HYNIX = ("SK_HYNIX", "000660", "SK하이닉스")
 
 class EquityVenue(StrEnum):
-    KRX = ("J", "H0STCNT0", "krx_equity_bar")
-    NXT = ("NX", "H0NXCNT0", "nxt_equity_bar")
+    KRX = ("J", "H0STCNT0")
+    NXT = ("NX", "H0NXCNT0")
 ```
 
 코드 집합은 Enum으로 고정하고, 당일·과거 요청값은 Pydantic `BaseModel`로 묶어 날짜·시각·시장
@@ -289,42 +296,54 @@ class EquityVenue(StrEnum):
 
 ### 4.2 거래 세션
 
-| 거래소 | 세션 | 저장 대상 체결 시각(KST) |
-| --- | --- | --- |
-| KRX | 정규장 | `09:00:00 <= t < 15:30:00` |
-| NXT | 프리마켓 | `08:00:00 <= t < 08:50:00` |
-| NXT | 메인마켓 | `09:00:30 <= t < 15:20:00` |
-| NXT | 애프터마켓 | `15:40:00 <= t < 20:00:00` |
+| 거래소 | 저장 대상 체결 시각(KST, 분 기준 양끝 포함) |
+| --- | --- |
+| KRX | `09:00` ~ `15:30` |
+| NXT | `08:00` ~ `20:00` |
+
+**거래소마다 창 하나다.** 이 문서 초안은 NXT를 프리(08:00~08:50)·메인(09:00:30~15:20)·
+애프터(15:40~20:00) 셋으로 나눴는데 실측에서 애프터가 15:30부터였고, 무엇보다 **REST 저장
+범위와 창이 같아야 WebSocket 쪽에만 구멍이 생기지 않는다.** 세션 사이 공백에는 체결이
+안 오므로 창을 좁힐 이유가 없다.
+
+원본은 `apps/realtime/aggregator.py`의 `SESSION_WINDOWS`이고, Airflow REST 수집기의 같은
+상수와 어긋나지 않는지 `tests/realtime/test_kis_realtime.py`가 대조한다. 이 중복은 의도된
+것이다 — `apps/`와 `airflow/`는 서로를 import하지 않는다(저장소 규칙).
 
 NXT 거래시간 출처: [넥스트레이드 거래제도](https://www.nextrade.co.kr/menu/transactionSys.do)
 
-`bar_at`은 체결 시각을 1분 아래로 절삭한 값이다. 따라서 NXT 메인마켓 첫 `09:00:30` 체결은
-`09:00` 봉에 들어간다. 휴지 구간에는 봉을 만들지 않고, 체결이 전혀 없는 분에도 0거래량 봉을
-합성하지 않는다.
+`bar_at`은 체결 시각을 1분 아래로 절삭한 값이다. 휴지 구간에는 봉을 만들지 않고, 체결이
+전혀 없는 분에도 0거래량 봉을 합성하지 않는다.
 
 평일 조건은 불필요한 연결을 줄이는 1차 필터다. 휴장일 캘린더를 이 기능에서 새로 만들지 않으며,
 평일 휴장일에는 구독 ACK 이후 데이터가 없는 상태를 정상 idle로 기록한다.
 
 ## 5. 데이터 모델과 쓰기 우선순위
 
-### 5.1 거래소별 테이블
+### 5.1 저장 테이블 — `stock_bar`
 
-`apps/models/market.py`에 같은 컬럼의 `KrxEquityBar`, `NxtEquityBar`를 선언한다.
+`apps/models/market/series.py`의 `StockBar`다.
 
 | 컬럼 | 타입 | 설명 |
 | --- | --- | --- |
-| `provider` | text | 항상 `kis` |
-| `symbol` | text | `SAMSUNG_ELECTRONICS`, `SK_HYNIX` |
+| `provider` | text | `kis` 또는 `yahoo` |
+| `stock_code` | text | 6자리 종목코드(`005930`, `000660`). 해외 상장은 저장 심볼(`TSMC_ADR`) |
+| `exchange` | enum | `KRX`·`NXT`·`NYSE`·`NASDAQ`. **자연키의 한 축이다** |
 | `bar_at` | timestamptz | 1분 시작 시각 UTC |
 | `open`, `high`, `low`, `close` | numeric | 1분 OHLC |
-| `volume` | bigint | 해당 거래소의 1분 체결량 |
-| `previous_close` | numeric | KIS `stck_prdy_clpr` |
+| `volume` | bigint nullable | 해당 거래소의 1분 체결량 |
+| `previous_close` | numeric | 직전 거래일 확정 종가. 변동률의 분모다 |
 | `ingest_method` | text | `websocket` 또는 `rest` |
-| `is_final` | boolean | REST가 완료 봉을 확인했는지 여부 |
+| `is_final` | boolean | REST가 완료 봉을 확정했는지 |
 | `source_record_id` | bigint FK | 이 행을 마지막으로 갱신한 원천 |
 
-자연키는 각 테이블의 `(provider, symbol, bar_at)`이다. `venue`와 `contract_code`는 두지 않는다.
-테이블 이름이 거래소를 고정하고 주식에는 선물 월물이 없기 때문이다.
+자연키는 **`(provider, stock_code, exchange, bar_at)`** 이다. 거래소를 키에서 빼면 같은 종목의
+KRX·NXT 체결이 같은 분에 서로를 덮어쓴다. `contract_code`는 두지 않는다 — 주식에는 선물
+월물이 없다.
+
+**`previous_close`는 NXT 봉도 KRX 확정 종가를 쓴다.** 전일 기준가가 거래소마다 따로 있지 않다.
+값은 시작 시 REST를 부르지 않고 `stock_investor_trade_daily`에서 읽는다 — REST access token이
+필요 없고 approval key만으로 상주 수집기가 돈다.
 
 제약:
 
@@ -368,7 +387,7 @@ WebSocket upsert
 
 - `rt_cd != "0"`이면 `KisResultError`
 - `output2` 자체가 비었으면 호출 목적에 따라 휴장 또는 payload 오류로 분류
-- `stck_prdy_clpr`가 없거나 0 이하이면 실패
+- 직전 거래일 종가(`stock_investor_trade_daily`)를 못 찾거나 0 이하이면 실패
 - OHLC가 유한한 숫자인지와 가격 관계가 유효한지
 - `cntg_vol`이 정수이며 0 이상인지
 - 요청한 종목·거래소 라우팅과 응답 날짜·세션이 일치하는지
@@ -383,8 +402,14 @@ WebSocket upsert
 
 ### 7.1 프로세스와 인증
 
-`airflow/modules/collectors/kis_realtime.py`가 공용 연결 하나를 관리한다. Airflow task를 장시간
-점유하지 않고 compose의 `kis-realtime` 서비스로 실행한다.
+`apps/realtime/`가 공용 연결 하나를 관리한다. Airflow task를 장시간 점유하지 않고
+`python -m apps.realtime.main`으로 도는 상주 서비스다 — 운영 스택은 `compose/prod/`,
+개발은 `compose/local/realtime/`다.
+
+**`airflow/` 아래가 아니다.** Airflow가 실행하지 않는 코드는 그 트리에 두지 않는다는 규칙이
+2026-08-19에 확정됐다. 모듈은 넷이다 — `frames.py`(TR ID별 46필드 계약과 파싱),
+`aggregator.py`(1분봉 집계와 세션 창), `repository.py`(ORM 잠정 upsert),
+`service.py`·`main.py`(연결·구독·재연결).
 
 시작 순서:
 
@@ -590,25 +615,24 @@ commit한다. 연결 전체를 감싸는 장기 DB 트랜잭션은 만들지 않
 
 ### 11.1 compose 서비스
 
-`compose/local/airflow/requirements.txt`에 백엔드와 같은 호환 범위의 `websockets`를 추가한다.
-루트 `pyproject.toml`의 의존성은 Airflow 이미지에 자동 설치되지 않으므로 두 파일을 테스트로
-맞춘다.
+**Airflow 이미지를 공유하지 않는다.** 상주 수집기는 별도 스택이다 — 운영은 `compose/prod/`,
+개발은 `compose/local/realtime/`. `websockets`는 루트 `pyproject.toml`이 갖고 Airflow
+requirements와 무관하다.
 
 `kis-realtime` 서비스:
 
 ```text
-command: python -m modules.collectors.kis_realtime
+command: python -m apps.realtime.main
 restart: unless-stopped
-공유: Airflow 이미지, modules, sql, logs 볼륨
-환경: AIRFLOW_CONN_FINANCE, KIS_ENV=prod, KIS_APP_KEY, KIS_APP_SECRET,
-      KIS_REST_DOMAIN, KIS_WEBSOCKET_DOMAIN,
-      KIS_ENABLE_NXT_REST, KIS_ENABLE_NXT_WEBSOCKET
+설정: config.yaml (apps.core.config) — FastAPI와 같은 파일
+저장: apps.models ORM (apps/realtime/repository.py)
+손잡이: KIS_ENABLE_NXT_REST, KIS_ENABLE_NXT_WEBSOCKET
 연결 시간: 평일 07:50~20:10 KST
 그 밖 시간: 프로세스는 살아 있고 연결하지 않은 채 대기
 ```
 
-환경 변수 이름은 애플리케이션 YAML의 `kis_websocket_domain`과 별개임을 README와 compose
-샘플에 명시한다. WebSocket 설정값에 `/tryitout`이 이미 있으면 중복해 붙이지 않는다.
+**설정이 Airflow 환경변수가 아니라 `config.yaml`이다.** 상주 서비스는 `apps/` 트리라
+백엔드 규칙을 따른다(저장소 규칙 — 위치는 배포가 가르고 규칙은 트리가 가른다). WebSocket 설정값에 `/tryitout`이 이미 있으면 중복해 붙이지 않는다.
 NXT 두 feature flag는 운영 계약 확인 전에는 `false`, 확인 뒤에는 독립적으로 `true`로 바꾼다.
 
 ### 구현 (2026-08-25)
@@ -662,12 +686,11 @@ KRX는 끌 수 없다 — 그건 수집을 통째로 멈추는 것이고 그때�
 
 ### 작업 1 — 모델·마이그레이션·SQL
 
-- 수정: `apps/models/market.py`
+- 수정: `apps/models/market/series.py`
 - 추가: 새 Alembic revision
-- 추가: `airflow/sql/postgres/krx_equity_bar/upsert_rest.sql`
-- 추가: `airflow/sql/postgres/krx_equity_bar/upsert_websocket.sql`
-- 추가: `airflow/sql/postgres/nxt_equity_bar/upsert_rest.sql`
-- 추가: `airflow/sql/postgres/nxt_equity_bar/upsert_websocket.sql`
+- 추가: `airflow/sql/postgres/stock_bar/upsert.sql` (REST 확정)
+- WebSocket 잠정 upsert는 SQL 파일이 아니라 ORM이다 — `apps/realtime/repository.py`의
+  `provisional_upsert`. `apps/`는 `airflow/sql/`을 보지 못한다
 - 추가: `airflow/sql/postgres/source_record/update.sql`
 - 수정: `tests/models/test_market_models.py`
 - 추가: `tests/migrations/test_equity_bar_schema.py`
@@ -681,8 +704,8 @@ KRX는 끌 수 없다 — 그건 수집을 통째로 멈추는 것이고 그때�
 
 ### 작업 3 — WebSocket 수집기
 
-- 추가: `airflow/modules/collectors/kis_realtime.py`
-- 추가: `tests/collectors/test_kis_realtime.py`
+- 추가: `apps/realtime/`(`frames.py`·`aggregator.py`·`repository.py`·`service.py`·`main.py`)
+- 추가: `tests/realtime/test_kis_realtime.py`
 - 구현: approval, 구독 ACK, TR ID별 46필드 파서, 다중 레코드 처리
 - 구현: 타이머 집계, 재연결, 잠정 upsert, source session, graceful shutdown
 
@@ -753,11 +776,11 @@ KRX는 끌 수 없다 — 그건 수집을 통째로 멈추는 것이고 그때�
 ```bash
 uv run pytest \
   tests/collectors/test_kis.py \
-  tests/collectors/test_kis_realtime.py \
+  tests/realtime/test_kis_realtime.py \
   tests/dags/test_kis_quote_intraday.py \
-  tests/dags/test_kis_equity_backfill.py \
-  tests/models/test_market_models.py \
-  tests/migrations/test_equity_bar_schema.py -q
+  tests/models/test_market_models.py -q
+
+# 백필 DAG(9절)은 아직 없다. 만들면 tests/dags/test_kis_equity_backfill.py가 붙는다.
 
 DJANGO_SETTINGS_MODULE=config.settings.test uv run python manage.py check
 docker compose -f compose/local/airflow/docker-compose.yaml config --quiet
@@ -767,42 +790,33 @@ docker compose -f compose/local/airflow/docker-compose.yaml config --quiet
 
 거래소별 범위와 확정 상태:
 
+테이블이 하나라 UNION이 필요 없다. `exchange`로 묶는다.
+
 ```sql
 SELECT
-    'KRX' AS venue,
-    symbol,
+    exchange,
+    stock_code,
     min(bar_at) AS first_bar_at,
     max(bar_at) AS last_bar_at,
     count(*) AS bar_count,
     count(*) FILTER (WHERE is_final) AS final_count
-FROM krx_equity_bar
+FROM stock_bar
 WHERE provider = 'kis'
-GROUP BY symbol
-UNION ALL
-SELECT
-    'NXT' AS venue,
-    symbol,
-    min(bar_at),
-    max(bar_at),
-    count(*),
-    count(*) FILTER (WHERE is_final)
-FROM nxt_equity_bar
-WHERE provider = 'kis'
-GROUP BY symbol;
+  AND exchange IN ('KRX', 'NXT')
+GROUP BY exchange, stock_code
+ORDER BY exchange, stock_code;
 ```
 
 장중 잠정 봉 정체:
 
 ```sql
-SELECT 'KRX' AS venue, symbol, max(bar_at) AS latest_bar_at
-FROM krx_equity_bar
+SELECT exchange, stock_code, max(bar_at) AS latest_bar_at
+FROM stock_bar
 WHERE provider = 'kis'
-GROUP BY symbol
-UNION ALL
-SELECT 'NXT', symbol, max(bar_at)
-FROM nxt_equity_bar
-WHERE provider = 'kis'
-GROUP BY symbol;
+  AND exchange IN ('KRX', 'NXT')
+  AND NOT is_final
+GROUP BY exchange, stock_code
+ORDER BY exchange, stock_code;
 ```
 
 운영 확인 항목:
@@ -810,7 +824,7 @@ GROUP BY symbol;
 - 같은 분의 WebSocket 잠정 OHLCV와 이후 REST 확정 OHLCV 차이
 - 활성 세션의 예상 거래 분 대비 누락 분과 실제 무체결 분 구분
 - 마지막 WebSocket 프레임과 REST 확정 봉의 지연
-- NXT 프리·메인·애프터 세션 경계와 휴지 구간 무봉 확인
+- NXT 세션 창(08:00~20:00) 안의 휴지 구간이 무봉으로 남는지 확인
 - 재연결 세션별 source record 종료 상태와 실패 원인
 
 ## 15. 단계별 배포

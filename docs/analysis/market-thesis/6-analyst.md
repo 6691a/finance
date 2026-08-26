@@ -6,11 +6,11 @@
   네이버 리서치)를 함께 했다. 리비전 둘(`a1f3c7e9b2d4`, `c2d9e4f1a7b3`)을 올리고
   `kis_analyst_opinion_daily`를 unpause하는 것이 남았다. KIS spike 결과는 9절.
 - 의존: [2-agent.md](2-agent.md)(툴을 늘리는 자리), [5-followup.md](5-followup.md)(리포트를
-  6단계로 뺀 경위, 11절). 문서 수집 경로는 `docs/economic-document-archive-design.md`.
-- 산출물: `apps/models/market.py`에 `StockAnalystOpinion`, `apps/models/content.py`의
+  6단계로 뺀 경위, 11절). 문서 수집 경로는 `docs/analysis/economic-document-archive-design.md`.
+- 산출물: `apps/models/market/fundamentals.py`에 `StockAnalystOpinion`, `apps/models/content.py`의
   `SourceKind.RESEARCH`, 수기 리비전 둘, `airflow/modules/collectors/analyst/kis_opinion.py`의
   `KisAnalystOpinionCollector`, `airflow/dags/kis_analyst_opinion_daily.py`,
-  `collectors/document/naver_research.py`의 `NaverResearchCollector`와 `ListingSource.enrich`, `documents.existing_external_ids`, `thesis.py`에 `analyst_opinions` 툴,
+  `collectors/document/naver_research.py`의 `NaverResearchCollector`와 `ListingSource.enrich`, `documents.existing_external_ids`, `thesis_toolbox.py`에 `analyst_opinions` 툴,
   SQL 넷(`stock_analyst_opinion/upsert.sql`·`select_thesis_recent.sql`,
   `document/select_existing_external_ids.sql`), 테스트 일곱 파일
 
@@ -101,7 +101,7 @@
 
 ### 2.1 테이블 `stock_analyst_opinion`
 
-`apps/models/market.py` 끝에 둔다. 본보기는 `KrxStockShortSaleDaily`(종목·날짜 자연키,
+`apps/models/market/fundamentals.py`에 둔다(작성 당시에는 `market.py` 한 파일이었고 2026-08-25에 패키지로 갈렸다). 본보기는 `KrxStockShortSaleDaily`(종목·날짜 자연키,
 `source_record_id` FK `ON DELETE RESTRICT`, `ix_<table>_source_record_id`).
 
 | 컬럼 | 뜻 |
@@ -131,7 +131,7 @@
 ### 2.2 수집기 `airflow/modules/collectors/analyst/kis_opinion.py`
 
 `KisAnalystOpinionCollector` 클래스다 — 자격 증명과 토큰이 상태라 종목마다 다시 넘기지 않는다
-(`docs/collectors-class-migration.md`). 검증 규칙은 `kis_positioning.py`를 따른다. `kis.py`에서 가져오는 것은 `access_token`,
+(`docs/convention/collectors-class-migration.md`). 검증 규칙은 `kis_positioning.py`를 따른다. `kis.py`에서 가져오는 것은 `access_token`,
 `send_get`, 예외 타입뿐이다. `_call`·`_rows`·`_day`·`_decimal` 같은 private 헬퍼는 import하지 않고
 같은 모양으로 다시 쓴다 — 수집기끼리 import하지 않는 규칙이다.
 
@@ -342,7 +342,7 @@ HTTP를 트랜잭션 안에 두지 않는다. `store_documents`는 손대지 않
 | `tests/collectors/test_kis_analyst_opinion.py` | `test_kis_positioning.py` — 가짜 `send_get`, 모델 metadata ↔ upsert 컬럼 대조, 미래 날짜 거부, `rt_cd != 0`, `tr_cont` 잘림 |
 | `tests/migrations/test_stock_analyst_opinion_schema.py` | `test_kis_market_positioning_schema.py` — 오프라인 SQL에서 CREATE TABLE·UNIQUE·FK·COMMENT |
 | `tests/dags/test_kis_analyst_opinion_daily.py` | `test_kis_market_positioning_daily.py` — 스케줄 `20 8 * * 1-5`, Param 집합 |
-| `tests/modules/test_thesis.py` | 툴 이름 집합, `_statement_key`에 `FROM stock_analyst_opinion`, "모든 툴 창의 끝은 `as_of_at`" 목록에 `analyst_opinions`, 목록 밖 ticker는 DB를 건드리지 않고 `ToolLimitExceeded` |
+| `tests/modules/test_thesis_pipeline.py` | 툴 이름 집합, `_statement_key`에 `FROM stock_analyst_opinion`, "모든 툴 창의 끝은 `as_of_at`" 목록에 `analyst_opinions`, 목록 밖 ticker는 DB를 건드리지 않고 `ToolLimitExceeded` |
 | `tests/collectors/test_document_listings.py` | 레지스트리 집합에 여섯 slug, `parse_naver_research`(실측 JSON 축약본: external_id·canonical_url·제목 형식·`published_at`), 배열 아님 → 실패, 빈 배열 정상, `enrich`는 FakeConnection + monkeypatch 상세로 "기존은 빠지고 새 것만 상세", 종목분석 summary 접두, HTML 제거 |
 | `tests/collectors/test_documents.py` | `source_kind="research"` → `document_type == "report"`, `existing_external_ids` 파라미터 모양 |
 | `tests/modules/test_dedup.py` | 같은 날 두 증권사의 같은 제목 리포트가 `titles_duplicate`에서 False |

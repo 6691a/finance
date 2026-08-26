@@ -1,7 +1,7 @@
 """DAG 객체와 params 해석만 검증한다.
 
 검출·저장 규칙은 `modules/technical_signals.py`에 있고 `tests/modules/test_technical_signals.py`가
-덮는다. 설계는 docs/market-technical-indicators.md 12.3절이다.
+덮는다. 설계는 docs/analysis/market-technical-indicators.md 12.3절이다.
 """
 
 from datetime import UTC, datetime

@@ -139,7 +139,7 @@ class ThesisHorizon(BaseModel):
 class ThesisHealth(BaseModel):
     """추론 파이프라인의 운영·품질 지표.
 
-    **두 묶음을 섞지 않는다**(`docs/market-thesis/README.md` 5절). backlog는 운영 지표라
+    **두 묶음을 섞지 않는다**(`docs/analysis/market-thesis/README.md` 5절). backlog는 운영 지표라
     이걸로 판단하고, Brier와 판정 분포는 누적만 한다 — 4주 표본으로 예측력을 결론 내리지 못한다.
     """
 

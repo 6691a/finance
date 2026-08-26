@@ -2,13 +2,13 @@
 
 - 상위: [README.md](README.md)
 - 의존: 없음. LLM 없음. 이 단계만으로 운영에 나가도 아무 것도 하지 않는 빈 테이블이다.
-- 산출물: `apps/models/analysis.py`, 수기 리비전, `airflow/sql/postgres/thesis/*.sql`·
-  `thesis_evidence/*.sql`, 세션 등락률 SQL, `airflow/modules/thesis.py`(채점 순수 함수만),
-  `tests/migrations/test_thesis_schema.py`, `tests/modules/test_thesis.py`(채점 부분)
+- 산출물: `apps/models/analysis/thesis.py`, 수기 리비전, `airflow/sql/postgres/thesis/*.sql`·
+  `thesis_evidence/*.sql`, 세션 등락률 SQL, `airflow/modules/thesis_domain.py`(채점 순수 함수만),
+  `tests/migrations/test_thesis_schema.py`, `tests/modules/test_thesis_pipeline.py`(채점 부분)
 
 ## 1. 테이블
 
-새 모델 파일 `apps/models/analysis.py`. 노드·엣지 구조이자 원본이다 — 4단계에서 Neo4j로도
+새 모델 파일 `apps/models/analysis/thesis.py`(작성 당시에는 `analysis.py` 한 파일이었고 2026-08-25에 패키지로 갈렸다). 노드·엣지 구조이자 원본이다 — 4단계에서 Neo4j로도
 반영된다. 파일 이름이 `analysis`인 것은 도메인 구분일 뿐이고 테이블은 저장소 규칙대로
 **스키마를 지정하지 않는다**(연결의 `search_path`, 기본 `public`).
 
@@ -98,7 +98,7 @@ thesis_evidence (                 -- 추론 → 근거 = 엣지
     동시호가가 빠져 있었다(`collectors/kis.py` `fetch_stock_bars` docstring 실측).
   - 지수: `index_bar`의 15:30 봉 close vs 그 봉의 `previous_close`. `kis_quote_intraday`가
     `*/5 8-16`으로 돌아 16:00이면 확정이다.
-- **수식은 Python 순수 함수다.** `airflow/modules/thesis.py`의 `classify_outcome(return_pct)`·
+- **수식은 Python 순수 함수다.** `airflow/modules/thesis_domain.py`의 `classify_outcome(return_pct, horizon_days)`·
   `brier_score(prob_up, prob_down, prob_flat, outcome)`. SQL에 넣으면 DB 없이 경계값을
   테스트할 수 없다(테스트에서 실 DB를 쓰지 않는 프로젝트 규칙). `select_session_return.sql`이
   등락률을 주고, `update_outcome.sql`은 계산된 값 넷을 쓰기만 한다.
@@ -145,6 +145,6 @@ thesis_evidence (                 -- 추론 → 근거 = 엣지
   `thesis/insert.sql`, `thesis_evidence/insert.sql`, `select_by_run.sql`, `select_by_thesis_ids.sql`.
   `thesis/insert.sql`에 `ON CONFLICT DO NOTHING`이 있고 `DO UPDATE`가 없는지.
   `select_session_return.sql`이 `stock_investor_trade_daily`를 보고 `stock_bar`를 안 보는지.
-- `tests/modules/test_thesis.py`(채점 부분) — `classify_outcome`: 0.29 → `flat`, 0.30 → `up`,
+- `tests/modules/test_thesis_pipeline.py`(채점 부분) — `classify_outcome`: 0.29 → `flat`, 0.30 → `up`,
   −0.30 → `down`, −0.29 → `flat`. `brier_score`: 완벽 예측 0, 반대 방향 확신 2에 가까움,
   균등 확률 0.667(상수), 합이 1인 어떤 분포든 0 ≤ 값 ≤ 2.

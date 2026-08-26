@@ -5,7 +5,7 @@ Revises: c9f4b2e70a18
 Create Date: 2026-08-26 09:00:00.000000
 
 `thesis.run_slot`에 장중 슬롯 넷(`intraday_morning`·`intraday_midday`·
-`intraday_afternoon`·`pre_close`)을 더한다. 설계는 `docs/market-thesis/9-intraday.md`에 있다.
+`intraday_afternoon`·`pre_close`)을 더한다. 설계는 `docs/analysis/market-thesis/9-intraday.md`에 있다.
 
 **수기 리비전이다.** `config.yaml`이 운영 DB를 가리켜 autogenerate를 돌리지 않는다.
 게다가 autogenerate는 CHECK 제약을 비교하지 않으므로 이 변경은 어차피 손으로 써야 한다.

@@ -1,7 +1,9 @@
 # 7단계 — NXT 애프터마켓 리뷰 슬롯 (`post_nxt_close`)
 
 - 날짜: 2026-08-22
-- 상태: 설계. 구현 미착수
+- 상태: **구현 완료(2026-08-22).** `airflow/modules/thesis_nxt_review.py`(`NxtAfterHoursReview`),
+  `airflow/dags/market_thesis_nxt_review.py`, `stock_bar/select_nxt_after_hours.sql`,
+  리비전 `d7a2f4e91c68`(`post_nxt_close` 슬롯)까지 있다
 - 의존: 1·2·3단계(저장, 에이전트, DAG·Slack). 5단계와는 **분리된다**(채점·해설 대상이 아니다)
 
 ## 0. 문제 — 하루의 마지막 4시간 30분이 기록에 없다
@@ -230,7 +232,7 @@ KST 경계를 UTC로 만드는 일은 파이썬이 한다(`index_bar/select_sess
 
 ## 6. 슬롯 어휘와 스키마
 
-### `airflow/modules/thesis.py`
+### 추론 모듈 (`thesis_toolbox.py`·`thesis_store.py`)
 
 | 자리 | 추가 |
 | --- | --- |
@@ -248,7 +250,7 @@ KST 경계를 UTC로 만드는 일은 파이썬이 한다(`index_bar/select_sess
 > 애프터마켓을 움직였는지**를 가설로 적어라. 지수(`index_regular`)는 정규장 마감값이라
 > 애프터마켓 움직임을 담지 않는다 — 맥락으로만 읽어라.
 
-### `apps/models/analysis.py` + 수기 리비전
+### `apps/models/analysis/thesis.py` + 수기 리비전
 
 - `RunSlot`에 값 추가
 - `ck_thesis_run_slot` CHECK 문자열
@@ -293,11 +295,11 @@ schedule="0 21 * * 1-5"   # KST 평일 21:00 = UTC 월~금 12:00
 | 파일 | 무엇 |
 | --- | --- |
 | `tests/dags/test_market_thesis_nxt_review.py` (신규) | 태스크 그래프, 스케줄, `SLOT`, 표시 메타데이터, `as_of`·`macro_window_start`·`after_hours_window`, `AfterHoursBar.from_row`와 frozen, `NxtAfterHoursReview`의 대상 필터·조회 1회·창 파라미터·guard 판정 넷·관측 상태 |
-| `tests/modules/test_thesis.py` | 새 SQL 텍스트(주석에 `%` 없음, `now()` 없음, 분모가 확정 종가), `_statement_key` 분기, 해설·백로그 SQL의 슬롯 목록 |
+| `tests/modules/test_thesis_pipeline.py` | 새 SQL 텍스트(주석에 `%` 없음, `now()` 없음, 분모가 확정 종가), `_statement_key` 분기, 해설·백로그 SQL의 슬롯 목록 |
 | `tests/migrations/test_thesis_schema.py` | 전체 dump에서 새 CHECK 문자열 |
 
 **자동으로 검사 대상이 되는 것**: `tests/models/test_analysis_models.py`의
-`test_analysis_check_constraints_repeat_the_enum_values`와 `tests/modules/test_thesis.py`의
+`test_analysis_check_constraints_repeat_the_enum_values`와 `tests/modules/test_thesis_pipeline.py`의
 `test_the_airflow_enums_match_the_backend_vocabulary`는 enum을 순회하므로 값을 넣는 순간
 CHECK 문자열과 두 enum의 일치를 강제한다.
 

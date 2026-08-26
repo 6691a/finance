@@ -2,7 +2,7 @@
 
 뉴스가 "무슨 일이 있었다"까지라면 리포트는 그 사건이 종목·시장에 어떤 뜻인지를 쓴 것이다.
 숫자(투자의견·목표주가)는 `collectors/analyst/kis_opinion.py`가 따로 받고, 추론 툴이 둘을
-발표일·증권사로 이어 읽는다. 설계는 `docs/market-thesis/6-analyst.md` 3절이다.
+발표일·증권사로 이어 읽는다. 설계는 `docs/analysis/market-thesis/6-analyst.md` 3절이다.
 
 ## 출처 (실측 2026-08-21, UTF-8 JSON)
 

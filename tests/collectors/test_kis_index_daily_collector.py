@@ -1,7 +1,7 @@
 """KIS 지수 확정 일봉 수집기.
 
 분봉·시장 등락은 `test_kis.py`가 덮는다. 이어받기 규칙과 잘림 판정이 이 API에만 있어
-소스와 같은 경계로 나눠 둔다(`docs/market-technical-indicators.md` 4절).
+소스와 같은 경계로 나눠 둔다(`docs/analysis/market-technical-indicators.md` 4절).
 """
 
 import json

@@ -44,7 +44,7 @@
 실 DB를 쓰지 않는 프로젝트 규칙). `select_session_return.sql`이 등락률을 주고
 `update_outcome.sql`은 여기서 나온 값 넷을 쓰기만 한다.
 
-설계는 `docs/market-thesis/1-storage.md`와 `docs/market-thesis/2-agent.md`에 있다.
+설계는 `docs/analysis/market-thesis/1-storage.md`와 `docs/analysis/market-thesis/2-agent.md`에 있다.
 """
 
 import logging
@@ -103,7 +103,7 @@ MAX_NARRATIVE_CHARS = 1000
 class NarrativeVariant(StrEnum):
     """해설 프롬프트가 실제 결과를 보느냐 마느냐.
 
-    어느 쪽이 나은지 추측하지 않고 실측으로 갈랐다(`docs/market-thesis/5-followup.md` 12절).
+    어느 쪽이 나은지 추측하지 않고 실측으로 갈랐다(`docs/analysis/market-thesis/5-followup.md` 12절).
 
     **`INFORMED`가 기본이다**(2026-08-21 2회차). `BLIND`가 사는 것이 없었다 — 툴 호출·
     레지스트리·서술의 질이 같고, 가격은 어차피 후속 기사로 새어 들어오며, 판정만 체계적으로
@@ -246,7 +246,7 @@ class FollowupNarrator:
     한 호출 안에서는 그 지평의 모든 대상을 한 번에 준다(건별 호출 금지 규칙 그대로).
 
     `include_outcome`이 프롬프트 변형을 가른다. 어느 쪽이 나은지는 실측으로 정한다
-    (`docs/market-thesis/5-followup.md` 12절).
+    (`docs/analysis/market-thesis/5-followup.md` 12절).
     """
 
     def __init__(self, model: BaseChatModel, toolbox: ThesisToolbox, *, include_outcome: bool = True) -> None:

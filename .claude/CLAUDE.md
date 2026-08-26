@@ -16,7 +16,7 @@ Codex용 규칙 원본은 [.codex/AGENTS.md](../.codex/AGENTS.md)이며 두 문�
 | `migrations/` | Alembic. 리비전 파일은 `migrations/versions` 하나를 모든 별칭이 공유한다 |
 | `migrations/routing.py` | 어떤 테이블이 어떤 DB 별칭에 속하는지 판단하는 순수 함수 |
 | `../airflow/dags/` | Airflow DAG. 폴더로 나누지 않는다 — 스케줄·재시도·실패 판정만 갖는 얇은 파일이다 |
-| `../airflow/modules/collectors/` | 수집기. 도메인 폴더(`market/`·`document/`·`indicator/`·`calendar/`·`analyst/`)로 나눈다. 전환 진행 상황은 [docs/collectors-class-migration.md](../docs/collectors-class-migration.md) |
+| `../airflow/modules/collectors/` | 수집기. 도메인 폴더(`market/`·`document/`·`indicator/`·`calendar/`·`analyst/`)로 나눈다. 전환 진행 상황은 [docs/convention/collectors-class-migration.md](../docs/convention/collectors-class-migration.md) |
 | `tests/` | pytest |
 
 `apps/models/`의 모듈은 도메인 단위로 나눈다(`raw.py`, `reference.py`, `content.py`).
@@ -205,7 +205,7 @@ DAG가 쓰는 코드는 **위치는 Airflow를, 규칙은 백엔드를** 따른�
 **`connection`을 첫 인자로 받는 모듈 함수는 이제 `modules/dedup.py`·`market_session.py`·
 `technical_signals.py`처럼 진입점이 하나뿐인 곳에만 남아 있다** — 새로 만들 때 그 형태를
 따라가지 않는다. 남은 단계는 없다.
-[docs/collectors-class-migration.md](../docs/collectors-class-migration.md)가 폴더
+[docs/convention/collectors-class-migration.md](../docs/convention/collectors-class-migration.md)가 폴더
 구조(도메인별 `market/`·`document/`·`indicator/`·`calendar/`·`analyst/`)와 어디서
 갈랐는지, 그리고 **함수로 두는 것이 맞다고 판정한 모듈과 그 이유**를 갖는다.
 **새 수집기는 처음부터 그 형태로 쓴다.**
@@ -216,7 +216,7 @@ DAG가 쓰는 코드는 **위치는 Airflow를, 규칙은 백엔드를** 따른�
 `airflow/modules/collectors/indicator/fred.py`(API 키 하나를 쥔 클래스, 검증 규칙의 기준)를 함께 본다.
 
 - **새 수집기는 클래스로, 도메인 폴더에 둔다.** 위 "클래스와 함수를 가르는 기준"과
-  [docs/collectors-class-migration.md](../docs/collectors-class-migration.md)를 따른다.
+  [docs/convention/collectors-class-migration.md](../docs/convention/collectors-class-migration.md)를 따른다.
   하위 패키지 `__init__.py`는 재수출하지 않는다 — 한 수집기의 의존성이 없는 환경에서
   관계없는 DAG이 import 오류로 죽는다.
 - `fetch`(외부 호출)와 `store`(DB 쓰기)를 나눈다. DAG이 `fetch` 실패로 재시도를 판단하고

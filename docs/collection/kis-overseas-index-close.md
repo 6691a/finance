@@ -1,10 +1,10 @@
-# 개발 문서 4 — 미국 현물 지수 마감 분봉(KIS)과 미국장 브리핑 섹션 분리
+# 미국 현물 지수 마감 분봉(KIS)과 미국장 브리핑 섹션 분리
 
 > 작성 기준: 2026-08-22  
 > 상태: 구현 완료(2026-08-22). 수집기는 `KisOverseasIndexCollector` 클래스다(2026-08-23)  
 > 대상: S&P500(`SPX`)·나스닥 종합(`COMP`) 현물 마감 분봉 수집, `slack_us_market_briefing` 표 분리  
 > 의존: `quote_symbol` 마스터, `index_bar`, `market_session`, `modules/briefing/market.py`  
-> 산출물: `airflow/modules/collectors/kis_overseas_index.py`, `airflow/dags/kis_overseas_index_close.py`,
+> 산출물: `airflow/modules/collectors/market/kis_overseas_index.py`, `airflow/dags/kis_overseas_index_close.py`,
 > `quote_symbol` 시드 리비전, `market.py` 섹션 분리, 테스트
 
 ## 1. 문제
@@ -52,9 +52,9 @@ FID_PW_DATA_INCU_YN=Y
 
 프로브 스크립트는 저장소 밖(스크래치패드)에 있고 키는 `config.yaml`에서 읽었다.
 
-## 4. 수집기 — `airflow/modules/collectors/kis_overseas_index.py`
+## 4. 수집기 — `airflow/modules/collectors/market/kis_overseas_index.py`
 
-`kis_market_calendar.py`·`kis_positioning.py`와 같은 꼴로 `modules/collectors/kis.py`의 `send_get`,
+`calendar/kis_market_calendar.py`·`market/kis_positioning.py`와 같은 꼴로 `modules/collectors/kis.py`의 `send_get`,
 `access_token`, `QuoteBar`, 예외 타입, `_decimal`을 재사용한다. `KisRawBar`·`parse_bars`는 국내
 전용(`futs_*`/`bstp_nmix_*` 칸, KST)이라 재사용하지 않는다.
 
@@ -216,7 +216,7 @@ ADR              TSMC ADR / SK하이닉스 ADR
 | `macro_changes()` | 건드리지 않는다. 설명에 "현물 마감은 `us_market_close`로 본다"를 덧붙인다 |
 | 상한 | `MAX_TOOL_RESULTS`(20)로 자른다. 미국 심볼이 지금 14개다 |
 
-툴 수는 11 → 12. `docs/market-thesis/2-agent.md`의 근거 툴 표(셋 → 넷)와 `TUNING.md`의 수를
+툴 수는 11 → 12. `docs/analysis/market-thesis/2-agent.md`의 근거 툴 표(셋 → 넷)와 `TUNING.md`의 수를
 고친다. **툴 수가 tool call 상한(`MAX_TOOL_CALLS = 12`)과 같아진다** — 상한에 붙는 실행이
 보이면 그 값을 올린다. 새 SQL은 2026-08-22에 운영 DB에 읽기 전용으로 돌려 14행을 확인했다
 (SOX -0.51pct가 KIS 응답의 `prdy_ctrt`와 같았다).

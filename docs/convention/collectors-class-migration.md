@@ -6,7 +6,8 @@
 **제목은 수집기지만 범위는 저장소 전체다.** 1·3단계가 `airflow/modules/collectors/`를 보고,
 2단계는 그 밖의 흐름 코드와 `apps/realtime/`까지 본다. **세 단계와 규칙 밖 정리까지 전부
 끝났다(2026-08-25).** 이 문서는 이제 "왜 그렇게 나눴나"의 기록이고, 새 수집기·새 흐름
-코드가 따라야 할 형태다.
+코드가 따라야 할 형태다. **파일을 나누는 기준도 여기 있다**("파일을 나누는 기준"
+절) — 2026-08-26에 끝난 감사 문서에서 옮겼다.
 
 ## 왜 나누는가
 
@@ -248,6 +249,55 @@ import하므로 이제 `monkeypatch.setattr(kis_quote, "send_get", ...)`다. 형
 | `apps/core/database.py`의 `table_options` 계열 | `table` 반복 | `Table` 하나를 읽는 순수 함수. 묶으면 전부 staticmethod |
 | `migrations/versions/**` | `_run(name)` 27파일 | 리비전은 불변 기록이다. 손대지 않는다 |
 
+## 파일을 나누는 기준
+
+**클래스로 묶을지와 파일로 나눌지는 다른 질문이다.** 위 규칙이 *어떤 동작을 클래스로
+묶을지*를 정한다면, 여기는 *한 모듈 안의 서로 다른 변경 축을 어디서 파일로 가를지*만
+정한다. 2026-08-25에 여섯 곳을 나누고 남은 판정 기준이다(`collectors/kis.py` 1,622→537,
+`briefing/market.py` 1,498→739, `apps/models/market.py` 1,916→패키지, `thesis.py`
+3,075→모듈 여섯, `apps/models/analysis.py` 986→패키지, `expectation.py` 849→모듈 셋).
+
+### 분리 신호 — 둘 이상일 때만 나눈다
+
+1. 다른 이유로 변경되는 책임이 한 파일에 섞여 있다.
+2. 공용 기반 코드 때문에 관계없는 소비자가 큰 모듈을 import한다.
+3. 선택 의존성이나 무거운 import가 DAG 로딩 경계를 넘는다.
+4. 이미 저장소에 같은 책임 경계를 표현하는 폴더·모듈 관례가 있다.
+5. 이동 뒤에도 각 파일의 소비자와 검증 방법을 명확히 말할 수 있다.
+
+**클래스 개수는 신호가 아니다.** 한 collector만 소비하는 요청·응답 모델은 collector와
+같이 둔다. DTO 하나당 파일 하나를 만들지 않는다.
+
+### 지금 나누지 않는 파일
+
+| 파일 | 유지 이유 |
+| --- | --- |
+| `airflow/modules/thesis_tools.py` | 작은 Pydantic DTO 카탈로그이며 운영 소비자가 `thesis_toolbox.py` 하나뿐 |
+| `airflow/modules/thesis_state.py` | 관측 상태·XCom 계약을 모은 의존성 방화벽이며 아홉 파일이 쓴다 |
+| `airflow/modules/collectors/indicator/ecos.py` | 한 제공처의 wire model과 collector가 응집돼 있음 |
+| `airflow/modules/assessment.py` | 두 LangGraph 클래스와 DTO가 하나의 평가 배치 흐름을 구성 |
+| `airflow/modules/collectors/document/dart.py` | 한 인증·전송 계약 아래 공시와 실적 파서가 이미 함수 경계로 갈려 있음 |
+| `airflow/modules/collectors/market/yahoo.py` | intraday/daily 경계 분리는 다음 기능 변경 때 다시 본다 |
+| `airflow/modules/collectors/market/kis_positioning.py` | 한 수집기의 요청·응답 모델이며 두 번째 소비자가 없음 |
+
+### 나눌 때 지키는 것
+
+1. **배치는 손으로 정하기 전에 센다.** 최상위 이름마다 어느 쪽에서 쓰이는지를 AST로 세고
+   모듈 간 간선으로 순환을 먼저 찾는다. `thesis.py`에서 줄 번호로 잡은 첫 경계는 순환 셋을
+   만들었고, 그것을 보고 `Subject`·`SLOT_LABELS`를 도메인으로 올려 풀었다.
+2. **불변량은 옮기기 전에 스냅샷으로 뜬다.** ORM 모델 이동에서는 `Base.metadata`를 통째로
+   직렬화한 것이 곧 완료 증명이다 — autogenerate를 돌리지 않고도 DB 무변경을 말할 수 있다.
+3. **나눈 뒤 남는 위험은 등록 누락이다.** 패키지 `__init__.py`에서 이름이 빠지면
+   `Base.metadata`에서 테이블이 사라지고 autogenerate가 `DROP TABLE`을 낸다. 하위 모듈을
+   훑어 `__all__`과 대조하는 테스트로 막는다(`tests/helpers.py`의 `models_defined_in`).
+4. **경계가 값어치를 만들었으면 그것을 재는 테스트를 남긴다.** `thesis`·`expectation`은
+   "무거운 것을 안 끌고 온다"가 분리의 이유였고 `tests/modules/test_import_weight.py`가 잰다.
+   반대 방향(무거운 쪽은 실제로 무겁다)도 함께 재야 단언이 헛돌지 않는다.
+5. **테스트를 나눌지는 픽스처가 정한다.** 파일마다 자기 가짜를 두는 쪽이면 나누고(수집기),
+   한 픽스처 뭉치를 모든 절이 공유하면 나누지 않는다(`thesis`·`briefing`).
+6. **눈으로 정한 배치는 틀릴 수 있다.** `MarketScope`는 조회 쪽에 적혀 있었지만 조회부가
+   그 값을 한 번도 보지 않았고, `expectation`은 둘로 적혀 있었지만 셋이 맞았다. 재고 고친다.
+
 ## 검증
 
 DAG을 돌려서 확인하지 않는다.
@@ -296,3 +346,10 @@ uv run pyrefly check
 
 이 문서의 세 단계가 모두 끝났다. 남은 규칙은 문서 앞부분("목표 형태", "폴더 구조",
 "함수로 두는 것이 맞는 모듈")이 갖는다.
+
+### 2026-08-26 — 파일 분리 기준 흡수
+
+`docs/working/class-file-split-audit.md`가 여섯 항목을 전부 끝내고 역할이 끝나, 그 문서에만
+있던 판정 기준 세 덩어리(분리 신호 다섯, 지금 나누지 않는 파일 일곱, 나눌 때 지키는 것 여섯)를
+"파일을 나누는 기준" 절로 옮기고 원본을 지웠다. 감사 문서는 `docs/working/`에 있어 추적되지
+않았고, 완료된 항목의 진행 이력은 남길 값어치가 없었다.

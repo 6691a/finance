@@ -1458,7 +1458,7 @@ def test_daily_history_says_which_symbols_have_bars_when_it_finds_none():
     assert "available_symbols" in payload
 
 
-# --- 기술지표 (docs/market-technical-indicators.md 7.1절) ----------------------
+# --- 기술지표 (docs/analysis/market-technical-indicators.md 7.1절) ----------------------
 
 
 def daily_history_row(
@@ -2123,7 +2123,7 @@ def test_the_prompt_variant_decides_whether_the_result_is_shown():
     assert "실제 결과" in shown
     assert "-4.00%" in shown
     # blind는 결과를 못 본다. 다만 후속 기사가 등락을 싣고 있어 완전한 차단은 아니다
-    # (docs/market-thesis/5-followup.md 12절 실측).
+    # (docs/analysis/market-thesis/5-followup.md 12절 실측).
     assert "실제 결과" not in hidden
     assert "-4.00%" not in hidden
     # 원 추론의 확률과 이유는 양쪽 다 본다.
@@ -2433,7 +2433,7 @@ def test_narratives_and_backlog_watch_the_same_slots():
     assert "due.run_slot = ANY(%s)" in backlog
     assert "'pre_open'" not in narratives
     assert "'pre_open'" not in backlog
-    # NXT 애프터마켓 리뷰는 아직 해설 루프 밖이다(`docs/market-thesis/7-nxt-review.md` 3절).
+    # NXT 애프터마켓 리뷰는 아직 해설 루프 밖이다(`docs/analysis/market-thesis/7-nxt-review.md` 3절).
     assert RunSlot.POST_NXT_CLOSE not in NARRATED_SLOTS
     # 채점 슬롯은 예측만이다. 리뷰 둘은 맞고 틀림을 물을 대상이 아니다.
     assert set(FORECAST_SLOTS) == {RunSlot.PRE_OPEN, *INTRADAY_SLOTS}
@@ -2560,7 +2560,7 @@ def test_evidence_refs_are_built_from_the_kind_itself():
 # 툴 14개를 한 번씩 부르면 나오는 결과 문자 수. 2026-08-26 장전 `as_of_at`
 # (`2026-08-25T23:35:00Z`), 대상 KOSPI·KOSDAQ·000660·005930으로 운영 DB에 읽기 전용으로
 # 붙어 실측한 값이다. 가짜 연결로는 잴 수 없어 상수로 박는다 — **툴을 늘리면 다시 잰다.**
-# 내역은 `docs/market-thesis/TUNING.md` 5절에 있다.
+# 내역은 `docs/analysis/market-thesis/TUNING.md` 5절에 있다.
 MEASURED_FULL_SWEEP_CHARS = 44_340
 
 

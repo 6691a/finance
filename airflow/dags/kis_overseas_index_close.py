@@ -4,7 +4,7 @@
 `quote_bar`에 그 봉이 있어야 한다. 지금까지 S&P500·나스닥은 **선물만**(Yahoo `ES=F`·`NQ=F`)
 받았고 현물은 VIX·SOX·러셀2000뿐이었다. 국내에서 받을 수 있는 것은 국내를 우선한다는
 원칙대로 KIS 해외지수 API로 현물을 받는다. CME 시세료(월 USD 221.10)는 선물 API 이야기라
-여기 해당하지 않는다. 실측과 설계는 `docs/kis-overseas-index-close.md`(개발 문서 4)에 있다.
+여기 해당하지 않는다. 실측과 설계는 `docs/collection/kis-overseas-index-close.md`에 있다.
 
 ## 왜 하루 한 번인가
 

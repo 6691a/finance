@@ -1,6 +1,6 @@
 """애프터마켓 리뷰 — 정규장이 닫힌 뒤 NXT에서 무엇이 움직였나.
 
-`docs/market-thesis/7-nxt-review.md`의 구현이다. 한국 주식의 실제 하루는 KRX 15:30이 아니라
+`docs/analysis/market-thesis/7-nxt-review.md`의 구현이다. 한국 주식의 실제 하루는 KRX 15:30이 아니라
 NXT 애프터마켓 20:00에 끝나는데, 장후 리뷰(`market_thesis_review`)의 기준 시각이 15:30이라
 그 뒤 4시간 30분이 추론 기록에 없었다. 이 DAG가 그 구간을 채운다.
 

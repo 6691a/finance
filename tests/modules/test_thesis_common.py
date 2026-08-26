@@ -1,6 +1,6 @@
 """두 추론 DAG가 함께 쓰는 관측 상태.
 
-기술적 관측 블록의 계약은 docs/market-technical-indicators.md 14.1절이다.
+기술적 관측 블록의 계약은 docs/analysis/market-technical-indicators.md 14.1절이다.
 """
 
 from datetime import UTC, date, datetime, timedelta

@@ -31,7 +31,7 @@ PROMPT_VERSION = "1"
 DEFAULT_BATCH_SIZE = 50
 
 # meet로 볼 서프라이즈 허용 밴드(퍼센트). **실측이 아니라 시작값이다** — thesis의
-# FLAT_THRESHOLD_PCT처럼 판정 분포가 쌓이면 다시 정한다(docs/market-thesis/TUNING.md).
+# FLAT_THRESHOLD_PCT처럼 판정 분포가 쌓이면 다시 정한다(docs/analysis/market-thesis/TUNING.md).
 MEET_BAND_PCT = Decimal("5.0")
 
 # 아래 도메인 상수는 apps/models/analysis/events.py와 중복이다(모듈 docstring). 테스트가 대조한다.

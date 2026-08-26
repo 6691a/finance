@@ -1,6 +1,6 @@
 """확정 일봉에서 기술적 보조지표와 매매 신호(사건)를 계산하는 순수 모듈.
 
-설계는 docs/market-technical-indicators.md 5절(지표)·12.1절(신호)이다. DB·Airflow·LLM을
+설계는 docs/analysis/market-technical-indicators.md 5절(지표)·12.1절(신호)이다. DB·Airflow·LLM을
 import하지 않는다 — 조회는 부르는 쪽(thesis, briefing, technical_signals)이 하고 여기는
 계산만 한다.
 

@@ -92,7 +92,9 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 
 # 해설 프롬프트를 고치면 올린다. `thesis_outcome.prompt_version`에 변형과 함께 저장된다.
-NARRATIVE_PROMPT_VERSION = "1"
+#
+# 2: 산문의 숫자 표기 규칙(`llm.NUMBER_STYLE`)이 붙었다(2026-08-26).
+NARRATIVE_PROMPT_VERSION = "2"
 
 # 해설 한 편의 상한. 넘으면 그 항목만 자른다.
 MAX_NARRATIVE_CHARS = 1000
@@ -200,6 +202,8 @@ Brier 점수로 따로 잰다. 네가 답할 것은 **이유가 맞았는가**�
 - 대상마다 **정확히 하나씩** 답한다. 같은 대상을 두 번 쓰지 마라.
 - 해설은 단정하지 말고 "이 기사들은 …라고 본다" 형태로 쓴다. 너는 결과를 아는 자리에서
   쓰고 있고 그 자리는 편향돼 있다.
+
+{llm.NUMBER_STYLE}
 
 출력 형식:
 {{"narratives": [{{"subject_code": "", "narrative": "", "verdict": "unresolved", "evidence_refs": []}}]}}"""

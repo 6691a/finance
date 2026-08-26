@@ -58,7 +58,7 @@ flowchart TD
 
 ## 구현 위치
 
-- [Airflow DAG](../airflow/dags/document_assessment_hourly.py)
-- [배치 및 문서별 LangGraph](../airflow/modules/assessment.py)
-- [LangChain 모델 생성과 호출](../airflow/modules/llm.py)
-- [구조화 응답 Schema](../airflow/modules/schema.py)
+- [Airflow DAG](../../airflow/dags/document_assessment_hourly.py)
+- [배치 및 문서별 LangGraph](../../airflow/modules/assessment.py)
+- [LangChain 모델 생성과 호출](../../airflow/modules/llm.py)
+- [구조화 응답 Schema](../../airflow/modules/schema.py)

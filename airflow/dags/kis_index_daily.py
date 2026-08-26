@@ -1,7 +1,7 @@
 """KOSPI·KOSDAQ 확정 일봉 수집 DAG.
 
 분봉(`kis_quote_intraday`)은 당일 흐름용이고, 이 DAG는 기술적 보조지표(SMA·RSI·MACD)의
-원천이 되는 **확정 일봉**을 받는다. 설계는 docs/market-technical-indicators.md 4절이다.
+원천이 되는 **확정 일봉**을 받는다. 설계는 docs/analysis/market-technical-indicators.md 4절이다.
 
 ## 왜 200달력일인가
 

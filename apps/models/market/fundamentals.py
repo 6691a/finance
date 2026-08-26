@@ -289,7 +289,7 @@ class StockAnalystOpinion(EntityBase):
     """증권사 애널리스트의 종목별 투자의견·목표주가(KIS `invest-opinion`).
 
     발표일·증권사마다 한 행이다. 리포트 본문은 여기 없다 — 글은 `document`가 네이버 리서치
-    출처로 갖고, 이 테이블은 숫자만 갖는다(`docs/market-thesis/6-analyst.md`).
+    출처로 갖고, 이 테이블은 숫자만 갖는다(`docs/analysis/market-thesis/6-analyst.md`).
 
     괴리 값은 **발표 전일 종가 대비**만 둔다. KIS가 함께 주는 조회 시점 현재가 대비 괴리
     (`stft_esdg`·`dprt`)는 매일 바뀌는 값이라 발표일 행에 섞지 않는다.

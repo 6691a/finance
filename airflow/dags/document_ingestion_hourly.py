@@ -1,6 +1,6 @@
 """공식기관·언론 피드에서 경제 문서를 매시간 발견해 저장한다.
 
-`docs/economic-document-archive-design.md` 2단계의 수집 절반이다. LLM 태깅은 별도 DAG이
+`docs/analysis/economic-document-archive-design.md` 2단계의 수집 절반이다. LLM 태깅은 별도 DAG이
 맡는다. **모델이나 API 키가 없어도 이 DAG은 돈다.** 원문 수집이 LLM 장애에 묶이면 안 된다는
 것이 설계의 첫 결정이고, 태깅이 못 돌아도 문서는 태그 없이 쌓인다.
 
@@ -36,7 +36,7 @@ RSS는 최근 항목만 준다. **수집을 시작하기 전 기간은 영영 �
 
 - `CONNECTION_ID`가 가리키는 Airflow 연결. 접속 정보는 `AIRFLOW_CONN_FINANCE`가 갖는다.
 - 인증은 없다. 전부 공개 피드다. 네이버 리서치(`naver_research_*`)는 robots.txt가 일반 봇을
-  막는 내부 JSON이고, 사용자 결정으로 수집한다(`docs/market-thesis/6-analyst.md` 1.2절).
+  막는 내부 JSON이고, 사용자 결정으로 수집한다(`docs/analysis/market-thesis/6-analyst.md` 1.2절).
 """
 
 import logging

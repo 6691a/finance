@@ -41,7 +41,7 @@ INDEX_DAILY_UPSERT = read_sql("postgres", "index_daily", "upsert.sql")
 
 
 # 지수 일봉(국내주식업종기간별시세). 기술지표 계산의 원천이다
-# (docs/market-technical-indicators.md 4절).
+# (docs/analysis/market-technical-indicators.md 4절).
 INDEX_DAILY_PATH = "/uapi/domestic-stock/v1/quotations/inquire-daily-indexchartprice"
 INDEX_DAILY_TR_ID = "FHKUP03500100"
 INDEX_DAILY_SOURCE_KEY = "inquire_daily_indexchartprice"

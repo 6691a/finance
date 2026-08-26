@@ -47,7 +47,7 @@
 실 DB를 쓰지 않는 프로젝트 규칙). `select_session_return.sql`이 등락률을 주고
 `update_outcome.sql`은 여기서 나온 값 넷을 쓰기만 한다.
 
-설계는 `docs/market-thesis/1-storage.md`와 `docs/market-thesis/2-agent.md`에 있다.
+설계는 `docs/analysis/market-thesis/1-storage.md`와 `docs/analysis/market-thesis/2-agent.md`에 있다.
 """
 
 import logging
@@ -101,7 +101,7 @@ NARRATED_HORIZON_DAYS: tuple[int, ...] = (1, 3, 5)
 #
 # **값의 근거는 `0.3 × sqrt(N)`을 반올림한 것뿐이고 실측이 아니다.** 배포 4주 뒤 지평별
 # `actual_outcome` 분포를 보고 조정한다 — 한 지평에서만 `flat` 비율이 5% 아래거나 60% 위면
-# 그 값이 틀린 것이다(`docs/market-thesis/5-followup.md` 2·11절).
+# 그 값이 틀린 것이다(`docs/analysis/market-thesis/5-followup.md` 2·11절).
 FLAT_THRESHOLD_PCT: dict[int, Decimal] = {
     0: Decimal("0.3"),
     1: Decimal("0.3"),
@@ -140,7 +140,7 @@ MAX_TOOL_CALLS = 20
 # 운이었다. 대상별 툴까지 부르는 현실적 조사는 26호출 64,694자였다.
 #
 # 이 값은 그 한 바퀴에 표적 2차 조사와 여유를 더한 크기다. 실측 내역은
-# `docs/market-thesis/TUNING.md` 5절에 있다(2026-08-26에 40,000에서, 그 전은 2026-08-25에
+# `docs/analysis/market-thesis/TUNING.md` 5절에 있다(2026-08-26에 40,000에서, 그 전은 2026-08-25에
 # 24,000에서).
 MAX_TOOL_RESULT_CHARS = 100_000
 

@@ -602,8 +602,8 @@ uv run ruff check airflow/modules/briefing/market.py tests/modules/test_briefing
 
 **Files:**
 
-- Modify: `docs/market-thesis/2-agent.md`
-- Modify: `docs/market-thesis/TUNING.md`
+- Modify: `docs/analysis/market-thesis/2-agent.md`
+- Modify: `docs/analysis/market-thesis/TUNING.md`
 
 - [ ] `daily_history` 행을 “일봉 + SMA20/60 + RSI14 + MACD + 거래량 비율”로 갱신하고 국내 일봉 부재 문구를 제거한다.
 - [ ] TUNING 변경 이력에 `PROMPT_VERSION 2 → 3`, 기술지표 입력 추가, 비교 시작일을 기록한다.
@@ -764,8 +764,8 @@ uv run ruff check airflow/modules/briefing/market.py tests/modules/test_briefing
 - Create: `airflow/sql/postgres/technical_signal/select_thesis_recent.sql`
 - Modify: `airflow/modules/thesis.py`
 - Modify: `tests/modules/test_thesis.py`
-- Modify: `docs/market-thesis/2-agent.md`
-- Modify: `docs/market-thesis/TUNING.md`
+- Modify: `docs/analysis/market-thesis/2-agent.md`
+- Modify: `docs/analysis/market-thesis/TUNING.md`
 
 - [ ] `recent_signals`가 7.1절 모양으로 나오고, `created_at > as_of_at` 행이 빠지고, 신호가 없으면 빈 배열이고, `Evidence.registry`는 비어 있고, 툴 수 13·호출 상한 12가 그대로인지 먼저 테스트한다.
 - [ ] 실패를 확인한다.
@@ -925,7 +925,7 @@ def detect_signals(
 
 ### 12.6 채점과 규칙 개정
 
-채점 테이블·DAG를 두지 않는다. 사건과 일봉이 모두 DB에 있으므로 SQL 한 번이면 된다. 아래를 운영 4주 뒤 돌리고, 결과를 `docs/market-thesis/TUNING.md`에 `RULE_VERSION`별로 적는다.
+채점 테이블·DAG를 두지 않는다. 사건과 일봉이 모두 DB에 있으므로 SQL 한 번이면 된다. 아래를 운영 4주 뒤 돌리고, 결과를 `docs/analysis/market-thesis/TUNING.md`에 `RULE_VERSION`별로 적는다.
 
 ```sql
 -- kind·direction·rule_version별 T+N 거래일 사후 수익률. N은 거래일 수이지 달력일이 아니다.
@@ -1147,7 +1147,7 @@ ORDER BY outcome.horizon_days, cited.cited_signal;
 
 판정 절차:
 
-- 배포 4주 뒤 위 셋과 12.6절을 `docs/market-thesis/TUNING.md`에 `prompt_version`·`RULE_VERSION`별로 적는다.
+- 배포 4주 뒤 위 셋과 12.6절을 `docs/analysis/market-thesis/TUNING.md`에 `prompt_version`·`RULE_VERSION`별로 적는다.
 - (1)·(2)에서 개선이 없으면 14.1절 push를 빼고 툴(pull)만 남기는 것이 1차 롤백이다. 테이블·DAG는 그대로다.
 - (3)에서 모델의 읽기가 신호 자체보다 나쁘면 14.2절 문구를 고친다. 신호 종류를 늘리는 것은 12.6절 조건만 따른다.
 
@@ -1167,7 +1167,7 @@ Task 11 뒤다. 둘 다 테스트 먼저.
 - Modify: `airflow/modules/thesis.py`(`ThesisEvidenceKind`, `ThesisToolbox.register`, `_tool_daily_history`), `apps/models/analysis.py`(`ThesisEvidenceKind`, CHECK), Task 8 리비전, `tests/modules/test_thesis.py`, `tests/migrations/`
 - [ ] `recent_signals` 항목이 `technical_signal:<id>` ref로 레지스트리에 들어가고, 모델이 그 ref를 `claims`에 쓰면 `thesis_evidence`에 `direction`·`mechanism`과 함께 저장되고, 레지스트리 밖 ref는 버려지는지 먼저 테스트한다.
 - [ ] offline SQL에 `ck_thesis_evidence_kind`가 `technical_signal`을 포함하는지 테스트한다.
-- [ ] `docs/market-thesis/2-agent.md`의 근거 종류 표에 `technical_signal`을 더한다.
+- [ ] `docs/analysis/market-thesis/2-agent.md`의 근거 종류 표에 `technical_signal`을 더한다.
 
 완료 기준(10절에 더함):
 

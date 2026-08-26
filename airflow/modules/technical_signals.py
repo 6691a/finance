@@ -1,7 +1,7 @@
 """확정 일봉에서 매매 신호를 검출해 `technical_signal`에 저장한다.
 
 계산은 `modules/technical.py`가 하고 여기는 조회·정렬·저장만 한다. 그래서 계산기는 계속
-DB를 모른다. 설계는 docs/market-technical-indicators.md 12.3절이다.
+DB를 모른다. 설계는 docs/analysis/market-technical-indicators.md 12.3절이다.
 
 조회는 추론 툴·브리핑과 **같은 SQL**을 쓴다(`technical/select_history.sql`). 지표와 신호가
 같은 봉을 봐야 Slack 표의 SMA와 신호의 SMA가 어긋나지 않는다.

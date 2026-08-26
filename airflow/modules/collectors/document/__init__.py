@@ -6,7 +6,7 @@
 
 지금 여기 있는 것은 네이버 증권 리서치와 DART 공시다. 나머지(`collectors/documents.py`의 피드,
 `collectors/document_listings.py`의 KRX·금감원)는 아직 옛 자리에 있고, 옮기는 계획은
-`docs/collectors-class-migration.md`에 있다.
+`docs/convention/collectors-class-migration.md`에 있다.
 
 `collectors/__init__.py`와 같은 이유로 하위 모듈을 재수출하지 않는다.
 

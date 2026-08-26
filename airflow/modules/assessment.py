@@ -1,6 +1,6 @@
 """수집한 문서를 LLM으로 태깅하고 점수를 매긴다.
 
-`docs/economic-document-archive-design.md` 2단계의 LLM 절반이다. 수집(`collectors/documents.py`)과
+`docs/analysis/economic-document-archive-design.md` 2단계의 LLM 절반이다. 수집(`collectors/documents.py`)과
 나뉘어 있어 **모델이나 키가 없어도 원문 수집은 계속 돈다.** 여기가 못 돌면 문서는 태그 없이
 쌓이고, 다음 실행이 밀린 것부터 집는다.
 

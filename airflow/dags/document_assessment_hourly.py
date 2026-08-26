@@ -1,6 +1,6 @@
 """수집한 문서를 LLM으로 태깅하고 점수를 매긴다.
 
-`docs/economic-document-archive-design.md` 2단계의 LLM 절반이다. 수집
+`docs/analysis/economic-document-archive-design.md` 2단계의 LLM 절반이다. 수집
 (`document_ingestion_hourly`)과 나뉘어 있어 **여기가 못 돌아도 원문 수집은 계속된다.** 모델
 장애가 수집을 막지 않는다는 것이 설계의 첫 결정이다.
 

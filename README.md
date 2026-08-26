@@ -287,13 +287,13 @@ DAG마다 절을 두지 않습니다. 상세는 각 DAG 파일의 `doc_md`에 �
 
 `yahoo_quote_intraday`에만 시간 창이 없습니다. 한국 장중의 미국 선물 변동을 보는 것이 이 수집의 목적이라 미국 장 시간에만 도는 스케줄로는 목적을 못 이룹니다.
 
-구현 계약은 [KIS 시장 수급·포지션·캘린더](docs/kis-market-data-collection.md),
-[DART 공시·실적](docs/dart-disclosure-earnings.md),
-[ECB 회원국 10년물 월평균](docs/ecb-convergence-monthly.md) 문서에 정리했습니다.
+구현 계약은 [KIS 시장 수급·포지션·캘린더](docs/collection/kis-market-data-collection.md),
+[DART 공시·실적](docs/collection/dart-disclosure-earnings.md),
+[ECB 회원국 10년물 월평균](docs/collection/ecb-convergence-monthly.md) 문서에 정리했습니다.
 
 ### Slack 브리핑 DAG 목록
 
-수집하지 않고 **읽어서 내보내기만 하는** DAG들입니다. 설계는 [docs/slack-report-design.md](docs/slack-report-design.md)에 있습니다.
+수집하지 않고 **읽어서 내보내기만 하는** DAG들입니다. 설계는 [docs/briefing/slack-report-design.md](docs/briefing/slack-report-design.md)에 있습니다.
 
 | DAG | 스케줄(KST) | 채널 | 내용 |
 | --- | --- | --- | --- |
@@ -385,7 +385,7 @@ airflow dags trigger mof_jgb_daily --conf '{\"source_file\": \"all\", \"observat
 
 태그 테이블(`document_instrument`, `document_indicator`)은 마스터로 **외래키를 걸지 않습니다.** `indicator_observation`이 `indicator_series`를 참조하지 않는 것과 같은 이유입니다. 마스터에 없는 값이 오면 태깅 전체가 죽는 대신 그 태그만 빠져야 합니다. LLM에게는 후보 목록을 프롬프트로 주고, 목록 밖의 값은 저장 전에 버립니다.
 
-흐름도는 [docs/document-assessment-workflow.md](docs/document-assessment-workflow.md)에 있습니다.
+흐름도는 [docs/analysis/document-assessment-workflow.md](docs/analysis/document-assessment-workflow.md)에 있습니다.
 
 ### LLM 계층은 세 층으로 나뉩니다
 

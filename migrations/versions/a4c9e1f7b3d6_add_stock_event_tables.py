@@ -5,7 +5,7 @@ Revises: b7e2f4a18c53
 Create Date: 2026-08-24 00:00:00.000000
 
 종목 이벤트 기대치·서프라이즈 판정 테이블 셋을 만든다. 설계는
-`docs/market-thesis/8-expectation.md`에 있다.
+`docs/analysis/market-thesis/8-expectation.md`에 있다.
 
 이 리비전은 **손으로 썼다.** `config.yaml`이 운영 DB를 가리켜 autogenerate를 돌리지
 않는다(프로젝트 규칙). 검증은 오프라인 `head_sql` 기반

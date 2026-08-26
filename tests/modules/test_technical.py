@@ -1,4 +1,4 @@
-"""기술지표 계산기 계약 테스트. 설계는 docs/market-technical-indicators.md 5절·12.1절이다."""
+"""기술지표 계산기 계약 테스트. 설계는 docs/analysis/market-technical-indicators.md 5절·12.1절이다."""
 
 from datetime import date, timedelta
 

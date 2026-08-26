@@ -42,7 +42,7 @@
 실 DB를 쓰지 않는 프로젝트 규칙). `select_session_return.sql`이 등락률을 주고
 `update_outcome.sql`은 여기서 나온 값 넷을 쓰기만 한다.
 
-설계는 `docs/market-thesis/1-storage.md`와 `docs/market-thesis/2-agent.md`에 있다.
+설계는 `docs/analysis/market-thesis/1-storage.md`와 `docs/analysis/market-thesis/2-agent.md`에 있다.
 """
 
 import logging

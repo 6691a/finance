@@ -9,7 +9,7 @@
 리뷰(`market_thesis_review`)의 기준 시각은 15:30이고 그 이후 정보는 **일부러** 뺀다 —
 재실행마다 근거가 달라지는 것을 막기 위해서다. 그래서 하루의 마지막 4시간 30분이 추론
 기록에 아예 없었다. 기존 리뷰에 애프터 데이터를 얹으면 그 슬롯의 event-time cutoff가
-깨지므로 슬롯을 나눈다. 설계는 `docs/market-thesis/7-nxt-review.md`에 있다.
+깨지므로 슬롯을 나눈다. 설계는 `docs/analysis/market-thesis/7-nxt-review.md`에 있다.
 
 ## 클래스인 이유
 

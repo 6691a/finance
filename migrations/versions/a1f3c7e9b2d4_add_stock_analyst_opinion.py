@@ -5,7 +5,7 @@ Revises: a3f9c1d27e64
 Create Date: 2026-08-22 00:00:00.000000
 
 증권사 애널리스트의 종목별 투자의견·목표주가를 담는 테이블을 만든다. 설계는
-`docs/market-thesis/6-analyst.md` 2절에 있다.
+`docs/analysis/market-thesis/6-analyst.md` 2절에 있다.
 
 이 리비전은 **손으로 썼다.** `config.yaml`이 운영 DB를 가리켜 autogenerate를 돌리지
 않는다(프로젝트 규칙). 검증은 오프라인 `head_sql` 기반

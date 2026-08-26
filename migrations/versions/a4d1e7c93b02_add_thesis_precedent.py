@@ -5,7 +5,7 @@ Revises: b7d21e4a9f38
 Create Date: 2026-08-21 21:30:00.000000
 
 장전 추론이 프롬프트에서 본 과거 추론을 잇는 엣지 테이블을 만든다. 설계는
-`docs/market-thesis/5-followup.md` 5절에 있다.
+`docs/analysis/market-thesis/5-followup.md` 5절에 있다.
 
 이 리비전은 **손으로 썼다.** `config.yaml`이 운영 DB를 가리켜 autogenerate를 돌리지
 않는다(프로젝트 규칙). 검증은 오프라인 `head_sql` 기반 `tests/migrations/test_thesis_schema.py`가

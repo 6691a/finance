@@ -64,10 +64,10 @@ REQUEST_TIMEOUT_SECONDS = 300.0
 #
 # **1800은 관측이 아니라 예방이다**(2026-08-22). 900에서 죽은 실행은 아직 없고, 툴이 11개로
 # 늘면서 왕복이 길어질 것을 보고 미리 올렸다. 되돌릴 후보라는 사실을 손잡이 장부에 남겼다
-# (`docs/market-thesis/TUNING.md` 6절 이력). 실제 소요 분포가 쌓이면 다시 정한다.
+# (`docs/analysis/market-thesis/TUNING.md` 6절 이력). 실제 소요 분포가 쌓이면 다시 정한다.
 #
 # **문서 태깅의 300초를 같이 올리지 않는다.** 그쪽은 지금 값으로 잘 돌고 있고, 한 번에
-# 손잡이 하나만 당긴다(`docs/market-thesis/TUNING.md` 1절).
+# 손잡이 하나만 당긴다(`docs/analysis/market-thesis/TUNING.md` 1절).
 THESIS_TIMEOUT_SECONDS = 1800.0
 
 # 산문에 숫자를 쓰는 규칙. 모델은 툴 JSON의 raw 숫자를 그대로 문장에 베끼기 때문에 "상승 1174",

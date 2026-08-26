@@ -18,7 +18,7 @@ down_revision: str | Sequence[str] | None = "a1f3c7e9b2d4"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 
-# 증권사 리서치 리포트를 문서로 흡수한다(`docs/market-thesis/6-analyst.md` 3절). 뉴스가
+# 증권사 리서치 리포트를 문서로 흡수한다(`docs/analysis/market-thesis/6-analyst.md` 3절). 뉴스가
 # "무슨 일이 있었다"까지라면 리포트는 그 사건이 종목·시장에 어떤 뜻인지를 쓴 것이고,
 # 지금까지는 뉴스에 섞여 들어오는 만큼만 잡혔다.
 #

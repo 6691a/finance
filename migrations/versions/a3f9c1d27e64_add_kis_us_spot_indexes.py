@@ -5,7 +5,7 @@ Revises: 6e09dafae6f8
 Create Date: 2026-08-22 12:00:00.000000
 
 S&P500(`SPX`)·나스닥 종합(`COMP`) 현물 지수를 KIS 해외지수 분봉 API로 받기 시작한다
-(`kis_overseas_index_close`, `docs/kis-overseas-index-close.md`). 지금까지 둘은 선물만
+(`kis_overseas_index_close`, `docs/collection/kis-overseas-index-close.md`). 지금까지 둘은 선물만
 (Yahoo `ES=F`·`NQ=F`) 있었다.
 
 - `quote_symbol` 마스터에 `provider = 'kis'` 행 둘을 넣는다. 브리핑·대시보드가

@@ -1,7 +1,7 @@
 """DAG 객체와 params 해석만 검증한다.
 
 수집·검증 규칙은 `modules/collectors/kis.py`의 `fetch_index_daily`/`store_index_daily`에 있고
-`tests/collectors/test_kis.py`가 덮는다. 설계는 docs/market-technical-indicators.md 4.4절이다.
+`tests/collectors/test_kis.py`가 덮는다. 설계는 docs/analysis/market-technical-indicators.md 4.4절이다.
 """
 
 from datetime import UTC, date, datetime, timedelta

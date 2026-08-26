@@ -7,7 +7,7 @@ Create Date: 2026-08-24 12:00:00.000000
 확정 일봉에서 검출한 매매 신호를 사건으로 보존한다. 지표값(SMA·RSI·MACD)은 원천 OHLCV에서
 언제든 다시 계산되므로 저장하지 않지만, "언제 교차했는지"는 값에서 되살릴 수 없고 그 뒤
 실제로 어떻게 움직였는지를 채점하려면 사건이 행으로 남아야 한다.
-설계는 `docs/market-technical-indicators.md` 12절.
+설계는 `docs/analysis/market-technical-indicators.md` 12절.
 
 이 리비전은 **손으로 썼다.** `config.yaml`이 운영 DB를 가리켜 autogenerate를 돌리지
 않는다(프로젝트 규칙). 검증은 오프라인 `head_sql` 기반 `tests/migrations/test_technical_signal_schema.py`가

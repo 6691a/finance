@@ -1,6 +1,6 @@
 """수집이 지난 하루 제대로 돌았는지를 Slack에 보낸다.
 
-`docs/slack-report-design.md` 3부다. `source_record` 한 테이블이 거의 모든 답을 준다.
+`docs/briefing/slack-report-design.md` 3부다. `source_record` 한 테이블이 거의 모든 답을 준다.
 
 ## 왜 올그린에도 보내나
 

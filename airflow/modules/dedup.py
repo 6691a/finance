@@ -1,6 +1,6 @@
 """같은 기사를 `canonical_document_id`에 연결한다.
 
-`docs/economic-document-archive-design.md` §6.4의 ①②를 구현한다. 판정은 둘이다.
+`docs/analysis/economic-document-archive-design.md` §6.4의 ①②를 구현한다. 판정은 둘이다.
 
 - **본문 해시(②)**: `content_hash`가 같으면 출처가 달라도 같은 문서다. 해시는 제목·요약·
   본문을 이어 붙인 SHA-256이라 값이 같으면 셋이 글자 그대로 같다. 제목을 보지 않는다.

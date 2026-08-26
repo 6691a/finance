@@ -100,7 +100,7 @@ uv run ruff check apps airflow migrations tests
 - 함수로 두는 것: 파싱·정규화·계산처럼 감쌀 상태가 없는 것, 그 클래스의 관심사가 아닌 조회(`watched_stocks`). 클래스 안이 읽기 좋으면 `@staticmethod`.
 - 데이터 모양은 언제나 Pydantic 모델이다. 수집기 클래스 안에 중첩하지 않는다.
 - **감쌀 상태가 없는 것을 클래스로 만들지 않는다.** 메서드가 전부 `@staticmethod`면 그건 모듈이다.
-- 자격 증명을 쥐는 수집기 10모듈(2026-08-23)과 연결·기준 시각을 쥐는 흐름 코드 9곳(2026-08-25)은 클래스로 옮겼고, 수집기는 도메인 폴더로 내려갔다(2026-08-25). `connection`을 첫 인자로 받는 모듈 함수는 진입점이 하나뿐인 곳(`dedup.py`·`market_session.py`·`technical_signals.py`)에만 남아 있다. 남은 단계는 없다. 폴더 구조(도메인별 `market/`·`document/`·`indicator/`·`calendar/`·`analyst/`)와 단계별 순서, 함수로 두는 것이 맞다고 판정한 모듈과 그 이유는 `docs/collectors-class-migration.md`에 있다. **새 수집기는 처음부터 그 형태로 쓴다.**
+- 자격 증명을 쥐는 수집기 10모듈(2026-08-23)과 연결·기준 시각을 쥐는 흐름 코드 9곳(2026-08-25)은 클래스로 옮겼고, 수집기는 도메인 폴더로 내려갔다(2026-08-25). `connection`을 첫 인자로 받는 모듈 함수는 진입점이 하나뿐인 곳(`dedup.py`·`market_session.py`·`technical_signals.py`)에만 남아 있다. 남은 단계는 없다. 폴더 구조(도메인별 `market/`·`document/`·`indicator/`·`calendar/`·`analyst/`)와 단계별 순서, 함수로 두는 것이 맞다고 판정한 모듈과 그 이유는 `docs/convention/collectors-class-migration.md`에 있다. **새 수집기는 처음부터 그 형태로 쓴다.**
 
 ## 수집기 작성 규칙
 

@@ -5,7 +5,7 @@ Revises: a4d1e7c93b02
 Create Date: 2026-08-21 22:10:00.000000
 
 추론이 근거를 **어느 방향으로 어떤 경로로** 썼는지를 `thesis_evidence`에 두 칸으로 더한다.
-이유 문장은 산문이라 그래프 엣지에 실을 수 없었다. 설계는 `docs/market-thesis/2-agent.md` 3절.
+이유 문장은 산문이라 그래프 엣지에 실을 수 없었다. 설계는 `docs/analysis/market-thesis/2-agent.md` 3절.
 
 이 리비전은 **손으로 썼다.** `config.yaml`이 운영 DB를 가리켜 autogenerate를 돌리지
 않는다(프로젝트 규칙). 검증은 오프라인 `head_sql` 기반 `tests/migrations/test_thesis_schema.py`가

@@ -216,7 +216,7 @@ ADR              TSMC ADR / SK하이닉스 ADR
 | `macro_changes()` | 건드리지 않는다. 설명에 "현물 마감은 `us_market_close`로 본다"를 덧붙인다 |
 | 상한 | `MAX_TOOL_RESULTS`(20)로 자른다. 미국 심볼이 지금 14개다 |
 
-툴 수는 11 → 12. `docs/market-thesis/2-agent.md`의 근거 툴 표(셋 → 넷)와 `TUNING.md`의 수를
+툴 수는 11 → 12. `docs/analysis/market-thesis/2-agent.md`의 근거 툴 표(셋 → 넷)와 `TUNING.md`의 수를
 고친다. **툴 수가 tool call 상한(`MAX_TOOL_CALLS = 12`)과 같아진다** — 상한에 붙는 실행이
 보이면 그 값을 올린다. 새 SQL은 2026-08-22에 운영 DB에 읽기 전용으로 돌려 14행을 확인했다
 (SOX -0.51pct가 KIS 응답의 `prdy_ctrt`와 같았다).

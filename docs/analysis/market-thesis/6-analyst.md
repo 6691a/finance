@@ -6,7 +6,7 @@
   네이버 리서치)를 함께 했다. 리비전 둘(`a1f3c7e9b2d4`, `c2d9e4f1a7b3`)을 올리고
   `kis_analyst_opinion_daily`를 unpause하는 것이 남았다. KIS spike 결과는 9절.
 - 의존: [2-agent.md](2-agent.md)(툴을 늘리는 자리), [5-followup.md](5-followup.md)(리포트를
-  6단계로 뺀 경위, 11절). 문서 수집 경로는 `docs/economic-document-archive-design.md`.
+  6단계로 뺀 경위, 11절). 문서 수집 경로는 `docs/analysis/economic-document-archive-design.md`.
 - 산출물: `apps/models/market.py`에 `StockAnalystOpinion`, `apps/models/content.py`의
   `SourceKind.RESEARCH`, 수기 리비전 둘, `airflow/modules/collectors/analyst/kis_opinion.py`의
   `KisAnalystOpinionCollector`, `airflow/dags/kis_analyst_opinion_daily.py`,
@@ -131,7 +131,7 @@
 ### 2.2 수집기 `airflow/modules/collectors/analyst/kis_opinion.py`
 
 `KisAnalystOpinionCollector` 클래스다 — 자격 증명과 토큰이 상태라 종목마다 다시 넘기지 않는다
-(`docs/collectors-class-migration.md`). 검증 규칙은 `kis_positioning.py`를 따른다. `kis.py`에서 가져오는 것은 `access_token`,
+(`docs/convention/collectors-class-migration.md`). 검증 규칙은 `kis_positioning.py`를 따른다. `kis.py`에서 가져오는 것은 `access_token`,
 `send_get`, 예외 타입뿐이다. `_call`·`_rows`·`_day`·`_decimal` 같은 private 헬퍼는 import하지 않고
 같은 모양으로 다시 쓴다 — 수집기끼리 import하지 않는 규칙이다.
 

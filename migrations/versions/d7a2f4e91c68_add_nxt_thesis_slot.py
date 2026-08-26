@@ -5,7 +5,7 @@ Revises: c2d9e4f1a7b3
 Create Date: 2026-08-22 15:10:00.000000
 
 `thesis.run_slot`에 `post_nxt_close`(NXT 애프터마켓 리뷰)를 더한다. 설계는
-`docs/market-thesis/7-nxt-review.md`에 있다.
+`docs/analysis/market-thesis/7-nxt-review.md`에 있다.
 
 **수기 리비전이다.** `config.yaml`이 운영 DB를 가리켜 autogenerate를 돌리지 않는다.
 게다가 autogenerate는 CHECK 제약을 비교하지 않으므로 이 변경은 어차피 손으로 써야 한다.

@@ -67,7 +67,6 @@ requirements) **배포 단위(worktree/PR 하나)마다 문서를 나눴다.** �
 | 7 | [7-nxt-review.md](7-nxt-review.md) | `post_nxt_close` 슬롯, `thesis_nxt_review.py`, `market_thesis_nxt_review` DAG, 애프터마켓 조회 SQL, 수기 리비전(CHECK 확장) | 1, 2, 3 | 있음 |
 | 8 | [8-expectation.md](8-expectation.md) | `stock_event_claim`·`stock_event_extraction`·`stock_event_outcome`과 수기 리비전, `modules/expectation_domain.py`·`expectation_extraction.py`·`expectation_judgment.py`, `event_expectation_hourly` DAG, `event_surprises` 툴, 컨센서스 수집기(후행) | 2, 6 | 추출만 |
 | 9 | [9-intraday.md](9-intraday.md) | 장중 슬롯 넷과 수기 리비전, `thesis_intraday.py`, `market_thesis_intraday` DAG, 장중 봉·되짚기·채점 SQL 다섯, 채점·해설 슬롯 목록 파라미터화 | 1, 2, 3, 5 | 있음 |
-| 10 | [10-multi-agent.md](10-multi-agent.md) | **문서뿐이다 — 배포 단위가 아니다.** 단일 에이전트를 멀티로 나눌지의 판정과 사다리(상한 → 툴 그룹 → 서브그래프 → multi-agent), 칸마다 발동 조건·비용·되돌리기 | 2 | 없음 |
 
 **5단계는 1단계의 `thesis` 채점 컬럼을 `thesis_outcome`으로 옮긴다.** 채택했으므로
 (2026-08-21) 그 이동을 1·2단계 코드에 먼저 반영한다. 무엇이 바뀌는지는
@@ -88,10 +87,6 @@ requirements) **배포 단위(worktree/PR 하나)마다 문서를 나눴다.** �
 
 **[TUNING.md](TUNING.md)는 단계가 아니다.** 다 만든 뒤에 쓰는 운영 규칙이라 번호가 없다 —
 손잡이 장부, 판단 캘린더, 그리고 **자동으로 안 나오는 지표를 손으로 읽는 쿼리**를 갖는다.
-
-**[10-multi-agent.md](10-multi-agent.md)도 배포 단위가 아니다.** 번호는 붙었지만 성격은
-`TUNING.md` 쪽이다 — 코드 산출물이 없고 "무엇을 언제 하기로 했나"를 남긴다. 표의 1~9와
-달리 worktree 하나가 나가는 단위가 아니다.
 
 ## 3. 공통 규칙
 

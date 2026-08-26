@@ -142,7 +142,7 @@ GROUP BY run_slot;
 | `NarrativeVariant` 기본 | `INFORMED` | `thesis_outcomes.py`, `FollowupNarrator.__init__` | 분기 Brier + `verdict` 분포 | 노트북 재실행으로 재검증. `BLIND`가 남아 있어 되돌리기가 인자 하나다 |
 | `HORIZON_DAYS` | `(0,1,3,5)` | `thesis_domain.py` `HORIZON_DAYS`·`NARRATED_HORIZON_DAYS`, `ops.py` `THESIS_HORIZONS`, DB CHECK — **네 곳** | LLM 호출 비용 | 비용이 문제면 **해설만** T+5 하나로 줄인다. 채점은 SQL이라 공짜다. 네 곳을 같은 커밋에서 만진다 |
 | `PREFETCHED_PAST_THESES` | 2 | `thesis_domain.py` | 도입 전후 지평별 Brier 추이 | 장전·장중 프롬프트에 미리 싣는 과거 추론 수. **슬롯마다다** — 슬롯이 여섯이라 최대 12행이고 프롬프트 길이도 그만큼이다. 5에서 2로 내린 것이 2026-08-26 장중 슬롯 추가 때다(그대로 두면 30행). **효과가 관측되지 않으면 0으로 끈다**([5-followup.md](5-followup.md) 5절) — 절은 `(없음)`이 되고 `thesis_precedent` 엣지도 안 남는다. `past_theses` 툴은 그대로다. 분기 판단 |
-| 툴 개수 | 14 | 같은 곳 | **어떤 툴을 실제로 부르는지**(LangSmith `run_name = build_theses`. DB로는 못 읽는다 — [10-multi-agent.md](10-multi-agent.md) 2절)와 `tool_rounds` 분포 | 한 번도 안 불리는 툴은 뺀다(문맥만 먹는다). 반대로 상한에 붙어 있으면 왕복을 늘린다. **툴을 더 열기 전에 `MAX_TOOL_CALLS`부터 본다** — 20이던 때 장중 슬롯이 21번째 호출에서 걸렸고 2026-08-26에 32로 올렸다(5절). 다음에 마르는 것은 문자 상한 쪽이다. 서브 에이전트로 나누는 판단은 [10-multi-agent.md](10-multi-agent.md)가 갖는다 |
+| 툴 개수 | 14 | 같은 곳 | **어떤 툴을 실제로 부르는지**와 `tool_rounds` 분포. 앞의 것은 **DB로 못 읽는다** — `thesis_evidence`는 열넷 중 다섯 툴만 ref를 남기고 그것도 "불렀다"가 아니라 "인용됐다"라, 안 불림·빈 결과·인용 안 함이 전부 0으로 보인다. LangSmith 트레이스(`run_name = build_theses`)를 사람이 열어 센다 | 한 번도 안 불리는 툴은 뺀다(문맥만 먹는다). 반대로 상한에 붙어 있으면 왕복을 늘린다. **툴을 더 열기 전에 `MAX_TOOL_CALLS`부터 본다** — 세어야 할 것은 툴 개수가 아니라 **대상 수 × 대상별 툴 수**다(5절 실측은 26호출). **서브 에이전트로 나누는 것은 여기서 판단한다** — 5절 참고 |
 | `verdict` 값 셋 | `supported`/`contradicted`/`unresolved` | `apps/models/analysis/thesis.py` + CHECK | `contradicted` 비율 | 60% 위가 유지되면 "반박"과 "다른 원인 지목"을 가를지 본다. **지금은 안 가른다** |
 | `MAX_TOOL_ROUNDS` / `MAX_TOOL_CALLS` / `MAX_TOOL_RESULT_CHARS` | 3 / 32 / 100,000 | `thesis_domain.py` | 쿼리 B의 분포와 Airflow 로그의 `budget exhausted` 경고 | 상한에 붙어 있으면 올린다. **값이 인자 모델(`RecentDocumentsArgs` 등)의 `Field(description=...)`에 f-string으로 실려 프롬프트가 자동으로 따라간다.** 문자 상한은 폭주만 받는 안전망이라 **한 바퀴 실측치(5절)보다 커야 한다** |
 | `PROMPT_VERSION` / `NARRATIVE_PROMPT_VERSION` | `"6"` / `"2"` | `thesis_domain.py` / `thesis_outcomes.py` | — | 프롬프트를 고치면 올린다. 올린 뒤 28일은 ops 창이 두 판에 걸친다. `"3"`은 기술적 보조지표(2026-08-24), `"4"`는 과거 추론 절에 장후 리뷰가 실린 판(2026-08-25), `"5"`는 `## 확률` 절이 `prob_flat`의 뜻과 base rate를 정의한 판(2026-08-25)이다 |
@@ -280,10 +280,16 @@ ops 브리핑의 **추론 적체** 한 줄. **여기서 즉시 대응하는 것�
   **금리는 퍼센트 변화가 아니라 bp 차이로 준다** —
   `BASIS_POINT_KINDS`와 `BASIS_POINT_INDICATOR_KINDS`가 그 규칙을 안다. 웹 검색은 출처를
   통제할 수 없어 별도 결정 전까지 안 넣는다.
-- **툴 그룹별 서브 에이전트** — **지금은 만들지 않는다.** 판정과 사다리(칸 0~5), 발동
-  조건을 읽는 법, 툴 묶음 실측은 전부 [10-multi-agent.md](10-multi-agent.md)로 옮겼다
-  (2026-08-26). **여기 요약을 두지 않는다** — 같은 판단을 두 곳에 두면 한쪽만 낡는다
-  (6절 규칙). 이 항목이 다시 열리는 신호는 그 문서 7절이 갖는다.
+- **툴 그룹별 서브 에이전트** — 툴이 열 개를 넘기면서 나온 이야기다. **지금은 만들지 않는다.**
+  단일 에이전트가 14개를 못 다룬다는 관측이 아직 없고, 서브 에이전트는 LLM 호출 수를
+  곱한다(이미 `THESIS_TIMEOUT_SECONDS`를 1800까지 올린 참이다). 되돌리기 비용도 반대다 —
+  툴은 목록에서 빼면 끝이지만 supervisor 구조는 그래프를 다시 짜야 한다.
+  **발동 조건**: 모델이 부르는 툴이 특정 몇 개에 고정되고 나머지가 문맥만 먹거나,
+  `tool_rounds`가 상한(3)에 붙어 있는데 답변이 얕을 때. 그때의 순서는
+  ① 단일 에이전트 + 툴 그룹 → ② 서브그래프를 툴로 감싸기 → ③ 완전한 multi-agent이고,
+  ②에서 멈추는 경우가 대부분이다.
+  **상한부터 본다.** 2026-08-26에 장중 실행이 21번째 호출에서 막힌 것은 구조가 아니라
+  `MAX_TOOL_CALLS`가 좁아서였다(6절 이력). 구조를 의심하기 전에 상한 둘이 닫혀 있는지 본다.
 - **근거 유효율 계측** — 2절 참고. 4주 검증에서 필요가 보이면.
 
 ---

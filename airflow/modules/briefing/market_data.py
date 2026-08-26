@@ -159,6 +159,9 @@ class QuoteChange(BaseModel):
     # 봉이 체결된 거래소. 국내 종목(stock_bar 직접 조회)만 채우고 뷰에서 온 행은 None이다.
     # NXT 값이면 표 라벨에 밝힌다 — KRX 마감값과 애프터마켓 값이 구분돼야 한다.
     exchange: str | None = None
+    # 그 세션의 첫 봉 시가. 정규장 발송(10:00~20:15)이 전일 종가 대비와 함께 그린다.
+    # 세션을 못 찾으면 `None`이다 — 종가로 대신 채우면 시가 대비가 늘 0%로 보인다.
+    session_open: Decimal | None = None
 
     @property
     def change_percent(self) -> float | None:
@@ -167,6 +170,13 @@ class QuoteChange(BaseModel):
         if not self.previous_close:
             return None
         return float((self.close - self.previous_close) / self.previous_close * 100)
+
+    @property
+    def change_from_open_percent(self) -> float | None:
+        """당일 시가 대비 등락. 개장 뒤 얼마나 움직였는지는 전일 대비 누적치가 말해 주지 않는다."""
+        if not self.session_open:
+            return None
+        return float((self.close - self.session_open) / self.session_open * 100)
 
 
 class RateChange(BaseModel):
@@ -438,9 +448,11 @@ class MarketBriefingReader:
 
     def summary(self) -> MarketSummary:
         """브리핑 한 통에 들어갈 값을 전부 읽는다."""
+        # 조회 창이 두 번 들어간다 — 세션 첫 봉을 모으는 CTE와 마지막 봉을 고르는 바깥 질의다.
+        since = self.now - QUOTE_LOOKBACK
         quotes = self._fetch(
             LATEST_QUOTES,
-            (self.now - QUOTE_LOOKBACK,),
+            (since, since),
             lambda row: QuoteChange(
                 provider=row[0],
                 symbol=row[1],
@@ -450,11 +462,12 @@ class MarketBriefingReader:
                 close=row[5],
                 previous_close=row[6],
                 bar_at=row[7],
+                session_open=row[8],
             ),
         )
         domestic_stocks = self._fetch(
             LATEST_DOMESTIC_STOCKS,
-            (self.now - QUOTE_LOOKBACK,),
+            (since, since),
             lambda row: QuoteChange(
                 provider=row[0],
                 symbol=row[1],
@@ -465,6 +478,7 @@ class MarketBriefingReader:
                 previous_close=row[6],
                 bar_at=row[7],
                 exchange=row[8],
+                session_open=row[9],
             ),
         )
         # 뷰가 준 국내 종목 행(KRX만)을 버리고 stock_bar 직접 조회(NXT 포함)로 바꾼다.

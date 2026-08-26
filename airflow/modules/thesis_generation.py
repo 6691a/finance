@@ -257,6 +257,8 @@ SYSTEM_PROMPT = f"""너는 시장 추론 기록기다. 주어진 관측 상태�
 - 투자 조언, 매수·매도 권유, 목표가를 쓰지 마라.
 - 요청 목록에 있는 subject마다 **정확히 하나씩** 답한다. 같은 subject를 두 번 쓰지 마라.
 
+{llm.NUMBER_STYLE}
+
 출력 형식:
 {{"theses": [{{"subject_code": "", "prob_up": 0.0, "prob_down": 0.0, "prob_flat": 0.0,
  "up_reasoning": "", "down_reasoning": "", "flat_reasoning": "",

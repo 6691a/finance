@@ -28,26 +28,78 @@ MORNING = datetime(2026, 8, 17, 23, 0, tzinfo=UTC)
 # KST 2026-08-18(화) 12:30. 국내 정규장 한가운데.
 MIDDAY = datetime(2026, 8, 18, 3, 30, tzinfo=UTC)
 
+# 마지막 칸이 그 세션 첫 봉의 시가다. NIKKEI225만 None이라 시가를 모르는 줄이 표에서 어떻게
+# 보이는지 함께 검증한다.
 QUOTE_ROWS = [
-    ("kis", "KOSPI", "코스피", "index", "KR", Decimal("2687.45"), Decimal("2665.60"), MIDDAY),
-    ("kis", "KOSPI200_FUT", "코스피200 선물", "index_future", "KR", Decimal("361.20"), Decimal("358.80"), MIDDAY),
-    ("yahoo", "SP500_FUT", "S&P500 선물", "index_future", "US", Decimal("5621.50"), Decimal("5600.25"), MIDDAY),
-    ("yahoo", "SOX", "필라델피아 반도체 지수", "index", "US", Decimal("5310.00"), Decimal("5200.00"), MIDDAY),
+    ("kis", "KOSPI", "코스피", "index", "KR", Decimal("2687.45"), Decimal("2665.60"), MIDDAY, Decimal("2670.00")),
+    (
+        "kis",
+        "KOSPI200_FUT",
+        "코스피200 선물",
+        "index_future",
+        "KR",
+        Decimal("361.20"),
+        Decimal("358.80"),
+        MIDDAY,
+        Decimal("359.50"),
+    ),
+    (
+        "yahoo",
+        "SP500_FUT",
+        "S&P500 선물",
+        "index_future",
+        "US",
+        Decimal("5621.50"),
+        Decimal("5600.25"),
+        MIDDAY,
+        Decimal("5605.00"),
+    ),
+    (
+        "yahoo",
+        "SOX",
+        "필라델피아 반도체 지수",
+        "index",
+        "US",
+        Decimal("5310.00"),
+        Decimal("5200.00"),
+        MIDDAY,
+        Decimal("5220.00"),
+    ),
     # KIS 해외지수로 받는 미국 현물. 선물(SP500_FUT) 옆에 놓여야 한다.
-    ("kis", "SP500", "S&P500", "index", "US", Decimal("7674.37"), Decimal("7641.16"), MIDDAY),
-    ("yahoo", "GOLD", "금", "commodity", "US", Decimal("3380.50"), Decimal("3350.00"), MIDDAY),
-    ("yahoo", "NIKKEI225", "닛케이225", "index", "JP", Decimal(38000), Decimal(38100), MIDDAY),
-    ("yahoo", "BTCUSD", "비트코인", "crypto", "XX", Decimal(118000), Decimal(115000), MIDDAY),
-    ("yahoo", "USDKRW", "원/달러(장외)", "fx", "KR", Decimal("1391.20"), Decimal("1388.60"), MIDDAY),
+    ("kis", "SP500", "S&P500", "index", "US", Decimal("7674.37"), Decimal("7641.16"), MIDDAY, Decimal("7650.00")),
+    ("yahoo", "GOLD", "금", "commodity", "US", Decimal("3380.50"), Decimal("3350.00"), MIDDAY, Decimal("3355.00")),
+    ("yahoo", "NIKKEI225", "닛케이225", "index", "JP", Decimal(38000), Decimal(38100), MIDDAY, None),
+    ("yahoo", "BTCUSD", "비트코인", "crypto", "XX", Decimal(118000), Decimal(115000), MIDDAY, Decimal(115500)),
+    (
+        "yahoo",
+        "USDKRW",
+        "원/달러(장외)",
+        "fx",
+        "KR",
+        Decimal("1391.20"),
+        Decimal("1388.60"),
+        MIDDAY,
+        Decimal("1389.00"),
+    ),
     # 미국 상장 ADR. country는 회사 국적(TW·KR)이라 국내·아시아 표로 새기 쉬운 값이다.
-    ("yahoo", "TSMC_ADR", "TSMC ADR", "equity", "TW", Decimal("192.40"), Decimal("189.10"), MIDDAY),
-    ("yahoo", "SK_HYNIX_ADR", "SK하이닉스 ADR", "equity", "KR", Decimal("155.62"), Decimal("151.30"), MIDDAY),
+    ("yahoo", "TSMC_ADR", "TSMC ADR", "equity", "TW", Decimal("192.40"), Decimal("189.10"), MIDDAY, Decimal("190.00")),
+    (
+        "yahoo",
+        "SK_HYNIX_ADR",
+        "SK하이닉스 ADR",
+        "equity",
+        "KR",
+        Decimal("155.62"),
+        Decimal("151.30"),
+        MIDDAY,
+        Decimal("152.00"),
+    ),
 ]
 
-# 국내 종목은 quote_bar 뷰가 아니라 stock_bar 직접 조회다(NXT 포함). 마지막 칸이 거래소다.
+# 국내 종목은 quote_bar 뷰가 아니라 stock_bar 직접 조회다(NXT 포함). 거래소 다음이 KRX 시가다.
 DOMESTIC_STOCK_ROWS = [
-    ("kis", "005930", "삼성전자", "equity", "KR", Decimal(268500), Decimal(266000), MIDDAY, "KRX"),
-    ("kis", "000660", "SK하이닉스", "equity", "KR", Decimal(298000), Decimal(295500), MIDDAY, "KRX"),
+    ("kis", "005930", "삼성전자", "equity", "KR", Decimal(268500), Decimal(266000), MIDDAY, "KRX", Decimal(266500)),
+    ("kis", "000660", "SK하이닉스", "equity", "KR", Decimal(298000), Decimal(295500), MIDDAY, "KRX", Decimal(296000)),
 ]
 
 # 마지막 두 칸이 직전 관측값과 그 관측일이다. 관측이 매일 있는 것이 아니라 직전이 전일이
@@ -270,8 +322,18 @@ def test_every_row_carries_its_own_as_of_time():
     stale = MIDDAY - timedelta(days=3)
     connection = FakeConnection(
         [
-            ("kis", "KOSPI", "코스피", "index", "KR", Decimal("2687.45"), Decimal("2665.60"), stale),
-            ("kis", "KOSDAQ", "코스닥", "index", "KR", Decimal("745.10"), Decimal("747.42"), MIDDAY),
+            (
+                "kis",
+                "KOSPI",
+                "코스피",
+                "index",
+                "KR",
+                Decimal("2687.45"),
+                Decimal("2665.60"),
+                stale,
+                Decimal("2670.00"),
+            ),
+            ("kis", "KOSDAQ", "코스닥", "index", "KR", Decimal("745.10"), Decimal("747.42"), MIDDAY, Decimal("746.00")),
         ],
         [],
         [],
@@ -288,8 +350,10 @@ def test_every_row_carries_its_own_as_of_time():
     rows = [[cell["text"] for cell in row] for row in table["rows"]]
 
     assert rows[0][-1] == "기준"  # 열 제목
-    assert rows[1] == ["코스피", "2,687.45", "2,665.60", "▲ +0.82%", "08/15 12:30"]  # 묵은 줄
-    assert rows[2] == ["코스닥", "745.10", "747.42", "▼ -0.31%", "08/18 12:30"]  # 최신 줄
+    # 묵은 줄
+    assert rows[1] == ["코스피", "2,687.45", "2,665.60", "▲ +0.82%", "2,670.00", "▲ +0.65%", "08/15 12:30"]
+    # 최신 줄
+    assert rows[2] == ["코스닥", "745.10", "747.42", "▼ -0.31%", "746.00", "▼ -0.12%", "08/18 12:30"]
 
 
 def test_nxt_bars_are_labeled_so_they_do_not_read_as_krx_closes():
@@ -299,10 +363,44 @@ def test_nxt_bars_are_labeled_so_they_do_not_read_as_krx_closes():
     """
     after_hours = datetime(2026, 8, 18, 9, 59, tzinfo=UTC)  # KST 18:59 NXT 애프터마켓
     connection = FakeConnection(
-        [("kis", "KOSPI", "코스피", "index", "KR", Decimal("2687.45"), Decimal("2665.60"), after_hours)],
         [
-            ("kis", "005930", "삼성전자", "equity", "KR", Decimal(268500), Decimal(266000), after_hours, "NXT"),
-            ("kis", "000660", "SK하이닉스", "equity", "KR", Decimal(298000), Decimal(295500), after_hours, "KRX"),
+            (
+                "kis",
+                "KOSPI",
+                "코스피",
+                "index",
+                "KR",
+                Decimal("2687.45"),
+                Decimal("2665.60"),
+                after_hours,
+                Decimal("2670.00"),
+            )
+        ],
+        [
+            (
+                "kis",
+                "005930",
+                "삼성전자",
+                "equity",
+                "KR",
+                Decimal(268500),
+                Decimal(266000),
+                after_hours,
+                "NXT",
+                Decimal(266500),
+            ),
+            (
+                "kis",
+                "000660",
+                "SK하이닉스",
+                "equity",
+                "KR",
+                Decimal(298000),
+                Decimal(295500),
+                after_hours,
+                "KRX",
+                Decimal(296000),
+            ),
         ],
         [],
         [],
@@ -318,10 +416,10 @@ def test_nxt_bars_are_labeled_so_they_do_not_read_as_krx_closes():
     rows = [[cell["text"] for cell in row] for row in table["rows"]]
     by_label = {row[0]: row for row in rows[1:]}
 
-    assert rows[0] == ["구분", "종가", "전일 종가", "등락", "거래소", "기준"]
-    assert by_label["삼성전자"][4] == "NXT"
-    assert by_label["SK하이닉스"][4] == "KRX"
-    assert by_label["코스피"][4] == "-"
+    assert rows[0] == ["구분", "종가", "전일 종가", "등락", "시가", "시가대비", "거래소", "기준"]
+    assert by_label["삼성전자"][6] == "NXT"
+    assert by_label["SK하이닉스"][6] == "KRX"
+    assert by_label["코스피"][6] == "-"
 
 
 def test_tables_without_exchange_rows_do_not_grow_an_exchange_column():
@@ -332,7 +430,15 @@ def test_tables_without_exchange_rows_do_not_grow_an_exchange_column():
         table for table in tables if any(cell["text"] == "S&P500 선물" for row in table["rows"] for cell in row)
     )
 
-    assert [cell["text"] for cell in overseas["rows"][0]] == ["구분", "종가", "전일 종가", "등락", "기준"]
+    assert [cell["text"] for cell in overseas["rows"][0]] == [
+        "구분",
+        "종가",
+        "전일 종가",
+        "등락",
+        "시가",
+        "시가대비",
+        "기준",
+    ]
 
 
 def test_the_context_flags_the_oldest_value():
@@ -349,7 +455,19 @@ def test_yields_are_not_drawn_as_percent_moves():
     indicator_observation 쪽 표가 bp로 그린다.
     """
     connection = FakeConnection(
-        [("yahoo", "US10Y", "미국 10년물 금리", "rate", "US", Decimal("4.70"), Decimal("4.65"), MIDDAY)],
+        [
+            (
+                "yahoo",
+                "US10Y",
+                "미국 10년물 금리",
+                "rate",
+                "US",
+                Decimal("4.70"),
+                Decimal("4.65"),
+                MIDDAY,
+                Decimal("4.66"),
+            )
+        ],
         *([[]] * 9),
     )
     result = market_data.MarketBriefingReader(connection, MORNING).summary()
@@ -387,8 +505,30 @@ def test_preopen_report_shows_premarket_stocks_and_skips_us_briefing_sections():
     connection = FakeConnection(
         QUOTE_ROWS,
         [
-            ("kis", "005930", "삼성전자", "equity", "KR", Decimal(268500), Decimal(266000), premarket_bar, "NXT"),
-            ("kis", "000660", "SK하이닉스", "equity", "KR", Decimal(298000), Decimal(295500), premarket_bar, "NXT"),
+            (
+                "kis",
+                "005930",
+                "삼성전자",
+                "equity",
+                "KR",
+                Decimal(268500),
+                Decimal(266000),
+                premarket_bar,
+                "NXT",
+                None,
+            ),
+            (
+                "kis",
+                "000660",
+                "SK하이닉스",
+                "equity",
+                "KR",
+                Decimal(298000),
+                Decimal(295500),
+                premarket_bar,
+                "NXT",
+                None,
+            ),
         ],
         RATE_ROWS,
         FLOW_ROWS,
@@ -543,6 +683,47 @@ def test_the_korea_report_draws_the_realtime_fx_table():
 
     assert "환율(실시간·장외)" in korea
     assert "원/달러(장외)" in korea
+
+
+def test_only_the_regular_session_report_compares_against_the_open():
+    """개장 전 발송에는 그날 시가가 없다. 열이 통째로 `-`가 되느니 열 자체가 없어야 한다.
+
+    10시 경계는 `MarketScope`가 이미 알고 있다(`_scope`). 여기서 시각을 다시 보지 않는다.
+    """
+    result = summary()
+    korea = [block for block in market.render_blocks(result, MarketScope.KOREA) if block["type"] == "table"]
+    preopen = [block for block in market.render_blocks(result, MarketScope.KOREA_PREOPEN) if block["type"] == "table"]
+    us = [block for block in market.render_blocks(result, MarketScope.US) if block["type"] == "table"]
+
+    def headers(table) -> list[str]:
+        return [cell["text"] for cell in table["rows"][0]]
+
+    assert all("시가대비" in headers(table) for table in korea[:1])
+    assert not any("시가대비" in headers(table) for table in preopen)
+    assert not any("시가대비" in headers(table) for table in us)
+
+
+def test_the_open_change_is_measured_against_the_session_open_not_the_previous_close():
+    """정규장 리포트는 두 분모를 한 줄에 둔다. 전일 대비는 누적, 시가 대비는 개장 뒤 움직임이다."""
+    rendered = market.render_blocks(summary(), MarketScope.KOREA)
+    table = next(block for block in rendered if block["type"] == "table")
+    rows = {row[0]["text"]: [cell["text"] for cell in row] for row in table["rows"]}
+
+    # 2,687.45는 전일 종가 2,665.60 대비 +0.82%, 시가 2,670.00 대비 +0.65%다.
+    assert rows["코스피"][2:6] == ["2,665.60", "▲ +0.82%", "2,670.00", "▲ +0.65%"]
+
+
+def test_an_unknown_session_open_shows_a_dash_not_a_flat_zero():
+    """시가를 못 찾은 줄은 `-`다. 종가로 채우면 시가 대비가 늘 보합으로 보인다."""
+    rendered = market.render_blocks(summary(), MarketScope.KOREA)
+    overseas = next(
+        table
+        for table in rendered
+        if table["type"] == "table" and any(cell["text"] == "닛케이225" for row in table["rows"] for cell in row)
+    )
+    row = next([cell["text"] for cell in row] for row in overseas["rows"] if row[0]["text"] == "닛케이225")
+
+    assert row[4:6] == ["-", "-"]
 
 
 def _us_tables(result) -> list[tuple[str, list[str]]]:
@@ -802,7 +983,11 @@ def test_stock_estimates_are_counted_in_shares_not_won():
     [
         # LATEST_QUOTES는 quote_bar **뷰**를 읽는다. 뷰의 컬럼은
         # kind 테이블과 같으므로 대표로 IndexBar 모델과 대조한다.
-        (market_data.LATEST_QUOTES, IndexBar.__table__, ("provider", "symbol", "close", "previous_close", "bar_at")),
+        (
+            market_data.LATEST_QUOTES,
+            IndexBar.__table__,
+            ("provider", "symbol", "open", "close", "previous_close", "bar_at"),
+        ),
         (market_data.LATEST_QUOTES, QuoteSymbol.__table__, ("label", "kind", "country")),
         (
             market_data.LATEST_RATES,
@@ -840,7 +1025,7 @@ def test_stock_estimates_are_counted_in_shares_not_won():
         (
             market_data.LATEST_DOMESTIC_STOCKS,
             StockBar.__table__,
-            ("provider", "stock_code", "exchange", "close", "previous_close", "bar_at"),
+            ("provider", "stock_code", "exchange", "open", "close", "previous_close", "bar_at"),
         ),
         (market_data.LATEST_DOMESTIC_STOCKS, QuoteSymbol.__table__, ("label", "kind", "country")),
         (

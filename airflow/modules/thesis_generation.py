@@ -63,10 +63,10 @@ from langgraph.graph.message import add_messages
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from modules import llm
+from modules.base_rate import FLAT_BASE_RATE_BARS
 from modules.llm import UnsupportedResponseFormat
 from modules.schema import SchemaError, json_object, response_format
 from modules.thesis_domain import (
-    FLAT_BASE_RATE_PCT,
     FLAT_THRESHOLD_PCT,
     MAX_MECHANISM_CHARS,
     MAX_REASONING_CHARS,
@@ -247,9 +247,17 @@ SYSTEM_PROMPT = f"""너는 시장 추론 기록기다. 주어진 관측 상태�
   "방향을 모르겠다"가 아니다. 모르겠으면 `prob_up`과 `prob_down`을 비슷하게 두는 것이
   맞고, `prob_flat`을 올리는 것은 틀리다. RSI 중립이나 히스토그램 0 근처는 방향 정보가
   없다는 뜻이지 등락률이 작을 것이라는 뜻이 아니다.
-- 과거 실현 빈도가 기준선이다 — 코스피 {FLAT_BASE_RATE_PCT["KOSPI"]}%, 코스닥 {FLAT_BASE_RATE_PCT["KOSDAQ"]}%, 개별 종목 {FLAT_BASE_RATE_PCT["stock"]}%가 실제
-  `flat` 비율이다. 이보다 크게 올리려면 밴드 장세·거래량 급감처럼 **그날에 한정된 근거**를
-  `claims`에 대야 한다.
+- **기준선은 관측 상태의 `flat_base_rate`다.** 대상마다 최근 {FLAT_BASE_RATE_BARS}거래일의
+  하루 등락을 세어 `up`/`flat`/`down` 비율로 준 값이고, `sample_size`가 그 표본 수다.
+  그 대상의 `flat`이 실제 실현 빈도이니 `prob_flat`의 출발점으로 삼는다. 이보다 크게 올리려면
+  밴드 장세·거래량 급감처럼 **그날에 한정된 근거**를 `claims`에 대야 한다.
+  - **`up`·`down`은 출발점이 아니다.** 같은 창의 실현 빈도라 그 1년이 오름세였으면 `up`이
+    0.58처럼 높게 나온다. 그것을 기본값으로 삼으면 지난 1년의 방향을 오늘로 그대로 미는
+    것이다. 방향은 근거가 정한다 — 근거가 없으면 `up`과 `down`을 비슷하게 둔다.
+    저 둘은 `flat`을 읽을 분모로만 본다.
+  - 이 값은 **대상마다 다르고 실행마다 다시 잰다.** 지수와 종목을 같은 숫자로 묶지 마라.
+  - 그 대상의 키가 없거나 `flat`이 `null`이면 표본이 모자라 재지 않은 것이다. 그때만
+    "국내 하루 등락은 대체로 방향이 있다"는 정도로 두고 `prob_flat`을 낮게 잡는다.
 - 근거가 한쪽으로 쏠려 있으면 확률도 쏠려야 한다. 근거를 찾았는데도 세 값을 균등에
   가깝게 두면 그 기록은 아무 것도 말하지 않는다.
 

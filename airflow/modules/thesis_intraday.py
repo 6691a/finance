@@ -246,9 +246,11 @@ class IntradayForecast:
                 return_pct=round(float((close - previous_close) / previous_close) * 100, 2),
                 bar_at=bar_at,
             )
+        codes = [target.code for target in targets]
         return ObservedState(
             intraday=intraday,
-            technical=self._run.technical_state([target.code for target in targets]),
+            technical=self._run.technical_state(codes),
+            flat_base_rate=self._run.flat_base_rate(codes),
         )
 
     def same_day(self, targets: Any, bars: dict[str, Bar]) -> dict[str, list[SameDayThesis]]:

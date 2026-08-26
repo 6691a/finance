@@ -40,6 +40,7 @@ from modules.thesis_domain import (
     evidence_ref,
 )
 from modules.thesis_state import (
+    HorizonBaseRate,
     IndexObservation,
     NxtObservedState,
     ObservedState,
@@ -221,8 +222,34 @@ class ThesisRun:
             for code, close in cursor.fetchall():
                 stock[code] = StockObservation(close=float(close))
 
-        technical = self.technical_state([target.code for target in targets])
-        return ObservedState(session=session, index=index, stock=stock, technical=technical)
+        codes = [target.code for target in targets]
+        return ObservedState(
+            session=session,
+            index=index,
+            stock=stock,
+            technical=self.technical_state(codes),
+            flat_base_rate=self.flat_base_rate(codes),
+        )
+
+    def flat_base_rate(self, subject_codes: Sequence[str]) -> dict[str, HorizonBaseRate]:
+        """대상별 `flat` 기준선. 최근 `FLAT_BASE_RATE_BARS`봉의 하루 등락 분포다.
+
+        프롬프트가 상수로 들고 있던 값이다(`FLAT_BASE_RATE_PCT`, 2026-08-26 제거). 그 비율이
+        연도별로 단조 감소해 6개월 만에 낡았고, 사람이 다시 재기 전까지 모델이 틀린 기준선을
+        받았다. 실행마다 재면 체제가 바뀌어도 값이 따라간다.
+
+        슬롯으로 갈리지 않는다 — 기준 시각은 부르는 쪽이 이미 정해서 넘겼다.
+        """
+        from modules import base_rate
+
+        codes = list(subject_codes)
+        if not codes:
+            return {}
+        return base_rate.flat_base_rates(
+            self._connection,
+            as_of_date=self._as_of_at.astimezone(KST_TIMEZONE).date(),
+            symbols=codes,
+        )
 
     def technical_state(self, subject_codes: Sequence[str]) -> TechnicalState:
         """추론 대상의 기술적 관측. 지표 다섯 칸과 최근 신호다(문서 14.1절).

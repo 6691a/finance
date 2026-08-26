@@ -211,6 +211,7 @@ class NxtAfterHoursReview:
             },
             index_regular=regular.index,
             technical=regular.technical,
+            flat_base_rate=regular.flat_base_rate,
         )
 
     @staticmethod

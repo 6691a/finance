@@ -197,9 +197,13 @@ investigate → (tool_calls 있으면) tools → investigate → … → answer 
   검증 실패일 때만 쓴다).
 - **`## 확률` 절이 확률의 뜻을 정의한다**(`PROMPT_VERSION` 5, 2026-08-25). 셋을 넣는다:
   (1) `prob_flat`은 등락률이 `FLAT_THRESHOLD_PCT[0]`(±0.3%) 안에 들어올 확률이지 "방향을
-  모르겠다"가 아니다, (2) 실측 base rate가 기준선이다(`FLAT_BASE_RATE_PCT` — 코스피 6%,
-  코스닥 11%, 종목 6%), (3) 근거가 쏠리면 확률도 쏠려야 한다. **임계와 base rate는
-  상수에서 f-string으로 실린다** — 상수를 고치면 프롬프트가 따라간다.
+  모르겠다"가 아니다, (2) 실측 base rate가 기준선이다, (3) 근거가 쏠리면 확률도 쏠려야 한다.
+
+  base rate는 처음에 상수였다(`FLAT_BASE_RATE_PCT` — 코스피 6%, 코스닥 11%, 종목 6%).
+  **2026-08-26에 관측 상태의 `flat_base_rate`로 옮겼다** — 그 비율이 연도별로 단조 감소해
+  상수가 반년 만에 낡았고, 지수·종목 넷을 세 값으로 묶어 종목별 차이도 잃었다
+  ([10-base-rate.md](10-base-rate.md) 14절). 임계(`FLAT_THRESHOLD_PCT`)는 여전히 상수에서
+  f-string으로 실린다 — 상수를 고치면 프롬프트가 따라간다.
 
   넣은 이유는 값이 실제로 틀렸기 때문이다. 정의가 없던 판에서 모델은 `prob_flat`에
   30%대를 줬고(실제 빈도 5~11%), 그만큼이 up·down에서 빠져 `pre_open` 12건 전부 최고

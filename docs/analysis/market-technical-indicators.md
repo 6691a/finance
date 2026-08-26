@@ -1014,7 +1014,7 @@ ORDER BY kind, direction, rule_version, horizon;
 - `quote_symbol` 시드에 `kis/005930`·`kis/000660`이 `equity`로 있다. 6절 두 번째 UNION의 JOIN이 종목 행을 떨어뜨리지 않는다.
 - `quote_daily` 뷰는 `created_at`을 갖는다(`e5b2d7a41c93` `DAILY_COLUMNS`). 6절의 cutoff가 동작한다.
 - 5.3 고정 벡터는 손으로 다시 계산해 맞다. 선형 종가에 SMA 시드 EMA는 처음부터 정상 상태(`t - (n-1)/2`)라 MACD가 정확히 7.0이다.
-- `MIN_HISTORY_DAYS=1`·`MAX_HISTORY_DAYS=30`·`MAX_TOOL_CALLS`(전부 `thesis_domain.py`. 상한은 2026-08-25에 20으로 올랐다) — 7.1절과 같다.
+- `MIN_HISTORY_DAYS=1`·`MAX_HISTORY_DAYS=30`·`MAX_TOOL_CALLS`(전부 `thesis_domain.py`. 상한은 2026-08-25에 20, 2026-08-26에 32로 올랐다) — 7.1절과 같다.
 - `kis_investor_trade_daily`의 `pages` Param은 최소 1이고 상한이 없다. Task 6의 `pages: 5`(150거래일)가 된다.
 
 ## 14. LLM 추론·평가에서 쓰는 방법

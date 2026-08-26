@@ -50,9 +50,12 @@ logger = logging.getLogger(__name__)
 
 RUN_SLOT_PARAM = "run_slot"
 
-# readiness guard가 보는 문서 평가 지연 허용치. 장전과 같은 값이다 —
-# `document_assessment_hourly`가 매시 25분에 돌고 슬롯이 :35라 여유가 같다.
-ASSESSMENT_LAG = timedelta(minutes=20)
+# readiness guard가 보는 문서 평가 지연 허용치. **장전(20분)과 다르다.**
+# `document_assessment_hourly`가 매시 :25에 돌아 평가 시각이 :25~:28에 몰린다. :35 슬롯은
+# 그 차이가 10분뿐이지만 `pre_close`(15:00 = UTC :00)는 직전 :25까지 35분이라, 20분으로는
+# 어떤 실행도 통과하지 못했다(2026-08-26 관측 — max(assessed_at) 05:26 < 05:40).
+# 40분은 네 슬롯 모두에서 "직전 :25 실행은 통과, 한 시간 전 실행은 탈락"이 되는 값이다.
+ASSESSMENT_LAG = timedelta(minutes=40)
 
 # 기준 시각에서 이만큼 안의 봉이어야 "지금 가격"으로 인정한다. 정상이면 **1분**이다
 # (2026-08-25 실측 — 네 슬롯 모두 직전 1분봉을 봤다). 15분은 지수 수집(`kis_quote_intraday`,

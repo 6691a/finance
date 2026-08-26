@@ -46,6 +46,22 @@ def test_the_schedule_matches_the_slot_table():
     assert DAG.max_active_runs == 1
 
 
+def test_every_slot_can_see_the_last_document_assessment():
+    """**모든 슬롯에서 직전 평가 실행이 guard를 통과해야 한다.**
+
+    `document_assessment_hourly`가 매시 :25에 돌므로, 슬롯 시각에서 직전 :25까지의 거리가
+    `ASSESSMENT_LAG`보다 크면 그 슬롯은 어떤 실행도 통과하지 못한다. `pre_close`(:00)가
+    실제로 그랬다(2026-08-26). 한 시간 전 실행이 통과해서도 안 된다 — 그러면 평가가
+    한 번 통째로 밀린 것을 guard가 못 본다.
+    """
+    assessment_minute = 25
+    for slot, at in INTRADAY_SLOT_TIMES.items():
+        minutes = at.hour * 60 + at.minute
+        gap = timedelta(minutes=(minutes - assessment_minute) % 60)
+        assert gap <= thesis_intraday.ASSESSMENT_LAG, slot
+        assert gap + timedelta(hours=1) > thesis_intraday.ASSESSMENT_LAG, slot
+
+
 def test_the_slot_table_is_the_four_the_user_asked_for():
     assert INTRADAY_SLOT_TIMES == {
         RunSlot.INTRADAY_MORNING: time(10, 35),

@@ -104,6 +104,7 @@ from modules.collectors.kis import (
     access_token,
 )
 from modules.collectors.market.kis_investor_flow import (
+    IDENTITY_EPOCH,
     InvestorFlowStock,
     KisInvestorFlowCollector,
     close_conflicts,
@@ -121,17 +122,16 @@ CALENDAR_DAY_PATTERN = re.compile(r"\d{4}-\d{2}-\d{2}")
 END_DATE_PARAM = "end_date"
 PAGES_PARAM = "pages"
 
-# 걷기가 되돌아갈 수 있는 가장 이른 날. **제공처가 정한 값이지 우리 취향이 아니다.**
+# 걷기가 되돌아갈 수 있는 가장 이른 날. 값과 그 근거는 수집기가 갖는다(`IDENTITY_EPOCH`) —
+# "이 앞은 응답을 못 믿는다"는 제공처 사실이라 항등식 검증 옆에 있어야 읽힌다.
 #
-# 2026-08-26 실측: 2018-12-07까지의 응답은 투자자 항등식 셋이 전부 깨진다 — 기관 세부 합이
-# 기관계와 다르고, 기타 세부 합이 `etc_ntby_qty`와 다르며, 시장 합계가 0으로 닫히지 않는다
-# (005930·000660 둘 다 2018-08-28~12-07 전 거래일에서 깨졌고 2018-12-10부터 전부 성립한다).
-# 종목이 달라도 경계가 같아 종목 특성이 아니라 제공처 쪽 집계 체제가 바뀐 날이다.
+# **바닥을 `cursor_date`로만 막을 수 없다.** 부르는 쪽이 정하는 것은 구간의 끝뿐이고 응답이
+# 어디까지 거슬러 올라갈지는 못 정한다 — 이 날짜를 끝으로 불러도 그 앞 29 거래일이 함께
+# 온다(2026-08-26 실측: 그래서 백필이 2018-12-07에서 죽었다). 그래서 `fetch_stock_trade_daily`에
+# `since`로도 함께 넘겨 **검증 전에** 버리게 한다.
 #
-# 그래서 그 앞은 받지 않는다. 항등식을 완화해 받으면 못 믿는 세부 수급이 DB에 들어가고
-# `stock_investor_flows` 툴과 브리핑이 그것을 읽는다. 지수(`index_daily`)는 이 응답과
-# 무관해 2016-08-15 그대로다(docs/analysis/market-thesis/10-base-rate.md 2.5절).
-BACKFILL_START_DATE = date(2018, 12, 10)
+# 지수(`index_daily`)는 이 응답과 무관해 2016-08-15 그대로다.
+BACKFILL_START_DATE = IDENTITY_EPOCH
 
 # 걷기의 backstop. 2018-12-10까지 약 1,900 거래일이고 한 응답이 30 거래일이라 64장이면
 # 닿는다. 실제로 멈추는 것은 `BACKFILL_START_DATE`이고 이 값은 그물이다.
@@ -231,7 +231,7 @@ def walk_back(
             break
         name = f"{stock.value}:{cursor_date.isoformat()}"
         try:
-            fetch = collector.fetch_stock_trade_daily(stock, cursor_date)
+            fetch = collector.fetch_stock_trade_daily(stock, cursor_date, since=until)
         except KisHTTPError as error:
             if error.status in KIS_UNRECOVERABLE_STATUSES:
                 raise AirflowFailException(f"{name}: {error}") from error

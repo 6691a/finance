@@ -774,3 +774,26 @@ def test_close_conflicts_skips_the_query_when_nothing_came_back(monkeypatch):
 
     assert kis_investor_flow.close_conflicts(connection, fetch) == ()
     assert connection.recorded_cursor.calls == []
+
+
+def test_rows_before_the_identity_epoch_are_dropped_before_validation(monkeypatch):
+    """**검증 전에** 버린다. 검증한 뒤에 버리면 항등식이 먼저 죽어 응답 전체를 잃는다.
+
+    2026-08-26 운영 실측: `IDENTITY_EPOCH`를 구간의 끝으로 불러도 그 앞 29 거래일이 함께
+    오고, 그 행들의 기관 세부 합이 기관계와 달라 백필이 죽었다.
+    """
+    old = daily_row(stck_bsop_date="20181207", orgn_ntby_qty="-384536", scrt_ntby_qty="768337")
+    monkeypatch.setattr(kis_investor_flow, "send_get", fake_send_get(body(output2=[DAILY_ROW, old])))
+
+    # 거르지 않으면 옛 행의 항등식에서 죽는다.
+    with pytest.raises(KisPayloadError, match="institution parts do not add up"):
+        COLLECTOR.fetch_stock_trade_daily(SAMSUNG, BUSINESS_DATE)
+
+    fetch = COLLECTOR.fetch_stock_trade_daily(SAMSUNG, BUSINESS_DATE, since=kis_investor_flow.IDENTITY_EPOCH)
+
+    assert [row.business_date for row in fetch.rows] == [date(2026, 8, 14)]
+
+
+def test_the_identity_epoch_is_the_measured_boundary():
+    """제공처가 정한 값이다. 앞으로 당기면 못 믿는 세부 수급이 DB에 들어간다."""
+    assert kis_investor_flow.IDENTITY_EPOCH == date(2018, 12, 10)

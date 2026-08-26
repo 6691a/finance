@@ -89,9 +89,18 @@ class FakeCollector:
         self.fetched: list[date] = []
         self.stored: list[date] = []
 
-    def fetch_stock_trade_daily(self, stock, end_date: date) -> FakeFetch:
+    def fetch_stock_trade_daily(self, stock, end_date: date, *, since: date | None = None) -> FakeFetch:
+        """`since`를 실제 수집기처럼 **응답 안에서** 자른다.
+
+        부르는 쪽은 구간의 끝만 정하고 응답이 어디까지 거슬러 올라갈지는 못 정한다. 가짜가
+        그 사실을 흉내 내지 않으면 바닥 검사가 통과하는 것처럼 보인다(2026-08-26에 실제로
+        그렇게 통과했고 운영에서 죽었다).
+        """
         self.fetched.append(end_date)
-        return FakeFetch([end_date - timedelta(days=offset) for offset in range(self.span)])
+        days = [end_date - timedelta(days=offset) for offset in range(self.span)]
+        if since is not None:
+            days = [day for day in days if day >= since]
+        return FakeFetch(days)
 
     def store_stock_trade_daily(self, connection, fetch: FakeFetch) -> int:
         self.stored.append(fetch.rows[0].business_date)
@@ -161,19 +170,38 @@ def test_the_backfill_stops_where_the_identities_start_holding():
     assert kis_investor_trade_daily.BACKFILL_START_DATE == date(2018, 12, 10)
 
 
-def test_the_walk_never_goes_past_the_backfill_start(monkeypatch, no_transaction):
-    """`pages`를 크게 줘도 항등식이 깨지는 구간까지 내려가지 않는다.
+def test_the_walk_never_stores_a_row_past_the_backfill_start(monkeypatch, no_transaction):
+    """`pages`를 크게 줘도 항등식이 깨지는 구간의 **행**이 들어오지 않는다.
 
-    운영자가 장 수를 계산하지 않아도 되게 기본값이 그 경계다.
+    구간의 끝만 막는 것으로는 모자란다 — 경계를 끝으로 불러도 그 앞 29 거래일이 함께 오고,
+    검증이 그 행들에서 먼저 죽는다(2026-08-26 운영 실측). 그래서 `since`가 응답 안을 자른다.
     """
     monkeypatch.setattr(kis_investor_trade_daily, "close_conflicts", lambda connection, fetch: ())
-    monkeypatch.setattr(kis_investor_trade_daily, "wait_seconds", lambda seconds: None)
     collector = FakeCollector()
 
-    kis_investor_trade_daily.walk_back(collector, object(), SAMSUNG, END_DATE, pages=500)
+    walk = kis_investor_trade_daily.walk_back(collector, object(), SAMSUNG, END_DATE, pages=500)
 
-    assert all(day >= kis_investor_trade_daily.BACKFILL_START_DATE for day in collector.fetched)
+    epoch = kis_investor_trade_daily.BACKFILL_START_DATE
+    assert all(day >= epoch for day in collector.fetched)
+    assert all(day >= epoch for day in collector.stored)
+    assert walk.earliest >= epoch
     assert len(collector.fetched) < 500
+
+
+def test_the_floor_reaches_the_collector_not_just_the_cursor(monkeypatch, no_transaction):
+    """바닥을 `since`로도 넘겨야 한다. 안 넘기면 응답 안의 옛 행이 검증에서 죽는다."""
+    monkeypatch.setattr(kis_investor_trade_daily, "close_conflicts", lambda connection, fetch: ())
+    seen: list[date | None] = []
+
+    class RecordingCollector(FakeCollector):
+        def fetch_stock_trade_daily(self, stock, end_date, *, since=None):
+            seen.append(since)
+            return super().fetch_stock_trade_daily(stock, end_date, since=since)
+
+    kis_investor_trade_daily.walk_back(RecordingCollector(), object(), SAMSUNG, END_DATE, pages=2)
+
+    assert seen == [kis_investor_trade_daily.BACKFILL_START_DATE] * len(seen)
+    assert seen
 
 
 def test_the_walk_waits_between_pages(monkeypatch, no_transaction):

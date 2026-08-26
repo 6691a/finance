@@ -190,6 +190,19 @@ DAILY_TRADE_MARKET_DIV = "J"
 # 한 응답이 담는 거래일 수. `tr_cont`가 빈 문자열로 와서 연속조회가 없다(실측).
 DAILY_TRADE_ROWS_PER_CALL = 30
 
+# 투자자 항등식이 성립하기 시작하는 첫 거래일. **제공처가 정한 값이지 우리 취향이 아니다.**
+#
+# 2026-08-26 실측: 2018-12-07까지의 응답은 아래 세 항등식이 전부 깨진다 — 기관 세부 합이
+# 기관계와 다르고, 기타 세부 합이 `etc_ntby_qty`와 다르며, 시장 합계가 0으로 닫히지 않는다.
+# 005930·000660 둘 다 2018-08-28~12-07 전 거래일에서 깨졌고 2018-12-10부터 전부 성립한다.
+# 종목이 달라도 경계가 같아 종목 특성이 아니라 제공처 쪽 집계 체제가 바뀐 날이다.
+#
+# 깨지는 것이 세부 합만이 아니라 **닫힘까지**라는 점이 판단을 갈랐다. 분류 하나를 빠뜨린
+# 것이 아니라 그 행 전체를 못 믿는다는 뜻이라, 항등식을 완화하는 대신 그 앞을 안 받는다.
+# 완화해서 받으면 못 믿는 세부 수급이 DB에 들어가고 `stock_investor_flows` 툴과 브리핑이
+# 그것을 읽는다(docs/analysis/market-thesis/10-base-rate.md 2.5절).
+IDENTITY_EPOCH = date(2018, 12, 10)
+
 STOCK_ESTIMATE_UPSERT = read_sql("postgres", "stock_investor_estimate_snapshot", "upsert.sql")
 DAILY_TRADE_UPSERT = read_sql("postgres", "stock_investor_trade_daily", "upsert.sql")
 DAILY_TRADE_COUNT_STORED = read_sql("postgres", "stock_investor_trade_daily", "count_stored.sql")
@@ -677,11 +690,22 @@ class KisInvestorFlowCollector:
             completed_at=datetime.now(UTC),
         )
 
-    def fetch_stock_trade_daily(self, stock: InvestorFlowStock, end_date: date) -> StockTradeDailyFetch:
+    def fetch_stock_trade_daily(
+        self,
+        stock: InvestorFlowStock,
+        end_date: date,
+        *,
+        since: date | None = None,
+    ) -> StockTradeDailyFetch:
         """한 종목의 확정 일별 투자자 매매동향을 받는다.
 
         `end_date`는 **구간의 끝**이다. 한 응답이 그날부터 과거로 30 거래일을 담는다(실측:
         2026-07-01을 넣으면 2026-07-01~2026-05-19). 그래서 백필은 날짜를 뒤로 걸으면 된다.
+
+        `since`를 주면 그보다 이른 거래일은 **검증하기 전에** 버린다. 부르는 쪽이 구간의
+        끝만 정할 수 있고 응답이 어디까지 거슬러 올라갈지는 못 정하기 때문이다 —
+        `IDENTITY_EPOCH`를 끝으로 불러도 그 앞 29 거래일이 함께 온다. 검증한 뒤에 버리면
+        항등식이 먼저 죽어 그 응답 전체를 잃는다.
 
         당일치는 장 마감 뒤에만 확정이다. 시각 판단은 DAG가 한다.
         """
@@ -698,6 +722,16 @@ class KisInvestorFlowCollector:
             },
         )
         raw = self._rows(payload, "output2")
+        if since is not None:
+            kept = [row for row in raw if str(row.get("stck_bsop_date", "")) >= since.strftime("%Y%m%d")]
+            if len(kept) != len(raw):
+                logger.info(
+                    "Dropped %s rows before %s for %s; they predate the identity epoch",
+                    len(raw) - len(kept),
+                    since,
+                    stock.value,
+                )
+            raw = kept
         try:
             rows = tuple(StockTradeDailyRow.from_payload(row) for row in raw)
         except (KeyError, ValidationError) as error:

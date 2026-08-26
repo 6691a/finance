@@ -11,8 +11,10 @@
 
 """시장 추론(thesis)을 만들고, 저장하고, 채점한다.
 
-**맞고 틀림이 목적이 아니다.** "어떤 정보를 근거로 어떤 결론을 냈다"가 기록으로 남는 것이
-목적이다. 채점은 그 기록 위에 나중에 얹히고, 틀린 판단도 고치지 않는다.
+**목적은 정확도다 — 다만 개별 추론이 아니라 판(版)의 정확도다.** 한 건의 적중은 운과
+구분되지 않으므로 "어떤 정보를 근거로 어떤 결론을 냈다"를 먼저 기록으로 남기고, 채점이
+쌓이면 model·prompt 판별로 비교해 다음 변경을 유지하거나 되돌린다. **이미 쓴 추론은
+고치지 않는다** — 고칠 수 있으면 나쁜 판이 사후 수정으로 좋아 보인다.
 
 ## 근거는 고정 풀이 아니라 모델이 조회한다
 
@@ -86,13 +88,16 @@ logger = logging.getLogger(__name__)
 #    그전에는 "상승 1174", "외국인이 140762백만원"처럼 툴 JSON의 raw 숫자가 그대로 문장에
 #    실렸다. ② 장중 슬롯 넷과 그 지시문, 그리고 `## 오늘 앞 슬롯` 절 — 장중 예측은 기준가가
 #    전일 종가가 아니라 지금 가격이라 그 사실을 프롬프트가 밝힌다.
-# 7: 둘이 같은 날 들어와 한 판이다(2026-08-26, 둘 다 운영에 나가기 전이다).
+# 7: 셋이 같은 날 들어와 한 판이다(2026-08-26, 셋 다 운영에 나가기 전이다).
 #    ① 신호마다 조건부 기저율이 실린다. "같은 사건이 과거에 얼마나 맞았는지는 너도 시스템도
 #    아직 모른다"를 지우고 실측 분포로 바꿨다. 무조건 기저를 함께 주고 둘의 차이가 그 신호의
 #    정보량임을 밝힌다. ② `flat` 기준선이 상수에서 관측 상태(`flat_base_rate`)로 옮겼다.
 #    상수는 132거래일로 잰 값이었는데 그 비율이 연도별로 단조 감소해(코스피 2016년 45퍼센트
 #    → 2026년 6퍼센트) 반년 만에 낡았고, 지수·종목 넷을 세 값으로 묶어 종목별 차이도 잃었다.
 #    설계는 docs/analysis/market-thesis/10-base-rate.md다.
+#    ③ 방향별 기대 등락률(`## 크기` 절과 출력 칸 둘)이 붙었다. 확률만으로는 "얼마나"를
+#    못 읽어 0.4% 하락과 3% 하락이 같은 줄로 나갔다
+#    (docs/analysis/market-thesis/11-expected-return.md).
 PROMPT_VERSION = "7"
 
 # 채점 지평. KRX 영업일 수이고 달력일이 아니다. 0은 예측일 세션 하나다.
@@ -116,6 +121,9 @@ FLAT_THRESHOLD_PCT: dict[int, Decimal] = {
     5: Decimal("0.7"),
 }
 
+# 방향별 기대 등락률의 상한(퍼센트). **폭주만 받는 안전망이다** — "임계보다 커야 한다"
+# 같은 정합성은 프롬프트와 저장 전 검증이 본다. DB CHECK도 같은 값을 쓴다.
+MAX_EXPECTED_RETURN_PCT = Decimal(30)
 
 # 조사 왕복 상한. 넘으면 조사를 끝내고 답변 단계로 넘어간다. 왕복 하나가 모델 호출 하나라
 # 이 값이 빌드 한 번의 길이를 정한다(`thesis_common.BUILD_TIMEOUT`이 그 바깥 울타리다).
@@ -191,6 +199,9 @@ PROB_SUM_TOLERANCE = Decimal("0.02")
 
 # `thesis.prob_*`가 numeric(5,4)다. 정규화 결과를 이 자리수로 맞춘다.
 PROB_QUANTUM = Decimal("0.0001")
+
+# `thesis.*_return_pct`가 numeric(5,2)다. 모델이 준 크기를 이 자리수로 맞춘다.
+RETURN_QUANTUM = Decimal("0.01")
 
 # DART 뷰어 주소. 접수번호만 있으면 사람이 원문을 열 수 있다.
 DART_VIEWER_URL = "https://dart.fss.or.kr/dsaf001/main.do?rcpNo={rcept_no}"
@@ -357,6 +368,37 @@ def brier_score(
     }[outcome]
     predicted = (prob_up, prob_down, prob_flat)
     return sum(((probability - truth) ** 2 for probability, truth in zip(predicted, actual)), Decimal(0))
+
+
+def return_error(
+    *,
+    actual_return_pct: Decimal,
+    outcome: ThesisDirection,
+    up_return_pct: Decimal | None,
+    down_return_pct: Decimal | None,
+) -> tuple[Decimal, Decimal] | None:
+    """크기 채점. `(predicted_return_pct, return_error_pct)`이고 잴 수 없으면 `None`이다.
+
+    **조건부 채점이다.** `up_return_pct`는 "상승한다면 얼마"라는 조건부 추정이므로
+    **실현된 방향의 추정만** 실제와 대조한다. 방향을 틀렸는지는 `brier_score`가 이미
+    답했고, 여기서 또 벌점을 주면 같은 실수를 두 번 세는 것이다.
+
+    `flat` 실현은 채점하지 않는다 — `flat`의 정의가 이미 "±임계 안"이라 크기가 정의에
+    들어 있다. 그 방향의 추정이 없으면(이 컬럼이 생기기 전 행) 역시 `None`이다.
+
+    오차는 `abs(actual) - predicted`이고 **부호를 유지한다.** 절댓값만 남기면 "얼마나
+    틀렸나"는 알아도 모델이 늘 크게 부르는지 작게 부르는지를 못 읽는다 — 그것이
+    프롬프트를 고칠 방향을 정한다. 실제값에 `abs`를 쓰는 이유는 저장한 추정이 부호 없는
+    크기여서다(하락이면 실제는 음수, 추정은 양수).
+    """
+    predicted = {
+        ThesisDirection.UP: up_return_pct,
+        ThesisDirection.DOWN: down_return_pct,
+        ThesisDirection.FLAT: None,
+    }[outcome]
+    if predicted is None:
+        return None
+    return predicted, abs(actual_return_pct) - predicted
 
 
 # ---------------------------------------------------------------------------

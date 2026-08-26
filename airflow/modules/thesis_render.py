@@ -6,8 +6,10 @@
 
 """시장 추론(thesis)을 만들고, 저장하고, 채점한다.
 
-**맞고 틀림이 목적이 아니다.** "어떤 정보를 근거로 어떤 결론을 냈다"가 기록으로 남는 것이
-목적이다. 채점은 그 기록 위에 나중에 얹히고, 틀린 판단도 고치지 않는다.
+**목적은 정확도다 — 다만 개별 추론이 아니라 판(版)의 정확도다.** 한 건의 적중은 운과
+구분되지 않으므로 "어떤 정보를 근거로 어떤 결론을 냈다"를 먼저 기록으로 남기고, 채점이
+쌓이면 model·prompt 판별로 비교해 다음 변경을 유지하거나 되돌린다. **이미 쓴 추론은
+고치지 않는다** — 고칠 수 있으면 나쁜 판이 사후 수정으로 좋아 보인다.
 
 ## 근거는 고정 풀이 아니라 모델이 조회한다
 
@@ -77,10 +79,6 @@ SLACK_EVIDENCE_LIMIT = 3
 # 때문에 그 뒤 분포를 보고 정한다.
 VERDICT_TIE_GAP = Decimal("0.05")
 
-# 되돌아보기 섹션을 그릴 지평. T+1·T+3까지 매일 보내면 하루 세 덩이가 더 붙어 원래 알림이
-# 묻힌다. T+5가 해설이 가장 굳은 시점이기도 하다.
-SLACK_REVIEW_HORIZON = 5
-
 # 헤더는 이모지 + 라벨이다. **장중 넷은 이모지가 같고 시각으로 갈린다** — 하루 다섯 건이
 # 같은 채널에 쌓이므로 "언제 기준인가"가 값의 절반이다(차트·표 표기 규칙과 같은 이유).
 # 라벨의 원본은 `thesis_domain.SLOT_LABELS`라 스케줄을 옮기면 여기도 따라온다.
@@ -148,6 +146,20 @@ def _evidence_lines(items: Sequence[StoredEvidence], directions: Sequence[str]) 
     return "\n".join(lines)
 
 
+def _verdict_label(direction: str, probability: Decimal, size: Decimal | None) -> str:
+    """결론 한 조각. 크기가 있으면 `▼ 하락 1.2% 예상 (40%)`, 없으면 `▼ 하락 40%`.
+
+    **소수 첫째 자리까지다.** 모델이 대는 크기는 어림이라 둘째 자리는 거짓 정밀도다.
+
+    `flat`에는 크기를 붙이지 않는다 — 정의가 이미 "±임계 안"이라 크기가 정의에 들어 있다.
+    판 7 이전 행은 둘 다 `None`이라 확률만 그리던 모양으로 떨어진다.
+    """
+    label = f"{DIRECTION_MARKS[direction]} {DIRECTION_NAMES[direction]}"
+    if size is None:
+        return f"*{label} {probability:.0%}*"
+    return f"*{label} {size:.1f}% 예상 ({probability:.0%})*"
+
+
 def _thesis_section(thesis: StoredThesis, verdicts: Sequence[tuple[str, Decimal]]) -> str:
     """추론 하나. 결론 줄과 그 방향의 이유다.
 
@@ -160,9 +172,9 @@ def _thesis_section(thesis: StoredThesis, verdicts: Sequence[tuple[str, Decimal]
         "down": thesis.down_reasoning,
         "flat": thesis.flat_reasoning,
     }
+    sizes = {"up": thesis.up_return_pct, "down": thesis.down_return_pct}
     verdict_line = "   ".join(
-        f"*{DIRECTION_MARKS[direction]} {DIRECTION_NAMES[direction]} {probability:.0%}*"
-        for direction, probability in verdicts
+        _verdict_label(direction, probability, sizes.get(direction)) for direction, probability in verdicts
     )
     # 방향이 하나면 바로 위 줄이 이미 방향을 말했다. 둘 이상일 때만 이유마다 표시를 단다.
     lines = [f"*{thesis.label}*", verdict_line]

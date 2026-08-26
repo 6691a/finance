@@ -9,6 +9,9 @@
 --
 -- 채점 컬럼 넷은 여기서 채우지 않는다. `update_outcome.sql`이 나중에 채운다.
 --
+-- `up_return_pct`·`down_return_pct`는 방향별 **조건부** 크기다(판 7부터). 모델이 안 주거나
+-- 규칙을 어기면 NULL이고 확률·이유는 그대로 들어간다.
+--
 -- 정의의 원본은 `apps/models/analysis/thesis.py`의 `Thesis`이고
 -- `tests/modules/test_thesis.py`가 여기 컬럼을 그 모델 metadata와 대조한다.
 INSERT INTO thesis (
@@ -22,6 +25,8 @@ INSERT INTO thesis (
     prob_up,
     prob_down,
     prob_flat,
+    up_return_pct,
+    down_return_pct,
     up_reasoning,
     down_reasoning,
     flat_reasoning,
@@ -29,6 +34,6 @@ INSERT INTO thesis (
     tool_rounds,
     llm_model,
     prompt_version
-) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
 ON CONFLICT ON CONSTRAINT uq_thesis_natural_key DO NOTHING
 RETURNING id

@@ -87,7 +87,6 @@ THESIS_INSERT = read_sql("postgres", "thesis", "insert.sql")
 THESIS_SELECT_BY_RUN = read_sql("postgres", "thesis", "select_by_run.sql")
 PENDING_GRADES = read_sql("postgres", "thesis_outcome", "select_pending_grades.sql")
 INSERT_GRADE = read_sql("postgres", "thesis_outcome", "insert_grade.sql")
-OUTCOME_SELECT_BY_IDS = read_sql("postgres", "thesis_outcome", "select_by_thesis_ids.sql")
 NTH_OPEN_DAY = read_sql("postgres", "market_session", "select_nth_open_day.sql")
 STOCK_HORIZON_RETURN = read_sql("postgres", "stock_investor_trade_daily", "select_horizon_return.sql")
 INDEX_HORIZON_RETURN = read_sql("postgres", "index_bar", "select_horizon_return.sql")
@@ -325,21 +324,6 @@ EVIDENCE_SELECT_COLUMNS = {
     "evidence_url",
     "rank",
 }
-OUTCOME_SELECT_COLUMNS = {
-    "thesis_id",
-    "horizon_days",
-    "as_of_at",
-    "dag_run_id",
-    "evaluated_at",
-    "actual_return_pct",
-    "actual_outcome",
-    "brier_score",
-    "narrative",
-    "verdict",
-    "narrative_at",
-    "llm_model",
-    "prompt_version",
-}
 
 
 @pytest.mark.parametrize(
@@ -348,7 +332,6 @@ OUTCOME_SELECT_COLUMNS = {
         (THESIS_SELECT_BY_RUN, Thesis, SELECT_BY_RUN_COLUMNS),
         (EVIDENCE_SELECT_ALL, ThesisEvidence, EVIDENCE_SELECT_COLUMNS),
         (EVIDENCE_SELECT_TOP, ThesisEvidence, EVIDENCE_SELECT_COLUMNS),
-        (OUTCOME_SELECT_BY_IDS, ThesisOutcome, OUTCOME_SELECT_COLUMNS),
     ],
 )
 def test_selects_name_only_columns_the_model_has(statement, model, expected):
@@ -502,7 +485,6 @@ def test_index_session_return_takes_its_bar_time_as_a_parameter():
     [
         THESIS_SELECT_BY_RUN,
         PENDING_GRADES,
-        OUTCOME_SELECT_BY_IDS,
         EVIDENCE_SELECT_ALL,
         EVIDENCE_SELECT_TOP,
         STOCK_SESSION_RETURN,
@@ -1906,6 +1888,8 @@ def stored_row(thesis_id: int = 1, code: str = "KOSPI") -> tuple:
         1,
         "gpt-5.6-luna",
         PROMPT_VERSION,
+        Decimal("0.80"),
+        Decimal("1.20"),
     )
 
 
@@ -2400,6 +2384,8 @@ def test_pending_narratives_carry_their_slot():
             "u",
             "d",
             "f",
+            None,
+            None,
             None,
             None,
             None,
@@ -3369,3 +3355,130 @@ def test_tool_timestamps_are_iso_8601_not_python_str():
 
     assert row["observed_at"] == "2026-08-21T05:00:00Z"
     assert settled["business_date"] == "2026-08-21"
+
+
+# --- 기대 등락률 --------------------------------------------------------------
+
+
+def test_return_error_grades_only_the_realised_direction():
+    """조건부 추정이라 실현된 방향의 것만 대조한다. 방향 오답은 Brier가 이미 벌점을 줬다."""
+    from modules.thesis_domain import return_error
+
+    graded = return_error(
+        actual_return_pct=Decimal("-1.50"),
+        outcome=ThesisDirection.DOWN,
+        up_return_pct=Decimal("0.80"),
+        down_return_pct=Decimal("1.20"),
+    )
+
+    # 하락이 실현됐으니 down 쪽 추정만 본다. |−1.50| − 1.20 = +0.30 (과소추정)
+    assert graded == (Decimal("1.20"), Decimal("0.30"))
+
+
+def test_return_error_keeps_the_sign_so_over_and_under_are_distinguishable():
+    """절댓값만 남기면 모델이 늘 크게 부르는지 작게 부르는지를 못 읽는다."""
+    from modules.thesis_domain import return_error
+
+    over = return_error(
+        actual_return_pct=Decimal("0.50"),
+        outcome=ThesisDirection.UP,
+        up_return_pct=Decimal("2.00"),
+        down_return_pct=None,
+    )
+
+    assert over == (Decimal("2.00"), Decimal("-1.50"))
+
+
+def test_return_error_skips_flat_and_missing_estimates():
+    """flat은 정의가 이미 크기를 담고, 판 7 이전 행은 추정 자체가 없다."""
+    from modules.thesis_domain import return_error
+
+    assert (
+        return_error(
+            actual_return_pct=Decimal("0.10"),
+            outcome=ThesisDirection.FLAT,
+            up_return_pct=Decimal("0.80"),
+            down_return_pct=Decimal("1.20"),
+        )
+        is None
+    )
+    assert (
+        return_error(
+            actual_return_pct=Decimal("1.10"),
+            outcome=ThesisDirection.UP,
+            up_return_pct=None,
+            down_return_pct=None,
+        )
+        is None
+    )
+
+
+def test_a_size_below_the_flat_threshold_is_dropped_not_stored():
+    """임계보다 작은 크기는 정의상 flat이다. 방향의 크기로 두면 모순이 저장된다."""
+    from modules.thesis_generation import normalize_return_pct
+
+    assert normalize_return_pct(0.3) is None
+    assert normalize_return_pct(0.31) == Decimal("0.31")
+
+
+def test_a_runaway_size_is_dropped_not_clamped():
+    """상한으로 자르면 모델이 부르지 않은 숫자를 우리가 지어내는 것이 된다."""
+    from modules.thesis_generation import normalize_return_pct
+
+    assert normalize_return_pct(30.1) is None
+    assert normalize_return_pct(30) == Decimal("30.00")
+    assert normalize_return_pct(None) is None
+
+
+def test_a_bad_size_drops_only_that_column_and_keeps_the_thesis():
+    """확률과 이유는 멀쩡한데 크기 하나 때문에 판단이 통째로 사라지면 손해가 더 크다."""
+    # 임계(0.3) 아래인 up은 버려지고 down은 남아야 한다.
+    payload = thesis_payload(refs=[], up_return_pct=0.1, down_return_pct=1.4)
+    model = scripted(answer_message(payload))
+    box = toolbox(FakeConnection({}))
+
+    drafts = ThesisBuilder(model, box).parse(json.dumps({"theses": [payload]}), SUBJECTS[:1])
+
+    assert drafts[0].up_return_pct is None
+    assert drafts[0].down_return_pct == Decimal("1.40")
+    assert drafts[0].prob_up > 0
+
+
+def _stored_for_render(up=Decimal("0.80"), down=Decimal("1.20")) -> StoredThesis:
+    return StoredThesis(
+        id=1,
+        run_slot=RunSlot.PRE_OPEN,
+        run_date=date(2026, 8, 21),
+        as_of_at=AS_OF,
+        dag_run_id="manual__run",
+        subject_kind=ThesisSubjectKind.INDEX,
+        subject_code="KOSPI",
+        label="코스피",
+        prob_up=Decimal("0.2300"),
+        prob_down=Decimal("0.6200"),
+        prob_flat=Decimal("0.1500"),
+        up_reasoning="오를 이유",
+        down_reasoning="내릴 이유",
+        flat_reasoning="횡보 이유",
+        tool_rounds=1,
+        llm_model="gpt-5.6-luna",
+        prompt_version=PROMPT_VERSION,
+        up_return_pct=up,
+        down_return_pct=down,
+    )
+
+
+def test_the_conclusion_line_carries_the_size_when_it_is_there():
+    """확률만 있으면 0.4% 하락과 3% 하락이 같은 줄로 나간다."""
+    blocks = render_blocks(RunSlot.PRE_OPEN, date(2026, 8, 21), [_stored_for_render()], {})
+
+    assert "하락 1.2% 예상 (62%)" in json.dumps(blocks, ensure_ascii=False)
+
+
+def test_the_conclusion_line_falls_back_when_the_size_is_missing():
+    """판 7 이전 행은 크기가 없다. 그때는 확률만 그리던 모양 그대로다."""
+    blocks = render_blocks(RunSlot.PRE_OPEN, date(2026, 8, 21), [_stored_for_render(None, None)], {})
+    rendered = json.dumps(blocks, ensure_ascii=False)
+
+    assert "하락 62%" in rendered
+    assert "예상" not in rendered

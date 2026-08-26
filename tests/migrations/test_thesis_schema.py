@@ -183,3 +183,35 @@ def test_thesis_evidence_records_how_the_thesis_used_each_citation(capsys):
     assert "direction IS NULL OR direction IN ('up', 'down', 'flat')" in sql
     # 방향만 있고 경로가 없는 행은 "왜"를 잃는다. 쌍으로만 들어간다.
     assert "(direction IS NULL AND mechanism IS NULL) OR (direction IS NOT NULL AND mechanism IS NOT NULL)" in sql
+
+
+def test_thesis_carries_the_conditional_return_sizes(capsys):
+    sql = head_sql(capsys)
+
+    # 방향별 **조건부** 크기다. flat은 정의가 이미 "±임계 안"이라 칸이 없다.
+    assert "ALTER TABLE thesis ADD COLUMN up_return_pct NUMERIC(5, 2)" in sql
+    assert "ALTER TABLE thesis ADD COLUMN down_return_pct NUMERIC(5, 2)" in sql
+    assert "flat_return_pct" not in sql
+    # 폭주만 받는 안전망이다. 임계와의 정합성은 프롬프트와 저장 전 검증이 본다.
+    assert "up_return_pct IS NULL OR up_return_pct BETWEEN 0 AND 30" in sql
+    assert "down_return_pct IS NULL OR down_return_pct BETWEEN 0 AND 30" in sql
+
+
+def test_thesis_outcome_keeps_the_size_grade_paired_with_a_grade(capsys):
+    sql = head_sql(capsys)
+
+    assert "ALTER TABLE thesis_outcome ADD COLUMN predicted_return_pct NUMERIC(5, 2)" in sql
+    assert "ALTER TABLE thesis_outcome ADD COLUMN return_error_pct NUMERIC(8, 4)" in sql
+    # 둘은 함께 있거나 함께 없다. 채점 넷 그룹에 넣지 않는 이유는 flat 실현·지평 1·3·5에서
+    # **정상적으로** 비어 있어서다.
+    assert "(return_error_pct IS NULL) = (predicted_return_pct IS NULL)" in sql
+    # 채점하지 않은 행에 크기 오차만 있을 수 없다.
+    assert "predicted_return_pct IS NULL OR evaluated_at IS NOT NULL" in sql
+
+
+def test_the_incoming_precedent_edge_has_its_own_index(capsys):
+    sql = head_sql(capsys)
+
+    # UNIQUE가 (thesis_id, precedent_id)라 선두만 커버한다. 이웃 그래프는 **들어오는**
+    # INFORMED_BY를 읽으므로 이 인덱스가 없으면 그 조회가 전체 스캔이다.
+    assert "CREATE INDEX ix_thesis_precedent_precedent_id ON thesis_precedent (precedent_id)" in sql

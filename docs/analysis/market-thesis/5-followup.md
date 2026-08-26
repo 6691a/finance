@@ -354,6 +354,12 @@ build_thesis >> grade_followups >> narrate_followups >> notify_slack
 
 ### Slack
 
+> **2026-08-26 갱신: 이 절은 구현되지 않았다.** `thesis_render.SLACK_REVIEW_HORIZON`과
+> `ThesisStore.stored_outcomes()`, `thesis_outcome/select_by_thesis_ids.sql`이 호출자 없이
+> 남아 있다가 그날 지워졌다. 아래는 그때의 설계 그대로이고 **지금 Slack에는 T+5 섹션이
+> 없다.** 채점·해설을 읽는 자리는 [14-web-ui.md](14-web-ui.md)의 웹 화면이 대신하고,
+> Slack에는 그대로 안 싣는다 — 읽는 사람이 다르다는 3단계 4절 판단이 유지된다.
+
 **T+5 해설만 보낸다.** T+1·T+3까지 매일 보내면 하루 세 덩이가 더 붙어 원래 알림이 묻힌다.
 T+5가 해설이 가장 굳은 시점이기도 하다. `notify_slack`의 기존 메시지 뒤에 섹션 하나:
 
@@ -375,7 +381,6 @@ T+5가 해설이 가장 굳은 시점이기도 하다. `notify_slack`의 기존 
 | `thesis_outcome/insert_grade.sql` | 채점 행 INSERT. **조건부 upsert다** — `DO NOTHING`이면 해설이 먼저 만든 행을 영영 채점하지 못한다. `WHERE thesis_outcome.evaluated_at IS NULL` |
 | `thesis_outcome/select_pending_narratives.sql` | 한 지평에서 `narrative IS NULL`인 대상 + 원 추론의 확률·이유. **`thesis`에서 LEFT JOIN한다** — `post_close`는 채점을 안 받아 행이 아예 없다 |
 | `thesis_outcome/insert_narrative.sql` | 해설 다섯 칸 채움. **UPDATE가 아니라 조건부 upsert다** — `post_close`는 해설이 행을 새로 만든다. `WHERE thesis_outcome.narrative IS NULL` |
-| `thesis_outcome/select_by_thesis_ids.sql` | 4단계 그래프 동기화, Slack T+5 섹션 |
 | `thesis/select_past_with_outcomes.sql` | 장전 프리페치와 `past_theses` 툴. `pre_open`·`post_close`를 슬롯마다 `n`건씩 준다. 지평별 결과를 jsonb 배열로 접어 추론당 한 행을 지킨다 |
 | `stock_investor_trade_daily/select_horizon_return.sql` | 종목 T+N 누적 등락률(기준가 = 예측일 전 영업일 종가) |
 | `index_bar/select_horizon_return.sql` | 지수 T+N 누적 등락률 |
@@ -389,8 +394,7 @@ T+5가 해설이 가장 굳은 시점이기도 하다. `notify_slack`의 기존 
   `horizon_days` CHECK, Brier 범위 CHECK, `verdict` 값 집합 CHECK, `horizon_days=0`이면
   해설 다섯 칸 NULL CHECK, 해설 all-or-none CHECK, CASCADE, 주석. `thesis`에 채점 컬럼이
   **없는지**. `thesis_evidence`의 UNIQUE 둘에 `outcome_horizon_days`가 들어갔는지.
-- SQL 컬럼 vs 모델 metadata 대조 — `insert_grade.sql`, `insert_narrative.sql`,
-  `select_by_thesis_ids.sql`. `insert_grade.sql`에 `ON CONFLICT DO NOTHING`이 있고
+- SQL 컬럼 vs 모델 metadata 대조 — `insert_grade.sql`, `insert_narrative.sql`. `insert_grade.sql`에 `ON CONFLICT DO NOTHING`이 있고
   `DO UPDATE`가 없는지. `select_horizon_return.sql`이 `stock_investor_trade_daily`를 보고
   `stock_bar`를 안 보는지.
 - `tests/modules/test_thesis_pipeline.py`에 추가:
@@ -411,8 +415,7 @@ T+5가 해설이 가장 굳은 시점이기도 하다. `notify_slack`의 기존 
     UPDATE와 evidence INSERT가 한 트랜잭션인지.
   - `past_theses`: `n` 0·11이 잘리는지, subject 목록 밖 값이 오류 `ToolMessage`인지,
     SQL에 넘어가는 창의 끝이 `as_of_at`이고 `evaluated_at`·`narrative_at` 술어가 실리는지.
-  - 렌더링: T+5 섹션이 예측 확률·실제 등락률·Brier·해설·근거를 담는지, 0건이면 섹션이
-    아예 없는지.
+  - ~~렌더링: T+5 섹션~~ — 7절 갱신대로 구현되지 않았다.
 - `tests/dags/test_market_thesis_review.py`에 추가 — 태스크 순서
   `build_thesis >> grade_followups >> narrate_followups >> notify_slack`,
   `pre_open` 실행에서 뒤 두 태스크가 즉시 반환하는지, XCom 슬롯 목록이 세 태스크의 결과를
@@ -427,7 +430,8 @@ T+5가 해설이 가장 굳은 시점이기도 하다. `notify_slack`의 기존 
   둘로 먼저 재고, 오염이 확인되면 그때 붙인다. 플래그 하나라 나중에 싸다.
 - **해설의 재해설** — 지평마다 한 번, 첫 성공본 불변. T+5 해설이 마음에 안 들어도 고치지
   않는다.
-- **지평별 Slack 알림 분리** — T+5 하나만 보낸다. 소음이 늘면 이 섹션부터 뺀다.
+- **지평별 Slack 알림 분리** — 애초에 T+5 하나만 보낼 계획이었고, 그 섹션조차
+  구현되지 않았다(7절 갱신). 채점·해설은 웹 화면이 낸다.
 - **`prompt_version` 자동 승급** — 피드백 루프는 툴 하나뿐이고, 프롬프트를 고치는 것은
   사람이다. 모델이 자기 프롬프트를 고치는 층은 만들지 않는다.
 - **교훈·규칙 추출 테이블** — 해설에서 "이런 패턴이면 이렇게 봐라"를 뽑아 쌓는 자가 메모리

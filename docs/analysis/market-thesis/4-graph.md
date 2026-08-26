@@ -42,6 +42,15 @@ relational→Neo4j와 복잡도가 같다. Cypher 방언만 둘(AGE의 openCyphe
   그대로 키로 쓴다. `MERGE (t:Thesis {id: $id}) SET t += $props`로 멱등 갱신. 추론 컬럼은
   불변이고([1-storage.md](1-storage.md) 2절) 채점 컬럼만 나중에 채워지므로, 같은 노드를
   두 번 MERGE하는 경우는 채점 갱신뿐이다.
+- **그 넷을 읽을 조회가 지금 없다.** `thesis_outcome/select_by_thesis_ids.sql`과
+  `ThesisStore.stored_outcomes()`는 소비자가 없어 2026-08-26에 지웠다. 4단계를 구현할 때
+  **지평 0만 읽는 조회를 새로 만든다** — 아래 각주대로 노드에 실리는 것이 그 하나뿐이라
+  옛 파일(13컬럼 전부)을 되살리는 것보다 좁게 짜는 편이 맞다.
+- **채점 속성 넷은 지평 0의 값이다**(2026-08-26 추가). 이 문단을 쓸 때는 채점이 `thesis`의
+  컬럼이었지만 5단계가 그것을 `thesis_outcome`의 **지평 넷(0·1·3·5)짜리 다중 행**으로
+  옮겼다([README.md](README.md) 2절). 노드는 단수 속성이라 어느 지평을 실을지 정해야 하고,
+  **지평 0**이다 — 채점된 추론이면 항상 있는 유일한 지평이라 노드 모양이 시간에 따라
+  변하지 않는다. 같은 규칙을 [12-api.md](12-api.md) 1.3절의 그래프 응답이 쓴다.
 - **타입 변환.** 드라이버 매핑에 `Decimal`이 없다. `prob_*`·`actual_return_pct`·`brier_score`는
   `float`로, `run_date`는 `neo4j.time.Date`로 바꿔 넘긴다. aware `datetime`(`as_of_at`·
   `evaluated_at`)은 그대로 간다. 변환은 `graph.py`의 Pydantic 모델이 한다 — 부르는 쪽은 모른다.
@@ -50,9 +59,9 @@ relational→Neo4j와 복잡도가 같다. Cypher 방언만 둘(AGE의 openCyphe
 - `(:Thesis)-[:INFORMED_BY]->(:Thesis)` — `thesis_precedent` 한 행당 관계 하나. 장전 추론이
   프롬프트에서 본 과거 추론이다(5-followup.md 5절). 양 끝이 다 `Thesis` 노드라 새 노드가 없고,
   양쪽 다 FK라 문자열 파싱도 없다.
-- `(:Thesis)-[:CITES {rank, direction, mechanism}]->(:Evidence)` — `thesis_evidence` 한 행당
-  관계 하나. `direction`·`mechanism`은 원 추론의 인용에만 있다(2-agent.md 3절). 해설의
-  인용(`outcome_horizon_days` NOT NULL)은 둘 다 NULL이라 속성을 빼고 만든다.
+- `(:Thesis)-[:CITES {rank, direction, mechanism}]->(:Evidence)` — 원 추론의
+  `thesis_evidence`(`outcome_horizon_days IS NULL`) 한 행당 관계 하나. 해설의 인용은
+  원 판단을 만든 근거가 아니고 지평마다 같은 ref가 반복될 수 있어 Postgres에만 남긴다.
   **exact-set으로 맞춘다**: 같은 트랜잭션 안에서 먼저
   `MATCH (t:Thesis {id: $id})-[c:CITES]->() DELETE c`로 그 추론의 기존 관계를 전부 지우고
   현재 목록을 MERGE한다. Postgres 쪽 근거는 불변이라 보통 같은 집합이 다시 들어가지만,
@@ -90,8 +99,9 @@ Neo4j 예외를 분류한다: 인증·제약 위반처럼 다시 불러도 같�
 시도 횟수와 실제 호출 횟수가 같다.
 
 `apps/core/graph.py`는 만들지 않는다. `database.py`·`redis.py`와 같은 모양(alias별
-`GraphConfig`)으로 확장할 자리는 있지만 지금 그래프를 **읽는** 소비자가 없다. 만들면 아무도
-안 쓰는 커넥션 풀이 된다. 그때까지 그래프를 읽는 방법은 Neo4j Browser나 `cypher-shell`이다.
+`GraphConfig`)으로 확장할 자리는 있지만 12단계 API는 같은 모양을 **Postgres에서** 읽는다.
+API가 Neo4j를 조회 원본으로 채택할 때 이 파일을 만든다. 그때까지 Neo4j를 직접 읽는 방법은
+Neo4j Browser나 `cypher-shell`이다.
 
 ## 4. DAG — `sync_graph` 태스크
 
@@ -116,8 +126,8 @@ Neo4j 예외를 분류한다: 인증·제약 위반처럼 다시 불러도 같�
     run_slot) 조합을 SQL로 뽑는다.
   - **초기 적재도 이것으로.** 3단계가 먼저 배포돼 쌓인 행은 슬롯별로 돌리지 않고
     `run_date_from`을 첫날로 주어 한 번에 넣는다. 데이터가 작고 MERGE라 멱등이다.
-  별도 reconciliation DAG나 lag·checksum 관측은 만들지 않는다 — 그래프를 읽는 소비자가
-  생겨 어긋남이 문제가 될 때 만든다.
+  별도 reconciliation DAG나 lag·checksum 관측은 만들지 않는다 — API가 Neo4j를 조회
+  원본으로 채택해 어긋남이 사용자 화면에 영향을 줄 때 만든다.
 - 실패 판정: `GraphError` → `AirflowFailException`, `ConnectionError` → 재시도. MERGE +
   exact-set이라 재시도가 중복 부작용을 안 만든다.
 - `notify_slack`과 `sync_graph`는 서로 독립이라 병렬로 돌고, 하나가 실패해도 다른 하나는
@@ -131,7 +141,7 @@ Neo4j 예외를 분류한다: 인증·제약 위반처럼 다시 불러도 같�
   `compose/prod/airflow/requirements.txt`, 그리고 `pyproject.toml`의 `dev` 그룹에 추가한다.
   dev 그룹이 필요한 이유: `tests/modules/test_graph.py`가 가짜 세션을 쓰더라도 `graph.py`가
   `neo4j` 예외 타입을 import한다. **prod는 이미지 재빌드·배포가 필요하다.**
-- **로컬 dev**: `compose/local/docker-compose.yaml`의 `db`/`redis`/`grafana` 옆에
+- **로컬 dev**: `compose/local/docker-compose.yaml`의 `db`/`redis` 옆에
   `neo4j` 서비스를 추가한다(공식 `neo4j:5-community` 이미지, 7474/7687 포트, named
   volume, healthcheck). prod compose·Dockerfile은 그대로 둔다.
 - **compose 간 네트워크는 만들지 않는다.** 로컬 Airflow compose는 자기 메타 DB만 갖고
@@ -148,7 +158,8 @@ Neo4j 예외를 분류한다: 인증·제약 위반처럼 다시 불러도 같�
 ## 6. 테스트
 
 - `tests/modules/test_graph.py` — 가짜 Neo4j 드라이버/세션(`FakeWebClient` 패턴)으로:
-  MERGE 쿼리에 실린 파라미터 모양(Thesis 속성 전체, Evidence kind+ref+url, CITES rank),
+  MERGE 쿼리에 실린 파라미터 모양(Thesis 속성 전체, 원 추론 Evidence kind+ref+url,
+  CITES rank)과 해설 인용이 제외되는지,
   CITES DELETE가 MERGE보다 먼저 같은 트랜잭션에 실리는지, 제약 문장이 `IS UNIQUE`이고
   `NODE KEY`가 아닌지, kind·ref 빈 값이 MERGE 전에 거절되는지, `Decimal`이 `float`로·`date`가
   `neo4j.time.Date`로 바뀌어 실리는지, 드라이버가 `max_transaction_retry_time=0`으로 만들어지는지,

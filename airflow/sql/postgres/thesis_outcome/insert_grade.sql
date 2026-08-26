@@ -7,6 +7,9 @@
 -- `DO NOTHING`이 아니라 조건부 `DO UPDATE`인 이유: 해설이 먼저 성공해 행을 만들어 둔
 -- 경우가 있다. 채점이 종가 결측으로 실패한 날 해설만 돌면 그렇게 된다. 그때 `DO NOTHING`이면
 -- 그 지평은 영영 채점되지 않는다.
+--
+-- **크기 채점 둘은 방향 채점과 같은 트랜잭션·같은 행이다**(판 7부터). 실현이 `flat`이거나
+-- 그 방향의 추정이 없으면 NULL이고, 그것을 정하는 것은 `thesis_domain.return_error`다.
 INSERT INTO thesis_outcome (
     thesis_id,
     horizon_days,
@@ -15,12 +18,16 @@ INSERT INTO thesis_outcome (
     evaluated_at,
     actual_return_pct,
     actual_outcome,
-    brier_score
-) VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+    brier_score,
+    predicted_return_pct,
+    return_error_pct
+) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
 ON CONFLICT ON CONSTRAINT uq_thesis_outcome_natural_key DO UPDATE SET
     evaluated_at = EXCLUDED.evaluated_at,
     actual_return_pct = EXCLUDED.actual_return_pct,
     actual_outcome = EXCLUDED.actual_outcome,
     brier_score = EXCLUDED.brier_score,
+    predicted_return_pct = EXCLUDED.predicted_return_pct,
+    return_error_pct = EXCLUDED.return_error_pct,
     updated_at = now()
 WHERE thesis_outcome.evaluated_at IS NULL

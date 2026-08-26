@@ -234,7 +234,7 @@ class ThesisRun:
 
         슬롯으로 갈리지 않는다 — 세션과 기준 시각은 부르는 쪽이 이미 정해서 넘겼다.
         """
-        from modules import technical
+        from modules import base_rate, technical
 
         # SQL 상수는 툴박스가 갖고 그 모듈이 LangChain을 끈다. 늦게 import한다.
         from modules.thesis_toolbox import DAILY_HISTORY, RECENT_SIGNALS
@@ -244,6 +244,14 @@ class ThesisRun:
             return TechnicalState()
 
         as_of_at = self._as_of_at
+        # 사건마다 "그 신호가 과거에 어떻게 끝났나"를 붙인다. 사건만 주고 확률을 요구하면
+        # 모델이 서사로 빈도를 지어낸다(10-base-rate.md 5절). 조회는 한 번이고 (심볼,
+        # 종류, 방향) 키로 나눠 쓴다 — 신호마다 SQL을 부르면 왕복이 사건 수만큼 는다.
+        rates = base_rate.signal_base_rates(
+            self._connection,
+            as_of_date=as_of_at.astimezone(KST_TIMEZONE).date(),
+            symbols=codes,
+        )
         with self._connection.cursor() as cursor:
             cursor.execute(
                 DAILY_HISTORY,
@@ -278,6 +286,7 @@ class ThesisRun:
                         signal_date=row[2],
                         kind=str(row[3]),
                         direction=str(row[4]),
+                        base_rate=rates.get((code, str(row[3]), str(row[4]))),
                     )
                     for row in cursor.fetchall()
                 )

@@ -22,6 +22,24 @@ SMA60과 EMA 안정화에 120거래일이 필요하다. 연휴가 포함된 구�
 | 이름 | 기본값 | 뜻 |
 | --- | --- | --- |
 | `end_date` | `null` | 구간의 끝(YYYY-MM-DD). 비우면 실행일(KST) |
+| `start_date` | `null` | 구간의 시작(YYYY-MM-DD). 비우면 `end_date`에서 200달력일 앞 |
+
+## 이력 백필
+
+`start_date`를 주면 그 날짜까지 거슬러 올라간다. 조회는 200달력일씩 창을 끊어 반복한다 —
+`KisIndexDailyCollector.fetch`가 한 심볼에 허용하는 `INDEX_DAILY_MAX_PAGES`(10)를 넘지
+않기 위해서다. 한 장이 50봉이라 200달력일(약 135거래일)은 3장 안쪽이다.
+
+상한 상수를 올려 한 번에 다 받게 만들지 않는다. 그 값은 "200달력일 구간이 이 안에 들어오지
+않으면 계약이 깨진 것"이라는 검사라, 백필 편의로 올리면 일상 실행의 검사가 함께 약해진다.
+
+```bash
+airflow dags trigger kis_index_daily \
+  --conf '{"start_date": "2016-08-15", "end_date": "2026-08-25"}'
+```
+
+`stock_investor_trade_daily`와 달리 지수에는 수정주가가 없다. 소급 조정으로 과거 값이
+바뀌는 일이 없으므로 이 DAG에는 대조 가드가 없다.
 
 ## 실패와 재시도
 
@@ -70,8 +88,11 @@ logger = logging.getLogger(__name__)
 CALENDAR_DAY_PATTERN = re.compile(r"\d{4}-\d{2}-\d{2}")
 
 END_DATE_PARAM = "end_date"
+START_DATE_PARAM = "start_date"
 
 # SMA60과 EMA 안정화에 필요한 120거래일을 연휴 포함 구간에서도 확보하는 고정 창(4.4절).
+# 백필의 창 크기이기도 하다 — 200달력일이 `INDEX_DAILY_MAX_PAGES` 안에 들어오는 것이
+# 일상 실행에서 이미 보장되므로 백필용 크기를 따로 정할 이유가 없다.
 SPAN_CALENDAR_DAYS = 200
 
 
@@ -87,22 +108,56 @@ def _connection() -> Any:
     return PostgresHook(postgres_conn_id=CONNECTION_ID).get_conn()
 
 
-def requested_end_date(now_kst: datetime, params: dict[str, Any]) -> date:
-    """이 run이 구간의 끝으로 쓸 날짜. 모양을 먼저 본다(`kis_investor_trade_daily`와 같은 이유)."""
-    given = params.get(END_DATE_PARAM)
-    if not given:
-        return now_kst.date()
+def _calendar_day(given: Any, name: str) -> date:
+    """`YYYY-MM-DD` 하나를 읽는다. 모양을 먼저 본다(`kis_investor_trade_daily`와 같은 이유)."""
     text = str(given).strip()
     if not CALENDAR_DAY_PATTERN.fullmatch(text):
-        raise AirflowFailException(f"{END_DATE_PARAM} must be YYYY-MM-DD, got {given!r}")
+        raise AirflowFailException(f"{name} must be YYYY-MM-DD, got {given!r}")
     try:
         return date.fromisoformat(text)
     except ValueError:
-        raise AirflowFailException(f"{END_DATE_PARAM} must be YYYY-MM-DD, got {given!r}") from None
+        raise AirflowFailException(f"{name} must be YYYY-MM-DD, got {given!r}") from None
+
+
+def requested_end_date(now_kst: datetime, params: dict[str, Any]) -> date:
+    """이 run이 구간의 끝으로 쓸 날짜."""
+    given = params.get(END_DATE_PARAM)
+    if not given:
+        return now_kst.date()
+    return _calendar_day(given, END_DATE_PARAM)
+
+
+def requested_start_date(end_date: date, params: dict[str, Any]) -> date:
+    """이 run이 구간의 시작으로 쓸 날짜. 비우면 200달력일 앞이다.
+
+    끝보다 뒤인 시작은 조용히 빈 구간이 되므로 막는다.
+    """
+    given = params.get(START_DATE_PARAM)
+    if not given:
+        return span_start(end_date)
+    start_date = _calendar_day(given, START_DATE_PARAM)
+    if start_date > end_date:
+        raise AirflowFailException(f"{START_DATE_PARAM} {start_date} must not be after {END_DATE_PARAM} {end_date}")
+    return start_date
 
 
 def span_start(end_date: date) -> date:
     return end_date - timedelta(days=SPAN_CALENDAR_DAYS)
+
+
+def fetch_windows(start_date: date, end_date: date) -> list[tuple[date, date]]:
+    """조회 구간을 `SPAN_CALENDAR_DAYS`씩 끊는다. 오래된 창이 먼저다.
+
+    한 심볼의 페이지 상한(`INDEX_DAILY_MAX_PAGES`)을 넘지 않으려고 나눈다. 일상 실행은
+    구간이 정확히 200달력일이라 창 하나가 나오고 동작이 바뀌지 않는다.
+    """
+    windows: list[tuple[date, date]] = []
+    cursor = start_date
+    while cursor <= end_date:
+        window_end = min(cursor + timedelta(days=SPAN_CALENDAR_DAYS), end_date)
+        windows.append((cursor, window_end))
+        cursor = window_end + timedelta(days=1)
+    return windows
 
 
 @dag(
@@ -121,6 +176,15 @@ def span_start(end_date: date) -> date:
             title="구간의 끝",
             description="YYYY-MM-DD. 비우면 실행일(KST). 이 날짜를 끝으로 최근 200달력일을 받는다.",
         ),
+        START_DATE_PARAM: Param(
+            None,
+            type=["null", "string"],
+            title="구간의 시작",
+            description=(
+                f"YYYY-MM-DD. 비우면 구간의 끝에서 {SPAN_CALENDAR_DAYS}달력일 앞. "
+                f"이력 백필에 쓴다 — 구간을 {SPAN_CALENDAR_DAYS}달력일씩 끊어 반복 조회한다."
+            ),
+        ),
     },
     doc_md=__doc__,
     tags=["kis", "market", "daily", "korea", "index"],
@@ -133,11 +197,12 @@ def kis_index_daily():
 
         now_kst = datetime.now(UTC).astimezone(KST_TIMEZONE)
         end_date = requested_end_date(now_kst, params)
-        start_date = span_start(end_date)
+        start_date = requested_start_date(end_date, params)
+        windows = fetch_windows(start_date, end_date)
 
         # 자동 실행만 휴장일을 건너뛴다. 백필은 끝 날짜가 휴장일이어도 구간 안의 거래일이
         # 목적이므로 막을 이유가 없다.
-        if not params.get(END_DATE_PARAM):
+        if not params.get(END_DATE_PARAM) and not params.get(START_DATE_PARAM):
             connection = _connection()
             try:
                 closed = krx_open_day(connection, end_date) is False
@@ -153,31 +218,41 @@ def kis_index_daily():
         failures: list[str] = []
         with closing(_connection()) as connection:
             for index in MOVEMENT_INDEXES:
-                try:
-                    fetch = collector.fetch(index, start_date, end_date)
-                except KisHTTPError as error:
-                    if error.status in KIS_UNRECOVERABLE_STATUSES:
-                        raise AirflowFailException(f"{index.value}: {error}") from error
-                    logger.warning("%s failed with HTTP %s", index.value, error.status)
-                    failures.append(f"{index.value}({error})")
-                    continue
-                except KisTimeWindowError as error:
-                    # 제공처가 지금은 이 조회를 받지 않는다(응답 본문이 창을 말해 준다). 재시도는 같은
-                    # 답을 받으며 예산만 태우므로 즉시 죽인다. 사람이 시각을 맞춰 다시 트리거한다.
-                    raise AirflowFailException(f"{index.value}: {error}. 제한 시각 뒤에 다시 트리거한다.") from error
-                except (KisResultError, KisPayloadError) as error:
-                    logger.warning("%s failed: %s", index.value, error)
-                    failures.append(f"{index.value}({error})")
-                    continue
-                except ConnectionError as error:
-                    logger.warning("%s failed to connect: %s", index.value, error)
-                    failures.append(f"{index.value}({error})")
-                    continue
+                # 창 하나가 실패하면 그 심볼의 남은 창은 건너뛴다. 구멍 난 구간 위에 나머지를
+                # 얹어 봐야 지표 계산이 그 구멍에서 멈춘다.
+                for window_start, window_end in windows:
+                    try:
+                        fetch = collector.fetch(index, window_start, window_end)
+                    except KisHTTPError as error:
+                        if error.status in KIS_UNRECOVERABLE_STATUSES:
+                            raise AirflowFailException(f"{index.value}: {error}") from error
+                        logger.warning("%s failed with HTTP %s", index.value, error.status)
+                        failures.append(f"{index.value} {window_start}~{window_end}({error})")
+                        break
+                    except KisTimeWindowError as error:
+                        # 제공처가 지금은 이 조회를 받지 않는다(응답 본문이 창을 말해 준다). 재시도는 같은
+                        # 답을 받으며 예산만 태우므로 즉시 죽인다. 사람이 시각을 맞춰 다시 트리거한다.
+                        raise AirflowFailException(f"{index.value}: {error}. 제한 시각 뒤에 다시 트리거한다.") from error
+                    except (KisResultError, KisPayloadError) as error:
+                        logger.warning("%s %s~%s failed: %s", index.value, window_start, window_end, error)
+                        failures.append(f"{index.value} {window_start}~{window_end}({error})")
+                        break
+                    except ConnectionError as error:
+                        logger.warning("%s %s~%s failed to connect: %s", index.value, window_start, window_end, error)
+                        failures.append(f"{index.value} {window_start}~{window_end}({error})")
+                        break
 
-                with atomic(connection):
-                    rows = collector.store(connection, fetch)
-                stored += rows
-                logger.info("Stored %s daily bars for %s in %s pages", rows, index.value, fetch.page_count)
+                    with atomic(connection):
+                        rows = collector.store(connection, fetch)
+                    stored += rows
+                    logger.info(
+                        "Stored %s daily bars for %s %s~%s in %s pages",
+                        rows,
+                        index.value,
+                        window_start,
+                        window_end,
+                        fetch.page_count,
+                    )
 
         if failures:
             raise AirflowFailException(f"Index daily collection failed for: {'; '.join(failures)}")

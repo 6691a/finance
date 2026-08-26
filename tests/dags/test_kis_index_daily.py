@@ -5,6 +5,7 @@
 """
 
 from datetime import UTC, date, datetime, timedelta
+from itertools import pairwise
 
 import pytest
 from airflow.exceptions import AirflowFailException
@@ -62,3 +63,50 @@ def test_the_span_is_a_fixed_calendar_window():
     end = date(2026, 8, 24)
     assert kis_index_daily.span_start(end) == end - timedelta(days=kis_index_daily.SPAN_CALENDAR_DAYS)
     assert kis_index_daily.SPAN_CALENDAR_DAYS == 200
+
+
+# ---------------------------------------------------------------------------
+# 이력 백필
+# ---------------------------------------------------------------------------
+
+
+def test_an_empty_start_date_keeps_the_fixed_span():
+    """일상 실행의 동작이 바뀌면 안 된다. 창 하나가 정확히 200달력일이다."""
+    end_date = date(2026, 8, 25)
+
+    start_date = kis_index_daily.requested_start_date(end_date, {})
+
+    assert start_date == end_date - timedelta(days=kis_index_daily.SPAN_CALENDAR_DAYS)
+    assert kis_index_daily.fetch_windows(start_date, end_date) == [(start_date, end_date)]
+
+
+def test_a_backfill_span_is_cut_into_page_sized_windows():
+    """한 심볼의 페이지 상한(`INDEX_DAILY_MAX_PAGES`)을 넘지 않으려고 끊는다.
+
+    한 장이 50봉이고 200달력일이 약 135거래일이라 창 하나가 3장 안쪽이다(2026-08-26 실측).
+    """
+    start_date, end_date = date(2016, 8, 15), date(2026, 8, 25)
+
+    windows = kis_index_daily.fetch_windows(start_date, end_date)
+
+    assert windows[0][0] == start_date
+    assert windows[-1][1] == end_date
+    assert all(
+        (window_end - window_start).days <= kis_index_daily.SPAN_CALENDAR_DAYS
+        for window_start, window_end in windows
+    )
+    # 창끼리 겹치거나 벌어지지 않는다. 벌어지면 지표 계산 창에 구멍이 남는다.
+    for earlier, later in pairwise(windows):
+        assert later[0] == earlier[1] + timedelta(days=1)
+
+
+def test_a_start_date_after_the_end_fails_before_any_call():
+    """조용히 빈 구간이 되면 0건 저장을 정상으로 읽는다."""
+    with pytest.raises(AirflowFailException, match="must not be after"):
+        kis_index_daily.requested_start_date(date(2026, 8, 25), {"start_date": "2026-08-26"})
+
+
+def test_an_iso_week_start_date_is_rejected():
+    """`date.fromisoformat`은 `2026-W34`도 받아 그 주의 월요일로 바꾼다."""
+    with pytest.raises(AirflowFailException, match="must be YYYY-MM-DD"):
+        kis_index_daily.requested_start_date(date(2026, 8, 25), {"start_date": "2026-W34"})

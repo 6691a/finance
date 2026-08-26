@@ -9,7 +9,7 @@ from typing import Any, Self
 
 import pytest
 
-from modules import thesis_common
+from modules import base_rate, thesis_common
 from modules.technical import TECHNICAL_LOOKBACK_BARS
 from modules.thesis_domain import RSI_OVERBOUGHT, RSI_OVERSOLD, ThesisSubjectKind
 from modules.thesis_generation import SYSTEM_PROMPT
@@ -24,6 +24,10 @@ from modules.thesis_state import (
 SESSION = date(2026, 8, 21)
 AS_OF = datetime(2026, 8, 21, 6, 30, tzinfo=UTC)  # KST 15:30
 
+
+
+# 기저율 조회 둘. 관측 상태를 만들 때마다 불린다.
+BASE_RATE_QUERIES = frozenset({base_rate.FORWARD_RETURNS, base_rate.UNCONDITIONAL_RETURNS})
 
 class FakeCursor:
     def __init__(self, connection: "FakeConnection") -> None:
@@ -62,6 +66,10 @@ class FakeConnection:
 
 
 def _key(statement: str) -> str:
+    # 기저율 조회가 먼저다. 둘 다 `FROM technical_signal`·`FROM stock_investor_trade_daily`를
+    # 담고 있어 아래 규칙에 걸리면 모양이 다른 행을 받는다.
+    if statement in BASE_RATE_QUERIES:
+        return "base_rate"
     if "WITH requested AS" in statement:
         return "technical"
     if "FROM technical_signal" in statement:

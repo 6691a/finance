@@ -45,8 +45,23 @@ class SignalRun(BaseModel):
     skipped: tuple[str, ...]
 
 
-def detect_and_store(connection: Connection, *, as_of_at: datetime, scan_bars: int) -> SignalRun:
+def detect_and_store(
+    connection: Connection,
+    *,
+    as_of_at: datetime,
+    scan_bars: int,
+    lookback_bars: int = TECHNICAL_LOOKBACK_BARS,
+) -> SignalRun:
     """지수와 watched 종목의 최근 `scan_bars`봉에서 사건을 찾아 저장한다.
+
+    `lookback_bars`는 계산에 쓰려고 **읽어 오는** 봉 수이고 `scan_bars`는 그중 사건을 찾을
+    구간이다. 지표에 워밍업이 필요하므로 앞엣것이 뒤엣것보다 커야 한다. 기본값은 일상 실행의
+    조회 창이고, 이력 백필만 이 값을 넓힌다
+    (docs/analysis/market-thesis/10-base-rate.md 4.1절).
+
+    **`as_of_at`을 과거로 굴려 백필하지 않는다.** `select_history.sql`의 cutoff는
+    `business_date`가 아니라 `created_at`이고, 백필한 행은 `created_at`이 전부 백필 시각이라
+    과거 `as_of_at`으로는 0건이 나온다. 전 구간을 한 번에 훑는다.
 
     **대상 전부를 건너뛰면 실패다.** 0건 저장은 "교차가 없었다"는 정상 상태이지만, 볼 대상이
     하나도 없는 것은 앞단 수집이 비었다는 뜻이다. 그것을 성공으로 표시하면 다음 실행도 같은
@@ -59,7 +74,7 @@ def detect_and_store(connection: Connection, *, as_of_at: datetime, scan_bars: i
                 "symbols": list(SIGNAL_INDEXES),
                 "include_watched": True,
                 "as_of_at": as_of_at,
-                "limit": TECHNICAL_LOOKBACK_BARS,
+                "limit": lookback_bars,
             },
         )
         rows = list(cursor.fetchall())

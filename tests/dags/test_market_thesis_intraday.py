@@ -14,7 +14,7 @@ import pytest
 from airflow.exceptions import AirflowFailException
 
 from dags import market_thesis_intraday as dag_module
-from modules import thesis_common, thesis_intraday
+from modules import base_rate, thesis_common, thesis_intraday
 from modules.thesis_domain import ThesisSubjectKind
 from modules.thesis_state import INTRADAY_SLOT_TIMES, IntradayObservation, RunSlot
 
@@ -155,6 +155,10 @@ def test_the_param_offers_exactly_the_intraday_slots():
 # --- 대역 --------------------------------------------------------------------
 
 
+
+# 기저율 조회 둘. 관측 상태를 만들 때마다 불리므로 가짜 커서가 순번 큐 밖으로 뺀다.
+BASE_RATE_QUERIES = frozenset({base_rate.FORWARD_RETURNS, base_rate.UNCONDITIONAL_RETURNS})
+
 class FakeCursor:
     def __init__(self, answers: list[Any]) -> None:
         self._answers = answers
@@ -169,6 +173,11 @@ class FakeCursor:
 
     def execute(self, statement: str, parameters: Any = ()) -> None:
         self.calls.append((statement, tuple(parameters)))
+        if statement in BASE_RATE_QUERIES:
+            # 기저율 조회는 순번 큐 밖이다. 관측 상태를 만들 때마다 두 번 더 불려서,
+            # 큐에 넣으면 이 파일의 모든 테스트가 그 두 칸을 세고 있어야 한다.
+            self._rows = []
+            return
         self._rows = self._answers.pop(0)
 
     def fetchone(self) -> Any:

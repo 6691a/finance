@@ -194,6 +194,7 @@ STOCK_ESTIMATE_UPSERT = read_sql("postgres", "stock_investor_estimate_snapshot",
 DAILY_TRADE_UPSERT = read_sql("postgres", "stock_investor_trade_daily", "upsert.sql")
 DAILY_TRADE_COUNT_STORED = read_sql("postgres", "stock_investor_trade_daily", "count_stored.sql")
 DAILY_TRADE_MISSING_OPEN_DAYS = read_sql("postgres", "stock_investor_trade_daily", "select_missing_open_days.sql")
+DAILY_TRADE_CLOSE_CONFLICTS = read_sql("postgres", "stock_investor_trade_daily", "select_close_conflicts.sql")
 MARKET_FLOW_UPSERT = read_sql("postgres", "market_investor_flow_snapshot", "upsert.sql")
 SOURCE_RECORD_INSERT = read_sql("postgres", "source_record", "insert.sql")
 
@@ -566,6 +567,32 @@ def missing_open_days(connection: Connection, stock_code: str, start: date, end:
     """구간 안에서 KRX가 열었는데 일봉이 없는 거래일. KIS 자격 증명과 무관해 함수로 둔다."""
     with connection.cursor() as cursor:
         cursor.execute(DAILY_TRADE_MISSING_OPEN_DAYS, (stock_code, start, end))
+        return tuple(row[0] for row in cursor.fetchall())
+
+
+def close_conflicts(connection: Connection, fetch: StockTradeDailyFetch) -> tuple[date, ...]:
+    """이미 저장된 종가와 어긋나는 거래일. **수정주가 소급 조정을 감지한다.**
+
+    KIS는 액면분할·병합·증자가 있으면 **과거 전체를 새 기준으로 다시 쓴다**(SQL 주석에
+    실측이 있다). 그래서 겹치는 구간만 upsert하면 한 종목 안에 두 기준이 섞이고 SMA60이
+    조용히 틀린다. 어긋난 날이 하나라도 있으면 그 종목은 전 구간을 다시 받아야 한다.
+
+    **저장 전에 부른다.** upsert가 먼저 돌면 무엇이 옛 값이었는지 알 방법이 없다.
+
+    판단은 DAG가 한다. 여기는 어긋난 거래일만 돌려준다. `missing_open_days`와 같은 이유로
+    함수다 — KIS 자격 증명을 보지 않는다.
+    """
+    if not fetch.rows:
+        return ()
+    with connection.cursor() as cursor:
+        cursor.execute(
+            DAILY_TRADE_CLOSE_CONFLICTS,
+            (
+                [row.business_date for row in fetch.rows],
+                [row.close_price for row in fetch.rows],
+                fetch.stock_code,
+            ),
+        )
         return tuple(row[0] for row in cursor.fetchall())
 
 

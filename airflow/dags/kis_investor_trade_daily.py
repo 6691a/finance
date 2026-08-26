@@ -40,6 +40,24 @@
 당일 조회는 성공했다. 그래서 이력 백필은 아무 때나 돌려도 되고, `end_date`를 지난 거래일로
 주면 장중에도 채울 수 있다.
 
+## 수정주가 소급 조정
+
+KIS는 수정주가를 준다. 액면분할·병합·증자가 있으면 **과거 전체가 새 기준으로 다시 쓰인다**
+(2026-08-26 실측: 2018-05-04 분할 뒤 2010-01-04 종가가 809,000이 아니라 16,180으로 온다).
+`FID_ORG_ADJ_PRC`로 원주가를 고를 수 없다 — 빈 값·0·1이 전부 같은 답이다.
+
+그대로 두면 겹치는 30 거래일만 새 기준이 되고 그 앞은 옛 기준으로 남아, 한 종목 안에 두
+기준이 섞인 채로 SMA60이 계산된다. 그래서 **저장 전에** 같은 거래일의 기존 종가와 대조한다
+(`close_conflicts`). 급락을 보는 것이 아니다 — 과거는 변하지 않으므로 **한 날짜의 종가가
+둘일 수 없고**, 어긋났다면 소급 조정 말고는 설명이 없다.
+
+어긋나면 그 종목의 `BACKFILL_START_DATE`부터 전 구간을 다시 받아 덮는다. 어긋난 날짜까지만
+받으면 경계가 뒤로 밀릴 뿐이다. **실행당 한 번뿐이고**, 다 덮은 뒤에도 어긋나면 저장이
+우리가 믿는 대로 굴러가지 않은 것이라 태스크를 죽인다.
+
+봉이 바뀌었으므로 `technical_signal_daily`를 `scan_bars`를 넓혀 다시 돌려야 한다.
+설계는 docs/analysis/market-thesis/10-base-rate.md 3절이다.
+
 ## 실패와 재시도
 
 - **한 종목이 실패해도 다른 종목은 저장한다.** 호출 하나가 트랜잭션 하나다.
@@ -66,7 +84,7 @@ import pendulum
 from airflow.exceptions import AirflowFailException, AirflowSkipException
 from airflow.providers.postgres.hooks.postgres import PostgresHook
 from airflow.sdk import Param, Variable, dag, get_current_context, task
-from pydantic import SecretStr
+from pydantic import BaseModel, ConfigDict, SecretStr
 
 from modules.collectors.kis import (
     KisHTTPError,
@@ -78,8 +96,10 @@ from modules.collectors.kis import (
 from modules.collectors.market.kis_investor_flow import (
     InvestorFlowStock,
     KisInvestorFlowCollector,
+    close_conflicts,
     missing_open_days,
 )
+from modules.db import Connection
 from modules.market_session import krx_open_day
 from modules.utility import CONNECTION_ID, KIS_UNRECOVERABLE_STATUSES, KST_TIMEZONE, atomic
 
@@ -90,6 +110,14 @@ CALENDAR_DAY_PATTERN = re.compile(r"\d{4}-\d{2}-\d{2}")
 
 END_DATE_PARAM = "end_date"
 PAGES_PARAM = "pages"
+
+# 소급 조정 복구가 되돌아갈 지점. 해외 지수(`index_daily`)의 시작일과 맞춘다 — 시작일이
+# 다르면 나중에 국가 간 비교를 할 수 없다(docs/analysis/market-thesis/10-base-rate.md 2.1절).
+BACKFILL_START_DATE = date(2016, 8, 15)
+
+# 복구 걷기의 backstop. 2016-08-15까지 약 2,500 거래일이고 한 응답이 30 거래일이라 84장이면
+# 닿는다. 실제로 멈추는 것은 `BACKFILL_START_DATE`이고 이 값은 그물이다.
+RECOVERY_MAX_PAGES = 200
 
 
 def _credentials() -> tuple[SecretStr, SecretStr]:
@@ -133,6 +161,94 @@ def requested_pages(params: dict[str, Any]) -> int:
     if pages < 1:
         raise AirflowFailException(f"{PAGES_PARAM} must be at least 1, got {pages}")
     return pages
+
+
+class StockWalk(BaseModel):
+    """한 종목을 뒤로 걸은 결과. 판정 재료라 dict로 두지 않는다."""
+
+    model_config = ConfigDict(frozen=True)
+
+    stored: int
+    # 이번 걷기가 닿은 가장 이른 거래일. 구멍 검사의 시작이다.
+    earliest: date
+    # 저장된 값과 어긋난 거래일. 비어 있지 않으면 소급 조정이 일어난 것이다.
+    conflicts: tuple[date, ...] = ()
+    # 호출 실패 사유. 있으면 그 종목의 걷기는 거기서 멈췄다.
+    failure: str | None = None
+
+
+def walk_back(
+    collector: KisInvestorFlowCollector,
+    connection: Connection,
+    stock: InvestorFlowStock,
+    end_date: date,
+    *,
+    pages: int,
+    until: date | None = None,
+    detect_conflicts: bool = True,
+) -> StockWalk:
+    """한 종목을 `end_date`부터 30 거래일씩 뒤로 걸으며 받아 저장한다.
+
+    `until`을 주면 그 날짜보다 앞으로는 가지 않는다. 복구 걷기가 쓴다.
+
+    `detect_conflicts`가 참이면 **저장 전에** 기존 종가와 대조하고, 어긋나면 그 페이지를
+    저장하지 않고 즉시 멈춘다. 어긋난 채로 얹으면 한 종목 안에 두 기준이 섞이기 때문이다.
+    복구 걷기는 DB 전체가 옛 기준이라 매 페이지가 어긋나므로 이 검사를 끈다.
+    """
+    stored = 0
+    earliest = end_date
+    cursor_date = end_date
+
+    for page in range(pages):
+        if until is not None and cursor_date < until:
+            break
+        name = f"{stock.value}:{cursor_date.isoformat()}"
+        try:
+            fetch = collector.fetch_stock_trade_daily(stock, cursor_date)
+        except KisHTTPError as error:
+            if error.status in KIS_UNRECOVERABLE_STATUSES:
+                raise AirflowFailException(f"{name}: {error}") from error
+            logger.warning("%s failed with HTTP %s", name, error.status)
+            return StockWalk(stored=stored, earliest=earliest, failure=f"{name}({error})")
+        except KisTimeWindowError as error:
+            # 조회를 받아 주지 않는 시각이다. 재시도는 같은 답을 받으며 예산만 태운다.
+            # 사람이 시각을 맞춰 다시 트리거해야 하므로 즉시 죽인다.
+            raise AirflowFailException(
+                f"{name}: {error}. 당일치 확정은 KST 15:40 이후에만 나온다 — "
+                "그 뒤에 다시 트리거하거나, 과거 구간만 채울 것이면 end_date를 "
+                "지난 거래일로 준다(과거 구간은 시각 제한이 없다)."
+            ) from error
+        except (KisResultError, KisPayloadError) as error:
+            logger.warning("%s failed: %s", name, error)
+            return StockWalk(stored=stored, earliest=earliest, failure=f"{name}({error})")
+        except ConnectionError as error:
+            logger.warning("%s failed to connect: %s", name, error)
+            return StockWalk(stored=stored, earliest=earliest, failure=f"{name}({error})")
+
+        if not fetch.rows:
+            logger.info("%s returned no rows; stopping this stock", name)
+            break
+
+        if detect_conflicts:
+            conflicts = close_conflicts(connection, fetch)
+            if conflicts:
+                # 저장하지 않고 멈춘다. 판단은 부르는 쪽이 한다.
+                return StockWalk(stored=stored, earliest=earliest, conflicts=conflicts)
+
+        with atomic(connection):
+            rows = collector.store_stock_trade_daily(connection, fetch)
+
+        stored += rows
+        logger.info("Stored %s rows for %s", rows, name)
+
+        # 다음 구간의 끝은 이번 응답의 가장 이른 거래일 하루 전이다. 우리가 거래일을
+        # 세면 휴장일에서 어긋난다.
+        earliest = min(row.business_date for row in fetch.rows)
+        cursor_date = earliest - timedelta(days=1)
+        if page + 1 < pages:
+            logger.info("Walking back to %s for %s", cursor_date, stock.value)
+
+    return StockWalk(stored=stored, earliest=earliest)
 
 
 @dag(
@@ -192,56 +308,48 @@ def kis_investor_trade_daily():
         gaps: list[str] = []
         with closing(_connection()) as connection:
             for stock in InvestorFlowStock:
-                earliest = end_date
-                cursor_date = end_date
-                for page in range(pages):
-                    name = f"{stock.value}:{cursor_date.isoformat()}"
-                    try:
-                        fetch = collector.fetch_stock_trade_daily(stock, cursor_date)
-                    except KisHTTPError as error:
-                        if error.status in KIS_UNRECOVERABLE_STATUSES:
-                            raise AirflowFailException(f"{name}: {error}") from error
-                        logger.warning("%s failed with HTTP %s", name, error.status)
-                        failures.append(f"{name}({error})")
-                        break
-                    except KisTimeWindowError as error:
-                        # 조회를 받아 주지 않는 시각이다. 재시도는 같은 답을 받으며 예산만
-                        # 태운다. 사람이 시각을 맞춰 다시 트리거해야 하므로 즉시 죽인다.
-                        raise AirflowFailException(
-                            f"{name}: {error}. 당일치 확정은 KST 15:40 이후에만 나온다 — "
-                            "그 뒤에 다시 트리거하거나, 과거 구간만 채울 것이면 end_date를 "
-                            "지난 거래일로 준다(과거 구간은 시각 제한이 없다)."
-                        ) from error
-                    except (KisResultError, KisPayloadError) as error:
-                        logger.warning("%s failed: %s", name, error)
-                        failures.append(f"{name}({error})")
-                        break
-                    except ConnectionError as error:
-                        logger.warning("%s failed to connect: %s", name, error)
-                        failures.append(f"{name}({error})")
-                        break
+                walk = walk_back(collector, connection, stock, end_date, pages=pages)
 
-                    if not fetch.rows:
-                        logger.info("%s returned no rows; stopping this stock", name)
-                        break
+                if walk.conflicts:
+                    # 수정주가 소급 조정이다. 조정은 분할일 이전 **전 기간**에 걸리므로
+                    # 어긋난 날짜까지만 다시 받으면 경계가 뒤로 밀릴 뿐 두 기준이 섞이는
+                    # 것은 그대로다. 그 종목 전체를 다시 받아 덮는다.
+                    logger.warning(
+                        "%s: stored closes disagree on %s — refetching from %s (adjusted prices were rewritten)",
+                        stock.value,
+                        ", ".join(day.isoformat() for day in walk.conflicts),
+                        BACKFILL_START_DATE,
+                    )
+                    # **실행당 한 번뿐이다.** 검사를 끄고 걷는다 — DB 전체가 옛 기준이라
+                    # 매 페이지가 어긋난다. 다 덮은 뒤 한 번만 다시 확인한다.
+                    walk = walk_back(
+                        collector,
+                        connection,
+                        stock,
+                        end_date,
+                        pages=RECOVERY_MAX_PAGES,
+                        until=BACKFILL_START_DATE,
+                        detect_conflicts=False,
+                    )
+                    if walk.failure is None:
+                        settled = walk_back(collector, connection, stock, end_date, pages=1)
+                        if settled.conflicts:
+                            # 다 덮었는데도 어긋난다. 저장이 우리가 믿는 대로 굴러가지
+                            # 않은 것이고, 그대로 두면 매일 같은 재수집을 돈다.
+                            raise AirflowFailException(
+                                f"{stock.value}: closes still disagree after refetching from "
+                                f"{BACKFILL_START_DATE} on "
+                                f"{', '.join(day.isoformat() for day in settled.conflicts)}"
+                            )
 
-                    with atomic(connection):
-                        rows = collector.store_stock_trade_daily(connection, fetch)
-
-                    stored += rows
-                    logger.info("Stored %s rows for %s", rows, name)
-
-                    # 다음 구간의 끝은 이번 응답의 가장 이른 거래일 하루 전이다. 우리가 거래일을
-                    # 세면 휴장일에서 어긋난다.
-                    earliest = min(row.business_date for row in fetch.rows)
-                    cursor_date = earliest - timedelta(days=1)
-                    if page + 1 < pages:
-                        logger.info("Walking back to %s for %s", cursor_date, stock.value)
+                stored += walk.stored
+                if walk.failure is not None:
+                    failures.append(walk.failure)
 
                 # 받은 구간에 KRX 개장일이 빠져 있으면 그 구멍은 아무도 모르게 남는다.
                 # 한 응답이 30 거래일을 담으므로 매일 도는 것만으로 메워져야 하고, 메워지지
                 # 않았다면 응답이나 저장 어느 한쪽이 우리가 믿는 대로 굴러가지 않은 것이다.
-                missing = missing_open_days(connection, stock.value, earliest, end_date)
+                missing = missing_open_days(connection, stock.value, walk.earliest, end_date)
                 if missing:
                     gaps.append(f"{stock.value}: {', '.join(day.isoformat() for day in missing)}")
 

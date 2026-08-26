@@ -86,6 +86,20 @@ def test_the_query_asks_for_the_indexes_and_the_watched_stocks():
     assert parameters["limit"] == technical_signals.TECHNICAL_LOOKBACK_BARS
 
 
+def test_the_lookback_widens_only_when_asked():
+    """`lookback_bars`가 조회 창을 정한다. 이력 백필만 이 값을 넓힌다.
+
+    기본값이 일상 실행의 창과 같아야 옛 동작이 그대로 남는다
+    (docs/analysis/market-thesis/10-base-rate.md 4.1절).
+    """
+    connection = FakeConnection(history_rows())
+
+    technical_signals.detect_and_store(connection, as_of_at=AS_OF, scan_bars=5, lookback_bars=3000)
+
+    _statement, parameters = connection.calls[0]
+    assert parameters["limit"] == 3000
+
+
 def test_events_are_stored_in_column_order():
     connection = FakeConnection(history_rows())
 

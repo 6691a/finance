@@ -19,6 +19,7 @@ from langchain_core.messages import AIMessage, ToolMessage
 from sqlalchemy import Table
 
 from apps.models.analysis import Thesis, ThesisEvidence, ThesisOutcome, ThesisPrecedent
+from modules import base_rate
 from modules.sql import read_sql
 from modules.technical import TECHNICAL_LOOKBACK_BARS
 from modules.thesis_domain import (
@@ -606,6 +607,10 @@ AS_OF = datetime(2026, 8, 21, 6, 30, tzinfo=UTC)
 MACRO_WINDOW_START = datetime(2026, 8, 20, 6, 30, tzinfo=UTC)
 
 
+
+# 기저율 조회 둘. 신호가 붙는 곳마다 불린다.
+BASE_RATE_QUERIES = frozenset({base_rate.FORWARD_RETURNS, base_rate.UNCONDITIONAL_RETURNS})
+
 class FakeCursor:
     def __init__(self, connection: "FakeConnection") -> None:
         self._connection = connection
@@ -662,6 +667,10 @@ class FakeConnection:
 
 def _statement_key(statement: str) -> str:
     """어느 SQL인지 가르는 짧은 키. 주석을 먼저 뺀다 — 파일마다 머리말이 길다."""
+    # 기저율 조회 둘이 먼저다. 신호가 붙는 곳마다 불리므로 테스트가 픽스처를 주지 않으면
+    # 빈 결과여야 한다 — 아래 규칙에 걸리면 모양이 다른 행을 받는다.
+    if statement in BASE_RATE_QUERIES:
+        return "base_rate"
     query = body(statement).strip()
     if query.startswith("INSERT INTO thesis_evidence"):
         return "evidence_insert"
@@ -1654,9 +1663,23 @@ def test_recent_signals_come_with_the_daily_history():
 
     payload = json.loads(box.run("daily_history", {"symbol": "005930", "days": 10}))
 
+    # 이 픽스처는 기저율 조회에 답을 주지 않으므로 `base_rate`가 `None`이다. 사건은 있는데
+    # 과거 표본이 없다는 뜻이고, 값이 붙는 경로 자체는 `test_base_rate.py`가 덮는다.
     assert payload["recent_signals"] == [
-        {"ref": "technical_signal:1042", "signal_date": "2026-08-19", "kind": "sma_cross", "direction": "up"},
-        {"ref": "technical_signal:1041", "signal_date": "2026-08-19", "kind": "macd_cross", "direction": "down"},
+        {
+            "ref": "technical_signal:1042",
+            "signal_date": "2026-08-19",
+            "kind": "sma_cross",
+            "direction": "up",
+            "base_rate": None,
+        },
+        {
+            "ref": "technical_signal:1041",
+            "signal_date": "2026-08-19",
+            "kind": "macd_cross",
+            "direction": "down",
+            "base_rate": None,
+        },
     ]
 
 
@@ -3272,7 +3295,7 @@ def test_every_context_tool_keeps_its_body_key_set():
         "close",
         "volume",
     }
-    assert set(history["recent_signals"][0]) == {"ref", "signal_date", "kind", "direction"}
+    assert set(history["recent_signals"][0]) == {"ref", "signal_date", "kind", "direction", "base_rate"}
     assert set(short_credit[0]) == {
         "stock_code",
         "label",

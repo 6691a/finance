@@ -59,7 +59,7 @@ from langchain_core.tools import BaseTool, StructuredTool
 from langgraph.prebuilt import ToolNode
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
 
-from modules import technical
+from modules import base_rate, technical
 from modules.db import TransactionalConnection as Connection
 from modules.sql import read_sql
 from modules.thesis_domain import (
@@ -95,6 +95,7 @@ from modules.thesis_domain import (
 )
 from modules.thesis_state import (
     PastThesis,
+    SignalBaseRate,
     SignalObservation,
 )
 from modules.thesis_tools import (
@@ -122,6 +123,7 @@ from modules.thesis_tools import (
     SurpriseDetail,
     UsCloseDetail,
 )
+from modules.utility import KST_TIMEZONE
 
 logger = logging.getLogger(__name__)
 
@@ -406,6 +408,8 @@ class ThesisToolbox:
         # 종목이나 조회하며 문맥을 채우게 두지 않는다.
         self._subject_codes = frozenset(subject_codes)
         self._registry: dict[str, Evidence] = {}
+        # 심볼별 기저율 캐시. 조회가 전 이력을 훑으므로 실행당 한 번으로 묶는다.
+        self._base_rate_cache: dict[str, dict[tuple[str, str, str], SignalBaseRate]] = {}
         self._calls = 0
         self._chars = 0
         self._tools = self._build_tools()
@@ -758,8 +762,31 @@ class ThesisToolbox:
                     volume_ratio20=_number(row[7]),
                 ),
             )
-            signals.append(SignalObservation(ref=ref, signal_date=row[2], kind=kind, direction=direction))
+            signals.append(
+                SignalObservation(
+                    ref=ref,
+                    signal_date=row[2],
+                    kind=kind,
+                    direction=direction,
+                    base_rate=self._base_rates(symbol).get((symbol, kind, direction)),
+                )
+            )
         return signals
+
+    def _base_rates(self, symbol: str) -> dict[tuple[str, str, str], SignalBaseRate]:
+        """이 심볼의 기저율. **실행당 심볼마다 한 번만 센다.**
+
+        관측 상태와 같은 값을 붙인다 — 모델이 툴로 보든 관측 상태로 보든 같은 숫자를 봐야
+        한다. 캐시가 있는 이유는 조회가 그 심볼의 전 이력을 훑기 때문이다. `daily_history`가
+        tool call 상한만큼 불릴 수 있어, 호출마다 다시 세면 그만큼 반복된다.
+        """
+        if symbol not in self._base_rate_cache:
+            self._base_rate_cache[symbol] = base_rate.signal_base_rates(
+                self._connection,
+                as_of_date=self._as_of_at.astimezone(KST_TIMEZONE).date(),
+                symbols=(symbol,),
+            )
+        return self._base_rate_cache[symbol]
 
     def _tool_short_and_credit(self) -> str:
         self._charge()

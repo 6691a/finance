@@ -1,9 +1,9 @@
 # 시장 추론(thesis) 기록 설계 — 개요
 
 - 날짜: 2026-08-20 (2026-08-21 리뷰 반영 후 단계별 문서로 분리, 2026-08-22 6·7단계 추가,
-  2026-08-24 8단계 추가, 2026-08-26 9단계 추가)
+  2026-08-24 8단계 추가, 2026-08-26 9·10단계 추가)
 - 상태: 1·2·3·5·6·7·8·9단계 구현 완료(6·7단계는 2026-08-22, 8단계는 2026-08-24,
-  9단계는 2026-08-26, 리비전 다섯 운영 반영 전), 4단계(그래프) 미착수.
+  9단계는 2026-08-26, 리비전 다섯 운영 반영 전), 4단계(그래프) 미착수, 10단계(기저율)는 구현 완료·백필 트리거 전.
   운영 배포 전 선행 조건은 5절
 
 한 문서로 쓰기엔 범위가 커서(모델·리비전, 모듈 둘, DAG, SQL 열 개, 테스트 넷, compose·
@@ -67,6 +67,7 @@ requirements) **배포 단위(worktree/PR 하나)마다 문서를 나눴다.** �
 | 7 | [7-nxt-review.md](7-nxt-review.md) | `post_nxt_close` 슬롯, `thesis_nxt_review.py`, `market_thesis_nxt_review` DAG, 애프터마켓 조회 SQL, 수기 리비전(CHECK 확장) | 1, 2, 3 | 있음 |
 | 8 | [8-expectation.md](8-expectation.md) | `stock_event_claim`·`stock_event_extraction`·`stock_event_outcome`과 수기 리비전, `modules/expectation_domain.py`·`expectation_extraction.py`·`expectation_judgment.py`, `event_expectation_hourly` DAG, `event_surprises` 툴, 컨센서스 수집기(후행) | 2, 6 | 추출만 |
 | 9 | [9-intraday.md](9-intraday.md) | 장중 슬롯 넷과 수기 리비전, `thesis_intraday.py`, `market_thesis_intraday` DAG, 장중 봉·되짚기·채점 SQL 다섯, 채점·해설 슬롯 목록 파라미터화 | 1, 2, 3, 5 | 있음 |
+| 10 | [10-base-rate.md](10-base-rate.md) | 일봉 백필(`kis_index_daily`의 `start_date`), 수정주가 소급 조정 가드와 자동 재백필, `detect_and_store`의 `lookback_bars`, `modules/base_rate.py`, 조회 SQL 둘, `SignalObservation` 확장과 프롬프트 교체 | 1, 2, 5, 9 | 없음(계산은 전부 SQL·파이썬) |
 
 **5단계는 1단계의 `thesis` 채점 컬럼을 `thesis_outcome`으로 옮긴다.** 채택했으므로
 (2026-08-21) 그 이동을 1·2단계 코드에 먼저 반영한다. 무엇이 바뀌는지는

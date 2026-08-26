@@ -129,10 +129,49 @@ class AfterHoursObservation(BaseModel):
     bars: int
 
 
+class HorizonBaseRate(BaseModel):
+    """한 지평의 실현 분포. 비율은 0~1이고 셋의 합이 1이다.
+
+    `sample_size`가 `base_rate.MIN_BASE_RATE_SAMPLE` 아래면 비율 넷이 전부 `None`이다.
+    표본이 모자라 **재지 않았다**는 뜻이고 0이라는 뜻이 아니다 — 0으로 채우면 모델이
+    "그런 적이 없다"로 읽는다.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    horizon_days: int
+    sample_size: int
+    up: float | None = None
+    flat: float | None = None
+    down: float | None = None
+    median_return_pct: float | None = None
+
+
+class SignalBaseRate(BaseModel):
+    """한 (심볼, 종류, 방향)의 지평별 기저율과 같은 심볼의 무조건 기저.
+
+    **둘을 같은 객체에 담는다.** 조건부만 보면 그 심볼의 평소 분포를 모른 채 읽게 된다 —
+    신호 뒤 상승 60퍼센트라도 평소가 55퍼센트면 그 신호가 더하는 것은 5퍼센트포인트다.
+
+    값을 만드는 것은 `modules/base_rate.py`다. 모델이 여기 있는 것은 그 모듈이 DB와 SQL
+    파일을 import하기 때문이다 — 이 모듈의 방화벽(모듈 docstring)을 지켜야 한다.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    conditional: tuple[HorizonBaseRate, ...] = ()
+    unconditional: tuple[HorizonBaseRate, ...] = ()
+
+
 class SignalObservation(BaseModel):
     """기술적 매매 신호 하나. **사건이지 판정이 아니다.**
 
     `ref`가 있어 모델이 `claims`로 인용할 수 있다(기술지표 문서 14.3절).
+
+    `base_rate`는 **같은 종류·방향의 신호가 과거에 어떻게 끝났나**다. 사건만 주고 확률을
+    요구하면 모델이 서사로 빈도를 지어낸다. 툴이 아니라 여기 붙는 이유는, 프롬프트가
+    "지표만으로 확률을 기울이지 마라"라고 가르치고 있어 기술 쪽 툴을 덜 부르기 때문이다
+    (`docs/analysis/market-thesis/10-base-rate.md` 6절). 사건이 없으면 `None`이다.
     """
 
     model_config = ConfigDict(frozen=True)
@@ -141,6 +180,7 @@ class SignalObservation(BaseModel):
     signal_date: date
     kind: str
     direction: str
+    base_rate: SignalBaseRate | None = None
 
 
 class TechnicalObservation(BaseModel):

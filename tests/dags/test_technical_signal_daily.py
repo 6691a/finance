@@ -59,8 +59,14 @@ def test_a_scan_outside_the_range_fails_before_any_query(given):
         technical_signal_daily.requested_scan_bars({"scan_bars": given})
 
 
-def test_the_scan_cap_is_the_lookback_window():
-    """계산에 쓰는 봉보다 더 되돌아볼 수는 없다."""
+def test_the_scan_cap_covers_the_backfilled_history():
+    """상한이 조회 창보다 크다. **이력 백필 때문이다.**
+
+    10년치 일봉을 받아 놓고 신호를 120봉만 검출하면 기저율의 표본이 그만큼만 생긴다
+    (docs/analysis/market-thesis/10-base-rate.md 4.1절). 2016-08-15부터 약 2,500 거래일이라
+    상한이 그보다 커야 한 번에 전 구간을 훑을 수 있다.
+    """
     from modules.technical import TECHNICAL_LOOKBACK_BARS
 
-    assert SIGNAL_SCAN_BARS_MAX == TECHNICAL_LOOKBACK_BARS
+    assert SIGNAL_SCAN_BARS_MAX > TECHNICAL_LOOKBACK_BARS
+    assert SIGNAL_SCAN_BARS_MAX >= 2500

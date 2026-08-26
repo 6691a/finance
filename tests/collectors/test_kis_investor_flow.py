@@ -699,3 +699,78 @@ def test_a_candle_of_zeros_passes(monkeypatch):
     row = COLLECTOR.fetch_stock_trade_daily(SAMSUNG, BUSINESS_DATE).rows[0]
 
     assert row.high_price == Decimal(0)
+
+
+# ---------------------------------------------------------------------------
+# 수정주가 소급 조정 감지
+# ---------------------------------------------------------------------------
+
+
+class ConflictCursor:
+    """`select_close_conflicts.sql` 자리. 어긋난 거래일을 그대로 돌려준다."""
+
+    def __init__(self, conflicts: list[date]) -> None:
+        self.conflicts = conflicts
+        self.calls: list[tuple[str, tuple]] = []
+
+    def __enter__(self) -> Self:
+        return self
+
+    def __exit__(self, *args: object) -> bool:
+        return False
+
+    def execute(self, statement: str, parameters) -> None:
+        self.calls.append((statement, tuple(parameters)))
+
+    def fetchall(self) -> list[tuple]:
+        return [(day,) for day in self.conflicts]
+
+
+class ConflictConnection:
+    def __init__(self, conflicts: list[date] | None = None) -> None:
+        self.recorded_cursor = ConflictCursor(conflicts or [])
+
+    def cursor(self) -> ConflictCursor:
+        return self.recorded_cursor
+
+
+def test_close_conflicts_sends_the_incoming_closes_for_comparison(monkeypatch):
+    """비교는 **같은 거래일의 두 값**이다. 들어온 거래일과 종가가 그대로 SQL로 가야 한다."""
+    monkeypatch.setattr(
+        kis_investor_flow,
+        "send_get",
+        fake_send_get(body(output2=[DAILY_ROW, DAILY_ROW_PREVIOUS])),
+    )
+    fetch = COLLECTOR.fetch_stock_trade_daily(SAMSUNG, BUSINESS_DATE)
+    connection = ConflictConnection()
+
+    assert kis_investor_flow.close_conflicts(connection, fetch) == ()
+
+    _statement, parameters = connection.recorded_cursor.calls[0]
+    business_dates, close_prices, stock_code = parameters
+    assert business_dates == [date(2026, 8, 14), date(2026, 8, 13)]
+    assert close_prices == [Decimal(274500), Decimal(268000)]
+    assert stock_code == SAMSUNG.value
+
+
+def test_close_conflicts_reports_every_disagreeing_day(monkeypatch):
+    """액면분할은 과거 전부를 바꾼다. 어긋난 날이 하나가 아니라 겹친 구간 전체다."""
+    monkeypatch.setattr(
+        kis_investor_flow,
+        "send_get",
+        fake_send_get(body(output2=[DAILY_ROW, DAILY_ROW_PREVIOUS])),
+    )
+    fetch = COLLECTOR.fetch_stock_trade_daily(SAMSUNG, BUSINESS_DATE)
+    connection = ConflictConnection([date(2026, 8, 13), date(2026, 8, 14)])
+
+    assert kis_investor_flow.close_conflicts(connection, fetch) == (date(2026, 8, 13), date(2026, 8, 14))
+
+
+def test_close_conflicts_skips_the_query_when_nothing_came_back(monkeypatch):
+    """0행은 정상이다(상장 전 구간). 빈 배열로 조회하면 비교할 것이 없는데 왕복만 는다."""
+    monkeypatch.setattr(kis_investor_flow, "send_get", fake_send_get(body(output2=[])))
+    fetch = COLLECTOR.fetch_stock_trade_daily(SAMSUNG, BUSINESS_DATE)
+    connection = ConflictConnection([date(2026, 8, 14)])
+
+    assert kis_investor_flow.close_conflicts(connection, fetch) == ()
+    assert connection.recorded_cursor.calls == []

@@ -36,8 +36,11 @@ VOLUME_WINDOW_BARS = 20
 RULE_VERSION = "1"
 RSI_OVERSOLD = 30.0
 RSI_OVERBOUGHT = 70.0
-# 한 번에 다시 볼 수 있는 봉 수의 상한. 조회 창과 같다.
-SIGNAL_SCAN_BARS_MAX = TECHNICAL_LOOKBACK_BARS
+# 한 번에 다시 볼 수 있는 봉 수의 상한. 일상 실행은 조회 창(120봉)이면 충분하고, 이 값이
+# 그보다 큰 것은 **이력 백필 때문이다** — 10년치 일봉을 받아 놓고 신호를 120봉만 검출하면
+# 기저율의 표본이 그만큼만 생긴다(docs/analysis/market-thesis/10-base-rate.md 4.1절).
+# 2016-08-15부터 약 2,500 거래일이라 그 위에 여유를 둔다.
+SIGNAL_SCAN_BARS_MAX = 3000
 
 
 class DailyBar(BaseModel):

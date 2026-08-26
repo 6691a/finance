@@ -48,7 +48,7 @@ from airflow.providers.postgres.hooks.postgres import PostgresHook
 from airflow.sdk import Param, dag, get_current_context, task
 
 from modules.market_session import krx_open_day
-from modules.technical import SIGNAL_SCAN_BARS_MAX
+from modules.technical import SIGNAL_SCAN_BARS_MAX, TECHNICAL_LOOKBACK_BARS
 from modules.technical_signals import TechnicalSignalError, detect_and_store
 from modules.utility import CONNECTION_ID, KST_TIMEZONE, atomic
 
@@ -93,7 +93,10 @@ def requested_scan_bars(params: dict[str, Any]) -> int:
             minimum=1,
             maximum=SIGNAL_SCAN_BARS_MAX,
             title="다시 볼 봉 수",
-            description=f"최근 몇 거래일을 다시 훑을지. 1~{SIGNAL_SCAN_BARS_MAX}. 초기 백필은 120.",
+            description=(
+                f"최근 몇 거래일을 다시 훑을지. 1~{SIGNAL_SCAN_BARS_MAX}. 초기 백필은 120, "
+                "일봉을 2016년까지 백필한 뒤의 전 구간 재검출은 3000."
+            ),
         ),
     },
     doc_md=__doc__,
@@ -120,7 +123,14 @@ def technical_signal_daily():
         with closing(_connection()) as connection:
             try:
                 with atomic(connection):
-                    result = detect_and_store(connection, as_of_at=datetime.now(UTC), scan_bars=scan_bars)
+                    result = detect_and_store(
+                        connection,
+                        as_of_at=datetime.now(UTC),
+                        scan_bars=scan_bars,
+                        # 사건을 찾을 구간 앞에 지표 워밍업 봉을 붙여 읽는다. 이 여유가
+                        # 없으면 구간의 앞머리에서 SMA60이 안 나와 사건이 통째로 빠진다.
+                        lookback_bars=scan_bars + TECHNICAL_LOOKBACK_BARS,
+                    )
             except TechnicalSignalError as error:
                 raise AirflowFailException(str(error)) from error
 

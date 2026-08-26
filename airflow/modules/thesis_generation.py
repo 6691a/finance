@@ -9,8 +9,10 @@
 
 """시장 추론(thesis)을 만들고, 저장하고, 채점한다.
 
-**맞고 틀림이 목적이 아니다.** "어떤 정보를 근거로 어떤 결론을 냈다"가 기록으로 남는 것이
-목적이다. 채점은 그 기록 위에 나중에 얹히고, 틀린 판단도 고치지 않는다.
+**목적은 정확도다 — 다만 개별 추론이 아니라 판(版)의 정확도다.** 한 건의 적중은 운과
+구분되지 않으므로 "어떤 정보를 근거로 어떤 결론을 냈다"를 먼저 기록으로 남기고, 채점이
+쌓이면 model·prompt 판별로 비교해 다음 변경을 유지하거나 되돌린다. **이미 쓴 추론은
+고치지 않는다** — 고칠 수 있으면 나쁜 판이 사후 수정으로 좋아 보인다.
 
 ## 근거는 고정 풀이 아니라 모델이 조회한다
 
@@ -68,11 +70,13 @@ from modules.schema import SchemaError, json_object, response_format
 from modules.thesis_domain import (
     FLAT_BASE_RATE_PCT,
     FLAT_THRESHOLD_PCT,
+    MAX_EXPECTED_RETURN_PCT,
     MAX_MECHANISM_CHARS,
     MAX_REASONING_CHARS,
     MAX_TOOL_ROUNDS,
     PROB_QUANTUM,
     PROB_SUM_TOLERANCE,
+    RETURN_QUANTUM,
     RSI_OVERBOUGHT,
     RSI_OVERSOLD,
     VOLUME_HEAVY_RATIO,
@@ -123,6 +127,10 @@ class ThesisAnswer(BaseModel):
     prob_up: float = Field(ge=0, le=1)
     prob_down: float = Field(ge=0, le=1)
     prob_flat: float = Field(ge=0, le=1)
+    # 방향별 **조건부** 크기다. 확률을 곱한 기대값이 아니다. 상한은 폭주만 막고 정합성
+    # (임계보다 커야 한다)은 저장 전 검증이 본다 — 스키마로 막으면 답 전체가 사라진다.
+    up_return_pct: float | None = Field(default=None, ge=0)
+    down_return_pct: float | None = Field(default=None, ge=0)
     up_reasoning: str = ""
     down_reasoning: str = ""
     flat_reasoning: str = ""
@@ -156,6 +164,10 @@ class ThesisDraft(BaseModel):
     prob_up: Decimal
     prob_down: Decimal
     prob_flat: Decimal
+    # 검증을 마친 조건부 크기. 모델이 안 주거나 규칙을 어기면 `None`이고, 그때는
+    # 확률만 있던 판(6 이하)과 같은 모양으로 저장된다.
+    up_return_pct: Decimal | None = None
+    down_return_pct: Decimal | None = None
     up_reasoning: str
     down_reasoning: str
     flat_reasoning: str
@@ -190,6 +202,27 @@ def normalize_probabilities(
     largest = max(range(3), key=lambda index: scaled[index])
     scaled[largest] += residual
     return scaled[0], scaled[1], scaled[2]
+
+
+def normalize_return_pct(value: float | None) -> Decimal | None:
+    """조건부 크기 하나를 검증한다. 규칙을 어기면 `None`이고 **그 칸만** 버린다.
+
+    **추론 전체를 버리지 않는다.** 확률과 이유는 멀쩡한데 크기 하나 때문에 판단이 통째로
+    사라지면 손해가 더 크다. 버린 사실은 부르는 쪽이 로그로 남긴다.
+
+    거르는 것 둘.
+
+    - `FLAT_THRESHOLD_PCT[0]` 이하 — 그 크기는 정의상 `flat`이다. 방향의 크기로 두면
+      "상승하는데 임계 안"이라는 모순이 저장된다.
+    - `MAX_EXPECTED_RETURN_PCT` 초과 — 폭주다. **자르지 않는다** — 상한으로 clamp하면
+      모델이 부르지 않은 숫자를 우리가 지어내는 것이 된다.
+    """
+    if value is None:
+        return None
+    amount = Decimal(str(value))
+    if amount <= FLAT_THRESHOLD_PCT[0] or amount > MAX_EXPECTED_RETURN_PCT:
+        return None
+    return amount.quantize(RETURN_QUANTUM, rounding=ROUND_HALF_UP)
 
 
 # ---------------------------------------------------------------------------
@@ -243,6 +276,21 @@ SYSTEM_PROMPT = f"""너는 시장 추론 기록기다. 주어진 관측 상태�
 - 근거가 한쪽으로 쏠려 있으면 확률도 쏠려야 한다. 근거를 찾았는데도 세 값을 균등에
   가깝게 두면 그 기록은 아무 것도 말하지 않는다.
 
+## 크기
+
+확률 옆에 **그 방향으로 갈 때의 크기**를 적는다. `up_return_pct`는 **상승한다는 조건에서의**
+등락률이고 `down_return_pct`는 **하락한다는 조건에서의** 등락률이다. 둘 다 양수로 쓴다.
+
+- **확률을 곱하지 마라.** 기대값이 아니라 조건부 크기다. 여기에 확률을 이미 곱해 적으면
+  읽는 쪽이 한 번 더 곱해 두 번 곱해진다.
+- 둘 다 **{FLAT_THRESHOLD_PCT[0]}%보다 커야 한다.** 그보다 작은 움직임은 정의상 `flat`이다.
+  {MAX_EXPECTED_RETURN_PCT}%를 넘는 값도 버려진다.
+- 기준선은 **최근 실현 변동폭**이다. `daily_history` 툴이 주는 일봉의 고가·저가·종가로
+  최근 며칠이 하루에 얼마나 움직였는지 보고, 그보다 크게 쓰려면 그날에 한정된 근거를
+  `claims`에 대야 한다. 관측 상태에는 변동폭이 없다.
+- **장중은 남은 시간이 짧을수록 크기도 작다.** 마감까지 한 시간 남은 슬롯에 하루치
+  변동폭을 쓰면 거짓이다.
+
 ## 규칙
 
 - **툴 결과와 관측 상태에 없는 사실·숫자를 쓰지 마라.** 지어낸 근거는 기록을 망친다.
@@ -251,6 +299,8 @@ SYSTEM_PROMPT = f"""너는 시장 추론 기록기다. 주어진 관측 상태�
   이내)을 쓴다. 목록 밖의 ref는 버려진다. 같은 ref는 한 번만 쓴다.
   인용할 것이 없으면 빈 배열로 둔다. **억지 인용이 근거 없음보다 나쁘다.**
 - 세 확률 `prob_up`, `prob_down`, `prob_flat`은 각각 0~1이고 **합이 정확히 1이어야 한다.**
+- `up_return_pct`, `down_return_pct`는 위 "크기" 절의 규칙을 따르는 양수다. 규칙을 어긴
+  값은 그 칸만 버려지고 확률과 이유는 그대로 저장된다.
 - 세 방향의 이유를 **모두** 쓴다. 오를 이유, 내릴 이유, 횡보할 이유가 각각 있다.
   한 방향만 쓰고 나머지를 비우지 마라 — 왜 그 반대를 배제했는지가 기록의 절반이다.
 - 각 이유는 {MAX_REASONING_CHARS}자 이내의 한국어다. 넘으면 잘린다.
@@ -261,6 +311,7 @@ SYSTEM_PROMPT = f"""너는 시장 추론 기록기다. 주어진 관측 상태�
 
 출력 형식:
 {{"theses": [{{"subject_code": "", "prob_up": 0.0, "prob_down": 0.0, "prob_flat": 0.0,
+ "up_return_pct": 0.0, "down_return_pct": 0.0,
  "up_reasoning": "", "down_reasoning": "", "flat_reasoning": "",
  "claims": [{{"ref": "", "direction": "up", "mechanism": ""}}]}}]}}"""
 
@@ -504,12 +555,27 @@ class ThesisBuilder:
             if probabilities is None:
                 dropped.append(f"{answer.subject_code}(확률 합 {answer.prob_up + answer.prob_down + answer.prob_flat})")
                 continue
+            up_return = normalize_return_pct(answer.up_return_pct)
+            down_return = normalize_return_pct(answer.down_return_pct)
+            # 크기 하나가 규칙을 어겨도 추론은 살린다(`normalize_return_pct`). 다만 조용히
+            # 버리면 프롬프트가 안 먹히는 것을 못 본다.
+            if (answer.up_return_pct is not None and up_return is None) or (
+                answer.down_return_pct is not None and down_return is None
+            ):
+                logger.warning(
+                    "%s dropped out-of-range return sizes: up=%s down=%s",
+                    answer.subject_code,
+                    answer.up_return_pct,
+                    answer.down_return_pct,
+                )
             drafts.append(
                 ThesisDraft(
                     subject=subject,
                     prob_up=probabilities[0],
                     prob_down=probabilities[1],
                     prob_flat=probabilities[2],
+                    up_return_pct=up_return,
+                    down_return_pct=down_return,
                     up_reasoning=_shorten(answer.up_reasoning),
                     down_reasoning=_shorten(answer.down_reasoning),
                     flat_reasoning=_shorten(answer.flat_reasoning),

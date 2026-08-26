@@ -127,6 +127,10 @@ class ThesisHorizon(BaseModel):
     supported: int
     contradicted: int
     unresolved: int
+    # 크기 채점. **지평 0에만 있고** flat 실현·판 7 이전 행은 빠져서 표본이 `graded`와 다르다.
+    # 평균은 부호를 살린다 — 양수면 과소추정, 음수면 과대추정이고 그것이 프롬프트를 고칠 방향이다.
+    return_graded: int = 0
+    mean_return_error_pct: float | None = None
 
     @property
     def beats_uniform(self) -> bool | None:
@@ -256,6 +260,8 @@ class OpsBriefingReader:
                     supported=row[5],
                     contradicted=row[6],
                     unresolved=row[7],
+                    return_graded=row[8],
+                    mean_return_error_pct=float(row[9]) if row[9] is not None else None,
                 )
                 for row in rows
             ),
@@ -315,7 +321,7 @@ def _thesis_blocks(health: ThesisHealth) -> list[dict[str, Any]]:
     if health.horizons:
         rendered += blocks.table_section(
             f"추론 품질 · 최근 {health.window_days}일",
-            ("지평", "채점", "Brier", "판정(지지/반박/보류)"),
+            ("지평", "채점", "Brier", "크기 오차", "판정(지지/반박/보류)"),
             [_horizon_row(item) for item in health.horizons],
         )
         # baseline을 매번 다시 설명하지 않도록 한 줄로 붙인다.
@@ -334,17 +340,25 @@ def _thesis_blocks(health: ThesisHealth) -> list[dict[str, Any]]:
     return rendered
 
 
-def _horizon_row(item: ThesisHorizon) -> tuple[str, str, str, str]:
+def _horizon_row(item: ThesisHorizon) -> tuple[str, str, str, str, str]:
     if item.mean_brier is None:
         brier = "-"
     else:
         # baseline보다 나은지를 기호로 갈라 준다. 숫자만 보면 매번 0.667과 비교해야 한다.
         mark = "✓" if item.beats_uniform else "✗"
         brier = f"{item.mean_brier:.3f} {mark}"
+    if item.mean_return_error_pct is None:
+        # 지평 1·3·5는 크기를 받지 않는다. 빈 칸이 정상이다.
+        sizing = "-"
+    else:
+        # 부호가 뜻이다. 표본 수를 함께 적는다 — flat과 미채점이 빠져 Brier의 n과 다르다.
+        gap = "과소" if item.mean_return_error_pct > 0 else "과대"
+        sizing = f"{item.mean_return_error_pct:+.2f}%p {gap} (n={item.return_graded})"
     return (
         f"T+{item.horizon_days}",
         str(item.graded),
         brier,
+        sizing,
         f"{item.supported}/{item.contradicted}/{item.unresolved}",
     )
 

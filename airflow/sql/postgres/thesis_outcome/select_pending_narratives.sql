@@ -15,8 +15,8 @@
 -- **LEFT JOIN이다.** post_close 추론은 채점을 받지 않아 thesis_outcome 행이 아예 없다.
 -- INNER JOIN으로 걸면 그 추론들이 영영 해설을 못 받는다. 행이 없으면 해설이 새로 만든다.
 --
--- 채점 값 넷을 함께 주지만 프롬프트에 실을지는 부르는 쪽이 정한다(informed/blind 변형).
--- 여기서는 있는 대로 준다.
+-- 채점 값 넷과 지평 0의 크기 오차를 함께 주지만 프롬프트에 실을지는 부르는 쪽이 정한다
+-- (informed/blind 변형). 여기서는 있는 대로 준다.
 --
 -- 날짜 상한이 없다. 해설 LLM이 실패했던 날의 것도 다음 실행이 회수한다.
 SELECT thesis.id,
@@ -33,11 +33,18 @@ SELECT thesis.id,
        thesis.flat_reasoning,
        outcome.actual_return_pct,
        outcome.actual_outcome,
-       outcome.brier_score
+       outcome.brier_score,
+       -- 크기 채점은 **지평 0에만** 있다. 해설은 지평 1·3·5라 지평을 건너 조인해야 한다.
+       -- 숫자만으로는 과대·과소의 이유가 안 남아서, 크게 어긋난 날은 해설이 그것을 다루게 한다.
+       sizing.predicted_return_pct,
+       sizing.return_error_pct
 FROM thesis
 LEFT JOIN thesis_outcome AS outcome
        ON outcome.thesis_id = thesis.id
       AND outcome.horizon_days = %s
+LEFT JOIN thesis_outcome AS sizing
+       ON sizing.thesis_id = thesis.id
+      AND sizing.horizon_days = 0
 WHERE thesis.run_date = %s
   AND thesis.run_slot = ANY(%s)
   AND outcome.narrative IS NULL

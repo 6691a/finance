@@ -183,11 +183,12 @@ def test_the_window_is_a_full_day():
 
 # --- 추론 품질 ---------------------------------------------------------------
 
-# (지평, 채점, 평균 Brier, flat, 해설, 지지, 반박, 보류)
+# (지평, 채점, 평균 Brier, flat, 해설, 지지, 반박, 보류, 크기 채점, 평균 크기 오차)
+# 크기 오차는 지평 0에만 있다. 나머지 지평은 크기를 받지 않아 NULL이 정상이다.
 THESIS_ROWS = [
-    (0, 12, 0.612, 3, 0, 0, 0, 0),
-    (1, 12, 0.701, 4, 12, 1, 4, 7),
-    (5, 8, 0.588, 2, 8, 2, 1, 5),
+    (0, 12, 0.612, 3, 0, 0, 0, 0, 9, 0.42),
+    (1, 12, 0.701, 4, 12, 1, 4, 7, 0, None),
+    (5, 8, 0.588, 2, 8, 2, 1, 5, 0, None),
 ]
 
 
@@ -207,6 +208,23 @@ def test_the_thesis_section_marks_whether_it_beats_the_uniform_baseline():
     assert "0.701 ✗" in text
     assert "0.588 ✓" in text
     assert str(ops.UNIFORM_BRIER) in text
+
+
+def test_the_thesis_section_shows_the_size_error_with_its_own_sample_count():
+    """부호가 뜻이다 — 양수면 과소추정이고 그것이 프롬프트를 고칠 방향이다."""
+    text = _block_text(ops.render_blocks(summary(thesis_rows=THESIS_ROWS)))
+
+    assert "+0.42%p 과소" in text
+    # flat과 미채점이 빠져 Brier의 n(12)과 다르다. 표본을 함께 적지 않으면 섞어 읽는다.
+    assert "n=9" in text
+
+
+def test_a_horizon_without_a_size_grade_shows_a_dash():
+    """크기는 지평 0에서만 받는다. 지평 1·3·5의 빈 칸은 결함이 아니다."""
+    text = _block_text(ops.render_blocks(summary(thesis_rows=THESIS_ROWS)))
+
+    # 지평 1 행에 0.00%p가 찍히면 "오차가 없었다"로 읽힌다.
+    assert "0.00%p" not in text
 
 
 def test_the_thesis_section_shows_the_verdict_split():
@@ -237,7 +255,7 @@ def test_an_overdue_grade_breaks_the_all_green():
 
 
 def test_a_horizon_without_grades_shows_a_dash_not_a_zero():
-    text = _block_text(ops.render_blocks(summary(thesis_rows=[(5, 0, None, 0, 0, 0, 0, 0)])))
+    text = _block_text(ops.render_blocks(summary(thesis_rows=[(5, 0, None, 0, 0, 0, 0, 0, 0, None)])))
 
     # 0.000은 "완벽했다"로 읽힌다. 채점이 없는 것과 완벽한 것을 가른다.
     assert "0.000" not in text

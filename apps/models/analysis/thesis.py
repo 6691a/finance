@@ -104,8 +104,9 @@ NARRATED_HORIZON_DAYS: tuple[int, ...] = (1, 3, 5)
 class Thesis(EntityBase):
     """시장 추론 하나. 그래프로 보면 노드다.
 
-    **맞고 틀림이 목적이 아니다.** "어떤 정보를 근거로 어떤 결론을 냈다"가 기록으로 남는 것이
-    목적이고, 채점은 그 기록 위에 나중에 얹힌다.
+    **목적은 정확도다 — 다만 개별 추론이 아니라 판(版)의 정확도다.** 한 건의 적중은 운과
+    구분되지 않으므로 "어떤 정보를 근거로 어떤 결론을 냈다"를 먼저 남기고, 채점이 쌓이면
+    model·prompt 판별로 비교해 다음 변경을 유지하거나 되돌린다.
 
     **첫 성공본은 불변이다.** 같은 (`run_date`, `run_slot`, subject)에 행이 이미 있으면
     `INSERT ... ON CONFLICT DO NOTHING`으로 아무 것도 바꾸지 않는다. LLM은 재호출마다 답이
@@ -141,6 +142,13 @@ class Thesis(EntityBase):
         CheckConstraint(
             "abs(prob_up + prob_down + prob_flat - 1) < 0.001",
             name="ck_thesis_prob_sum",
+        ),
+        # 폭주만 받는 안전망이다. "임계보다 커야 한다" 같은 정합성은 프롬프트와 저장 전
+        # 검증이 본다 — DB로 막으면 모델이 경계값을 낼 때 행 전체가 사라진다.
+        CheckConstraint(
+            "(up_return_pct IS NULL OR up_return_pct BETWEEN 0 AND 30)"
+            " AND (down_return_pct IS NULL OR down_return_pct BETWEEN 0 AND 30)",
+            name="ck_thesis_return_pct_range",
         ),
         table_options(
             comment="슬롯마다 만든 시장 추론을 불변으로 보존하는 테이블. 채점과 해설은 thesis_outcome이 갖는다",
@@ -194,6 +202,26 @@ class Thesis(EntityBase):
     prob_up: Mapped[Decimal] = mapped_column(Numeric(5, 4), nullable=False, comment="상승 확률 0~1. 셋의 합은 1이다")
     prob_down: Mapped[Decimal] = mapped_column(Numeric(5, 4), nullable=False, comment="하락 확률 0~1. 셋의 합은 1이다")
     prob_flat: Mapped[Decimal] = mapped_column(Numeric(5, 4), nullable=False, comment="횡보 확률 0~1. 셋의 합은 1이다")
+    # 방향별 **조건부** 크기다. 확률을 이미 곱한 기대값이 아니다. 단일 부호값 한 칸이 아닌
+    # 이유는 Slack 결론 줄이 방향을 둘 보일 수 있어서다(`thesis_render._verdicts`).
+    # nullable인 것은 이 컬럼이 생기기 전 행을 채울 방법이 없어서다 — 이 테이블은 사후
+    # 갱신하지 않는다. `flat`은 정의가 이미 "±임계 안"이라 크기 칸을 두지 않는다.
+    up_return_pct: Mapped[Decimal | None] = mapped_column(
+        Numeric(5, 2),
+        nullable=True,
+        comment=(
+            "상승한다는 조건에서 채점 창의 등락률(퍼센트, 양수). 확률을 곱하지 않은 조건부 크기다. "
+            "창은 확률과 같은 지평 0이다"
+        ),
+    )
+    down_return_pct: Mapped[Decimal | None] = mapped_column(
+        Numeric(5, 2),
+        nullable=True,
+        comment=(
+            "하락한다는 조건에서 채점 창의 등락률(퍼센트, **양수 크기**). 확률을 곱하지 않은 "
+            "조건부 크기다. 창은 확률과 같은 지평 0이다"
+        ),
+    )
     up_reasoning: Mapped[str] = mapped_column(
         Text, nullable=False, comment="상승 쪽 이유(한국어). 저장 전에 500자로 자른다"
     )
@@ -284,6 +312,17 @@ class ThesisOutcome(EntityBase):
             "evaluated_at IS NOT NULL OR narrative IS NOT NULL",
             name="ck_thesis_outcome_not_empty",
         ),
+        # 크기 채점 둘은 함께 있거나 함께 없다. 채점 넷 그룹에 넣지 않는 이유는
+        # flat 실현·지평 1·3·5·리비전 전 행에서 **정상적으로** 비어 있어서다.
+        CheckConstraint(
+            "(return_error_pct IS NULL) = (predicted_return_pct IS NULL)",
+            name="ck_thesis_outcome_return_error_all_or_none",
+        ),
+        # 채점하지 않은 행에 크기 오차만 있을 수 없다.
+        CheckConstraint(
+            "predicted_return_pct IS NULL OR evaluated_at IS NOT NULL",
+            name="ck_thesis_outcome_return_error_needs_grade",
+        ),
         table_options(
             comment="추론 하나의 지평별 채점과 사후 해설을 누적하는 테이블",
             database="default",
@@ -341,6 +380,25 @@ class ThesisOutcome(EntityBase):
         comment=(
             "원 추론의 세 확률을 이 지평 결과로 매긴 3-class Brier 점수. 0이 완벽, 2가 최악이다. "
             "방향만 맞고 확신이 낮았던 경우와 틀린 방향에 확신을 준 경우를 함께 잡는다"
+        ),
+    )
+    # 크기 채점 둘. 방향은 `brier_score`가 채점하고 이쪽은 **독립**이다 — 둘을 합친 종합
+    # 점수는 만들지 않는다. **실현된 방향의 조건부 추정만** 대조한다: 방향을 틀린 것은
+    # Brier가 이미 벌점을 줬으므로 여기서 또 세면 같은 실수를 두 번 세는 것이다.
+    predicted_return_pct: Mapped[Decimal | None] = mapped_column(
+        Numeric(5, 2),
+        nullable=True,
+        comment=(
+            "실현된 방향에 대응하는 thesis의 조건부 크기 스냅샷(퍼센트, 양수). "
+            "지평 0에서만, actual_outcome이 flat이 아닐 때만 채운다"
+        ),
+    )
+    return_error_pct: Mapped[Decimal | None] = mapped_column(
+        Numeric(8, 4),
+        nullable=True,
+        comment=(
+            "abs(actual_return_pct) - predicted_return_pct(퍼센트포인트). **부호를 유지한다** — "
+            "양수면 과소추정, 음수면 과대추정이다. 절댓값 평균(MAE)은 조회가 만든다"
         ),
     )
     narrative: Mapped[str | None] = mapped_column(

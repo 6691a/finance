@@ -8,8 +8,10 @@
 
 """시장 추론(thesis)을 만들고, 저장하고, 채점한다.
 
-**맞고 틀림이 목적이 아니다.** "어떤 정보를 근거로 어떤 결론을 냈다"가 기록으로 남는 것이
-목적이다. 채점은 그 기록 위에 나중에 얹히고, 틀린 판단도 고치지 않는다.
+**목적은 정확도다 — 다만 개별 추론이 아니라 판(版)의 정확도다.** 한 건의 적중은 운과
+구분되지 않으므로 "어떤 정보를 근거로 어떤 결론을 냈다"를 먼저 기록으로 남기고, 채점이
+쌓이면 model·prompt 판별로 비교해 다음 변경을 유지하거나 되돌린다. **이미 쓴 추론은
+고치지 않는다** — 고칠 수 있으면 나쁜 판이 사후 수정으로 좋아 보인다.
 
 ## 근거는 고정 풀이 아니라 모델이 조회한다
 
@@ -139,6 +141,10 @@ class NarrativeTarget(BaseModel):
     actual_return_pct: Decimal | None = None
     actual_outcome: ThesisDirection | None = None
     brier_score: Decimal | None = None
+    # 크기 채점(지평 0). 해설은 지평 1·3·5라 SQL이 지평을 건너 조인해 준다. 숫자만으로는
+    # 과대·과소의 **이유**가 안 남아서, 크게 어긋난 날은 해설이 그것을 다루게 한다.
+    predicted_return_pct: Decimal | None = None
+    return_error_pct: Decimal | None = None
 
 
 class NarrativeAnswer(BaseModel):
@@ -307,6 +313,13 @@ class FollowupNarrator:
                 f"- **실제 결과**: {target.actual_return_pct:+.2f}% ({target.actual_outcome.value}), "
                 f"Brier {target.brier_score}"
             )
+            if target.return_error_pct is not None:
+                # 부호가 뜻이다 — 양수면 실제가 더 컸다(과소추정), 음수면 과대추정이다.
+                gap = "과소" if target.return_error_pct > 0 else "과대"
+                lines.append(
+                    f"- **크기 예측**: {target.predicted_return_pct}% 예상 → "
+                    f"{target.return_error_pct:+.2f}%p {gap}"
+                )
         return "\n".join(lines)
 
     def run(

@@ -28,7 +28,10 @@ SELECT thesis.id,
        -- 장중 슬롯의 채점 기준가. 모델이 실제로 본 값이라 봉에서 다시 뽑지 않는다
        -- (`index_bar/select_intraday_horizon_return.sql` 머리말). 장전 슬롯은 이 칸이
        -- NULL이고 기준가를 전일 종가에서 얻는다.
-       thesis.input_state #>> ARRAY['intraday', thesis.subject_code, 'price'] AS base_price
+       thesis.input_state #>> ARRAY['intraday', thesis.subject_code, 'price'] AS base_price,
+       -- 크기 채점(판 7부터)의 입력. 실현된 방향에 대응하는 쪽만 쓰이고 그 전 행은 NULL이다.
+       thesis.up_return_pct,
+       thesis.down_return_pct
 FROM thesis
 CROSS JOIN unnest(%s::integer[]) AS horizon(horizon_days)
 WHERE thesis.run_slot = ANY(%s)

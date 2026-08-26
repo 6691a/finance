@@ -17,7 +17,11 @@ SELECT outcome.horizon_days,
        count(*) FILTER (WHERE outcome.narrative IS NOT NULL) AS narrated,
        count(*) FILTER (WHERE outcome.verdict = 'supported') AS supported,
        count(*) FILTER (WHERE outcome.verdict = 'contradicted') AS contradicted,
-       count(*) FILTER (WHERE outcome.verdict = 'unresolved') AS unresolved
+       count(*) FILTER (WHERE outcome.verdict = 'unresolved') AS unresolved,
+       -- 크기 오차. **지평 0에만 있고** flat 실현과 판 7 이전 행은 NULL이라 이 표본 수는
+       -- graded와 다르다. 평균은 부호를 살려서 낸다 — 양수면 과소, 음수면 과대다.
+       count(outcome.return_error_pct) AS return_graded,
+       avg(outcome.return_error_pct) AS mean_return_error_pct
 FROM thesis_outcome AS outcome
 JOIN thesis ON thesis.id = outcome.thesis_id
 WHERE thesis.run_date >= %s

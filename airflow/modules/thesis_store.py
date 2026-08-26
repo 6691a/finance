@@ -9,8 +9,10 @@
 
 """시장 추론(thesis)을 만들고, 저장하고, 채점한다.
 
-**맞고 틀림이 목적이 아니다.** "어떤 정보를 근거로 어떤 결론을 냈다"가 기록으로 남는 것이
-목적이다. 채점은 그 기록 위에 나중에 얹히고, 틀린 판단도 고치지 않는다.
+**목적은 정확도다 — 다만 개별 추론이 아니라 판(版)의 정확도다.** 한 건의 적중은 운과
+구분되지 않으므로 "어떤 정보를 근거로 어떤 결론을 냈다"를 먼저 기록으로 남기고, 채점이
+쌓이면 model·prompt 판별로 비교해 다음 변경을 유지하거나 되돌린다. **이미 쓴 추론은
+고치지 않는다** — 고칠 수 있으면 나쁜 판이 사후 수정으로 좋아 보인다.
 
 ## 근거는 고정 풀이 아니라 모델이 조회한다
 
@@ -66,12 +68,11 @@ from modules.thesis_domain import (
     PROMPT_VERSION,
     Evidence,
     Subject,
-    ThesisDirection,
     ThesisError,
     ThesisSubjectKind,
-    ThesisVerdict,
     brier_score,
     classify_outcome,
+    return_error,
 )
 from modules.thesis_generation import (
     Claim,
@@ -128,6 +129,10 @@ class StoredThesis(BaseModel):
     tool_rounds: int
     llm_model: str
     prompt_version: str
+    # 판 7부터의 방향별 조건부 크기. 그 전에 저장된 행은 둘 다 `None`이라 렌더가
+    # 확률만 그리던 모양으로 떨어진다.
+    up_return_pct: Decimal | None = None
+    down_return_pct: Decimal | None = None
 
 
 WATCHED_INSTRUMENTS = read_sql("postgres", "instrument", "select_watched.sql")
@@ -193,6 +198,8 @@ def _stored(row: Sequence[Any]) -> StoredThesis:
         tool_rounds=row[14],
         llm_model=row[15],
         prompt_version=row[16],
+        up_return_pct=row[17],
+        down_return_pct=row[18],
     )
 
 
@@ -232,6 +239,9 @@ class PendingGrade(BaseModel):
     # 장중 슬롯의 채점 기준가. 추론 행의 `input_state`에 박혀 있는, **모델이 실제로 본**
     # 가격이다. 장전 슬롯은 `None`이고 기준가를 전일 종가에서 얻는다.
     base_price: Decimal | None = None
+    # 크기 채점의 입력. 실현된 방향에 대응하는 쪽만 쓰인다(`thesis_domain.return_error`).
+    up_return_pct: Decimal | None = None
+    down_return_pct: Decimal | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -250,25 +260,10 @@ INSERT_NARRATIVE = read_sql("postgres", "thesis_outcome", "insert_narrative.sql"
 # ---------------------------------------------------------------------------
 
 EVIDENCE_SELECT_TOP = read_sql("postgres", "thesis_evidence", "select_top_by_thesis_ids.sql")
-OUTCOME_SELECT_BY_IDS = read_sql("postgres", "thesis_outcome", "select_by_thesis_ids.sql")
 
 # 근거를 DB에서 가져올 개수. 표시 개수보다 넉넉히 받아 결론 방향으로 거른 뒤 자른다.
 # 인용은 실행당 20건이 상한이라(`MAX_TOOL_RESULTS`) 이 값이면 사실상 전부다.
 EVIDENCE_FETCH_LIMIT = 12
-
-
-class StoredOutcome(BaseModel):
-    """저장된 지평 결과 한 행. `thesis_outcome/select_by_thesis_ids.sql`의 행 계약이다."""
-
-    model_config = ConfigDict(frozen=True)
-
-    thesis_id: int
-    horizon_days: int
-    actual_return_pct: Decimal | None = None
-    actual_outcome: ThesisDirection | None = None
-    brier_score: Decimal | None = None
-    narrative: str | None = None
-    verdict: ThesisVerdict | None = None
 
 
 class StoredEvidence(BaseModel):
@@ -408,6 +403,8 @@ class ThesisStore:
                         draft.prob_up,
                         draft.prob_down,
                         draft.prob_flat,
+                        draft.up_return_pct,
+                        draft.down_return_pct,
                         draft.up_reasoning,
                         draft.down_reasoning,
                         draft.flat_reasoning,
@@ -450,6 +447,8 @@ class ThesisStore:
                 run_slot=RunSlot(row[9]),
                 # SQL이 jsonb에서 뽑은 문자열이다. 없으면(장전 슬롯) NULL이 온다.
                 base_price=None if row[10] is None else Decimal(row[10]),
+                up_return_pct=row[11],
+                down_return_pct=row[12],
             )
             for row in rows
         )
@@ -545,6 +544,19 @@ class ThesisStore:
             prob_flat=pending.prob_flat,
             outcome=outcome,
         )
+        # 크기 채점은 방향 채점과 **같은 행**이고 지평 0에서만 잰다 — 크기의 창이 확률과
+        # 같은 창이라 5영업일 누적에 대조하면 항상 과소로 나온다. 잴 수 없으면 둘 다 NULL.
+        sizing = (
+            return_error(
+                actual_return_pct=return_pct,
+                outcome=outcome,
+                up_return_pct=pending.up_return_pct,
+                down_return_pct=pending.down_return_pct,
+            )
+            if pending.horizon_days == 0
+            else None
+        )
+        predicted_return_pct, return_error_pct = sizing if sizing else (None, None)
         with self._connection.cursor() as cursor:
             cursor.execute(
                 INSERT_GRADE,
@@ -557,6 +569,8 @@ class ThesisStore:
                     return_pct,
                     outcome.value,
                     score.quantize(Decimal("0.00001")),
+                    predicted_return_pct,
+                    return_error_pct,
                 ),
             )
 
@@ -593,6 +607,8 @@ class ThesisStore:
                 actual_return_pct=row[12],
                 actual_outcome=row[13],
                 brier_score=row[14],
+                predicted_return_pct=row[15],
+                return_error_pct=row[16],
             )
             for row in rows
         )
@@ -671,28 +687,6 @@ class ThesisStore:
                     rank=row[6],
                     direction=row[7],
                     mechanism=row[8],
-                )
-            )
-        return {thesis_id: tuple(items) for thesis_id, items in grouped.items()}
-
-    def stored_outcomes(self, thesis_ids: Sequence[int]) -> dict[int, tuple[StoredOutcome, ...]]:
-        """추론별 지평 결과 전부."""
-        if not thesis_ids:
-            return {}
-        with self._connection.cursor() as cursor:
-            cursor.execute(OUTCOME_SELECT_BY_IDS, (list(thesis_ids),))
-            rows = cursor.fetchall()
-        grouped: dict[int, list[StoredOutcome]] = {}
-        for row in rows:
-            grouped.setdefault(row[0], []).append(
-                StoredOutcome(
-                    thesis_id=row[0],
-                    horizon_days=row[1],
-                    actual_return_pct=row[5],
-                    actual_outcome=row[6],
-                    brier_score=row[7],
-                    narrative=row[8],
-                    verdict=row[9],
                 )
             )
         return {thesis_id: tuple(items) for thesis_id, items in grouped.items()}

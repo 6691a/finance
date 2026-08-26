@@ -172,3 +172,72 @@ def test_the_baseline_horizons_skip_the_prediction_day():
     """T+0은 없다. 신호가 그날 종가로 검출되므로 등락률이 정의상 0이다."""
     assert base_rate.BASE_RATE_HORIZON_DAYS == (1, 3, 5)
     assert 0 not in base_rate.BASE_RATE_HORIZON_DAYS
+
+
+# ---------------------------------------------------------------------------
+# `flat` 기준선 — 프롬프트가 상수로 들고 있던 값
+# ---------------------------------------------------------------------------
+
+
+def test_the_flat_baseline_reads_only_the_recent_window():
+    """전 이력이 아니라 최근 `FLAT_BASE_RATE_BARS`봉이다.
+
+    신호 기저율과 창이 다른 이유는 재는 대상이 다르기 때문이다 — 신호는 "그 사건이 평소보다
+    나았나"라 사건과 같은 기간과 견줘야 하고, 이 값은 "앞으로 얼마나 자주 일어나나"라 지금
+    체제를 재야 한다. 코스피 flat 비율이 2016년 45퍼센트에서 2026년 6퍼센트로 단조 감소한
+    것이 그 차이의 근거다(2026-08-26 실측).
+    """
+    # 오래된 구간은 전부 flat, 최근 창은 전부 up. 창을 안 자르면 flat이 섞인다.
+    old = [0.0] * 500
+    recent = [1.0] * base_rate.FLAT_BASE_RATE_BARS
+    connection = FakeConnection([], unconditional_rows(old + recent))
+
+    rates = base_rate.flat_base_rates(connection, as_of_date=AS_OF, symbols=("KOSPI",))
+
+    assert rates["KOSPI"].sample_size == base_rate.FLAT_BASE_RATE_BARS
+    assert rates["KOSPI"].up == 1.0
+    assert rates["KOSPI"].flat == 0.0
+
+
+def test_the_flat_baseline_is_per_symbol():
+    """상수는 지수 둘·종목 전체를 세 값으로 묶었다. 종목끼리도 1.5배 달랐다."""
+    connection = FakeConnection(
+        [],
+        unconditional_rows([0.0] * 40, symbol="KOSPI") + unconditional_rows([1.0] * 40, symbol="005930"),
+    )
+
+    rates = base_rate.flat_base_rates(connection, as_of_date=AS_OF, symbols=("KOSPI", "005930"))
+
+    assert rates["KOSPI"].flat == 1.0
+    assert rates["005930"].flat == 0.0
+
+
+def test_a_symbol_without_enough_bars_gets_no_ratios():
+    """표본이 모자라면 비율이 `None`이다. 프롬프트가 그때만 다르게 읽으라고 적어 뒀다."""
+    connection = FakeConnection([], unconditional_rows([1.0] * (base_rate.MIN_BASE_RATE_SAMPLE - 1)))
+
+    rates = base_rate.flat_base_rates(connection, as_of_date=AS_OF, symbols=("KOSPI",))
+
+    assert rates["KOSPI"].flat is None
+    assert rates["KOSPI"].sample_size == base_rate.MIN_BASE_RATE_SAMPLE - 1
+
+
+def test_the_flat_baseline_is_the_one_day_horizon():
+    """세 확률의 채점 창이 예측일 세션 하나라 그것과 같은 축이어야 한다."""
+    connection = FakeConnection([], unconditional_rows([1.0] * 40))
+
+    base_rate.flat_base_rates(connection, as_of_date=AS_OF, symbols=("KOSPI",))
+
+    params = next(p for statement, p in connection.calls if "무조건 기저" in statement)
+    assert params["horizons"] == [1]
+
+
+def test_the_signal_baseline_still_uses_the_whole_history():
+    """창을 자르는 것은 `flat` 기준선뿐이다. 신호 비교는 사건과 같은 기간을 봐야 한다."""
+    returns = [1.0] * (base_rate.FLAT_BASE_RATE_BARS + 100)
+    connection = FakeConnection(conditional_rows([1.0] * 20), unconditional_rows(returns))
+
+    rates = base_rate.signal_base_rates(connection, as_of_date=AS_OF, symbols=SYMBOLS, horizons=(1,))
+
+    assert rates[("KOSPI", "sma_cross", "up")].unconditional[0].sample_size == len(returns)
+

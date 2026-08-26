@@ -52,6 +52,22 @@ BASE_RATE_HORIZON_DAYS: tuple[int, ...] = (1, 3, 5)
 # 보이면 쓴다.
 MIN_BASE_RATE_SAMPLE = 20
 
+# 프롬프트에 싣는 `flat` 기준선을 재는 창(거래일). **전 이력이 아니다.**
+#
+# 이 값이 신호 기저율의 창과 다른 이유는 재는 대상이 다르기 때문이다. 신호는 "그 사건이
+# 평소보다 나았나"라 사건과 같은 기간의 기저와 견줘야 하고(그래서 전 이력), `flat` 기준선은
+# "앞으로 며칠 안에 실제로 얼마나 자주 일어나나"라 **지금 체제**를 재야 한다.
+#
+# 2026-08-26 실측이 그 차이를 보여 준다. 코스피의 `flat` 비율이 연도별로 2016년 45퍼센트에서
+# 2026년 6퍼센트까지 **단조로 줄었다.** 창을 넓힐수록 값이 커진다(132봉 6.1, 250봉 10.8,
+# 500봉 19.4, 1000봉 22.1, 전체 27.3). 진동이 아니라 추세라, 전 이력 평균은 지금을 4배
+# 넘게 벗어난다.
+#
+# 250봉을 고른 것은 둘 사이다. 직전 상수는 132봉으로 쟀는데 그 창의 코스피 `flat`이 8건뿐
+# 이라 얇고, 1년이면 조용했던 구간과 요동친 구간을 함께 담는다. **상수가 아니라 실행마다
+# 다시 재므로 체제가 바뀌면 값이 따라간다** — 전에는 사람이 다시 재기 전까지 낡았다.
+FLAT_BASE_RATE_BARS = 250
+
 
 def _summarize(horizon_days: int, returns: Sequence[Decimal]) -> HorizonBaseRate:
     """등락률 목록 하나를 분포로. 분류는 채점과 같은 임계를 쓴다."""
@@ -75,6 +91,66 @@ def _summarize(horizon_days: int, returns: Sequence[Decimal]) -> HorizonBaseRate
         down=round(counts[ThesisDirection.DOWN] / sample_size, 4),
         median_return_pct=round(float(median), 4),
     )
+
+
+def unconditional_rates(
+    connection: Connection,
+    *,
+    as_of_date: date,
+    symbols: Sequence[str],
+    horizons: Sequence[int] = BASE_RATE_HORIZON_DAYS,
+    max_bars: int | None = None,
+) -> dict[str, tuple[HorizonBaseRate, ...]]:
+    """심볼마다 **아무 날이나**의 지평별 실현 분포. 조건부 기저율의 비교 대상이다.
+
+    `max_bars`를 주면 최근 그만큼의 거래일만 센다. SQL이 거래일 오름차순으로 주므로 뒤에서
+    자른다 — 봉 수 상한을 SQL에 넣으면 부르는 쪽 둘이 서로 안 쓰는 파라미터를 넘겨야 한다.
+    """
+    horizon_list = list(horizons)
+    symbol_list = list(symbols)
+    if not symbol_list or not horizon_list:
+        return {}
+
+    buckets: dict[str, dict[int, list[Decimal]]] = defaultdict(lambda: defaultdict(list))
+    with connection.cursor() as cursor:
+        cursor.execute(
+            UNCONDITIONAL_RETURNS,
+            {"as_of_date": as_of_date, "horizons": horizon_list, "symbols": symbol_list},
+        )
+        for symbol, horizon_days, return_pct in cursor.fetchall():
+            buckets[str(symbol)][int(horizon_days)].append(return_pct)
+
+    def window(values: list[Decimal]) -> list[Decimal]:
+        return values if max_bars is None else values[-max_bars:]
+
+    return {
+        symbol: tuple(_summarize(horizon, window(rows.get(horizon, []))) for horizon in horizon_list)
+        for symbol, rows in buckets.items()
+    }
+
+
+def flat_base_rates(
+    connection: Connection,
+    *,
+    as_of_date: date,
+    symbols: Sequence[str],
+) -> dict[str, HorizonBaseRate]:
+    """프롬프트에 싣는 심볼별 `flat` 기준선. **최근 `FLAT_BASE_RATE_BARS`봉이다.**
+
+    모델이 `prob_flat`을 "±임계 안에 들어올 빈도"가 아니라 "방향을 모르겠다"로 읽어 30퍼센트대를
+    주던 것을 막는 값이다. 그 자리에 상수를 박아 두었더니 6개월 만에 체제가 바뀌어 낡았다
+    (`FLAT_BASE_RATE_BARS` 주석의 실측). 실행마다 다시 잰다.
+
+    지평 1(하루)만 준다. 세 확률의 채점 창이 예측일 세션 하나라 그것과 같은 축이다.
+    """
+    rates = unconditional_rates(
+        connection,
+        as_of_date=as_of_date,
+        symbols=symbols,
+        horizons=(1,),
+        max_bars=FLAT_BASE_RATE_BARS,
+    )
+    return {symbol: horizons[0] for symbol, horizons in rates.items() if horizons}
 
 
 def signal_base_rates(
@@ -107,19 +183,9 @@ def signal_base_rates(
                 continue
             conditional[(str(symbol), str(kind), str(direction))][int(horizon_days)].append(return_pct)
 
-    unconditional: dict[str, dict[int, list[Decimal]]] = defaultdict(lambda: defaultdict(list))
-    with connection.cursor() as cursor:
-        cursor.execute(
-            UNCONDITIONAL_RETURNS,
-            {"as_of_date": as_of_date, "horizons": horizon_list, "symbols": symbol_list},
-        )
-        for symbol, horizon_days, return_pct in cursor.fetchall():
-            unconditional[str(symbol)][int(horizon_days)].append(return_pct)
-
-    baseline = {
-        symbol: tuple(_summarize(horizon, buckets.get(horizon, [])) for horizon in horizon_list)
-        for symbol, buckets in unconditional.items()
-    }
+    baseline = unconditional_rates(
+        connection, as_of_date=as_of_date, symbols=symbol_list, horizons=horizon_list
+    )
 
     rates: dict[tuple[str, str, str], SignalBaseRate] = {}
     for key, buckets in conditional.items():

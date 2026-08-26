@@ -26,9 +26,6 @@ AS_OF = datetime(2026, 8, 21, 6, 30, tzinfo=UTC)  # KST 15:30
 
 
 
-# 기저율 조회 둘. 관측 상태를 만들 때마다 불린다.
-BASE_RATE_QUERIES = frozenset({base_rate.FORWARD_RETURNS, base_rate.UNCONDITIONAL_RETURNS})
-
 class FakeCursor:
     def __init__(self, connection: "FakeConnection") -> None:
         self._connection = connection
@@ -67,8 +64,10 @@ class FakeConnection:
 
 def _key(statement: str) -> str:
     # 기저율 조회가 먼저다. 둘 다 `FROM technical_signal`·`FROM stock_investor_trade_daily`를
-    # 담고 있어 아래 규칙에 걸리면 모양이 다른 행을 받는다.
-    if statement in BASE_RATE_QUERIES:
+    # 담고 있어 아래 규칙에 걸리면 모양이 다른 행을 받는다. **행 모양이 서로 달라 키도 나눈다.**
+    if statement == base_rate.FORWARD_RETURNS:
+        return "signal_base_rate"
+    if statement == base_rate.UNCONDITIONAL_RETURNS:
         return "base_rate"
     if "WITH requested AS" in statement:
         return "technical"
@@ -139,7 +138,7 @@ def test_the_state_is_a_model_not_a_bare_dict():
     # JSON 경계에서만 dict가 된다.
     payload = result.model_dump(mode="json")
     assert payload["session"] == "2026-08-21"
-    assert set(payload) == {"session", "index", "stock", "intraday", "technical"}
+    assert set(payload) == {"session", "index", "stock", "intraday", "technical", "flat_base_rate"}
     # 장전·장후는 `intraday`를 안 채운다. 장중 슬롯만 쓰는 칸이고 둘은 배타적이다.
     assert payload["intraday"] == {}
     assert set(payload["technical"]) == {"as_of_date", "subjects"}
@@ -268,3 +267,36 @@ def test_an_unfilled_calendar_is_remembered_as_none():
     assert run.previous_open_day() is None
     assert run.previous_open_day() is None
     assert len([call for call in connection.calls if _key(call[0]) == "session"]) == 1
+
+
+def test_the_flat_baseline_rides_in_the_observed_state():
+    """프롬프트가 상수로 들고 있던 값이라, 관측 상태에 없으면 모델이 기준선을 못 받는다.
+
+    `input_state`에 함께 저장되므로 "그때 어떤 기준선을 줬나"도 기록에 남는다.
+    """
+    connection = FakeConnection(
+        {
+            "index": [("KOSPI", Decimal(3150), Decimal(3125))],
+            "stock": [("005930", Decimal(71500))],
+            "technical": both_subjects(),
+            "signals": [],
+            "base_rate": [("KOSPI", 1, Decimal("0.5"))] * 40,
+        }
+    )
+
+    result = state(connection)
+
+    assert result.flat_base_rate["KOSPI"].sample_size == 40
+    assert result.flat_base_rate["KOSPI"].flat == 0.0
+    assert "flat_base_rate" in result.model_dump(mode="json")
+
+
+def test_the_prompt_no_longer_hardcodes_the_flat_baseline():
+    """상수는 132거래일로 잰 값이라 반년 만에 낡았다. 프롬프트가 관측 상태를 가리켜야 한다."""
+    from modules import thesis_domain
+
+    assert not hasattr(thesis_domain, "FLAT_BASE_RATE_PCT")
+    assert "flat_base_rate" in SYSTEM_PROMPT
+    # 지수·종목을 한 숫자로 묶어 부르던 표현이 남아 있으면 안 된다.
+    assert "개별 종목 6%" not in SYSTEM_PROMPT
+

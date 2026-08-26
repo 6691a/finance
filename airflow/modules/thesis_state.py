@@ -233,6 +233,15 @@ class ObservedState(BaseModel):
     stock: dict[str, StockObservation] = Field(default_factory=dict)
     intraday: dict[str, IntradayObservation] = Field(default_factory=dict)
     technical: TechnicalState = TechnicalState()
+    # 심볼별 `flat` 기준선(최근 `base_rate.FLAT_BASE_RATE_BARS`봉의 하루 등락 분포).
+    #
+    # **상수가 아니라 실행마다 잰 값이다.** 프롬프트가 "코스피 6퍼센트가 실제 flat 비율"이라고
+    # 상수로 가르치던 것을 여기로 옮겼다 — 2026-08-26 실측에서 그 비율이 연도별로 단조
+    # 감소해(2016년 45퍼센트 → 2026년 6퍼센트) 상수가 반년 만에 낡았기 때문이다.
+    #
+    # `input_state`에 함께 저장되므로 "그때 어떤 기준선을 줬나"가 기록에 남는다. 봉이 모자란
+    # 심볼은 키가 없다.
+    flat_base_rate: dict[str, HorizonBaseRate] = Field(default_factory=dict)
 
 
 class NxtObservedState(BaseModel):
@@ -249,6 +258,15 @@ class NxtObservedState(BaseModel):
     after_hours: dict[str, AfterHoursObservation] = Field(default_factory=dict)
     index_regular: dict[str, IndexObservation] = Field(default_factory=dict)
     technical: TechnicalState = TechnicalState()
+    # 심볼별 `flat` 기준선(최근 `base_rate.FLAT_BASE_RATE_BARS`봉의 하루 등락 분포).
+    #
+    # **상수가 아니라 실행마다 잰 값이다.** 프롬프트가 "코스피 6퍼센트가 실제 flat 비율"이라고
+    # 상수로 가르치던 것을 여기로 옮겼다 — 2026-08-26 실측에서 그 비율이 연도별로 단조
+    # 감소해(2016년 45퍼센트 → 2026년 6퍼센트) 상수가 반년 만에 낡았기 때문이다.
+    #
+    # `input_state`에 함께 저장되므로 "그때 어떤 기준선을 줬나"가 기록에 남는다. 봉이 모자란
+    # 심볼은 키가 없다.
+    flat_base_rate: dict[str, HorizonBaseRate] = Field(default_factory=dict)
 
 
 class PastOutcome(BaseModel):

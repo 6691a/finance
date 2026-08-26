@@ -1,0 +1,870 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="Finance 프로젝트의 수집, LLM 평가, 그래프 단계를 소개하는 발표 자료">
+  <title>Finance — 프로젝트 소개</title>
+  <!-- reveal.js 6.0.1 · MIT License · https://revealjs.com -->
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/reveal.js@6.0.1/dist/reset.css">
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/reveal.js@6.0.1/dist/reveal.css">
+  <style>
+    :root {
+      color-scheme: dark;
+      --bg: #07111f;
+      --panel: rgba(18, 34, 51, .82);
+      --panel-strong: #13283d;
+      --line: rgba(184, 207, 221, .16);
+      --text: #f4f7f8;
+      --muted: #a8bbc6;
+      --mint: #65f2c2;
+      --cyan: #6ed8ff;
+      --amber: #ffce73;
+      --danger: #ff8c8c;
+      --shadow: 0 28px 80px rgba(0, 0, 0, .32);
+      font-family: Pretendard, "Noto Sans KR", "Apple SD Gothic Neo", Inter, system-ui, sans-serif;
+    }
+
+    * { box-sizing: border-box; }
+
+    html, body {
+      width: 100%;
+      height: 100%;
+      margin: 0;
+      overflow: hidden;
+      background: var(--bg);
+    }
+
+    body {
+      color: var(--text);
+      background:
+        radial-gradient(circle at 12% 18%, rgba(101, 242, 194, .12), transparent 25%),
+        radial-gradient(circle at 88% 70%, rgba(110, 216, 255, .10), transparent 28%),
+        linear-gradient(145deg, #06101d 0%, #0a1727 55%, #07111f 100%);
+    }
+
+    .reveal {
+      color: var(--text);
+      font-family: inherit;
+    }
+
+    .reveal::before {
+      content: "";
+      position: fixed;
+      inset: 0;
+      pointer-events: none;
+      opacity: .14;
+      background-image:
+        linear-gradient(var(--line) 1px, transparent 1px),
+        linear-gradient(90deg, var(--line) 1px, transparent 1px);
+      background-size: 64px 64px;
+      mask-image: linear-gradient(to bottom, black, transparent 86%);
+    }
+
+    .reveal .slides { text-align: left; }
+
+    .reveal .slides section.slide {
+      height: 100%;
+      grid-template-rows: auto 1fr auto;
+      gap: clamp(1.2rem, 2.4vh, 2.2rem);
+      padding: clamp(1.8rem, 5vw, 5rem) clamp(1.5rem, 7vw, 7rem) clamp(4.8rem, 10vh, 7rem);
+      overflow: auto;
+    }
+
+    .reveal .slides section.slide.present { display: grid; }
+
+    .slide-head,
+    .slide-foot {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 1rem;
+    }
+
+    .brand {
+      display: inline-flex;
+      align-items: center;
+      gap: .7rem;
+      color: var(--text);
+      font-weight: 800;
+      letter-spacing: -.02em;
+    }
+
+    .brand-mark {
+      width: 1.8rem;
+      height: 1.8rem;
+      border: 1px solid rgba(101, 242, 194, .6);
+      border-radius: .55rem;
+      background: linear-gradient(145deg, rgba(101, 242, 194, .28), rgba(110, 216, 255, .08));
+      box-shadow: inset 0 0 18px rgba(101, 242, 194, .12);
+    }
+
+    .page-kicker,
+    .eyebrow,
+    .status-pill,
+    .chip,
+    .mini-label {
+      text-transform: uppercase;
+      letter-spacing: .11em;
+      font-weight: 800;
+    }
+
+    .page-kicker,
+    .eyebrow,
+    .mini-label {
+      color: var(--mint);
+      font-size: clamp(.68rem, .85vw, .82rem);
+    }
+
+    .slide-main {
+      width: min(100%, 1500px);
+      margin: auto;
+      align-self: center;
+    }
+
+    h1, h2, h3, p { margin-top: 0; }
+
+    h1 {
+      max-width: 13ch;
+      margin-bottom: 1.5rem;
+      font-size: clamp(3.6rem, 8vw, 8.8rem);
+      line-height: .92;
+      letter-spacing: -.075em;
+    }
+
+    h2 {
+      margin-bottom: clamp(1.4rem, 3vh, 2.6rem);
+      font-size: clamp(2.2rem, 4.8vw, 5rem);
+      line-height: 1.02;
+      letter-spacing: -.055em;
+    }
+
+    h3 {
+      margin-bottom: .65rem;
+      font-size: clamp(1.05rem, 1.45vw, 1.38rem);
+      line-height: 1.25;
+    }
+
+    p {
+      color: var(--muted);
+      font-size: clamp(.88rem, 1.12vw, 1.12rem);
+      line-height: 1.66;
+    }
+
+    strong { color: var(--text); }
+
+    .accent { color: var(--mint); }
+    .cyan { color: var(--cyan); }
+    .amber { color: var(--amber); }
+
+    .lede {
+      max-width: 780px;
+      font-size: clamp(1.05rem, 1.55vw, 1.45rem);
+      line-height: 1.6;
+    }
+
+    .tag-row {
+      display: flex;
+      flex-wrap: wrap;
+      gap: .65rem;
+      margin-top: 2.2rem;
+    }
+
+    .chip,
+    .status-pill {
+      display: inline-flex;
+      align-items: center;
+      gap: .45rem;
+      width: max-content;
+      padding: .52rem .78rem;
+      border: 1px solid var(--line);
+      border-radius: 999px;
+      color: var(--muted);
+      background: rgba(255, 255, 255, .035);
+      font-size: .68rem;
+    }
+
+    .chip::before,
+    .status-pill::before {
+      content: "";
+      width: .42rem;
+      height: .42rem;
+      border-radius: 50%;
+      background: var(--cyan);
+    }
+
+    .status-pill.done { color: var(--mint); border-color: rgba(101, 242, 194, .3); }
+    .status-pill.done::before { background: var(--mint); }
+    .status-pill.next { color: var(--amber); border-color: rgba(255, 206, 115, .3); }
+    .status-pill.next::before { background: var(--amber); }
+
+    .hero-layout {
+      display: grid;
+      grid-template-columns: 1.15fr .85fr;
+      align-items: end;
+      gap: clamp(2rem, 7vw, 7rem);
+    }
+
+    .hero-orbit {
+      position: relative;
+      aspect-ratio: 1;
+      width: min(100%, 440px);
+      justify-self: end;
+      border: 1px solid rgba(101, 242, 194, .18);
+      border-radius: 50%;
+      background: radial-gradient(circle, rgba(101, 242, 194, .12), transparent 58%);
+    }
+
+    .hero-orbit::before,
+    .hero-orbit::after {
+      content: "";
+      position: absolute;
+      inset: 15%;
+      border: 1px dashed rgba(110, 216, 255, .25);
+      border-radius: 50%;
+    }
+
+    .hero-orbit::after { inset: 31%; }
+
+    .orbit-core,
+    .orbit-item {
+      position: absolute;
+      display: grid;
+      place-items: center;
+      border-radius: 50%;
+      text-align: center;
+      font-weight: 800;
+    }
+
+    .orbit-core {
+      inset: 36%;
+      color: #06131e;
+      background: var(--mint);
+      box-shadow: 0 0 60px rgba(101, 242, 194, .28);
+    }
+
+    .orbit-item {
+      width: 25%;
+      aspect-ratio: 1;
+      border: 1px solid var(--line);
+      color: var(--text);
+      background: var(--panel-strong);
+      font-size: clamp(.68rem, .9vw, .86rem);
+      box-shadow: var(--shadow);
+    }
+
+    .orbit-item.one { top: 3%; left: 38%; }
+    .orbit-item.two { right: 0; bottom: 14%; }
+    .orbit-item.three { left: 0; bottom: 14%; }
+
+    .section-title {
+      display: grid;
+      grid-template-columns: auto 1fr;
+      align-items: start;
+      gap: 1.1rem;
+    }
+
+    .chapter-index {
+      display: grid;
+      place-items: center;
+      width: clamp(2.8rem, 4vw, 4rem);
+      aspect-ratio: 1;
+      border-radius: 1rem;
+      color: #07111f;
+      background: var(--mint);
+      font-size: clamp(1.1rem, 1.8vw, 1.7rem);
+      font-weight: 900;
+    }
+
+    .flow-grid {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 1rem;
+    }
+
+    .stage-card,
+    .panel,
+    .tech-card,
+    .metric,
+    .source-card,
+    .validation-card {
+      border: 1px solid var(--line);
+      background: var(--panel);
+      box-shadow: var(--shadow);
+      backdrop-filter: blur(12px);
+    }
+
+    .stage-card {
+      position: relative;
+      min-height: 280px;
+      padding: clamp(1.25rem, 2vw, 2rem);
+      border-radius: 1.4rem;
+      overflow: hidden;
+    }
+
+    .stage-card::after {
+      content: "→";
+      position: absolute;
+      z-index: 2;
+      top: 50%;
+      right: -1.55rem;
+      display: grid;
+      place-items: center;
+      width: 2.2rem;
+      height: 2.2rem;
+      border-radius: 50%;
+      color: var(--bg);
+      background: var(--mint);
+      font-weight: 900;
+    }
+
+    .stage-card:last-child::after { display: none; }
+
+    .stage-card .chapter-index { margin-bottom: 2rem; }
+    .stage-card ul { padding-left: 1.15rem; color: var(--muted); line-height: 1.75; }
+    .stage-card li::marker { color: var(--mint); }
+
+    .two-column {
+      display: grid;
+      grid-template-columns: 1.18fr .82fr;
+      gap: clamp(1.2rem, 2.5vw, 2.4rem);
+      align-items: stretch;
+    }
+
+    .panel {
+      padding: clamp(1.2rem, 2.3vw, 2.2rem);
+      border-radius: 1.4rem;
+    }
+
+    .source-grid,
+    .tech-grid,
+    .metric-grid {
+      display: grid;
+      gap: .8rem;
+    }
+
+    .source-grid { grid-template-columns: repeat(2, 1fr); }
+    .tech-grid { grid-template-columns: repeat(2, 1fr); }
+    .metric-grid { grid-template-columns: repeat(4, 1fr); }
+
+    .source-card,
+    .tech-card,
+    .metric {
+      padding: 1rem;
+      border-radius: 1rem;
+      box-shadow: none;
+    }
+
+    .source-card p,
+    .tech-card p { margin-bottom: 0; font-size: clamp(.76rem, .92vw, .92rem); }
+
+    .source-name {
+      display: block;
+      margin-bottom: .38rem;
+      color: var(--text);
+      font-weight: 800;
+    }
+
+    .pipe {
+      display: grid;
+      gap: .65rem;
+      margin-top: 1rem;
+    }
+
+    .pipe-step {
+      display: grid;
+      grid-template-columns: 2.2rem 1fr auto;
+      gap: .8rem;
+      align-items: center;
+      padding: .85rem 1rem;
+      border: 1px solid var(--line);
+      border-radius: .85rem;
+      background: rgba(255, 255, 255, .025);
+    }
+
+    .pipe-step b:first-child { color: var(--mint); }
+    .pipe-step small { color: var(--muted); }
+
+    .callout {
+      margin-top: 1rem;
+      padding: 1rem 1.15rem;
+      border-left: 3px solid var(--mint);
+      border-radius: 0 .8rem .8rem 0;
+      color: var(--muted);
+      background: rgba(101, 242, 194, .07);
+      font-size: clamp(.8rem, .95vw, .95rem);
+      line-height: 1.55;
+    }
+
+    .assessment-flow {
+      display: grid;
+      grid-template-columns: repeat(5, 1fr);
+      gap: .65rem;
+      margin-bottom: 1.1rem;
+    }
+
+    .flow-node {
+      position: relative;
+      min-height: 112px;
+      padding: 1rem;
+      border: 1px solid var(--line);
+      border-radius: 1rem;
+      background: rgba(255, 255, 255, .035);
+    }
+
+    .flow-node::after {
+      content: "›";
+      position: absolute;
+      top: 40%;
+      right: -.52rem;
+      color: var(--mint);
+      font-size: 1.4rem;
+      font-weight: 900;
+    }
+
+    .flow-node:last-child::after { display: none; }
+    .flow-node b { display: block; margin-bottom: .4rem; font-size: .92rem; }
+    .flow-node span { color: var(--muted); font-size: .76rem; line-height: 1.45; }
+
+    .validation-stack {
+      display: grid;
+      gap: .65rem;
+      counter-reset: validate;
+    }
+
+    .validation-card {
+      position: relative;
+      padding: .88rem 1rem .88rem 3.4rem;
+      border-radius: .85rem;
+      box-shadow: none;
+      counter-increment: validate;
+    }
+
+    .validation-card::before {
+      content: counter(validate);
+      position: absolute;
+      left: .9rem;
+      top: 50%;
+      display: grid;
+      place-items: center;
+      width: 1.75rem;
+      height: 1.75rem;
+      transform: translateY(-50%);
+      border-radius: .5rem;
+      color: var(--bg);
+      background: var(--cyan);
+      font-weight: 900;
+    }
+
+    .validation-card b { display: block; font-size: .9rem; }
+    .validation-card small { color: var(--muted); }
+
+    .graph-layout {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 1rem;
+    }
+
+    .graph-panel {
+      position: relative;
+      min-height: 320px;
+      overflow: hidden;
+    }
+
+    .graph-panel::before {
+      content: "";
+      position: absolute;
+      inset: 0;
+      opacity: .4;
+      background: radial-gradient(circle at 65% 35%, rgba(110, 216, 255, .15), transparent 36%);
+      pointer-events: none;
+    }
+
+    .graph-flow {
+      position: relative;
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: .55rem;
+      margin-top: 1.7rem;
+    }
+
+    .graph-flow span {
+      padding: .72rem .82rem;
+      border: 1px solid var(--line);
+      border-radius: .75rem;
+      background: #102438;
+      font-size: .78rem;
+      font-weight: 800;
+    }
+
+    .graph-flow i { color: var(--mint); font-style: normal; font-weight: 900; }
+
+    .node-map {
+      position: relative;
+      height: 205px;
+      margin-top: .8rem;
+    }
+
+    .node,
+    .edge-label {
+      position: absolute;
+      display: grid;
+      place-items: center;
+    }
+
+    .node {
+      z-index: 2;
+      width: 96px;
+      aspect-ratio: 1;
+      border: 1px solid rgba(101, 242, 194, .45);
+      border-radius: 50%;
+      background: #102b3b;
+      text-align: center;
+      font-size: .72rem;
+      font-weight: 800;
+      box-shadow: 0 0 34px rgba(101, 242, 194, .1);
+    }
+
+    .node.thesis { top: 49px; left: 4%; }
+    .node.evidence { top: 0; right: 5%; border-color: rgba(110, 216, 255, .55); }
+    .node.past { right: 5%; bottom: 0; border-color: rgba(255, 206, 115, .55); }
+
+    .edge {
+      position: absolute;
+      z-index: 1;
+      height: 1px;
+      transform-origin: left center;
+      background: linear-gradient(90deg, var(--mint), rgba(110, 216, 255, .15));
+    }
+
+    .edge.one { top: 87px; left: 23%; width: 58%; transform: rotate(-13deg); }
+    .edge.two { top: 118px; left: 23%; width: 58%; transform: rotate(13deg); }
+    .edge-label { z-index: 3; color: var(--muted); font-size: .62rem; letter-spacing: .06em; }
+    .edge-label.one { top: 43px; left: 47%; }
+    .edge-label.two { top: 153px; left: 43%; }
+
+    .legend {
+      display: flex;
+      flex-wrap: wrap;
+      gap: .7rem 1.2rem;
+      margin-top: 1rem;
+      color: var(--muted);
+      font-size: .74rem;
+    }
+
+    .legend b { color: var(--text); }
+
+    .metric {
+      min-height: 120px;
+      display: flex;
+      flex-direction: column;
+      justify-content: space-between;
+    }
+
+    .metric strong {
+      display: block;
+      color: var(--mint);
+      font-size: clamp(2rem, 3.3vw, 3.4rem);
+      line-height: 1;
+      letter-spacing: -.06em;
+    }
+
+    .metric span { color: var(--muted); font-size: .78rem; }
+
+    .roadmap {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: .8rem;
+      margin-top: 1.2rem;
+    }
+
+    .roadmap-item {
+      padding: 1rem;
+      border-top: 2px solid var(--line);
+      background: rgba(255, 255, 255, .02);
+    }
+
+    .roadmap-item.done { border-color: var(--mint); }
+    .roadmap-item.check { border-color: var(--cyan); }
+    .roadmap-item.next { border-color: var(--amber); }
+    .roadmap-item p { margin: .5rem 0 0; font-size: .78rem; }
+
+    .slide-foot {
+      color: rgba(168, 187, 198, .7);
+      font-size: .68rem;
+      letter-spacing: .03em;
+    }
+
+    .reveal .controls { color: var(--mint); }
+    .reveal .progress { height: 3px; color: var(--mint); }
+    .reveal .slide-number {
+      right: auto;
+      left: 1.2rem;
+      color: var(--muted);
+      background: rgba(6, 16, 29, .78);
+      border-radius: 999px;
+      font-size: .72rem;
+      font-weight: 800;
+    }
+
+    @media (max-width: 900px), (max-height: 720px) {
+      .reveal .slides section.slide { padding: 1.4rem 1.2rem 5rem; }
+      .hero-layout, .two-column, .graph-layout { grid-template-columns: 1fr; }
+      .hero-orbit { display: none; }
+      .flow-grid { grid-template-columns: 1fr; }
+      .stage-card { min-height: auto; }
+      .stage-card::after { display: none; }
+      .assessment-flow { grid-template-columns: 1fr 1fr; }
+      .metric-grid { grid-template-columns: repeat(2, 1fr); }
+      .roadmap { grid-template-columns: 1fr; }
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+      *, *::before, *::after { scroll-behavior: auto !important; transition: none !important; }
+    }
+
+    @media print {
+      @page { size: 16in 9in; margin: 0; }
+    }
+  </style>
+</head>
+<body>
+  <main class="reveal" aria-label="Finance 프로젝트 소개 발표">
+    <div class="slides">
+    <section class="slide" data-stage="intro" aria-labelledby="slide-1-title">
+      <header class="slide-head">
+        <div class="brand"><span class="brand-mark" aria-hidden="true"></span>Finance</div>
+        <span class="page-kicker">00 · Introduction</span>
+      </header>
+      <div class="slide-main hero-layout">
+        <div>
+          <p class="eyebrow">Market intelligence pipeline</p>
+          <h1 id="slide-1-title">데이터에서<br><span class="accent">근거 있는 판단</span>까지</h1>
+          <p class="lede">시장 데이터와 경제 문서를 자동으로 모으고, LLM으로 평가한 뒤, 판단과 근거의 관계를 기록하는 금융 데이터 프로젝트입니다.</p>
+          <div class="tag-row" aria-label="발표 구성">
+            <span class="chip">수집</span>
+            <span class="chip">LLM 평가·재검증</span>
+            <span class="chip">그래프</span>
+          </div>
+        </div>
+        <div class="hero-orbit" aria-hidden="true">
+          <div class="orbit-core">Finance</div>
+          <div class="orbit-item one">Collect</div>
+          <div class="orbit-item two">Assess</div>
+          <div class="orbit-item three">Graph</div>
+        </div>
+      </div>
+      <footer class="slide-foot"><span>PROJECT SNAPSHOT</span><span>2026.08.26</span></footer>
+    </section>
+
+    <section class="slide" data-stage="overview" aria-labelledby="slide-2-title">
+      <header class="slide-head">
+        <div class="brand"><span class="brand-mark" aria-hidden="true"></span>Finance</div>
+        <span class="page-kicker">01 · Overview</span>
+      </header>
+      <div class="slide-main">
+        <p class="eyebrow">One pipeline, three stages</p>
+        <h2 id="slide-2-title">프로젝트를 <span class="accent">세 단계</span>로 보면 쉽습니다</h2>
+        <div class="flow-grid">
+          <article class="stage-card">
+            <div class="chapter-index">1</div>
+            <h3>수집 단계</h3>
+            <p>시장·경제·문서 데이터를 일정에 맞춰 가져오고 원본과 정규화 결과를 저장합니다.</p>
+            <span class="status-pill done">구현·운영 코드</span>
+          </article>
+          <article class="stage-card">
+            <div class="chapter-index">2</div>
+            <h3>평가(LLM) 단계</h3>
+            <p>문서의 관련성·방향·근거를 구조화하고, 검증 실패는 교정 후 다시 평가합니다.</p>
+            <span class="status-pill done">구현·개선 중</span>
+          </article>
+          <article class="stage-card">
+            <div class="chapter-index">3</div>
+            <h3>그래프 단계</h3>
+            <p>추론이 인용한 근거와 과거 판단의 관계를 탐색 가능한 그래프로 투영합니다.</p>
+            <span class="status-pill next">Neo4j 투영 계획</span>
+          </article>
+        </div>
+      </div>
+      <footer class="slide-foot"><span>핵심 원칙</span><span>수집은 LLM 장애와 분리 · Postgres가 원본</span></footer>
+    </section>
+
+    <section class="slide" data-stage="collect" aria-labelledby="slide-3-title">
+      <header class="slide-head">
+        <div class="brand"><span class="brand-mark" aria-hidden="true"></span>Finance</div>
+        <span class="page-kicker">02 · Collect</span>
+      </header>
+      <div class="slide-main">
+        <div class="section-title">
+          <div class="chapter-index">1</div>
+          <div>
+            <p class="eyebrow">수집 단계</p>
+            <h2 id="slide-3-title">서로 다른 데이터를 <span class="accent">같은 규칙</span>으로 쌓습니다</h2>
+          </div>
+        </div>
+        <div class="two-column">
+          <div class="panel">
+            <span class="mini-label">Data sources</span>
+            <div class="source-grid">
+              <article class="source-card"><span class="source-name">KIS Open API</span><p>국내 지수·종목·수급·공매도·대차·캘린더</p></article>
+              <article class="source-card"><span class="source-name">경제지표 API</span><p>FRED, ECOS, ECB 등 금리·물가·거시지표</p></article>
+              <article class="source-card"><span class="source-name">RSS / Atom</span><p>공식기관 발표와 경제 뉴스·리서치 문서</p></article>
+              <article class="source-card"><span class="source-name">DART / KRX</span><p>기업 공시, 잠정실적, 거래소 공개 데이터</p></article>
+            </div>
+            <div class="pipe" aria-label="수집 처리 흐름">
+              <div class="pipe-step"><b>01</b><strong>Fetch</strong><small>외부 요청</small></div>
+              <div class="pipe-step"><b>02</b><strong>Validate</strong><small>형식·단위 검증</small></div>
+              <div class="pipe-step"><b>03</b><strong>Normalize</strong><small>UTC·공통 모델</small></div>
+              <div class="pipe-step"><b>04</b><strong>Upsert</strong><small>중복 없이 저장</small></div>
+            </div>
+          </div>
+          <div class="panel">
+            <span class="mini-label">Technology, simply</span>
+            <div class="tech-grid">
+              <article class="tech-card"><h3>Python</h3><p>수집·검증·저장 규칙을 작성하는 주 언어입니다.</p></article>
+              <article class="tech-card"><h3>Airflow</h3><p>“언제 무엇을 실행할지” 정하고 실패 시 재시도합니다.</p></article>
+              <article class="tech-card"><h3>Pydantic</h3><p>외부 응답이 우리가 기대한 모양인지 저장 전에 확인합니다.</p></article>
+              <article class="tech-card"><h3>PostgreSQL</h3><p>시세·문서·평가·추론을 보관하는 원본 데이터베이스입니다.</p></article>
+              <article class="tech-card"><h3>Redis</h3><p>실시간 스트림과 공유 토큰처럼 빠른 임시 상태를 맡습니다.</p></article>
+              <article class="tech-card"><h3>Docker</h3><p>로컬과 운영에서 같은 실행 환경을 재현합니다.</p></article>
+            </div>
+            <div class="callout"><strong>문서 파이프라인의 설계 포인트:</strong> 문서 수집과 문서 LLM 평가는 서로 다른 DAG입니다. 모델이 멈춰도 원문 수집은 계속됩니다.</div>
+          </div>
+        </div>
+      </div>
+      <footer class="slide-foot"><span>DATA CONTRACT</span><span>출처별 트랜잭션 · UTC 정규화 · 자연키 upsert</span></footer>
+    </section>
+
+    <section class="slide" data-stage="assess" aria-labelledby="slide-4-title">
+      <header class="slide-head">
+        <div class="brand"><span class="brand-mark" aria-hidden="true"></span>Finance</div>
+        <span class="page-kicker">03 · Assess &amp; Validate</span>
+      </header>
+      <div class="slide-main">
+        <div class="section-title">
+          <div class="chapter-index">2</div>
+          <div>
+            <p class="eyebrow">평가(LLM) 단계 · 재검증 로직 향상</p>
+            <h2 id="slide-4-title">LLM 답변을 <span class="accent">바로 믿지 않습니다</span></h2>
+          </div>
+        </div>
+        <div class="assessment-flow" aria-label="LLM 평가 처리 흐름">
+          <div class="flow-node"><b>평가 대상 조회</b><span>미평가 또는 내용·프롬프트가 바뀐 문서</span></div>
+          <div class="flow-node"><b>LLM 평가</b><span>종목·지표, 방향, 0~8점, 새 사실과 이유</span></div>
+          <div class="flow-node"><b>구조 검증</b><span>JSON Schema와 Pydantic으로 타입·범위 확인</span></div>
+          <div class="flow-node"><b>교정 1회</b><span>형식 오류면 repair 지시를 붙여 재호출</span></div>
+          <div class="flow-node"><b>독립 저장</b><span>성공 문서는 커밋, 실패 문서는 다음 실행에서 재평가</span></div>
+        </div>
+        <div class="two-column">
+          <div class="panel">
+            <span class="mini-label">현재 검증 방어선</span>
+            <div class="validation-stack">
+              <div class="validation-card"><b>제공처 Schema 강제</b><small>지원하지 않으면 일반 응답으로 전환하되 내부 검증은 유지</small></div>
+              <div class="validation-card"><b>형식·범위 검증</b><small>JSON 구조, enum, 4개 점수 항목 각각 0~2(합계 0~8) 확인</small></div>
+              <div class="validation-card"><b>도메인 검증</b><small>마스터에 없는 태그와 툴이 주지 않은 근거 ref 제거</small></div>
+              <div class="validation-card"><b>실패 격리</b><small>문서별 결과·트랜잭션으로 한 건의 실패가 전체를 막지 않음</small></div>
+            </div>
+          </div>
+          <div class="panel">
+            <span class="mini-label">향상 방향</span>
+            <div class="tech-grid">
+              <article class="tech-card"><h3>검증 이유 기록</h3><p>어떤 규칙에서 탈락했는지 집계해 프롬프트 개선 근거로 사용합니다.</p></article>
+              <article class="tech-card"><h3>회귀 데이터셋</h3><p>실패했던 실제 응답을 고정 사례로 남겨 같은 오류의 재발을 막습니다.</p></article>
+              <article class="tech-card"><h3>품질 지표</h3><p>형식 실패율, repair 비율, 허용되지 않은 태그 비율을 추적합니다.</p></article>
+              <article class="tech-card"><h3>변경 시 재평가</h3><p>문서 내용이나 프롬프트 버전이 바뀌면 평가 대상을 다시 선택합니다.</p></article>
+            </div>
+            <div class="callout"><strong>LangChain</strong>은 모델 호출 형식을 맞추고, <strong>LangGraph</strong>는 call → repair → call 같은 상태 흐름을 제어합니다.</div>
+          </div>
+        </div>
+      </div>
+      <footer class="slide-foot"><span>TRUST BOUNDARY</span><span>LLM은 해석 · SQL은 계산 · Pydantic은 검증</span></footer>
+    </section>
+
+    <section class="slide" data-stage="graph" aria-labelledby="slide-5-title">
+      <header class="slide-head">
+        <div class="brand"><span class="brand-mark" aria-hidden="true"></span>Finance</div>
+        <span class="page-kicker">04 · Graph</span>
+      </header>
+      <div class="slide-main">
+        <div class="section-title">
+          <div class="chapter-index">3</div>
+          <div>
+            <p class="eyebrow">그래프 단계</p>
+            <h2 id="slide-5-title">흐름 그래프와 관계 그래프는 <span class="accent">다릅니다</span></h2>
+          </div>
+        </div>
+        <div class="graph-layout">
+          <article class="panel graph-panel">
+            <span class="status-pill done">현재 구현</span>
+            <h3>LangGraph — 실행 흐름</h3>
+            <p>LLM이 어떤 순서로 조사하고 답변하며 오류를 교정할지 제어하는 상태 머신입니다.</p>
+            <div class="graph-flow" aria-label="LangGraph 추론 흐름">
+              <span>investigate</span><i>→</i><span>tools</span><i>↺</i><span>answer</span><i>→</i><span>repair</span>
+            </div>
+            <div class="callout">툴 왕복은 최대 3회입니다. 답변은 등록된 근거 ref만 인용할 수 있고, 형식 실패 시 교정은 1회만 합니다.</div>
+          </article>
+          <article class="panel graph-panel">
+            <span class="status-pill next">다음 단계 · 미착수</span>
+            <h3>Neo4j — 관계 저장·탐색</h3>
+            <p>PostgreSQL의 추론과 근거 일부만 노드·엣지로 투영해 관계를 빠르게 탐색합니다.</p>
+            <div class="node-map" aria-label="계획된 Neo4j 관계 구조">
+              <div class="node thesis">Thesis<br>시장 판단</div>
+              <div class="node evidence">Evidence<br>인용 근거</div>
+              <div class="node past">Past Thesis<br>과거 판단</div>
+              <div class="edge one"></div><div class="edge-label one">CITES</div>
+              <div class="edge two"></div><div class="edge-label two">INFORMED_BY</div>
+            </div>
+            <div class="legend"><span><b>PostgreSQL</b> 원본</span><span><b>Neo4j</b> 탐색용 projection</span><span><b>sync_graph</b> 별도 태스크</span></div>
+          </article>
+        </div>
+      </div>
+      <footer class="slide-foot"><span>GRAPH PRINCIPLE</span><span>원본을 복제하지 않고 필요한 관계만 투영</span></footer>
+    </section>
+
+    <section class="slide" data-stage="status" aria-labelledby="slide-6-title">
+      <header class="slide-head">
+        <div class="brand"><span class="brand-mark" aria-hidden="true"></span>Finance</div>
+        <span class="page-kicker">05 · Current Status</span>
+      </header>
+      <div class="slide-main">
+        <p class="eyebrow">Current project snapshot</p>
+        <h2 id="slide-6-title">현재는 <span class="accent">수집과 추론</span>을 갖췄고,<br>검증과 그래프를 확장하는 단계입니다</h2>
+        <div class="metric-grid" aria-label="구현 상태 요약">
+          <article class="metric"><strong>완료</strong><span>시장·문서 데이터 수집</span></article>
+          <article class="metric"><strong>완료</strong><span>문서 LLM 평가·교정</span></article>
+          <article class="metric"><strong>완료</strong><span>시장 Thesis·기술 신호·Slack</span></article>
+          <article class="metric"><strong class="amber">계획</strong><span>Neo4j graph projection</span></article>
+        </div>
+        <div class="roadmap">
+          <article class="roadmap-item done"><span class="status-pill done">완료</span><h3>수집·평가·Thesis·Slack</h3><p>시장 데이터, 문서 평가, 도구 기반 추론, 정기 브리핑이 구현돼 있습니다. 장전·장중·장후에 더해 NXT 애프터마켓까지 추론하고, 기술적 매매 신호와 실적 기대치 대비 서프라이즈 판정이 그 입력으로 들어갑니다.</p></article>
+          <article class="roadmap-item check"><span class="status-pill next">확인 예정</span><h3>시장 추론 운영 검증</h3><p>운영 배포 뒤 4주간 발행률·근거 유효율을 보고, Brier score는 분기 단위로 판단합니다.</p></article>
+          <article class="roadmap-item next"><span class="status-pill next">다음</span><h3>Neo4j projection</h3><p>운영 인스턴스를 준비한 뒤 sync_graph를 붙이고, 실제 다중 홉 탐색 가치가 있는지 검증합니다.</p></article>
+        </div>
+        <div class="callout"><strong>한 문장 요약:</strong> Finance는 “데이터를 많이 모으는 시스템”에서 “무슨 근거로 어떤 판단을 했는지 남기는 시스템”으로 발전하고 있습니다.</div>
+      </div>
+      <footer class="slide-foot"><span>FINANCE</span><span>Collect → Assess → Graph</span></footer>
+    </section>
+    </div>
+  </main>
+  <script src="https://cdn.jsdelivr.net/npm/reveal.js@6.0.1/dist/reveal.js"></script>
+  <script>
+    Reveal.initialize({
+      width: 1600,
+      height: 900,
+      margin: 0,
+      controls: true,
+      progress: true,
+      slideNumber: 'c/t',
+      hash: true,
+      hashOneBasedIndex: true,
+      keyboard: true,
+      touch: true,
+      overview: true,
+      center: false,
+      transition: 'slide',
+      backgroundTransition: 'fade'
+    });
+  </script>
+</body>
+</html>

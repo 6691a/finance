@@ -100,8 +100,13 @@ class FakeCollector:
 
 @pytest.fixture
 def no_transaction(monkeypatch):
-    """`atomic`은 실제 연결을 요구한다. 걷기의 판단만 보므로 통과시킨다."""
+    """`atomic`은 실제 연결을 요구한다. 걷기의 판단만 보므로 통과시킨다.
+
+    장 사이 대기도 함께 끈다. 실제로 쉬면 테스트가 걷는 장 수만큼 느려진다. 대기가 걸리는지는
+    `test_the_walk_waits_between_pages`가 따로 본다.
+    """
     monkeypatch.setattr(kis_investor_trade_daily, "atomic", lambda connection: nullcontext())
+    monkeypatch.setattr(kis_investor_trade_daily, "wait_seconds", lambda seconds: None)
 
 
 def test_a_conflicting_page_is_not_stored(monkeypatch, no_transaction):
@@ -147,6 +152,43 @@ def test_the_recovery_walk_stops_at_the_backfill_start(monkeypatch, no_transacti
     assert len(collector.fetched) < kis_investor_trade_daily.RECOVERY_MAX_PAGES
 
 
-def test_the_backfill_start_matches_the_index_history():
-    """지수와 종목의 시작일이 다르면 나중에 둘을 대조할 수 없다."""
-    assert kis_investor_trade_daily.BACKFILL_START_DATE == date(2016, 8, 15)
+def test_the_backfill_stops_where_the_identities_start_holding():
+    """제공처가 정한 경계다. 2018-12-07까지는 투자자 항등식 셋이 전부 깨진다(2026-08-26 실측).
+
+    이 값을 앞으로 당기면 못 믿는 세부 수급이 DB에 들어간다. 항등식을 완화해서 받는 것보다
+    안 받는 편이 낫다는 판단이 이 상수다.
+    """
+    assert kis_investor_trade_daily.BACKFILL_START_DATE == date(2018, 12, 10)
+
+
+def test_the_walk_never_goes_past_the_backfill_start(monkeypatch, no_transaction):
+    """`pages`를 크게 줘도 항등식이 깨지는 구간까지 내려가지 않는다.
+
+    운영자가 장 수를 계산하지 않아도 되게 기본값이 그 경계다.
+    """
+    monkeypatch.setattr(kis_investor_trade_daily, "close_conflicts", lambda connection, fetch: ())
+    monkeypatch.setattr(kis_investor_trade_daily, "wait_seconds", lambda seconds: None)
+    collector = FakeCollector()
+
+    kis_investor_trade_daily.walk_back(collector, object(), SAMSUNG, END_DATE, pages=500)
+
+    assert all(day >= kis_investor_trade_daily.BACKFILL_START_DATE for day in collector.fetched)
+    assert len(collector.fetched) < 500
+
+
+def test_the_walk_waits_between_pages(monkeypatch, no_transaction):
+    """무대기 백필은 초당 거래건수 제한에 걸린다(2026-08-26 실측: EGW00201)."""
+    monkeypatch.setattr(kis_investor_trade_daily, "close_conflicts", lambda connection, fetch: ())
+    waits: list[float] = []
+    monkeypatch.setattr(kis_investor_trade_daily, "wait_seconds", waits.append)
+    collector = FakeCollector()
+
+    kis_investor_trade_daily.walk_back(collector, object(), SAMSUNG, END_DATE, pages=3)
+
+    # 장이 셋이면 사이가 둘이다. 마지막 장 뒤에는 쉬지 않는다.
+    assert waits == [kis_investor_trade_daily.PAGE_DELAY_SECONDS] * 2
+
+
+def test_a_single_page_run_does_not_wait():
+    """일상 실행은 종목당 한 장이라 대기가 붙으면 안 된다."""
+    assert kis_investor_trade_daily.requested_pages({}) == 1

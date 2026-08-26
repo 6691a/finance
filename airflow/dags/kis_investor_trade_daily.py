@@ -21,6 +21,15 @@
     airflow dags trigger kis_investor_trade_daily \\
       --conf '{"end_date": "2026-07-01", "pages": 6}'
 
+**`pages`를 크게 줘도 `BACKFILL_START_DATE`(2018-12-10) 앞으로는 가지 않는다.** 그 앞의
+응답은 투자자 항등식이 깨져 있다(그 상수의 주석에 실측이 있다). 전 구간을 채울 때는 장 수를
+계산하지 말고 넉넉히 준다.
+
+    airflow dags trigger kis_investor_trade_daily \\
+      --conf '{"end_date": "2026-08-25", "pages": 70}'
+
+장 사이에 `PAGE_DELAY_SECONDS`만큼 쉰다. 없으면 백필이 초당 거래건수 제한에 걸린다.
+
 ## params
 
 | 이름 | 기본값 | 뜻 |
@@ -78,6 +87,7 @@ import os
 import re
 from contextlib import closing
 from datetime import UTC, date, datetime, timedelta
+from time import sleep as wait_seconds
 from typing import Any
 
 import pendulum
@@ -111,13 +121,26 @@ CALENDAR_DAY_PATTERN = re.compile(r"\d{4}-\d{2}-\d{2}")
 END_DATE_PARAM = "end_date"
 PAGES_PARAM = "pages"
 
-# 소급 조정 복구가 되돌아갈 지점. 해외 지수(`index_daily`)의 시작일과 맞춘다 — 시작일이
-# 다르면 나중에 국가 간 비교를 할 수 없다(docs/analysis/market-thesis/10-base-rate.md 2.1절).
-BACKFILL_START_DATE = date(2016, 8, 15)
+# 걷기가 되돌아갈 수 있는 가장 이른 날. **제공처가 정한 값이지 우리 취향이 아니다.**
+#
+# 2026-08-26 실측: 2018-12-07까지의 응답은 투자자 항등식 셋이 전부 깨진다 — 기관 세부 합이
+# 기관계와 다르고, 기타 세부 합이 `etc_ntby_qty`와 다르며, 시장 합계가 0으로 닫히지 않는다
+# (005930·000660 둘 다 2018-08-28~12-07 전 거래일에서 깨졌고 2018-12-10부터 전부 성립한다).
+# 종목이 달라도 경계가 같아 종목 특성이 아니라 제공처 쪽 집계 체제가 바뀐 날이다.
+#
+# 그래서 그 앞은 받지 않는다. 항등식을 완화해 받으면 못 믿는 세부 수급이 DB에 들어가고
+# `stock_investor_flows` 툴과 브리핑이 그것을 읽는다. 지수(`index_daily`)는 이 응답과
+# 무관해 2016-08-15 그대로다(docs/analysis/market-thesis/10-base-rate.md 2.5절).
+BACKFILL_START_DATE = date(2018, 12, 10)
 
-# 복구 걷기의 backstop. 2016-08-15까지 약 2,500 거래일이고 한 응답이 30 거래일이라 84장이면
+# 걷기의 backstop. 2018-12-10까지 약 1,900 거래일이고 한 응답이 30 거래일이라 64장이면
 # 닿는다. 실제로 멈추는 것은 `BACKFILL_START_DATE`이고 이 값은 그물이다.
 RECOVERY_MAX_PAGES = 200
+
+# 장 사이 대기. 없으면 백필이 초당 거래건수 제한에 걸린다(2026-08-26 실측: 무대기 백필이
+# `EGW00201 초당 거래건수를 초과하였습니다`로 HTTP 500). 일상 실행은 종목당 한 장이라
+# 이 대기를 타지 않는다. 값은 다른 KIS 수집기의 페이지 대기와 같다.
+PAGE_DELAY_SECONDS = 0.5
 
 
 def _credentials() -> tuple[SecretStr, SecretStr]:
@@ -184,12 +207,16 @@ def walk_back(
     end_date: date,
     *,
     pages: int,
-    until: date | None = None,
+    until: date | None = BACKFILL_START_DATE,
     detect_conflicts: bool = True,
+    sleep: float = PAGE_DELAY_SECONDS,
 ) -> StockWalk:
     """한 종목을 `end_date`부터 30 거래일씩 뒤로 걸으며 받아 저장한다.
 
-    `until`을 주면 그 날짜보다 앞으로는 가지 않는다. 복구 걷기가 쓴다.
+    `until`보다 앞으로는 가지 않는다. 기본값이 `BACKFILL_START_DATE`라 `pages`를 크게 줘도
+    항등식이 깨지는 구간까지 내려가지 않는다 — 운영자가 장 수를 계산할 일이 없다.
+
+    장 사이에 `sleep`만큼 쉰다. 일상 실행은 한 장이라 이 대기를 타지 않는다.
 
     `detect_conflicts`가 참이면 **저장 전에** 기존 종가와 대조하고, 어긋나면 그 페이지를
     저장하지 않고 즉시 멈춘다. 어긋난 채로 얹으면 한 종목 안에 두 기준이 섞이기 때문이다.
@@ -245,8 +272,9 @@ def walk_back(
         # 세면 휴장일에서 어긋난다.
         earliest = min(row.business_date for row in fetch.rows)
         cursor_date = earliest - timedelta(days=1)
-        if page + 1 < pages:
+        if page + 1 < pages and (until is None or cursor_date >= until):
             logger.info("Walking back to %s for %s", cursor_date, stock.value)
+            wait_seconds(sleep)
 
     return StockWalk(stored=stored, earliest=earliest)
 
@@ -328,7 +356,6 @@ def kis_investor_trade_daily():
                         stock,
                         end_date,
                         pages=RECOVERY_MAX_PAGES,
-                        until=BACKFILL_START_DATE,
                         detect_conflicts=False,
                     )
                     if walk.failure is None:

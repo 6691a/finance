@@ -23,15 +23,20 @@ from apps.models.analysis.technical import (
 from apps.models.analysis.thesis import (
     NARRATED_HORIZON_DAYS,
     THESIS_HORIZON_DAYS,
+    LlmRunKind,
+    LlmRunStatus,
     RunSlot,
     Thesis,
     ThesisDirection,
     ThesisEvidence,
     ThesisEvidenceKind,
+    ThesisLlmRun,
     ThesisOutcome,
     ThesisPrecedent,
     ThesisSubjectKind,
+    ThesisToolCall,
     ThesisVerdict,
+    ToolCallErrorKind,
 )
 
 __all__ = [
@@ -39,6 +44,8 @@ __all__ = [
     "NARRATED_HORIZON_DAYS",
     "PERIOD_KEY_PATTERN",
     "THESIS_HORIZON_DAYS",
+    "LlmRunKind",
+    "LlmRunStatus",
     "RunSlot",
     "StockEventClaim",
     "StockEventClaimKind",
@@ -53,8 +60,11 @@ __all__ = [
     "ThesisDirection",
     "ThesisEvidence",
     "ThesisEvidenceKind",
+    "ThesisLlmRun",
     "ThesisOutcome",
     "ThesisPrecedent",
     "ThesisSubjectKind",
+    "ThesisToolCall",
     "ThesisVerdict",
+    "ToolCallErrorKind",
 ]

@@ -52,13 +52,21 @@
 
 import json
 import logging
-from collections.abc import Sequence
-from datetime import datetime, timedelta
+import time
+from collections.abc import Callable, Sequence
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal
-from typing import Any
+from typing import Annotated, Any
 
-from langchain_core.tools import BaseTool, StructuredTool
+from langchain_core.messages import BaseMessage, ToolMessage
+from langchain_core.tools import BaseTool, InjectedToolCallId, StructuredTool
 from langgraph.prebuilt import ToolNode
+
+# **공개 API가 아니다.** `langgraph.prebuilt`가 export하지 않아 여기서만 import된다
+# (1.2.2·1.2.11 실측). 마이너 판올림에서 움직일 수 있다는 것을 알고 쓴다 — 대안은 이 예외를
+# 안 넣고 인자 검증 실패도 태스크 실패로 두거나(모델이 고쳐 부를 기회를 잃는다) 상위
+# `ToolException`으로 잡는 것인데(툴이 던지는 **모든** 것을 삼킨다) 둘 다 이쪽보다 나쁘다.
+from langgraph.prebuilt.tool_node import ToolInvocationError
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
 
 from modules import base_rate, technical
@@ -92,6 +100,8 @@ from modules.thesis_domain import (
     TECHNICAL_LOOKBACK_BARS,
     Evidence,
     ThesisEvidenceKind,
+    ToolCallErrorKind,
+    ToolCallRecord,
     evidence_ref,
     kst_label,
 )
@@ -181,6 +191,13 @@ class ToolArgs(BaseModel):
     """
 
     model_config = ConfigDict(extra="ignore")
+
+    # **모델에게 보이지 않는 칸이다.** `InjectedToolCallId`가 붙으면 LangChain이
+    # `tool_call_schema`에서 빼고(`BaseTool.args`도 그것을 쓴다) 실행 시점에 진짜 call id로
+    # 채운다. 모델이 위조해 보내도 `BaseTool._parse_input`이 덮는다. 이 한 칸이 있어야
+    # 공통 래퍼가 "지금 부른 것이 어느 요청이었나"를 안다 — 툴 14개에 계측 코드를 따로
+    # 넣지 않는 이유다. 여기 두는 것은 모든 툴 인자가 `ToolArgs`를 상속해서다.
+    tool_call_id: Annotated[str, InjectedToolCallId] = ""
 
     @model_validator(mode="before")
     @classmethod
@@ -366,6 +383,14 @@ TOOL_DESCRIPTIONS: dict[str, str] = {
 }
 
 
+def _message_text(message: ToolMessage) -> str:
+    """`ToolMessage` 본문. 제공처에 따라 문자열이 아니라 조각 리스트로 온다."""
+    content = message.content
+    if isinstance(content, str):
+        return content
+    return "".join(part if isinstance(part, str) else str(part.get("text", "")) for part in content)
+
+
 class ToolLimitExceeded(RuntimeError):
     """상한에 걸려 실행하지 않았다. 오류 `ToolMessage`가 되어 모델에게 돌아간다."""
 
@@ -374,13 +399,14 @@ def tool_node(toolbox: "ThesisToolbox") -> ToolNode:
     """툴 실행 노드. 두 그래프(`ThesisBuilder`·`FollowupNarrator`)가 같은 것을 쓴다.
 
     **`handle_tool_errors`에 타입을 준다.** `ToolLimitExceeded`(상한 초과·모르는 툴·대상
-    목록 밖)만 오류 `ToolMessage`가 되어 모델이 고쳐 부를 기회를 얻고, psycopg 오류 같은
-    나머지는 그대로 올라가 태스크를 죽인다.
+    목록 밖)와 `ToolInvocationError`(모델이 보낸 인자가 스키마와 안 맞음)만 오류
+    `ToolMessage`가 되어 모델이 고쳐 부를 기회를 얻고, psycopg 오류 같은 나머지는 그대로
+    올라가 태스크를 죽인다.
 
     기본값(`True`)을 쓰면 **연결 끊김이 "결과 없음"으로 위장된다.** 빈 결과는 "그 창에
     문서가 없다"는 뜻이어야 한다는 규칙이 거기서 깨진다.
     """
-    return ToolNode(toolbox.tools, handle_tool_errors=(ToolLimitExceeded,))
+    return ToolNode(toolbox.tools, handle_tool_errors=(ToolLimitExceeded, ToolInvocationError))
 
 
 class ThesisToolbox:
@@ -414,11 +440,19 @@ class ThesisToolbox:
         self._base_rate_cache: dict[str, dict[tuple[str, str, str], SignalBaseRate]] = {}
         self._calls = 0
         self._chars = 0
+        # 원장(13단계). 기록만 쌓고 **DB에는 쓰지 않는다** — 읽기 전용 툴 셋이라는 성격을
+        # 유지하고 저장 시점은 부르는 쪽이 정한다.
+        self._records: list[ToolCallRecord] = []
+        self._by_call_id: dict[str, ToolCallRecord] = {}
+        self._rounds = 0
         self._tools = self._build_tools()
         self._by_name = {tool.name: tool for tool in self._tools}
 
     def _build_tools(self) -> list[BaseTool]:
         """`ToolNode`와 `bind_tools`에 그대로 넘길 툴 목록.
+
+        **함수는 전부 `_record`로 감싼다.** 툴 하나하나에 계측 코드를 넣지 않는다 —
+        래퍼가 실제 인자·소요·결과를 채우고, 숨은 `tool_call_id`가 어느 요청이었는지를 잇는다.
 
         `StructuredTool.from_function`이 `args_schema`에서 JSON Schema를 뽑으므로 우리가
         스키마를 손으로 쓰지 않는다. 함수는 **바인드된 메서드**다 — 툴이 연결·`as_of_at`·
@@ -426,85 +460,85 @@ class ThesisToolbox:
         """
         return [
             StructuredTool.from_function(
-                func=self._tool_recent_documents,
+                func=self._record("recent_documents", self._tool_recent_documents),
                 name="recent_documents",
                 description=TOOL_DESCRIPTIONS["recent_documents"],
                 args_schema=RecentDocumentsArgs,
             ),
             StructuredTool.from_function(
-                func=self._tool_recent_disclosures,
+                func=self._record("recent_disclosures", self._tool_recent_disclosures),
                 name="recent_disclosures",
                 description=TOOL_DESCRIPTIONS["recent_disclosures"],
                 args_schema=RecentDisclosuresArgs,
             ),
             StructuredTool.from_function(
-                func=self._tool_macro_changes,
+                func=self._record("macro_changes", self._tool_macro_changes),
                 name="macro_changes",
                 description=TOOL_DESCRIPTIONS["macro_changes"],
                 args_schema=MacroChangesArgs,
             ),
             StructuredTool.from_function(
-                func=self._tool_us_market_close,
+                func=self._record("us_market_close", self._tool_us_market_close),
                 name="us_market_close",
                 description=TOOL_DESCRIPTIONS["us_market_close"],
                 args_schema=NoArgs,
             ),
             StructuredTool.from_function(
-                func=self._tool_past_theses,
+                func=self._record("past_theses", self._tool_past_theses),
                 name="past_theses",
                 description=TOOL_DESCRIPTIONS["past_theses"],
                 args_schema=PastThesesArgs,
             ),
             StructuredTool.from_function(
-                func=self._tool_macro_indicators,
+                func=self._record("macro_indicators", self._tool_macro_indicators),
                 name="macro_indicators",
                 description=TOOL_DESCRIPTIONS["macro_indicators"],
                 args_schema=MacroIndicatorsArgs,
             ),
             StructuredTool.from_function(
-                func=self._tool_market_investor_flows,
+                func=self._record("market_investor_flows", self._tool_market_investor_flows),
                 name="market_investor_flows",
                 description=TOOL_DESCRIPTIONS["market_investor_flows"],
                 args_schema=NoArgs,
             ),
             StructuredTool.from_function(
-                func=self._tool_market_breadth,
+                func=self._record("market_breadth", self._tool_market_breadth),
                 name="market_breadth",
                 description=TOOL_DESCRIPTIONS["market_breadth"],
                 args_schema=NoArgs,
             ),
             StructuredTool.from_function(
-                func=self._tool_stock_investor_flows,
+                func=self._record("stock_investor_flows", self._tool_stock_investor_flows),
                 name="stock_investor_flows",
                 description=TOOL_DESCRIPTIONS["stock_investor_flows"],
                 args_schema=StockFlowsArgs,
             ),
             StructuredTool.from_function(
-                func=self._tool_market_funds,
+                func=self._record("market_funds", self._tool_market_funds),
                 name="market_funds",
                 description=TOOL_DESCRIPTIONS["market_funds"],
                 args_schema=MarketFundsArgs,
             ),
             StructuredTool.from_function(
-                func=self._tool_daily_history,
+                func=self._record("daily_history", self._tool_daily_history),
                 name="daily_history",
                 description=TOOL_DESCRIPTIONS["daily_history"],
                 args_schema=DailyHistoryArgs,
             ),
             StructuredTool.from_function(
-                func=self._tool_short_and_credit,
+                func=self._record("short_and_credit", self._tool_short_and_credit),
                 name="short_and_credit",
                 description=TOOL_DESCRIPTIONS["short_and_credit"],
                 args_schema=NoArgs,
             ),
             StructuredTool.from_function(
-                func=self._tool_analyst_opinions,
+                func=self._record("analyst_opinions", self._tool_analyst_opinions),
                 name="analyst_opinions",
                 description=TOOL_DESCRIPTIONS["analyst_opinions"],
                 args_schema=AnalystOpinionsArgs,
             ),
             StructuredTool.from_function(
-                func=self._tool_event_surprises,
+                func=self._record("event_surprises", self._tool_event_surprises),
                 name="event_surprises",
                 description=TOOL_DESCRIPTIONS["event_surprises"],
                 args_schema=EventSurprisesArgs,
@@ -891,6 +925,142 @@ class ThesisToolbox:
         self._chars += len(body)
         return body
 
+    # --- 원장 --------------------------------------------------------------
+    # 툴 호출을 남기는 자리는 둘이다. **함수 래퍼만으로는 부족하다** — unknown tool과
+    # Pydantic 인자 오류는 원래 함수에 도달하기 전에 `ToolNode`가 오류 `ToolMessage`로
+    # 바꾸기 때문이다. 그래서 요청 shell(`begin_round`)과 실제 실행(`_record`)을 따로
+    # 잡고, 마지막에 `finish_round`가 `ToolMessage`로 둘을 맞춘다.
+
+    @property
+    def tool_calls(self) -> tuple[ToolCallRecord, ...]:
+        """이번 대화에서 기록한 툴 호출 전부. 부르는 쪽이 `thesis_tool_call`로 저장한다."""
+        return tuple(self._records)
+
+    @property
+    def round_count(self) -> int:
+        """조사 왕복 수. 실패한 대화는 그래프 최종 상태를 못 받아 이 값이 유일한 출처다."""
+        return self._rounds
+
+    def begin_round(self, tool_calls: Sequence[dict[str, Any]]) -> None:
+        """모델이 요청한 tool_call마다 빈 기록을 연다.
+
+        여기서 잡는 것은 **모델이 실제로 보낸 것**이다 — 이름, 검증 전 인자, 제공처 call id,
+        그리고 요청을 등록한 시각. 실행 결과는 래퍼가, 모델에게 돌아갔는지는
+        `finish_round`가 채운다.
+        """
+        self._rounds += 1
+        requested_at = datetime.now(UTC)
+        for call in tool_calls:
+            call_id = str(call.get("id") or "")
+            record = ToolCallRecord(
+                seq=len(self._records) + 1,
+                round_no=self._rounds,
+                tool_call_id=call_id,
+                tool_name=str(call.get("name") or ""),
+                arguments=dict(call.get("args") or {}),
+                requested_at=requested_at,
+            )
+            self._records.append(record)
+            self._by_call_id[call_id] = record
+
+    def finish_round(self, messages: Sequence[BaseMessage]) -> None:
+        """`ToolNode`가 돌려준 `ToolMessage`로 그 라운드의 기록을 닫는다.
+
+        **여기서만 알 수 있는 것이 둘이다.**
+
+        - 함수에 진입하지 못한 실패(모르는 툴, 인자 검증). 래퍼가 못 보므로 이 자리가
+          아니면 그 호출은 영영 빈 기록으로 남는다.
+        - `delivered` — 결과가 모델 대화에 실제로 돌아갔나. sibling 하나가 처리되지 않은
+          예외를 올리면 `ToolNode`는 나머지 결과를 **버린다.** 그런데 sync 경로가
+          `executor.map`이라 이미 시작된 sibling은 취소되지 않고 끝까지 돈다 — 래퍼가
+          결과를 다 채운 행이 남는다. 그것은 오류가 아니라 "모델만 못 봤다"이고,
+          인용 분석이 정확히 그 구분 위에 선다.
+        """
+        for message in messages:
+            if not isinstance(message, ToolMessage):
+                continue
+            record = self._by_call_id.get(str(message.tool_call_id))
+            if record is None:
+                continue
+            record.delivered = True
+            if record.result is not None:
+                continue
+            # 여기 오는 것은 함수에 진입하지 못했거나(unknown tool·인자 검증) 래퍼가 이미
+            # 예외를 남긴 경우다. 어느 쪽이든 모델이 읽은 문자열은 이 본문이라 그것을 담는다.
+            if record.error_kind is None:
+                record.error_kind = (
+                    ToolCallErrorKind.UNKNOWN_TOOL
+                    if record.tool_name not in self._by_name
+                    else ToolCallErrorKind.VALIDATION
+                )
+            record.error = _message_text(message)
+
+    def close_open_records(self) -> None:
+        """끝나고도 결과·오류가 없는 기록을 닫는다. 실행조차 못 한 sibling이다.
+
+        워커가 포화됐을 때(`max_concurrency` 지정, 또는 호출 수 > `min(32, cpu+4)`) sibling
+        하나의 예외가 아직 시작 안 한 것들을 취소한다. 그 행은 `result`도 `error`도 없어
+        DB CHECK(둘 중 하나는 있어야 한다)를 어긴다 — 여기서 닫아야 저장할 수 있다.
+        """
+        for record in self._records:
+            if record.result is None and record.error is None:
+                record.error_kind = ToolCallErrorKind.CANCELLED
+                record.error = "sibling 실패로 실행되지 않았다"
+
+    def _record(self, name: str, func: Callable[..., str]) -> Callable[..., str]:
+        """툴 함수 하나를 기록으로 감싼다. 툴 14개가 이 래퍼 하나를 지난다.
+
+        **`**kwargs`로 받는다.** 그러면 `StructuredTool`이 `args_schema`와 시그니처를
+        대조하지 않아 생기는 실패 모드(스키마에만 있는 인자 → 호출 시 `TypeError` →
+        `ToolInvocationError`로 감싸이지 않아 태스크 사망)가 구조적으로 사라진다.
+        개별 시그니처로 되돌리지 않는다.
+
+        **예외는 기록한 뒤 다시 올린다.** `ToolLimitExceeded`는 `ToolNode`가 오류
+        `ToolMessage`로 바꿔야 하고, DB 오류는 태스크를 죽여야 한다.
+        """
+
+        def call(**kwargs: Any) -> str:
+            record = self._by_call_id.get(str(kwargs.pop("tool_call_id", "") or ""))
+            started = time.perf_counter()
+            try:
+                body = func(**kwargs)
+            except ToolLimitExceeded as error:
+                self._close_record(record, kwargs, started, error=error, kind=ToolCallErrorKind.LIMIT)
+                raise
+            # 넓게 잡되 **반드시 다시 올린다.** 여기서 잡는 이유는 기록 하나뿐이고,
+            # 삼키면 DB 끊김이 "결과 없음"으로 위장된다.
+            except Exception as error:
+                self._close_record(record, kwargs, started, error=error, kind=ToolCallErrorKind.EXECUTION)
+                raise
+            self._close_record(record, kwargs, started, result=body)
+            return body
+
+        call.__name__ = name
+        call.__doc__ = func.__doc__
+        return call
+
+    @staticmethod
+    def _close_record(
+        record: ToolCallRecord | None,
+        kwargs: dict[str, Any],
+        started: float,
+        *,
+        result: str | None = None,
+        error: BaseException | None = None,
+        kind: ToolCallErrorKind | None = None,
+    ) -> None:
+        """실행이 끝난 기록에 실제 인자·소요·결과를 채운다. `delivered`는 아직 모른다."""
+        if record is None:
+            return
+        record.validated_arguments = dict(kwargs)
+        record.duration_ms = int((time.perf_counter() - started) * 1000)
+        if error is not None:
+            record.error_kind = kind
+            record.error = str(error)
+            return
+        record.result = result
+        record.result_chars = len(result or "")
+
     def _charge(self) -> None:
         """호출 한 번을 상한에 단다. 넘으면 실행하지 않고 `ToolLimitExceeded`다.
 
@@ -922,7 +1092,19 @@ class ThesisToolbox:
         tool = self._by_name.get(name)
         if tool is None:
             raise ToolLimitExceeded(f"모르는 툴 이름이다: {name!r}. 쓸 수 있는 것은 {sorted(self._by_name)}")
-        return tool.invoke(arguments)
+        # **full ToolCall dict로 부른다.** 인자 dict만 넘기면 `InjectedToolCallId`를 채울
+        # id가 없어 LangChain이 거절한다. 운영 경로(`ToolNode`)가 넘기는 모양과 같게 둬야
+        # 이 경로만 다르게 도는 일이 없다. `begin_round`로 요청 shell도 함께 연다 —
+        # 원장 코드가 이 경로에서도 같은 길을 지나야 테스트가 그것을 검증할 수 있다.
+        call_id = f"manual_{len(self._records) + 1}"
+        self.begin_round([{"name": name, "args": dict(arguments), "id": call_id}])
+        reply = tool.invoke({"name": name, "args": dict(arguments), "id": call_id, "type": "tool_call"})
+        # full ToolCall로 부르면 LangChain이 `ToolMessage`를 돌려준다. 이 메서드의 계약은
+        # 본문 문자열이라 여기서 편다. 운영 경로는 `ToolNode`가 같은 일을 한다.
+        if isinstance(reply, ToolMessage):
+            self.finish_round([reply])
+            return _message_text(reply)
+        return str(reply)
 
     def _past_theses(self, arguments: dict[str, Any]) -> list[PastThesis]:
         """툴 판 `past_theses`. 대상 목록 밖을 거절하고 건수를 자른 뒤 모듈 함수에 맡긴다.

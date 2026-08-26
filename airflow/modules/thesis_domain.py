@@ -56,8 +56,9 @@ import logging
 from datetime import datetime, timedelta
 from decimal import Decimal
 from enum import StrEnum
+from typing import Any
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import AwareDatetime, BaseModel, ConfigDict, Field
 
 from modules import technical
 from modules.thesis_state import (
@@ -310,6 +311,73 @@ class ThesisEvidenceKind(StrEnum):
     # 인용하게 만드는 이유는 평가다 — "신호를 근거로 쓴 추론이 안 쓴 추론보다 나았나"를
     # 재려면 어느 추론이 어느 신호를 인용했는지가 엣지로 남아야 한다(문서 14.3절).
     TECHNICAL_SIGNAL = "technical_signal"
+
+
+class LlmRunKind(StrEnum):
+    """대화 한 번의 종류. **슬롯에서 유도할 수 없다** — 같은 `post_close` 슬롯에 생성
+    대화와 해설 대화가 둘 다 있다.
+    """
+
+    FORECAST = "forecast"
+    REVIEW = "review"
+    NXT_REVIEW = "nxt_review"
+    NARRATION = "narration"
+
+
+class LlmRunStatus(StrEnum):
+    """대화의 끝. `running`은 "시작했지만 종료를 기록하지 못했다"이기도 하다."""
+
+    RUNNING = "running"
+    SUCCEEDED = "succeeded"
+    FAILED = "failed"
+
+
+class ToolCallErrorKind(StrEnum):
+    """툴 호출이 실패한 종류. **오류 문자열을 파싱해 분류하지 않는다.**
+
+    - `UNKNOWN_TOOL`·`VALIDATION` — 함수에 진입하기 전이라 실제 인자와 소요가 없다.
+    - `LIMIT` — `_charge`가 함수 안에서 거절했다. 실제 인자는 남는다.
+    - `EXECUTION` — 그 밖의 함수 예외.
+    - `CANCELLED` — sibling 예외로 **실행조차 못 했다.** 끝까지 돌았는데 모델에게 못 간
+      것은 오류가 아니라 `delivered = False`다.
+    """
+
+    UNKNOWN_TOOL = "unknown_tool"
+    VALIDATION = "validation"
+    LIMIT = "limit"
+    EXECUTION = "execution"
+    CANCELLED = "cancelled"
+
+
+class ToolCallRecord(BaseModel):
+    """툴 호출 하나의 기록. 그대로 `thesis_tool_call` 행이 된다.
+
+    **여기 두는 이유는 소비자가 둘이라서다.** 만드는 쪽은 `thesis_toolbox`인데 저장하는
+    쪽은 `thesis_store`이고, 그 둘 사이에 LangChain·LangGraph를 끌어오지 않으려면 모양이
+    가벼운 모듈에 있어야 한다(`thesis_state`가 같은 이유로 갈라져 있다).
+
+    **frozen이 아니다.** 요청 shell을 먼저 만들고 실제 실행·전달 결과를 나중에 채우는
+    두 단계라 그렇다. 이 모듈의 다른 모델과 다른 유일한 자리이고, 그 이유가 이것이다.
+    """
+
+    model_config = ConfigDict(frozen=False)
+
+    seq: int
+    round_no: int
+    tool_call_id: str
+    tool_name: str
+    # 모델이 보낸 원본. `StructuredTool` 검증 전이라 기본값이 안 채워져 있다.
+    arguments: dict[str, Any] = Field(default_factory=dict)
+    requested_at: AwareDatetime
+    # 아래는 실제 실행이 채운다. 함수에 진입하지 못하면 끝까지 비어 있다.
+    validated_arguments: dict[str, Any] | None = None
+    duration_ms: int | None = None
+    result_chars: int = 0
+    result: str | None = None
+    # 모델 대화에 실제로 돌아갔나. `ToolNode`가 sibling 예외로 결과를 버리면 False다.
+    delivered: bool = False
+    error_kind: ToolCallErrorKind | None = None
+    error: str | None = None
 
 
 # 사건 이름. Slack 표(`briefing/market_data.SIGNAL_LABELS`)와 같은 말을 쓴다. `매수`·`매도`

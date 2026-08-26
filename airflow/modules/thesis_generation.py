@@ -660,7 +660,12 @@ class ThesisBuilder:
         태스크를 죽인다.** 기본값(`True`)은 둘을 가르지 않아 연결 끊김이 "결과 없음"으로
         위장된다.
         """
+        reply = state["messages"][-1]
+        # 원장(13단계)이 여기서 열리고 닫힌다. **래퍼만으로는 부족하다** — 모르는 툴과
+        # 인자 검증 실패는 함수에 도달하기 전에 `ToolNode`가 오류 `ToolMessage`로 바꾼다.
+        self._toolbox.begin_round(getattr(reply, "tool_calls", None) or [])
         update = self._tool_node.invoke(state)
+        self._toolbox.finish_round(update["messages"])
         return {"messages": update["messages"], "tool_rounds": state["tool_rounds"] + 1}
 
     def _answer(self, state: ThesisState) -> dict[str, Any]:

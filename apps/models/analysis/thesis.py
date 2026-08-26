@@ -95,6 +95,45 @@ class ThesisEvidenceKind(StrEnum):
     TECHNICAL_SIGNAL = "technical_signal"
 
 
+class LlmRunKind(StrEnum):
+    """대화 한 번의 종류. **슬롯에서 유도할 수 없다** — 같은 `post_close` 슬롯에 생성
+    대화와 해설 대화가 둘 다 있다.
+    """
+
+    FORECAST = "forecast"
+    REVIEW = "review"
+    NXT_REVIEW = "nxt_review"
+    NARRATION = "narration"
+
+
+class LlmRunStatus(StrEnum):
+    """대화의 끝. `running`은 "시작했지만 종료를 기록하지 못했다"이기도 하다.
+
+    프로세스 kill이나 전원 장애는 `finally`도 못 지나므로 그 행이 `running`으로 남는다.
+    삭제할 찌꺼기가 아니라 감사 기록이다 — heartbeat가 없으므로 지금 도는 중인지
+    중간에 끊긴 것인지는 이 행만으로 구분하지 않는다.
+    """
+
+    RUNNING = "running"
+    SUCCEEDED = "succeeded"
+    FAILED = "failed"
+
+
+class ToolCallErrorKind(StrEnum):
+    """툴 호출이 실패한 종류. **오류 문자열을 파싱해 분류하지 않는다.**
+
+    `UNKNOWN_TOOL`과 `VALIDATION`은 함수에 진입하기 전이라 `validated_arguments`와
+    `duration_ms`가 비어 있다. `CANCELLED`는 sibling 예외로 **실행조차 못 한** 것이고,
+    끝까지 돌았지만 모델에게 못 간 것은 오류가 아니라 `delivered = false`다.
+    """
+
+    UNKNOWN_TOOL = "unknown_tool"
+    VALIDATION = "validation"
+    LIMIT = "limit"
+    EXECUTION = "execution"
+    CANCELLED = "cancelled"
+
+
 # 채점·해설 지평. KRX 영업일 수이고 달력일이 아니다.
 # 0은 예측일 세션 하나이며 해설을 받지 않는다(그날의 보도가 아직 쌓이지 않았다).
 THESIS_HORIZON_DAYS: tuple[int, ...] = (0, 1, 3, 5)
@@ -246,6 +285,15 @@ class Thesis(EntityBase):
     )
     prompt_version: Mapped[str] = mapped_column(
         Text, nullable=False, comment="프롬프트 판 식별자. 프롬프트를 고친 뒤 채점 결과를 가르는 기준이다"
+    )
+    # 원장이 판단을 인질로 잡으면 안 된다 — 원장을 지워도 추론은 남는다. nullable인 것은
+    # 이 칸이 생기기 전 행을 채울 방법이 없어서다. 반대 방향 FK는 걸지 않는다: 대화 하나가
+    # 추론 여럿을 만들고 실패한 대화는 추론이 없다.
+    llm_run_id: Mapped[int | None] = mapped_column(
+        BigInteger,
+        ForeignKey("thesis_llm_run.id", ondelete="SET NULL"),
+        nullable=True,
+        comment="이 추론을 만든 LLM 대화. 툴 호출·결과와 정확도를 조인하는 유일한 칸이다",
     )
 
 
@@ -431,6 +479,13 @@ class ThesisOutcome(EntityBase):
             "프롬프트에 주는 informed와 주지 않는 blind다. 어느 쪽이 나은지는 실측으로 가른다"
         ),
     )
+    # 채점에는 LLM이 없으므로 연결 칸이 해설 하나뿐이다.
+    narration_run_id: Mapped[int | None] = mapped_column(
+        BigInteger,
+        ForeignKey("thesis_llm_run.id", ondelete="SET NULL"),
+        nullable=True,
+        comment="이 해설을 만든 LLM 대화. 채점은 순수 함수라 이 칸이 없다",
+    )
 
 
 class ThesisPrecedent(EntityBase):
@@ -587,4 +642,257 @@ class ThesisEvidence(EntityBase):
         Integer,
         nullable=False,
         comment="모델이 인용한 순서(1부터). Slack이 상위 몇 개만 보일 때의 기준이다",
+    )
+
+
+class ThesisLlmRun(EntityBase):
+    """LLM 대화 한 번. 그 안에서 부른 툴이 `thesis_tool_call`이다.
+
+    **"대화 하나"가 이 원장의 단위다.** 한 대화가 여러 대상을 한 번에 다루므로
+    (`ThesisBuilder`: "실행당 대화 하나에 모든 subject를 한 번에") 툴 호출은 추론 한 건이
+    아니라 대화에 속한다.
+
+    **자연키를 두지 않는다.** 실패한 대화도 남겨야 하고 재시도는 새 대화라, 같은
+    `(kind, run_date, run_slot, horizon_days)`에 행이 여럿일 수 있다. 그것이 사실이고
+    패턴 분석에 필요한 정보다. **원장이지 판단이 아니라서** "첫 성공본 불변"이 적용되지 않는다.
+
+    설계는 `docs/analysis/market-thesis/13-llm-ledger.md`에 있다.
+    """
+
+    __tablename__ = "thesis_llm_run"
+    __table_args__ = (
+        CheckConstraint(
+            "kind IN ('forecast', 'review', 'nxt_review', 'narration')",
+            name="ck_thesis_llm_run_kind",
+        ),
+        CheckConstraint(
+            "status IN ('running', 'succeeded', 'failed')",
+            name="ck_thesis_llm_run_status",
+        ),
+        CheckConstraint(
+            "horizon_days IS NULL OR horizon_days IN (1, 3, 5)",
+            name="ck_thesis_llm_run_horizon_days",
+        ),
+        # 상태 셋이 허용하는 조합은 이것뿐이다. running인데 끝난 시각이 있거나 failed인데
+        # 사유가 없는 행을 두면 "끊긴 대화"와 "실패한 대화"를 나중에 못 가른다.
+        CheckConstraint(
+            "(status = 'running' AND finished_at IS NULL AND error IS NULL)"
+            " OR (status = 'succeeded' AND finished_at IS NOT NULL AND error IS NULL)"
+            " OR (status = 'failed' AND finished_at IS NOT NULL AND error IS NOT NULL)",
+            name="ck_thesis_llm_run_status_shape",
+        ),
+        table_options(
+            comment="LLM 대화 한 번의 원장. 툴 호출 패턴과 정확도의 상관을 재려고 남긴다",
+            database="default",
+        ),
+    )
+
+    kind: Mapped[LlmRunKind] = mapped_column(
+        _enum_column(LlmRunKind),
+        nullable=False,
+        comment=(
+            "대화의 종류(forecast·review·nxt_review는 추론 생성, narration은 사후 해설). "
+            "슬롯에서 유도할 수 없다 — 같은 post_close 슬롯에 생성과 해설이 둘 다 있다"
+        ),
+    )
+    run_date: Mapped[date] = mapped_column(
+        nullable=False,
+        comment=(
+            "대화가 대상으로 삼은 세션 날짜(KST). **해설이면 원 추론일이다** — "
+            "thesis와 같은 축으로 조인하기 위해서다. 실행일은 as_of_at과 dag_run_id가 말한다"
+        ),
+    )
+    run_slot: Mapped[RunSlot] = mapped_column(
+        _enum_column(RunSlot),
+        nullable=False,
+        comment="대상 슬롯. 해설이면 원 추론의 슬롯이다",
+    )
+    horizon_days: Mapped[int | None] = mapped_column(
+        Integer,
+        nullable=True,
+        comment=(
+            "해설 대화의 지평(1·3·5). 생성 대화는 NULL이다. 해설이 지평마다 갈리는 것은 "
+            "툴 조회의 기준 시각이 지평마다 달라 한 대화에 섞을 수 없어서다"
+        ),
+    )
+    as_of_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        comment="이 대화의 툴 조회 기준 시각(UTC). event-time cutoff다",
+    )
+    dag_run_id: Mapped[str] = mapped_column(
+        Text,
+        nullable=False,
+        comment="이 대화를 돌린 Airflow dag_run_id",
+    )
+    try_number: Mapped[int] = mapped_column(
+        Integer,
+        nullable=False,
+        comment=(
+            "그 태스크의 시도 번호(1부터). dag_run_id는 재시도에도 같아서 이 칸이 없으면 "
+            "재시도 대화를 서로 구분할 방법이 없다"
+        ),
+    )
+    llm_model: Mapped[str] = mapped_column(Text, nullable=False, comment="이 대화를 돈 모델 식별자")
+    prompt_version: Mapped[str] = mapped_column(
+        Text,
+        nullable=False,
+        comment="프롬프트 판. 해설은 `<판>/<변형>` 형태라 생성 대화의 판 번호와 체계가 다르다",
+    )
+    started_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        comment="대화를 시작한 시각(UTC). 이 행은 그래프 호출 전에 먼저 커밋된다",
+    )
+    finished_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True,
+        comment="대화가 끝난 시각(UTC). NULL이면 종료를 기록하지 못했다는 뜻이다",
+    )
+    status: Mapped[LlmRunStatus] = mapped_column(
+        _enum_column(LlmRunStatus),
+        nullable=False,
+        comment="running·succeeded·failed. running으로 남은 행은 삭제할 찌꺼기가 아니라 감사 기록이다",
+    )
+    error: Mapped[str | None] = mapped_column(
+        Text,
+        nullable=True,
+        comment="실패 사유. status가 failed일 때만 채운다",
+    )
+    tool_rounds: Mapped[int] = mapped_column(
+        Integer,
+        nullable=False,
+        default=0,
+        comment="조사 왕복 수. 왕복 하나가 모델 호출 하나다",
+    )
+    tool_calls: Mapped[int] = mapped_column(
+        Integer,
+        nullable=False,
+        default=0,
+        comment=(
+            "기록된 툴 호출 수. **상한을 재는 카운터와 다른 수다** — 이 값은 unknown tool과 "
+            "인자 검증 실패도 세지만 툴박스의 예산 카운터는 함수에 진입한 것만 센다"
+        ),
+    )
+    tool_result_chars: Mapped[int] = mapped_column(
+        Integer,
+        nullable=False,
+        default=0,
+        comment=(
+            "모델에게 실제로 돌아간 결과의 누적 문자 수(delivered=true만). **예산 카운터와 "
+            "다른 수다** — 그쪽은 버려진 결과도 센다. MAX_TOOL_RESULT_CHARS와 직접 비교하지 않는다"
+        ),
+    )
+
+
+class ThesisToolCall(EntityBase):
+    """대화 하나 안의 툴 호출 하나. 요청·인자·결과 전문을 그대로 남긴다.
+
+    **결과 본문을 버리지 않는다.** `document`는 upsert로 덮어써서 그때 값을 복원할 수 없고,
+    이 행이 모델이 실제로 본 스냅샷의 유일한 사본이 된다.
+    """
+
+    __tablename__ = "thesis_tool_call"
+    __table_args__ = (
+        UniqueConstraint("llm_run_id", "seq", name="uq_thesis_tool_call_seq"),
+        UniqueConstraint("llm_run_id", "round_no", "tool_call_id", name="uq_thesis_tool_call_id"),
+        CheckConstraint(
+            "error_kind IN ('unknown_tool', 'validation', 'limit', 'execution', 'cancelled')",
+            name="ck_thesis_tool_call_error_kind",
+        ),
+        # 결과와 오류는 배타다. 둘 다 비면 "돌았는데 아무 것도 없다"가 되어 조용히 틀린다.
+        CheckConstraint(
+            "(result IS NULL) <> (error IS NULL)",
+            name="ck_thesis_tool_call_result_xor_error",
+        ),
+        # 오류 종류는 오류가 있을 때만 있다. 문자열을 파싱해 분류하지 않으려는 칸이다.
+        CheckConstraint(
+            "(error IS NULL) = (error_kind IS NULL)",
+            name="ck_thesis_tool_call_error_kind_pairs",
+        ),
+        CheckConstraint("seq > 0 AND round_no > 0", name="ck_thesis_tool_call_positive_order"),
+        table_options(
+            comment="LLM 대화가 부른 툴 하나. 인자와 결과 전문을 남겨 나중에 패턴과 상관을 잰다",
+            database="default",
+        ),
+    )
+
+    llm_run_id: Mapped[int] = mapped_column(
+        BigInteger,
+        ForeignKey("thesis_llm_run.id", ondelete="CASCADE"),
+        nullable=False,
+        comment="이 호출이 속한 대화",
+    )
+    seq: Mapped[int] = mapped_column(
+        Integer,
+        nullable=False,
+        comment="대화 안의 기록 순서(1부터). **인과 순서가 아니다** — 같은 라운드의 호출은 병렬일 수 있다",
+    )
+    round_no: Mapped[int] = mapped_column(
+        Integer,
+        nullable=False,
+        comment="몇 번째 tool round의 요청인가(1부터). 한 라운드가 모델 응답 하나다",
+    )
+    tool_call_id: Mapped[str] = mapped_column(
+        Text,
+        nullable=False,
+        comment="제공처가 준 tool call id. AIMessage의 요청과 ToolMessage의 결과를 잇는 키다",
+    )
+    tool_name: Mapped[str] = mapped_column(Text, nullable=False, comment="부른 툴 이름")
+    arguments: Mapped[dict[str, object]] = mapped_column(
+        JSONB,
+        nullable=False,
+        comment="모델이 보낸 인자 원본(StructuredTool 검증 전). AIMessage.tool_calls의 args 그대로다",
+    )
+    validated_arguments: Mapped[dict[str, object] | None] = mapped_column(
+        JSONB,
+        nullable=True,
+        comment=(
+            "검증·기본값 적용 뒤 실제 함수에 들어간 인자. unknown tool과 인자 검증 실패는 "
+            "함수에 진입하지 않아 NULL이다"
+        ),
+    )
+    requested_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        comment="모델의 호출 요청을 등록한 시각(UTC)",
+    )
+    duration_ms: Mapped[int | None] = mapped_column(
+        Integer,
+        nullable=True,
+        comment="실제 함수가 돈 시간(밀리초). 진입 전 거절은 NULL이다. 툴 SQL이 느려지는 것을 본다",
+    )
+    result_chars: Mapped[int] = mapped_column(
+        Integer,
+        nullable=False,
+        default=0,
+        comment="결과 문자 수. 오류면 0이다",
+    )
+    result: Mapped[str | None] = mapped_column(
+        Text,
+        nullable=True,
+        comment=(
+            "결과 본문 전문. 성공이면 툴이 돌려준 JSON 문자열이다. jsonb로 굳히지 않는 것은 "
+            "실패 본문이 평문이어서다 — 분석은 error IS NULL 뒤에 result::jsonb를 쓴다"
+        ),
+    )
+    delivered: Mapped[bool] = mapped_column(
+        nullable=False,
+        comment=(
+            "이 결과·오류가 모델 대화에 실제로 돌아갔나. sibling 예외로 ToolNode가 결과를 버리면 "
+            "false다 — 결과는 진짜이고 모델만 못 봤다. 실행조차 못 한 것은 error_kind=cancelled다"
+        ),
+    )
+    error_kind: Mapped[ToolCallErrorKind | None] = mapped_column(
+        _enum_column(ToolCallErrorKind),
+        nullable=True,
+        comment="실패 종류. 오류가 있을 때만 채운다. 오류 문자열을 파싱해 분류하지 않는다",
+    )
+    error: Mapped[str | None] = mapped_column(
+        Text,
+        nullable=True,
+        comment=(
+            "실패 사유. delivered면 ToolNode가 만든 ToolMessage 본문 그대로이고, "
+            "ToolMessage가 없으면 래퍼가 잡은 예외 문자열이다"
+        ),
     )

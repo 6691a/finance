@@ -406,7 +406,7 @@ def test_run_hands_build_and_store_every_argument_it_requires(monkeypatch):
     monkeypatch.setattr(thesis_common.ThesisRun, "build_and_store", fake_build_and_store)
 
     run = forecast(FakeConnection([]), RunSlot.INTRADAY_AFTERNOON)
-    written = run.run(dag_run_id="manual__1")
+    written = run.run(dag_run_id="manual__1", try_number=1)
 
     assert written == 2
     signature.bind(run._run, **received)

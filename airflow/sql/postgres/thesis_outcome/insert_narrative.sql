@@ -19,13 +19,15 @@ INSERT INTO thesis_outcome (
     verdict,
     narrative_at,
     llm_model,
-    prompt_version
-) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+    prompt_version,
+    narration_run_id
+) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
 ON CONFLICT ON CONSTRAINT uq_thesis_outcome_natural_key DO UPDATE SET
     narrative = EXCLUDED.narrative,
     verdict = EXCLUDED.verdict,
     narrative_at = EXCLUDED.narrative_at,
     llm_model = EXCLUDED.llm_model,
     prompt_version = EXCLUDED.prompt_version,
+    narration_run_id = EXCLUDED.narration_run_id,
     updated_at = now()
 WHERE thesis_outcome.narrative IS NULL

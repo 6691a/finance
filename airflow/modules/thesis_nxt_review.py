@@ -49,7 +49,7 @@ from pydantic import AwareDatetime, BaseModel, ConfigDict
 
 from modules import thesis_common
 from modules.sql import read_sql
-from modules.thesis_domain import ThesisSubjectKind
+from modules.thesis_domain import LlmRunKind, ThesisSubjectKind
 from modules.thesis_state import AfterHoursObservation, NxtObservedState, RunSlot, ThesisRunResult
 from modules.utility import KST_TIMEZONE
 
@@ -224,11 +224,13 @@ class NxtAfterHoursReview:
             bars=bar.bar_count,
         )
 
-    def run(self, *, dag_run_id: str) -> int:
+    def run(self, *, dag_run_id: str, try_number: int) -> int:
         """휴장 판정 → readiness guard → 관측 상태 → LLM → 저장. 저장한 행 수를 준다."""
         self._run.skip_unless_open()
         self.check_ready()
         return self._run.build_and_store(
+            try_number=try_number,
+            run_kind=LlmRunKind.NXT_REVIEW,
             run_slot=RunSlot.POST_NXT_CLOSE,
             macro_window_start=macro_window_start(self._run_date),
             targets=self.targets,
@@ -244,7 +246,9 @@ def build() -> ThesisRunResult:
     context = get_current_context()
     run_date = thesis_common.resolve_run_date(context)
     dag_run_id = str(context["dag_run"].run_id)
+    # 재시도는 새 대화다. dag_run_id는 재시도에도 같아 이 칸이 없으면 구분할 수 없다.
+    try_number = int(context["ti"].try_number)
 
     with closing(thesis_common.connection()) as conn:
-        written = NxtAfterHoursReview(conn, run_date=run_date).run(dag_run_id=dag_run_id)
+        written = NxtAfterHoursReview(conn, run_date=run_date).run(dag_run_id=dag_run_id, try_number=try_number)
     return ThesisRunResult(run_date=run_date, slot=SLOT, written=written)

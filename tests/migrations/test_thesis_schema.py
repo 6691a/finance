@@ -215,3 +215,51 @@ def test_the_incoming_precedent_edge_has_its_own_index(capsys):
     # UNIQUE가 (thesis_id, precedent_id)라 선두만 커버한다. 이웃 그래프는 **들어오는**
     # INFORMED_BY를 읽으므로 이 인덱스가 없으면 그 조회가 전체 스캔이다.
     assert "CREATE INDEX ix_thesis_precedent_precedent_id ON thesis_precedent (precedent_id)" in sql
+
+
+def test_the_llm_ledger_has_no_natural_key(capsys):
+    sql = head_sql(capsys)
+    statement = _table_statement(sql, "thesis_llm_run")
+
+    # 실패한 대화도 남기고 재시도는 새 대화다. 같은 (kind, run_date, run_slot, horizon)에
+    # 행이 여럿인 것이 정상이라 UNIQUE를 걸면 안 된다.
+    assert "UNIQUE" not in statement
+    assert "try_number" in statement
+
+
+def test_the_llm_run_status_shape_is_constrained(capsys):
+    sql = head_sql(capsys)
+
+    # running인데 끝난 시각이 있거나 failed인데 사유가 없는 행을 두면 "끊긴 대화"와
+    # "실패한 대화"를 나중에 못 가른다.
+    assert "status = 'running' AND finished_at IS NULL AND error IS NULL" in sql
+    assert "status = 'failed' AND finished_at IS NOT NULL AND error IS NOT NULL" in sql
+
+
+def test_a_tool_call_carries_a_result_or_an_error_but_never_neither(capsys):
+    sql = head_sql(capsys)
+
+    # 둘 다 비면 "돌았는데 아무 것도 없다"가 되어 조용히 틀린다.
+    assert "(result IS NULL) <> (error IS NULL)" in sql
+    # 오류 종류는 오류가 있을 때만. 문자열을 파싱해 분류하지 않으려는 칸이다.
+    assert "(error IS NULL) = (error_kind IS NULL)" in sql
+
+
+def test_delivered_is_its_own_axis_not_an_error_kind(capsys):
+    sql = head_sql(capsys)
+    statement = _table_statement(sql, "thesis_tool_call")
+
+    # 끝까지 돌았지만 모델에게 못 간 결과는 오류가 아니다. error_kind에 넣으면
+    # result/error 배타 CHECK와 충돌한다.
+    assert "delivered BOOLEAN NOT NULL" in statement
+    assert "'cancelled'" in sql
+
+
+def test_the_ledger_never_holds_a_thesis_hostage(capsys):
+    sql = head_sql(capsys)
+
+    # 원장을 지워도 추론은 남아야 한다. CASCADE면 판단이 함께 사라진다.
+    assert "FOREIGN KEY(llm_run_id) REFERENCES thesis_llm_run (id) ON DELETE SET NULL" in sql
+    assert "FOREIGN KEY(narration_run_id) REFERENCES thesis_llm_run (id) ON DELETE SET NULL" in sql
+    # 반대로 대화가 지워지면 그 호출 기록은 의미가 없다.
+    assert "FOREIGN KEY(llm_run_id) REFERENCES thesis_llm_run (id) ON DELETE CASCADE" in sql

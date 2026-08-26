@@ -67,9 +67,12 @@ from modules.thesis_domain import (
     NARRATED_HORIZON_DAYS,
     PROMPT_VERSION,
     Evidence,
+    LlmRunKind,
+    LlmRunStatus,
     Subject,
     ThesisError,
     ThesisSubjectKind,
+    ToolCallRecord,
     brier_score,
     classify_outcome,
     return_error,
@@ -102,6 +105,9 @@ PRECEDENT_INSERT = read_sql("postgres", "thesis_precedent", "insert.sql")
 # 저장 — 첫 성공본 불변
 # ---------------------------------------------------------------------------
 
+LLM_RUN_INSERT = read_sql("postgres", "thesis_llm_run", "insert.sql")
+LLM_RUN_FINISH = read_sql("postgres", "thesis_llm_run", "update_finish.sql")
+TOOL_CALL_INSERT = read_sql("postgres", "thesis_tool_call", "insert.sql")
 THESIS_INSERT = read_sql("postgres", "thesis", "insert.sql")
 THESIS_SELECT_BY_RUN = read_sql("postgres", "thesis", "select_by_run.sql")
 EVIDENCE_INSERT = read_sql("postgres", "thesis_evidence", "insert.sql")
@@ -301,6 +307,103 @@ class ThesisStore:
     def __init__(self, connection: Connection) -> None:
         self._connection = connection
 
+    # --- LLM 실행 원장 -------------------------------------------------------
+
+    def start_llm_run(
+        self,
+        *,
+        kind: LlmRunKind,
+        run_date: date,
+        run_slot: RunSlot,
+        as_of_at: datetime,
+        dag_run_id: str,
+        try_number: int,
+        llm_model: str,
+        prompt_version: str,
+        horizon_days: int | None = None,
+    ) -> int:
+        """대화 하나를 `running`으로 열고 그 id를 준다. **그래프를 부르기 전에 커밋한다.**
+
+        대화가 죽어도 "시작했다"는 사실이 남아야 한다. 실패한 대화가 원장에 없으면 패턴
+        분석이 성공한 실행만 보게 되고, 그게 이 단계 전의 상태다.
+
+        판단 저장과 **다른 트랜잭션이다.** 원장이 못 써졌다고 추론을 버리면 안 되고,
+        추론 저장이 실패해도 "무엇을 봤나"는 남아야 한다.
+        """
+        with atomic(self._connection) as transaction, transaction.cursor() as cursor:
+            cursor.execute(
+                LLM_RUN_INSERT,
+                (
+                    kind.value,
+                    run_date,
+                    run_slot.value,
+                    horizon_days,
+                    as_of_at,
+                    dag_run_id,
+                    try_number,
+                    llm_model,
+                    prompt_version,
+                    datetime.now(UTC),
+                ),
+            )
+            row = cursor.fetchone()
+        if row is None:
+            raise ThesisError("failed to open an llm run ledger row")
+        return int(row[0])
+
+    def finish_llm_run(
+        self,
+        llm_run_id: int,
+        *,
+        status: LlmRunStatus,
+        records: Sequence[ToolCallRecord],
+        tool_rounds: int,
+        error: str | None = None,
+    ) -> None:
+        """대화를 닫고 그 안의 툴 호출을 한 트랜잭션에 쓴다.
+
+        **총량 둘은 상한을 재는 카운터와 다른 수다.** `tool_calls`는 기록된 행 수라 모르는
+        툴과 인자 검증 실패도 세지만 툴박스의 예산 카운터는 함수에 진입한 것만 센다.
+        `tool_result_chars`는 모델에게 실제로 돌아간 것만(`delivered`) 센다 — 예산 카운터는
+        버려진 결과도 센다. 둘 다 `MAX_TOOL_*`와 직접 비교하지 않는다.
+        """
+        delivered_chars = sum(record.result_chars for record in records if record.delivered)
+        with atomic(self._connection) as transaction, transaction.cursor() as cursor:
+            cursor.execute(
+                LLM_RUN_FINISH,
+                (
+                    status.value,
+                    datetime.now(UTC),
+                    error,
+                    tool_rounds,
+                    len(records),
+                    delivered_chars,
+                    llm_run_id,
+                ),
+            )
+            for record in records:
+                cursor.execute(
+                    TOOL_CALL_INSERT,
+                    (
+                        llm_run_id,
+                        record.seq,
+                        record.round_no,
+                        record.tool_call_id,
+                        record.tool_name,
+                        json.dumps(record.arguments, ensure_ascii=False, default=str),
+                        None
+                        if record.validated_arguments is None
+                        else json.dumps(record.validated_arguments, ensure_ascii=False, default=str),
+                        record.requested_at,
+                        record.duration_ms,
+                        record.result_chars,
+                        record.result,
+                        record.delivered,
+                        None if record.error_kind is None else record.error_kind.value,
+                        record.error,
+                    ),
+                )
+
     def past_theses(self, *, as_of_at: datetime, subject_code: str, n: int) -> list[PastThesis]:
         """이 대상의 지난 추론과 지평별 결과. **슬롯마다** 최근 것부터 `n`건이다.
 
@@ -377,6 +480,7 @@ class ThesisStore:
         llm_model: str,
         tool_rounds: int,
         precedents: Mapping[str, Sequence[int]],
+        llm_run_id: int | None = None,
     ) -> tuple[StoredThesis, ...]:
         """추론과 근거, 그리고 본 과거 추론을 한 트랜잭션에 쓴다.
 
@@ -412,6 +516,7 @@ class ThesisStore:
                         tool_rounds,
                         llm_model,
                         PROMPT_VERSION,
+                        llm_run_id,
                     ),
                 )
                 returned = cursor.fetchone()
@@ -623,6 +728,7 @@ class ThesisStore:
         registry: dict[str, Evidence],
         llm_model: str,
         prompt_revision: str,
+        narration_run_id: int | None = None,
     ) -> int:
         """해설과 그 근거를 한 트랜잭션에 쓴다. 쓴 건수를 돌려준다.
 
@@ -650,6 +756,7 @@ class ThesisStore:
                         datetime.now(UTC),
                         llm_model,
                         prompt_revision,
+                        narration_run_id,
                     ),
                 )
                 if cursor.rowcount == 0:

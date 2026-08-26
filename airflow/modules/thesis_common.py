@@ -34,6 +34,8 @@ from modules.market_session import krx_open_day
 from modules.slack import SlackClient, SlackError
 from modules.thesis_domain import (
     DOMESTIC_MAX_DAILY_CHANGE_PCT,
+    PROMPT_VERSION,
+    LlmRunStatus,
     ThesisError,
     ThesisEvidenceKind,
     ThesisSubjectKind,
@@ -85,6 +87,16 @@ SETTLED_CLOSE_COUNT = (
     "SELECT count(DISTINCT stock_code) FROM stock_investor_trade_daily "
     "WHERE provider = 'kis' AND business_date = %s AND stock_code = ANY(%s)"
 )
+
+
+def closed_records(toolbox: Any) -> Any:
+    """저장 직전에 열린 기록을 닫고 목록을 준다.
+
+    결과도 오류도 없는 행은 DB CHECK(`(result IS NULL) <> (error IS NULL)`)를 어긴다.
+    sibling 예외로 **실행조차 못 한** 호출이 그렇게 남는다.
+    """
+    toolbox.close_open_records()
+    return toolbox.tool_calls
 
 
 class ThesisNotReady(RuntimeError):
@@ -372,6 +384,8 @@ class ThesisRun:
         observed: ObservedState | NxtObservedState,
         past: Mapping[str, Sequence[PastThesis]],
         dag_run_id: str,
+        try_number: int,
+        run_kind: Any,
         same_day: Mapping[str, Sequence[SameDayThesis]] = MappingProxyType({}),
     ) -> int:
         """추론을 만들고 저장한다. 저장한 행 수를 준다.
@@ -409,6 +423,19 @@ class ThesisRun:
             watched_codes=[s.code for s in targets if s.kind is ThesisSubjectKind.STOCK],
             subject_codes=[s.code for s in targets],
         )
+        # 원장(13단계)을 **그래프 호출 전에** 연다. 대화가 죽어도 "시작했다"는 사실과
+        # 그때까지 부른 툴이 남아야 한다 — 실패한 대화가 안 남으면 패턴 분석이 성공한
+        # 실행만 보게 된다. 판단 저장과 다른 트랜잭션이다.
+        llm_run_id = store.start_llm_run(
+            kind=run_kind,
+            run_date=self._run_date,
+            run_slot=run_slot,
+            as_of_at=self._as_of_at,
+            dag_run_id=dag_run_id,
+            try_number=try_number,
+            llm_model=model_name(model),
+            prompt_version=PROMPT_VERSION,
+        )
         try:
             drafts, rounds = ThesisBuilder(model, toolbox).run(
                 run_slot=run_slot,
@@ -418,13 +445,27 @@ class ThesisRun:
                 past_theses=past,
                 same_day=same_day,
             )
-        except ThesisError as error:
-            raise AirflowFailException(str(error)) from error
-        except LlmError as error:
+        # 넓게 잡되 **반드시 다시 올린다.** 잡는 이유는 원장을 닫는 것 하나뿐이다.
+        except BaseException as error:
+            store.finish_llm_run(
+                llm_run_id,
+                status=LlmRunStatus.FAILED,
+                records=closed_records(toolbox),
+                tool_rounds=toolbox.round_count,
+                error=f"{type(error).__name__}: {error}",
+            )
+            if isinstance(error, ThesisError):
+                raise AirflowFailException(str(error)) from error
             # 재시도할 값어치가 있는 것은 그대로 올린다. 판단은 여기서 한다.
-            if isinstance(error, RetryableLlmError):
-                raise
-            raise AirflowFailException(str(error)) from error
+            if isinstance(error, LlmError) and not isinstance(error, RetryableLlmError):
+                raise AirflowFailException(str(error)) from error
+            raise
+        store.finish_llm_run(
+            llm_run_id,
+            status=LlmRunStatus.SUCCEEDED,
+            records=closed_records(toolbox),
+            tool_rounds=toolbox.round_count,
+        )
 
         rows = store.store_theses(
             run_date=self._run_date,
@@ -436,6 +477,7 @@ class ThesisRun:
             observed_state=observed,
             llm_model=model_name(model),
             tool_rounds=rounds,
+            llm_run_id=llm_run_id,
             precedents={code: [row.id for row in rows] for code, rows in past.items()},
         )
         logger.info("stored %s theses for %s %s (%s tool rounds)", len(rows), self._run_date, run_slot.value, rounds)

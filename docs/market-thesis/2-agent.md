@@ -99,7 +99,7 @@ DB 연결과 **기준 시각 `as_of_at`**을 들고 읽기 전용 툴 14개를 �
 - **상한은 코드 상수로 강제한다.** 모델이 인자를 넘겨도 잘라서 실행한다:
   `1 <= hours <= 72`, `0 <= min_score <= 100`, 툴 호출당 결과 ≤ 20건, 항목당
   `new_facts`·`reason` 합쳐 ≤ 600자, 실행당 tool call 총 ≤ 20회,
-  실행당 툴 결과 누적 ≤ 40,000자. 넘는 호출은 빈 결과가 아니라 "상한 초과" `ToolMessage`로
+  실행당 툴 결과 누적 ≤ 100,000자. 넘는 호출은 빈 결과가 아니라 "상한 초과" `ToolMessage`로
   돌려 모델이 알게 한다.
 
 ### 툴은 LangChain이 정의하고 LangGraph가 돌린다
@@ -255,7 +255,7 @@ ScriptedModel(tool_calls 붙인 `AIMessage` 지원)로:
 - 확률 합 검증: ±0.02 안이면 정규화, 벗어나면 그 subject 버림, 전부 벗어나면 repair 1회
 - 근거 0건 허용, 세 `*_reasoning` 필드 각각 자름
 - 툴 상한: `hours` 0·73, `min_score` −1·101, 결과 20건 초과, tool call 20회 초과, 누적
-  40,000자 초과가 잘리거나 "상한 초과" `ToolMessage`로 돌아오는지
+  100,000자 초과가 잘리거나 "상한 초과" `ToolMessage`로 돌아오는지
 - 툴 계약: 모르는 툴·깨진 인자가 오류 `ToolMessage`로 돌아오고 `tool_call_id`마다
   `ToolMessage`가 정확히 하나인지, DB 예외가 그대로 올라오는지
 - `evidence_refs` 중복이 첫 등장 rank로 합쳐지는지, 중복 `subject_code`가 거절되는지,

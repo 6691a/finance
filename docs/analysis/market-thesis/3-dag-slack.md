@@ -5,7 +5,7 @@
 - 상태: 구현 완료 (2026-08-21). 운영 배포는 선행 조건 둘이 남아 있다 — 7절
 - 산출물: `airflow/dags/market_thesis_forecast.py`·`market_thesis_review.py`,
   `airflow/modules/thesis_common.py`·`thesis_forecast.py`·`thesis_review.py`,
-  `thesis.py`의 렌더링 함수, 두 DAG 테스트, 렌더링 테스트
+  렌더링 함수(지금 `airflow/modules/thesis_render.py`), 두 DAG 테스트, 렌더링 테스트
 - **여기서 처음 운영에 발송된다.** 테스트 발송은 `slack_channel_test`로만 한다(프로젝트 규칙).
 - `sync_graph` 태스크는 이 단계에 없다. [4-graph.md](4-graph.md)가 `build_thesis` 뒤에 붙인다.
 
@@ -148,7 +148,7 @@ subject마다 `section()`(결론·이유)과 `context()`(근거) 둘:
 - 승인·보류 상태 머신을 두지 않는다는 원칙 그대로, 인터랙티브 버튼이나 스레드 피드백
   수집기를 만들지 않고, "이상하면 고치라"는 안내도 달지 않는다 — 틀린 판단은 틀린 채로
   남는 것이 기록이다.
-- 렌더링 함수(`render_blocks`/`render_text`)는 `airflow/modules/thesis.py`에 둔다
+- 렌더링 함수(`render_blocks`/`render_text`)는 추론 모듈이 갖는다(지금 `airflow/modules/thesis_render.py`)
   (`briefing/market.py`가 자기 도메인 렌더링을 갖는 것과 같다 — thesis는 정기 리포트
   3부작과 다른 도메인이라 `briefing/` 아래 두지 않는다).
 - **Slack 한도**: 메시지당 블록 50개, `section` 텍스트 3,000자. 지금은 subject 4개 ×
@@ -170,7 +170,7 @@ subject마다 `section()`(결론·이유)과 `context()`(근거) 둘:
 
 ## 6. 테스트
 
-- `tests/modules/test_thesis.py`에 추가 — 렌더링(`render_blocks`/`render_text`):
+- `tests/modules/test_thesis_pipeline.py`에 추가 — 렌더링(`render_blocks`/`render_text`):
   슬롯별 헤더 분기, **결론 하나만 나오고 나머지 두 확률·이유는 안 나오는지**,
   **확률이 붙으면 붙은 것이 다 나오고 그때만 이유에 방향 표시가 붙는지**, 확률 퍼센트
   반올림, 근거가 결론 방향의 것만 `rank` 순 상위 3개인지·`mechanism`이 실리는지·

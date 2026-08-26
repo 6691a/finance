@@ -49,11 +49,11 @@ FRED `series` 엔드포인트로 2026-08-16에 확인한 값이다.
 
 ### 결정과 이유
 
-- **`M` 접미사는 월간 표시다.** `ecb_irs.py`가 먼저 쓴 규칙이다(`FR10YM`). 한 테이블에 일별과
+- **`M` 접미사는 월간 표시다.** `indicator/ecb_irs.py`가 먼저 쓴 규칙이다(`FR10YM`). 한 테이블에 일별과
   월간이 섞여 있어 표시가 없으면 조회하는 쪽이 주기를 구분할 수 없다.
 - **FRED id를 저장 식별자로 쓰지 않는다.** `DGS10`은 사람이 읽으니 그대로 뒀지만 `CPIAUCSL`은
   DB만 보고 무슨 값인지 알 수 없다. 제공처 좌표는 수집기 Enum이 들고 있다가 요청과
-  `source_record.metadata`에만 쓴다. `ecos.py`의 `MarketRateSeries`가 항목코드를 다루는 방식과 같다.
+  `source_record.metadata`에만 쓴다. `indicator/ecos.py`의 `MarketRateSeries`가 항목코드를 다루는 방식과 같다.
 - **지수 레벨을 저장한다.** 전년 대비 변화율은 저장하지 않는다. FRED가 `units=pc1`로 변환해
   주지만, 원본을 두면 변화율은 언제든 계산되고 반대는 안 된다.
 - **`kind`를 둘로 나눈다.** 지수(300 근처)와 백만 달러(70만 근처)를 한 축에 놓을 수 없다.
@@ -68,7 +68,7 @@ FRED `series` 엔드포인트로 2026-08-16에 확인한 값이다.
 | --- | --- | --- |
 | `kind` CHECK | `apps/models/reference.py` | `('government_bond', 'money_market')` 둘뿐 |
 | `maturity_months` | 같은 파일 | `NOT NULL` + CHECK `> 0`. **물가지수에는 만기가 없다** |
-| `unit` | `airflow/modules/collectors/fred.py` | `SERIES_UNIT = "Percent"` 모듈 상수 하나 |
+| `unit` | `airflow/modules/collectors/indicator/fred.py` | `SERIES_UNIT = "Percent"` 모듈 상수 하나 |
 
 `indicator_observation.unit` 컬럼 자체는 `Text NOT NULL`이고 제약이 없다. 지금 전 행이
 `"Percent"`인 것은 수집기 일곱 개가 각자 같은 상수를 쓰기 때문이다. 컬럼은 이미 준비돼 있고
@@ -107,8 +107,8 @@ FRED `series` 엔드포인트로 2026-08-16에 확인한 값이다.
 
 ### 5.3 수집기에 계열 레지스트리를 둔다
 
-`airflow/modules/collectors/fred.py`의 `TREASURY_SERIES`는 문자열 tuple이라 계열마다 단위를 달
-자리가 없다. `ecos.py`의 `MarketRateSeries`와 같은 모양으로 바꾼다.
+`airflow/modules/collectors/indicator/fred.py`의 `TREASURY_SERIES`는 문자열 tuple이라 계열마다 단위를 달
+자리가 없다. `indicator/ecos.py`의 `MarketRateSeries`와 같은 모양으로 바꾼다.
 
 ```python
 class FredSeries(StrEnum):
@@ -125,7 +125,7 @@ class FredSeries(StrEnum):
   `collect.expand(series_id=list(TREASURY_SERIES))`는 그대로 돈다.
 - `SERIES_UNIT` 상수를 지우고 저장 시 계열의 `unit`을 쓴다.
 - **월간 계열은 관측일이 그 달 1일인지 검증하고 아니면 실패시킨다.** 달 중간 날짜가 섞이면
-  같은 달이 두 행이 되고 그 뒤로는 어느 쪽이 진짜인지 알 수 없다. `ecb_irs.py`가 같은 검사를 한다.
+  같은 달이 두 행이 되고 그 뒤로는 어느 쪽이 진짜인지 알 수 없다. `indicator/ecb_irs.py`가 같은 검사를 한다.
 
 ### 5.4 새 DAG `fred_macro_daily`
 

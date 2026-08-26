@@ -13,7 +13,7 @@
   `airflow/dags/event_expectation_hourly.py`, `modules/llm.py`의 `expectation_model()`,
   SQL 아홉(`stock_event_claim/*` 넷, `stock_event_extraction/upsert.sql`,
   `stock_event_outcome/*` 둘, `document/select_pending_extraction.sql`,
-  `earnings_fact/select_actual_for_judgment.sql`), `thesis.py`에 `event_surprises` 툴,
+  `earnings_fact/select_actual_for_judgment.sql`), `thesis_toolbox.py`에 `event_surprises` 툴,
   테스트 넷. 컨센서스 수집기는 후행(6절)
 
 ## 0. 왜 — 기대치가 숫자로 안 쌓여서 "미달"을 판단하지 못한다
@@ -82,7 +82,7 @@
 
 ## 2. 테이블 셋
 
-`apps/models/analysis.py`에 둔다 — thesis 계보의 분석 도메인이다. 스키마 지정 없음,
+`apps/models/analysis/events.py`에 둔다 — thesis 계보의 분석 도메인이다. 스키마 지정 없음,
 전 컬럼 한국어 주석, 리비전은 수기(공통 규칙).
 
 ```sql
@@ -283,7 +283,7 @@ LLM 추출만으로 시작할 수 있지만, 실적·DPS는 정형 컨센서스�
 | 〃 (판정 부분) | 순수 함수 — `aggregate_expectations`(컨센서스 우선, 증권사별 최신, `stated_at < announced_at` 컷, 0건이면 None), `classify_surprise` 경계값(±5.0), `period_end_for`(`2026Q2`→06-30, 형식 위반 실패), 실제 주장 불일치 시 판정 보류 |
 | SQL ↔ 모델 대조 | `inserted_columns` 패턴 — claim·extraction·outcome insert, outcome에 `ON CONFLICT DO NOTHING`이 있고 `DO UPDATE`가 없는지 |
 | `tests/dags/test_event_expectation_hourly.py` | 스케줄 `45 * * * *`, 태스크 구조, 화면 메타데이터, 실패 판정 형태 |
-| `tests/modules/test_thesis.py` | 툴 이름 집합에 `event_surprises`, 목록 밖 ticker 거절, "모든 툴 창의 끝은 `as_of_at`" 목록 |
+| `tests/modules/test_thesis_pipeline.py` | 툴 이름 집합에 `event_surprises`, 목록 밖 ticker 거절, "모든 툴 창의 끝은 `as_of_at`" 목록 |
 
 가짜 커서는 컬럼 이름과 조인 조건이 틀려도 통과한다. 그래서 **새 SQL 아홉을 실제
 PostgreSQL에 대고 한 번 돌린다.** 운영 DB에는 아직 테이블이 없으므로 오프라인 리비전
@@ -350,7 +350,7 @@ SQL로 임시 로컬 DB를 만들어 거기에 EXPLAIN을 돌리고, 삼성전�
 
 - `uv run pytest tests -q` 1774 passed, `uv run ruff check apps airflow migrations tests` 통과.
   새 테스트는 `test_expectation.py`(49), `test_stock_event_schema.py`(11),
-  `test_event_expectation_hourly.py`(10)과 `test_thesis.py`·`test_analysis_models.py` 추가분이다.
+  `test_event_expectation_hourly.py`(10)과 `test_thesis_pipeline.py`·`test_analysis_models.py` 추가분이다.
 - **SQL 아홉을 실제 PostgreSQL에서 EXPLAIN으로 확인했다.** 오프라인 리비전 SQL로 임시 DB를
   만들고(운영 DB는 건드리지 않았다) 조회 여섯과 쓰기 셋을 전부 돌렸다 — 전부 통과.
 - **삼성전자 사례를 실제 DB에서 재현했다.** 기대 넷(대신 9.5조·키움 9.0조·한국투자 10조와

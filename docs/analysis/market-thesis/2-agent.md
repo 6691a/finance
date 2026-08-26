@@ -1,10 +1,10 @@
-# 2단계 — 추론 에이전트: `airflow/modules/thesis.py`
+# 2단계 — 추론 에이전트: `airflow/modules/thesis_toolbox.py`·`thesis_generation.py`
 
 - 상위: [README.md](README.md)
 - 의존: [1-storage.md](1-storage.md)(저장할 테이블·insert SQL·채점 함수)
-- 산출물: `airflow/modules/thesis.py`에 ThesisToolbox·ThesisBuilder·저장 추가(1단계가 만든
+- 산출물: `ThesisToolbox`(지금 `airflow/modules/thesis_toolbox.py`)·`ThesisBuilder`(`thesis_generation.py`)·저장(`thesis_store.py`) 추가(1단계가 만든
   채점 함수 옆), 툴 SQL 3개, `modules/llm.py`의 `thesis_model()`과 `invoke` tools+schema 가드,
-  `tests/modules/test_thesis.py`
+  `tests/modules/test_thesis_pipeline.py`
 - 이 단계엔 DAG가 없다. 모듈과 테스트까지다. 운영 호출은 [3-dag-slack.md](3-dag-slack.md).
 
 `picks.py`(문서 선별)·`assessment.py`(태깅) 계보의 흐름 클래스다. 새로 생기는 것은
@@ -245,7 +245,7 @@ LLM을 부르지 않고 그 행들을 돌려준다(첫 성공본 불변). 행이
 스키마를 한 요청에 섞지 않는다"는 원칙이 코드 계약이 되도록 `if tools and schema: raise
 ValueError(...)` 한 줄과 `tests/modules/test_llm.py` 케이스를 이 단계에서 넣는다.
 
-## 7. 테스트 — `tests/modules/test_thesis.py`
+## 7. 테스트 — `tests/modules/test_thesis_pipeline.py`
 
 ScriptedModel(tool_calls 붙인 `AIMessage` 지원)로:
 

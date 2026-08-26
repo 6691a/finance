@@ -487,10 +487,10 @@ uv run ruff check airflow/modules/technical.py tests/modules/test_technical.py
 
 **Files:**
 
-- Modify: `airflow/modules/collectors/kis.py`
+- Modify: `airflow/modules/collectors/market/kis_index_daily.py`
 - Modify: `tests/collectors/test_kis.py`
 - Reuse unchanged: `airflow/sql/postgres/index_daily/upsert.sql`
-- Reuse unchanged: `apps/models/market.py`
+- Reuse unchanged: `apps/models/market/series.py`
 
 - [ ] 테스트에 공식 `output2` 모양의 KOSPI·KOSDAQ fixture를 추가한다.
 - [ ] 요청 path·TR ID·다섯 query parameter, `tr_cont`의 `"" → "N"`, 페이지 사이 0.5초(`sleep=0` 테스트), 10장 상한, NaN·무한대 거절, 중복 날짜, 저장 컬럼 순서, source metadata를 검증한다.
@@ -508,7 +508,7 @@ uv run pytest tests/collectors/test_kis.py -q
 
 ```bash
 uv run pytest tests/collectors/test_kis.py -q
-uv run ruff check airflow/modules/collectors/kis.py tests/collectors/test_kis.py
+uv run ruff check airflow/modules/collectors/market/kis_index_daily.py tests/collectors/test_kis_index_daily_collector.py
 ```
 
 ### Task 3: 지수 일봉 DAG를 추가한다
@@ -547,17 +547,17 @@ uv run ruff check airflow/dags/kis_index_daily.py tests/dags/test_kis_index_dail
 - Create: `airflow/sql/postgres/technical/select_symbols.sql`
 - Delete: `airflow/sql/postgres/quote_daily/select_thesis_history.sql`
 - Delete: `airflow/sql/postgres/quote_daily/select_thesis_symbols.sql`
-- Modify: `airflow/modules/thesis.py`
-- Modify: `tests/modules/test_thesis.py`
+- Modify: `airflow/modules/thesis_toolbox.py`
+- Modify: `tests/modules/test_thesis_pipeline.py`
 
-- [ ] `test_thesis.py`에 국내 지수와 watched 종목이 같은 응답 계약으로 나오는지, raw bars는 요청한 `days`만 나오고 계산에는 120봉을 쓰는지, 60봉 미만이면 snapshot만 `null`인지 먼저 테스트한다.
+- [ ] `test_thesis_pipeline.py`에 국내 지수와 watched 종목이 같은 응답 계약으로 나오는지, raw bars는 요청한 `days`만 나오고 계산에는 120봉을 쓰는지, 60봉 미만이면 snapshot만 `null`인지 먼저 테스트한다.
 - [ ] 기존 raw bar의 아홉 키(`label`, `kind`, `country`, `business_date`, `open`, `high`, `low`, `close`, `volume`)가 그대로 유지되는 회귀 테스트를 추가한다.
 - [ ] `created_at > as_of_at` 행 제외와 `Evidence.registry == {}`를 유지하는 테스트를 추가한다.
 - [ ] 툴 이름 집합이 기존 13개 그대로이고 호출 상한도 12인지를 검증한다.
 - [ ] 실패를 확인한다.
 
 ```bash
-uv run pytest tests/modules/test_thesis.py -q
+uv run pytest tests/modules/test_thesis_pipeline.py -q
 ```
 
 - [ ] 6절 SQL을 추가하고 두 기존 SQL 참조를 새 경로로 옮긴다.
@@ -568,8 +568,8 @@ uv run pytest tests/modules/test_thesis.py -q
 - [ ] 테스트와 lint를 통과시킨다.
 
 ```bash
-uv run pytest tests/modules/test_technical.py tests/modules/test_thesis.py -q
-uv run ruff check airflow/modules/technical.py airflow/modules/thesis.py tests/modules/test_technical.py tests/modules/test_thesis.py
+uv run pytest tests/modules/test_technical.py tests/modules/test_thesis_pipeline.py -q
+uv run ruff check airflow/modules/technical.py airflow/modules/thesis_toolbox.py tests/modules/test_technical.py tests/modules/test_thesis_pipeline.py
 ```
 
 ### Task 5: 한국장 Slack에 기술적 관측 표를 추가한다
@@ -614,7 +614,7 @@ uv run pytest \
   tests/modules/test_technical.py \
   tests/collectors/test_kis.py \
   tests/dags/test_kis_index_daily.py \
-  tests/modules/test_thesis.py \
+  tests/modules/test_thesis_pipeline.py \
   tests/modules/test_briefing_market.py \
   tests/modules/test_briefing_chart.py -q
 uv run ruff check airflow tests
@@ -702,7 +702,7 @@ uv run ruff check airflow/modules/technical.py tests/modules/test_technical.py
 
 **Files:**
 
-- Modify: `apps/models/analysis.py`
+- Modify: `apps/models/analysis/technical.py`
 - Modify: `apps/models/__init__.py`
 - Create: `migrations/versions/<rev>_add_technical_signal.py`
 - Modify: `tests/models/test_analysis_models.py`
@@ -762,8 +762,8 @@ uv run ruff check airflow/modules/briefing/market.py tests/modules/test_briefing
 **Files:**
 
 - Create: `airflow/sql/postgres/technical_signal/select_thesis_recent.sql`
-- Modify: `airflow/modules/thesis.py`
-- Modify: `tests/modules/test_thesis.py`
+- Modify: `airflow/modules/thesis_toolbox.py`
+- Modify: `tests/modules/test_thesis_pipeline.py`
 - Modify: `docs/analysis/market-thesis/2-agent.md`
 - Modify: `docs/analysis/market-thesis/TUNING.md`
 
@@ -868,7 +868,7 @@ def detect_signals(
 
 ### 12.2 `technical_signal` 테이블
 
-`apps/models/analysis.py`에 둔다. 추론의 입력이 되는 분석 산출물이라 `thesis`와 같은 모듈이다.
+`apps/models/analysis/technical.py`에 둔다. 추론의 입력이 되는 분석 산출물이라 `thesis`와 같은 패키지다.
 
 | 컬럼 | 타입 | 의미 |
 | --- | --- | --- |
@@ -1007,7 +1007,7 @@ ORDER BY kind, direction, rule_version, horizon;
 - `quote_symbol` 시드에 `kis/005930`·`kis/000660`이 `equity`로 있다. 6절 두 번째 UNION의 JOIN이 종목 행을 떨어뜨리지 않는다.
 - `quote_daily` 뷰는 `created_at`을 갖는다(`e5b2d7a41c93` `DAILY_COLUMNS`). 6절의 cutoff가 동작한다.
 - 5.3 고정 벡터는 손으로 다시 계산해 맞다. 선형 종가에 SMA 시드 EMA는 처음부터 정상 상태(`t - (n-1)/2`)라 MACD가 정확히 7.0이다.
-- `MIN_HISTORY_DAYS=1`·`MAX_HISTORY_DAYS=30`(`thesis.py:184`), 툴 13개·`MAX_TOOL_CALLS=12`(`thesis.py:98`) — 7.1절과 같다.
+- `MIN_HISTORY_DAYS=1`·`MAX_HISTORY_DAYS=30`·`MAX_TOOL_CALLS`(전부 `thesis_domain.py`. 상한은 2026-08-25에 20으로 올랐다) — 7.1절과 같다.
 - `kis_investor_trade_daily`의 `pages` Param은 최소 1이고 상한이 없다. Task 6의 `pages: 5`(150거래일)가 된다.
 
 ## 14. LLM 추론·평가에서 쓰는 방법
@@ -1056,7 +1056,7 @@ ORDER BY kind, direction, rule_version, horizon;
 
 ### 14.2 프롬프트 — 읽는 법을 알려 주되 결론을 주지 않는다
 
-`SYSTEM_PROMPT`(`thesis.py:1399`)에 절 하나를 더한다. 초안:
+`SYSTEM_PROMPT`(`thesis_generation.py`)에 절 하나를 더한다. 초안:
 
 ```text
 ## 기술적 관측
@@ -1157,14 +1157,14 @@ Task 11 뒤다. 둘 다 테스트 먼저.
 
 **Task 12: 관측 상태 `technical` 블록과 프롬프트**
 
-- Modify: `airflow/modules/thesis_common.py`, `airflow/modules/thesis.py`(`SYSTEM_PROMPT`), `tests/modules/test_thesis_common.py`, `tests/modules/test_thesis.py`
+- Modify: `airflow/modules/thesis_common.py`, `airflow/modules/thesis_generation.py`(`SYSTEM_PROMPT`), `tests/modules/test_thesis_common.py`, `tests/modules/test_thesis_pipeline.py`
 - [ ] `technical_state()`가 subject마다 14.1절 모양을 내고, 60봉 미만이면 `null`이고, `created_at > as_of_at` 봉·신호를 보지 않고, 세 슬롯 모듈이 같은 함수를 부르는지 먼저 테스트한다.
 - [ ] `SYSTEM_PROMPT`에 임계 상수가 f-string으로 들어가고 `RSI_OVERBOUGHT`·`RSI_OVERSOLD`가 12.1절과 같은 객체인지 테스트한다.
 - [ ] 구현 뒤 `tests/modules/test_thesis*.py` 통과. `PROMPT_VERSION`은 같은 릴리스면 `"3"` 유지.
 
 **Task 13: 신호 인용**
 
-- Modify: `airflow/modules/thesis.py`(`ThesisEvidenceKind`, `ThesisToolbox.register`, `_tool_daily_history`), `apps/models/analysis.py`(`ThesisEvidenceKind`, CHECK), Task 8 리비전, `tests/modules/test_thesis.py`, `tests/migrations/`
+- Modify: `airflow/modules/thesis_domain.py`(`ThesisEvidenceKind`)·`thesis_toolbox.py`(`ThesisToolbox.register`, `_tool_daily_history`), `apps/models/analysis/thesis.py`(`ThesisEvidenceKind`, CHECK), Task 8 리비전, `tests/modules/test_thesis_pipeline.py`, `tests/migrations/`
 - [ ] `recent_signals` 항목이 `technical_signal:<id>` ref로 레지스트리에 들어가고, 모델이 그 ref를 `claims`에 쓰면 `thesis_evidence`에 `direction`·`mechanism`과 함께 저장되고, 레지스트리 밖 ref는 버려지는지 먼저 테스트한다.
 - [ ] offline SQL에 `ck_thesis_evidence_kind`가 `technical_signal`을 포함하는지 테스트한다.
 - [ ] `docs/analysis/market-thesis/2-agent.md`의 근거 종류 표에 `technical_signal`을 더한다.

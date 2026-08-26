@@ -1,8 +1,11 @@
 # 경제 문서 아카이브와 시장 리포트 설계
 
-- 날짜: 2026-08-15 (개정)
+- 날짜: 2026-08-15 (개정), 2026-08-26 구현 반영
 - 이전본: 2026-08-11 승인본
-- 상태: 초안
+- 상태: **1·2단계 구현 완료, 3·4단계 재계획 보류.** 2단계는 `document_ingestion_hourly`(수집)와
+  `document_assessment_hourly`(LLM 태깅) 둘로 갈려 운영 중이다. 본문 수집·청크·임베딩은
+  아직 없다(6.3·6.4의 벡터 판정 절이 그렇다). 3·4단계는 market-thesis가 사실상 같은 자리를
+  채우고 있어 착수 전에 범위를 다시 잡는다 — 7·8절 머리에 그 표기가 있다
 
 ## 0. 왜 다시 쓰는가
 
@@ -51,8 +54,10 @@
 - 이미지·음성·영상 분석
 - 기사 번역, 자동 요약 서비스, 자연어 질의응답
 - Elasticsearch, OpenSearch, 별도 vector DB
-- LangGraph, LLM 에이전트, LangSmith — 4단계는 분석가마다 호출 수 상한이 있는 고정
-  파이프라인이다. 모델이 스스로 다음 단계를 정하지 않는다(§8.1)
+- ~~LangGraph, LLM 에이전트, LangSmith~~ — **2026-08-16에 셋 다 들어왔다.** 흐름 제어는
+  `StateGraph`이고(`modules/assessment.py`), 툴을 쥔 에이전트는 market-thesis가 만들었으며,
+  추적은 `LANGSMITH_*` 환경변수로 켠다. 이 줄은 2026-08-15 시점의 판단이었고 지금은 거짓이다.
+  호출 수 상한이 있는 고정 파이프라인이라는 원칙 자체는 살아 있다 — 상한이 `MAX_TOOL_CALLS`다
 - LLM이 직접 쓰는 SQL. 계산은 애플리케이션이 구현한 종류만 실행한다(§8.2)
 - 외부 공개 또는 상용 재배포
 
@@ -69,18 +74,20 @@
 **Airflow 의존성은 `compose/local/airflow/requirements.txt`가 정한다.** 이미지가 빌드에서
 설치하고 운영도 같은 파일을 쓴다. **이 설계를 위해 늘린 의존성은 없다.**
 
-- LLM 호출은 JSON을 POST하고 JSON을 받는 것 하나뿐이다. SDK가 주는 재시도·스트리밍·타입
-  모델을 쓰지 않고 재시도는 Airflow가 하므로 `urllib.request`로 충분하다
-  (`modules/llm.py`의 `chat_client`). **"OpenAI 호환"은 회사가 아니라 요청·응답 모양을
-  가리킨다.** xAI(Grok)든 어디든 `base_url`만 바꾸면 된다.
+- ~~LLM 호출은 `urllib.request`로 충분하다~~ — **2026-08-16에 폐기됐다.** 지금은 LangChain의
+  `BaseChatModel`을 쓴다(`modules/llm.py`의 `document_model()`·`thesis_model()`·
+  `expectation_model()`). HTTP를 직접 치면 LangSmith 추적이 끊기고 툴 호출 왕복을 직접 짜야
+  한다. **`base_url`을 환경변수로 빼 제공처를 갈아 끼우지도 않는다** — 어떤 모델을 쓸지는
+  코드가 정하고 API 키만 환경에서 온다. 그것도 LangChain 클래스가 자기 이름
+  (`XAI_API_KEY`·`OPENAI_API_KEY`)으로 읽는다.
 - RSS·Atom은 `xml.etree.ElementTree`가, RFC 822 날짜는 `email.utils.parsedate_to_datetime`이
   읽는다. `feedparser`가 필요 없다.
-- 문서 분할(`langchain-text-splitters`)은 임베딩과 함께 붙일 때 넣는다. 지금 쓰는 코드가 없다.
+- 문서 분할(`langchain-text-splitters`)은 임베딩과 함께 붙일 때 넣는다. **아직 없다** —
+  `document_chunk` 테이블도 HNSW 인덱스도 0건이다.
 - PDF 본문 추출(`pypdf`)은 아직 범위 밖이다.
 
-SDK를 안 쓰는 부수 효과가 하나 더 있다. **주피터 프로브가 같은 코드를 그대로 import한다.**
-백엔드 가상환경에 SDK를 넣지 않아도 되고, 노트북에서 돌린 것과 배포에서 도는 것이 같은
-`chat_client`다.
+노트북과 배포가 같은 코드를 쓴다는 성질은 그대로다. `notebooks/narrator_ab.ipynb`가
+`modules/llm.py`의 모델 팩토리를 그대로 import한다.
 
 **DAG는 `config.yaml`을 읽지 못한다.** 원본 저장소 루트는 `config.yaml`이 아니라 Airflow
 환경변수 `DOCUMENT_ARCHIVE_PATH`로 준다. 값이 없으면 태스크를 즉시 실패시킨다.
@@ -174,16 +181,22 @@ ParadeDB는 0.2x 사이에서 이 API를 바꿔 왔다. 버전을 함께 적지 
 
 **`document`** — 문서 한 건의 정규화 결과와 LLM 평가.
 
-`source_record_id`(`source_record.id` 외래키, `ON DELETE RESTRICT`), `source_id`,
+`source_record_id`(`source_record.id` 외래키, `ON DELETE RESTRICT`), `source_slug`,
 `external_id`, `canonical_url`, `document_type`(`article`·`report`·`press_release`·`speech`),
-`title`, `summary`, `body`, `language`, `published_at`, `content_level`, `content_hash`,
-`canonical_document_id`(중복 대표 문서 자기참조), `direction`, `value_score`, `assessment`
-(JSONB), `llm_model`, `prompt_version`, `assessed_at`.
+`title`, `summary`, `body`, `language`, `published_at`, `detected_at`, `content_level`,
+`content_hash`, `canonical_document_id`(중복 대표 문서 자기참조), `direction`, `value_score`,
+`assessment`(JSONB), `llm_model`, `prompt_version`, `assessed_content_hash`, `assessed_at`.
 
-- 자연키는 **`(source_id, external_id)`** 다. 이전본의 `(source_id, external_id, content_hash)`는
+- `detected_at`은 우리가 그 문서를 처음 본 시각이다. `published_at`이 없는 출처가 있어
+  시간순 정렬의 바닥이 된다.
+- `assessed_content_hash`는 **평가한 시점의 본문 해시**다. 지금 `content_hash`와 다르면 본문이
+  바뀐 것이라 다시 평가한다. 이 두 칸의 비교가 재평가 판정의 전부다.
+- 자연키는 **`(source_slug, external_id)`** 다. 이전본의 `(source_id, external_id, content_hash)`는
   해시가 바뀌면 새 행이 생겨 재수집을 못 막는다. 본문이 바뀌면 같은 행을 갱신하고
   `content_hash`로 재평가 여부를 가른다.
 - `external_id`는 필수다. 제공처 ID가 없으면 정규화 URL을 쓴다.
+- 컬럼 이름이 `source_id`가 아니라 `source_slug`인 것은 `document_source.slug`를 그대로
+  들고 있기 때문이다. 대리키 조인을 한 단 줄인다.
 - `status` 컬럼을 두지 않는다. 보류·승인 상태 머신이 없기 때문이다. 중복만
   `canonical_document_id`로 표시한다.
 - `value_score`는 저장만 하고 어떤 자동 처리도 하지 않는다. 4단계 프롬프트가 정렬에 쓴다.
@@ -201,7 +214,7 @@ series_id)`** — 기사와 종목·지표를 잇는 조인 테이블.
 같은 이유다. 마스터에 없는 값이 오면 수집이 죽는 대신, 그 태그만 버리고 문서는 저장한다.
 마스터와의 대조는 테스트가 한다.
 
-**`document_chunk`** — 임베딩 단위.
+**`document_chunk`** — 임베딩 단위. **아직 만들지 않았다**(G-15). 아래는 붙일 때의 설계다.
 
 `document_id`, `position`, `content`, `content_hash`, `embedding`, `embedding_model`,
 `embedded_at`. 자연키는 `(document_id, position)`이다.
@@ -263,12 +276,18 @@ LLM에 보냈는데, 그러면 비용이 문서 수가 아니라 후보 쌍 수�
 
 ### 6.5 LLM 출력
 
-분할은 `langchain-text-splitters`가, 임베딩과 채팅 호출은 `openai` 클라이언트가 한다.
-오케스트레이션과 저장은 기존 코드가 한다.
+모델 호출은 LangChain이 하고(`modules/llm.py`의 `document_model()`), 흐름 제어는
+LangGraph가 한다(`modules/assessment.py`의 `AssessmentBatch`·`DocumentAssessor`). 저장은
+기존 코드 그대로다.
 
-설정은 Airflow 환경변수로 준다: `LLM_BASE_URL`, `LLM_API_KEY`, `LLM_CHAT_MODEL`,
-`LLM_PERSPECTIVE`. DAG는 `config.yaml`을 읽지 못하므로(§4) 여기에 둘 수 없다. 키는
-`SecretStr`로 받고 로그와 예외 메시지에 넣지 않는다.
+**어떤 모델을 쓸지는 코드가 정한다.** `LLM_BASE_URL`·`LLM_CHAT_MODEL`을 환경변수로 빼
+제공처를 갈아 끼우지 않는다 — 제공처마다 LangChain 클래스와 인자가 달라 문자열 설정 몇
+개로 흉내 내면 어느 쪽도 제대로 못 쓴다. **API 키는 우리가 읽지 않는다** — LangChain
+클래스가 자기 이름(`OPENAI_API_KEY`·`XAI_API_KEY`)으로 읽는다. 키를 우리 설정 객체에
+담으면 로그와 예외에 실릴 자리만 는다.
+
+DAG가 읽는 환경변수는 둘뿐이고 **모델과 무관하다**: `LLM_PERSPECTIVE`(선택, 기본 `global`)와
+`LLM_MAX_CONCURRENCY`(선택, 기본 4). DAG는 `config.yaml`을 읽지 못하므로(§4) 여기에 둔다.
 
 ### 관점은 값이지 프롬프트가 아니다
 
@@ -284,7 +303,7 @@ LLM에 보냈는데, 그러면 비용이 문서 수가 아니라 후보 쌍 수�
 | `korea` | 국내에서 직접 일어난 일만 |
 | `us` | 미국 시장의 눈으로 |
 
-**관점은 `prompt_version`에 함께 저장한다**(`2/global`). 관점이 바뀌면 같은 문서라도 점수가
+**관점은 `prompt_version`에 함께 저장한다**(지금 `3/global`). 관점이 바뀌면 같은 문서라도 점수가
 달라지므로 재평가 대상이 돼야 하는데, 컬럼을 늘리는 대신 기존 재평가 조건(§10)에 얹는다.
 
 **출력은 스키마로 강제한다.** Pydantic 모델을 strict JSON Schema로 바꿔 `response_format`에
@@ -299,6 +318,8 @@ strict 모드가 요구하는 것이 둘 있다. 모든 객체에 `additionalPro
 **제공처가 스키마를 못 받으면 스키마 없이 한 번 더 부른다.** 그때는 프롬프트와 사후 검증이
 형식을 지킨다. 강제가 되면 좋고, 안 되면 검증이 받는다.
 
+지금 구현된 것은 일곱 키다(`assessment.Assessment`).
+
 ```json
 {
   "instruments": ["005930"],
@@ -306,13 +327,15 @@ strict 모드가 요구하는 것이 둘 있다. 모든 객체에 `additionalPro
   "topics": ["monetary_policy"],
   "direction": "positive | negative | neutral",
   "scores": {"relevance": 0, "novelty": 0, "specificity": 0, "impact": 0},
-  "relation": "unique | update | repeated | duplicate",
-  "duplicate_of": null,
   "new_facts": [],
-  "reason": "",
-  "evidence_chunk_ids": []
+  "reason": ""
 }
 ```
+
+**`relation`·`duplicate_of`·`evidence_chunk_ids` 셋은 아직 없다.** 앞의 둘은 벡터 중복 판정에,
+마지막은 청크 인용에 쓰는 칸인데 본문 수집·청크·임베딩이 통째로 미구현이라 넣을 값이 없다.
+지금 중복 판정을 하는 것은 LLM이 아니라 `modules/dedup.py`의 순수 규칙 둘이다(§6.4의 ①②).
+셋을 붙이는 것은 청크·임베딩과 같은 묶음이다.
 
 - 각 점수는 0~2다. 합계는 `value_score`에 저장만 하고 상태를 바꾸지 않는다.
 - **`relevance`를 "직접 관련"으로 묻지 않는다.** 켜져 있는 피드 아홉 중 여섯이 비한국이고
@@ -324,12 +347,17 @@ strict 모드가 요구하는 것이 둘 있다. 모든 객체에 `additionalPro
   `DomesticStock` Enum으로 식별자를 좁히는 것과 같은 이유다.
 - **모르는 태그가 오면 그 값만 버리고 문서는 저장한다.** 태그 하나 때문에 문서를 잃지 않는다.
   버린 값은 로그에 남겨 마스터를 늘릴 근거로 쓴다.
-- `duplicate_of`는 프롬프트에 넣은 후보 ID만 허용한다.
+- `duplicate_of`는 프롬프트에 넣은 후보 ID만 허용한다(미구현 — 위 참고).
 - `direction`은 그 기사가 대상 종목·지표에 호재인지 악재인지다. 4단계에서 쓴다.
 
 긴 보고서는 전체를 보내지 않는다. 제목·초록·목차·결론과 vector로 고른 핵심 청크만 평가한다.
+**지금은 본문 자체가 없어**(`document.body`는 항상 `NULL`) 제목과 `summary`만 평가한다.
 
 ## 7. 3단계 — 일별 요약
+
+> **재계획 중, 유예(2026-08-26).** `market_daily_brief` 테이블은 저장소에 없다. 이 절은
+> 4단계의 입력을 만드는 자리인데, 4단계를 브리핑 축(산출물이 Slack 메시지)으로 재편하면
+> 이 테이블의 필요 자체가 사라진다. **8절을 먼저 정한다.**
 
 분봉 수십만 행을 프롬프트에 넣을 수 없다. 거래일 하나가 한 행인 `market_daily_brief`를
 DAG가 매일 만든다. **SQL만 쓰고 LLM은 들어가지 않는다.**
@@ -349,6 +377,13 @@ DAG가 매일 만든다. **SQL만 쓰고 LLM은 들어가지 않는다.**
 이 테이블은 LLM과 무관하게 Grafana에서 바로 쓴다. 3단계는 4단계를 안 만들어도 값이 있다.
 
 ## 8. 4단계 — 리포트 생성
+
+> **재계획 중, 유예(2026-08-26).** 이 절의 설계 대부분을 market-thesis가 이미 채웠다 —
+> 등록된 툴만 부르고(`ThesisToolbox`), 행 상한과 호출 상한이 있으며(`MAX_TOOL_CALLS`),
+> 답변은 등록된 근거 `ref`만 인용한다. 남은 것은 **카테고리 분석가 분할**과 재현 가능한
+> 저장용 `market_report` 테이블 둘뿐이다. 브리핑 쪽은 Slack 메시지가 산출물의 전부라
+> 저장용 리포트를 미뤄 뒀다. 착수 전에 market-thesis가 이 자리를 대신 채우고 있는지부터
+> 판단한다.
 
 무엇을 볼지 사람이 미리 정하지 않는다. "환율과 기술주"는 예시일 뿐이고, **가진 데이터로
 무엇을 만들 수 있는지 LLM이 고르게 한다.** 다만 한 모델에게 전부 맡기지 않고 카테고리별

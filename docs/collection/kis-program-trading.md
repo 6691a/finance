@@ -1,14 +1,22 @@
-# 개발 문서 3 — KIS 프로그램매매 수집
+# KIS 프로그램매매 수집
 
-> 작성 기준: 2026-08-11  
-> 상태: 미구현 기능의 실행 계획  
-> 대상 종목: 삼성전자, SK하이닉스  
+> 작성 기준: 2026-08-11 / 저장 설계 갱신: 2026-08-26
+> 상태: **미구현.** 착수 게이트는 §5 작업 1(REST·WebSocket 값이 누적인지 증분인지 프로브)
+> 대상 종목: 삼성전자, SK하이닉스
 > 대상 시장: 코스피, 코스닥
+
+**이 문서에서 값어치가 있는 것은 §2다** — TR ID 일곱 개, 필드 매핑표, 그리고 공식 문서가
+밝힌 제약(시장 종합 API는 정규장 중 최근 30분만 준다, 마감 뒤 복제 행이 온다). 그건 실측
+없이 다시 만들 수 없다.
+
+**§3 저장 설계는 2026-08-26에 다시 썼다.** 초안은 거래소별 물리 테이블 둘
+(`krx_program_trade_snapshot`·`nxt_program_trade_snapshot`)이었는데, 그 뒤 저장소가
+`stock_bar`처럼 **테이블 하나 + `exchange` 자연키 축**으로 규칙을 정했다(2026-08-18).
 
 ## 1. 결론
 
-프로그램매매는 일반 외국인·기관 수급과 분리하고 거래소별 물리 테이블인
-`krx_program_trade_snapshot`, `nxt_program_trade_snapshot`에 저장한다.
+프로그램매매는 일반 외국인·기관 수급과 분리하고 `program_trade_snapshot` 한 테이블에
+저장한다. 거래소는 `exchange`(KRX/NXT) 컬럼이고 자연키의 한 축이다.
 
 1차 구현:
 
@@ -83,9 +91,10 @@ tr_key=005930 또는 000660
 | 매도·매수 호가잔량 | `seln_rsqn`, `shnu_rsqn` |
 | 전체 순매수 호가잔량 | `whol_ntby_qty` |
 
-두 채널은 같은 11필드 구조다. 수신 TR ID가 `H0STPGM0`이면 KRX 테이블,
-`H0NXPGM0`이면 NXT 테이블에 저장한다. 통합 `H0UNPGM0`은 두 원천의 경계를 흐리므로
-구독하지 않는다.
+두 채널은 같은 11필드 구조다. 수신 TR ID가 `H0STPGM0`이면 `exchange='KRX'`,
+`H0NXPGM0`이면 `'NXT'`로 저장한다. **TR ID → 거래소 매핑은 registry 하나에 둔다** —
+`apps/realtime/frames.py`의 `FRAME_SPECS`가 이미 체결 채널에 대해 그 형태다.
+통합 `H0UNPGM0`은 두 원천의 경계를 흐리므로 구독하지 않는다.
 
 ### 2.3 시장 종합 시간 추이
 
@@ -114,14 +123,14 @@ NXT 조회는 `FID_COND_MRKT_DIV_CODE=NX`로 별도 호출한다. KRX/NXT 지원
 
 ## 3. 데이터 모델
 
-`apps/models/market.py`에 같은 스키마의 `KrxProgramTradeSnapshot`,
-`NxtProgramTradeSnapshot`을 추가한다.
+`apps/models/market/positioning.py`에 `ProgramTradeSnapshot` 하나를 추가한다.
 
 | 컬럼 | 타입 | 설명 |
 | --- | --- | --- |
 | `provider` | text | `kis` |
+| `exchange` | enum | `KRX` 또는 `NXT`. **자연키의 한 축이다** |
 | `scope` | text | `stock` 또는 `market` |
-| `target` | text | 두 종목 심볼 또는 `KOSPI`, `KOSDAQ` |
+| `target` | text | 6자리 종목코드(`005930`·`000660`) 또는 `KOSPI`·`KOSDAQ` |
 | `observed_at` | timestamptz | KIS 영업일+시각을 UTC로 변환 |
 | `reference_price` | numeric nullable | 종목 현재가 또는 시장 기준 가격 |
 | `accumulated_volume` | bigint nullable | 응답의 누적 거래량 |
@@ -139,18 +148,22 @@ NXT 조회는 `FID_COND_MRKT_DIV_CODE=NX`로 별도 호출한다. KRX/NXT 지원
 멱등 키:
 
 ```text
-(provider, scope, target, observed_at)
+(provider, exchange, scope, target, observed_at)
 ```
 
-물리 테이블은 `krx_program_trade_snapshot`, `nxt_program_trade_snapshot`이다. 두 테이블의
-`target`은 동일한 `SAMSUNG_ELECTRONICS`, `SK_HYNIX`, `KOSPI`, `KOSDAQ`을 사용한다.
-`venue` 컬럼과 심볼 접미사는 두지 않는다. 저장 테이블 자체가 거래소를 결정한다.
+**테이블은 하나다.** 컬럼이 글자 그대로 같은 테이블 둘을 두는 것보다 축 하나가 싸고,
+브리핑·추론이 두 거래소를 한 쿼리로 읽는다. `stock_bar`가 같은 판단을 먼저 했다
+(2026-08-18, 커밋 `e6cf001`). 거래소를 키에서 빼면 같은 종목·같은 시각의 KRX·NXT 값이
+서로를 덮어쓴다.
+
+`target`에 거래소 접미사를 붙이지 않는다. 종목은 `instrument.ticker`와 같은 6자리 코드라
+수급·공시와 한 화면에서 조인된다.
 
 수량과 금액은 KIS 원단위를 그대로 저장한다. 화면에서 억/백만 단위로 바꾸며 DB 값의 단위를
 수집기에서 바꾸지 않는다. 순매수는 음수가 정상이다.
 
 WebSocket 종목 행은 수신 시점의 KST 영업일과 `stck_cntg_hour`를 결합해 초 단위로 저장한다.
-같은 종목에서 같은 초에 여러 프레임이 오면 마지막 프레임이 자연키를 갱신한다. 원본 틱을 모두
+같은 종목·거래소에서 같은 초에 여러 프레임이 오면 마지막 프레임이 자연키를 갱신한다. 원본 틱을 모두
 보존할 필요가 생기기 전까지 별도 sequence 컬럼은 만들지 않는다.
 
 테이블의 수량·대금은 REST와 비교 가능한 **누적값**으로 통일한다. 운영 프로브에서 연속
@@ -166,27 +179,34 @@ WebSocket 프레임을 REST의 같은 시각 행과 비교한다. WebSocket 값�
 
 ### 4.1 WebSocket 상주 수집기
 
-`airflow/modules/collectors/kis_realtime.py`가 문서 1의 주식 체결과 같은 연결에서 두 종목의
-KRX `H0STPGM0`과 NXT `H0NXPGM0`을 추가 구독한다. 새 연결이나 새 컨테이너를 만들지 않는다.
+`apps/realtime/`가 [1분봉 문서](kis-semiconductor-minute-bars.md)의 주식 체결과 같은
+연결에서 두 종목의 KRX `H0STPGM0`과 NXT `H0NXPGM0`을 추가 구독한다. 새 연결이나 새
+컨테이너를 만들지 않는다.
+
+**`airflow/` 아래가 아니다.** 상주 수집기는 `apps/realtime/`이고 실행은
+`python -m apps.realtime.main`, 배포는 `compose/prod/`다. 프레임 계약은
+`apps/realtime/frames.py`의 registry에 TR ID 하나당 한 줄로 더한다 — 46필드 체결 채널이
+이미 그 형태이므로 필드 수 검증과 파싱이 따라온다.
 
 - approval key는 연결 시작 때 한 번 발급
 - 프로그램 프레임은 11개 필드 수를 먼저 검증
-- TR ID에 따라 KRX/NXT 프로그램 테이블에 upsert
+- TR ID가 정하는 `exchange` 값으로 upsert
 - DB 쓰기는 짧은 배치로 묶되 최대 지연은 1초
 - 연결 종료 시 exponential backoff 재연결 후 전 채널 재구독
 - WebSocket 세션별 `source_record(source_type='websocket')` 생성
+- 저장은 SQL 파일이 아니라 ORM이다(`apps/realtime/repository.py`). `apps/`는 `airflow/sql/`을 보지 못한다
 
 ### 4.2 REST 수집기
 
-기존 `airflow/modules/collectors/kis.py`에 다음을 추가한다.
+새 수집기 `airflow/modules/collectors/market/kis_program_trade.py`를 **클래스로** 만든다
+(`KisProgramTradeCollector`). KIS 토큰·앱키를 여러 호출에 걸쳐 들고 도는 것이 클래스로 묶는
+신호이고, `market/kis_positioning.py`가 기준 구현이다. `fetch`(외부 호출)와 `store`(DB 쓰기)를
+나눈다.
 
-- `fetch_stock_program_trade()`
-- `fetch_market_program_trade()`
-- 종목·시장 응답 파서
-- `store_program_trade()`에서 시장 구분 코드로 SQL 경로 선택
+공용 전송층 `collectors/kis.py`의 `send_get`, 토큰 캐시, KIS 오류 분류, `source_record`
+패턴을 그대로 쓴다. 프로그램매매만을 위한 새 HTTP 클라이언트나 base class는 만들지 않는다.
 
-기존 `_get()`, 토큰 캐시, KIS 오류, `source_record` 패턴을 그대로 쓴다. 프로그램매매만을
-위한 새 HTTP 클라이언트나 base class는 만들지 않는다.
+요청 값·응답 본문·정규화 결과·수집 결과는 전부 Pydantic 모델이고 `ConfigDict(frozen=True)`다.
 
 파서 규칙:
 
@@ -213,7 +233,7 @@ KRX `H0STPGM0`과 NXT `H0NXPGM0`을 추가 구독한다. 새 연결이나 새 �
 
 REST 프로그램 DAG는 분봉 DAG와 합치지 않는다. 프로그램매매 API의 실패가 가격 봉 수집을
 막아서는 안 되고 저장 테이블·파서·운영 목적도 다르다. 반면 WebSocket은 연결 비용과 재연결
-로직을 줄이기 위해 문서 1·2의 실시간 채널과 같은 상주 프로세스를 쓴다.
+로직을 줄이기 위해 [1분봉 문서](kis-semiconductor-minute-bars.md)의 실시간 채널과 같은 상주 프로세스를 쓴다.
 
 ## 5. 변경 파일
 
@@ -227,38 +247,37 @@ REST 프로그램 DAG는 분봉 DAG와 합치지 않는다. 프로그램매매 A
 
 ### 작업 2 — 모델과 migration
 
-- 수정: `apps/models/market.py`
-- 추가: 새 Alembic revision
+- 수정: `apps/models/market/positioning.py`, `apps/models/market/__init__.py`,
+  `apps/models/__init__.py`(`__all__` 두 단 모두 — 빠지면 autogenerate가 `DROP TABLE`을 낸다)
+- 추가: 새 Alembic revision. **손으로 쓴다** — 운영 DB에 `makemigrations`를 돌리지 않는다
 - 수정: `tests/models/test_market_models.py`
 - 추가: `tests/migrations/test_program_trade_schema.py`
 
 검증:
 
-- 두 물리 테이블의 컬럼·제약이 동일함
-- 각 테이블에 독립된 자연키와 `source_record_id` FK가 있음
-- KRX 저장이 NXT 행을 갱신할 수 없음
+- 자연키에 `exchange`가 들어 있고 KRX 저장이 NXT 행을 갱신할 수 없음
+- `exchange` CHECK 제약이 enum 값과 같음
+- `source_record_id` FK가 `ON DELETE RESTRICT`
 
 ### 작업 3 — SQL과 REST 수집기
 
-- 추가: `airflow/sql/postgres/krx_program_trade_snapshot/upsert.sql`
-- 추가: `airflow/sql/postgres/nxt_program_trade_snapshot/upsert.sql`
-- 수정: `airflow/modules/collectors/kis.py`
-- 수정: `tests/collectors/test_kis.py`
+- 추가: `airflow/sql/postgres/program_trade_snapshot/upsert.sql`
+- 추가: `airflow/modules/collectors/market/kis_program_trade.py`
+- 추가: `tests/collectors/test_kis_program_trade.py`
 
 ### 작업 4 — WebSocket 수집기
 
-- 수정: `airflow/modules/collectors/kis_realtime.py`
-- 수정: `compose/local/airflow/requirements.txt`
-- 수정: `compose/local/airflow/docker-compose.yaml`
-- 수정: `tests/collectors/test_kis_realtime.py`
+- 수정: `apps/realtime/frames.py`(TR ID registry), `apps/realtime/service.py`(구독),
+  `apps/realtime/repository.py`(저장)
+- 수정: `tests/realtime/test_kis_realtime.py`
 
 검증:
 
 - `H0STPGM0`, `H0NXPGM0` 구독 메시지와 11필드 프레임
 - 초 단위 시각 변환과 같은 초 upsert
 - 재연결 뒤 자동 재구독
-- 문서 1·2 채널의 실패와 프로그램 프레임 실패 격리
-- 동일 종목·시각의 KRX와 NXT 값이 서로 덮어쓰지 않음
+- 체결 채널의 실패와 프로그램 프레임 실패 격리
+- 동일 종목·시각의 KRX와 NXT 값이 서로 덮어쓰지 않음(`exchange`가 자연키에 있으므로)
 
 ### 작업 5 — REST 조정 DAG
 
@@ -283,43 +302,33 @@ REST 프로그램 DAG는 분봉 DAG와 합치지 않는다. 프로그램매매 A
 실행:
 
 ```bash
-uv run pytest tests/collectors/test_kis.py tests/models/test_market_models.py tests/migrations -q
-DJANGO_SETTINGS_MODULE=config.settings.test uv run python manage.py check
+uv run pytest tests/collectors/test_kis_program_trade.py tests/models/test_market_models.py tests/migrations -q
+uv run ruff check apps airflow migrations tests
 ```
 
 실데이터 확인:
 
 ```sql
 SELECT
-    'KRX' AS venue,
+    exchange,
+    scope,
     target,
-    min(observed_at),
-    max(observed_at),
-    count(*),
+    min(observed_at) AS first_at,
+    max(observed_at) AS last_at,
+    count(*) AS rows,
     min(net_buy_quantity),
     max(net_buy_quantity)
-FROM krx_program_trade_snapshot
+FROM program_trade_snapshot
 WHERE provider = 'kis'
-GROUP BY target
-UNION ALL
-SELECT
-    'NXT' AS venue,
-    target,
-    min(observed_at),
-    max(observed_at),
-    count(*),
-    min(net_buy_quantity),
-    max(net_buy_quantity)
-FROM nxt_program_trade_snapshot
-WHERE provider = 'kis'
-GROUP BY target;
+GROUP BY exchange, scope, target
+ORDER BY exchange, scope, target;
 ```
 
 ## 7. 완료 조건
 
-- 삼성전자·SK하이닉스 프로그램 순매수 수량과 대금이 KRX/NXT 물리 테이블에 각각 저장된다.
-- 코스피·코스닥 지원이 실측 확인되면 해당 거래소 테이블에 시장 스냅샷이 저장된다.
-- 두 테이블 안의 종목·시장 심볼은 같고 거래소 접미사를 붙이지 않는다.
+- 삼성전자·SK하이닉스 프로그램 순매수 수량과 대금이 `exchange`별로 나뉘어 저장된다.
+- 코스피·코스닥 지원이 실측 확인되면 같은 테이블에 `scope='market'` 행이 저장된다.
+- 종목·시장 식별자에 거래소 접미사를 붙이지 않는다 — 거래소는 컬럼이다.
 - 동일 시각 재수집은 중복 행을 만들지 않는다.
 - 장 마감 뒤 복제값이 새 시계열처럼 쌓이지 않는다.
 - WebSocket 재연결 뒤 5분 이내 REST 조정으로 누락 구간이 복구된다.

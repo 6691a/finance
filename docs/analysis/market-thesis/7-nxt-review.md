@@ -1,7 +1,9 @@
 # 7단계 — NXT 애프터마켓 리뷰 슬롯 (`post_nxt_close`)
 
 - 날짜: 2026-08-22
-- 상태: 설계. 구현 미착수
+- 상태: **구현 완료(2026-08-22).** `airflow/modules/thesis_nxt_review.py`(`NxtAfterHoursReview`),
+  `airflow/dags/market_thesis_nxt_review.py`, `stock_bar/select_nxt_after_hours.sql`,
+  리비전 `d7a2f4e91c68`(`post_nxt_close` 슬롯)까지 있다
 - 의존: 1·2·3단계(저장, 에이전트, DAG·Slack). 5단계와는 **분리된다**(채점·해설 대상이 아니다)
 
 ## 0. 문제 — 하루의 마지막 4시간 30분이 기록에 없다

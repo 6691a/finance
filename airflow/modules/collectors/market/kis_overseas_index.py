@@ -17,7 +17,7 @@
 - 모르는 코드에도 `rt_cd=0`에 0건으로 답한다(`.DJI`는 분봉 0건, `RUT`은 일봉도 0건). 그래서
   코드를 `OverseasIndex`로 좁혀 요청 전에 막는다.
 
-설계 배경은 `docs/collection/kis-overseas-index-close.md`(개발 문서 4)에 있다.
+설계 배경은 `docs/collection/kis-overseas-index-close.md`에 있다.
 """
 
 import json

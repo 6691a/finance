@@ -1,6 +1,13 @@
-# 국내 기술적 보조지표·매매 신호 기능 Implementation Plan
+# 국내 기술적 보조지표·매매 신호
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use `superpowers:subagent-driven-development` (recommended) or `superpowers:executing-plans` to implement this plan task-by-task.
+- 날짜: 2026-08-23 (검토 반영)
+- 상태: **구현 완료.** `airflow/modules/technical.py`(계산)·`technical_signals.py`(검출·저장),
+  `airflow/dags/technical_signal_daily.py`, `apps/models/analysis/technical.py`의 `TechnicalSignal`,
+  리비전 `c9f4b2e70a18`까지 있다. 남은 것은 코드가 아니라 관측이다 — 12.6절 SQL로 신호 셋의
+  지평별 적중률을 본다
+- 성격: **설계 계약과 구현 기록이다.** 1~8·12·14절이 계약이고, 9절은 그때의 구현 순서,
+  13절은 2026-08-23 검토에서 고친 점이다. 9절의 체크박스와 Task 단위는 당시 작업 단위를
+  그대로 둔 것이라 지금 실행할 지시가 아니다
 
 **Goal:** KOSPI·KOSDAQ과 추적 국내 종목의 확정 일봉에서 SMA·RSI·MACD·거래량 비율을 계산해 시장 추론과 Slack 브리핑에 투자 참고용 관측값으로 제공하고, 같은 계산에서 이평선·MACD·RSI 매매 신호(사건)를 검출해 저장·채점한다.
 

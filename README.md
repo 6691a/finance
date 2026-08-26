@@ -281,7 +281,7 @@ DAG마다 절을 두지 않습니다. 상세는 각 DAG 파일의 `doc_md`에 �
 | `yahoo_quote_daily` | 매일 07:30 | `quote_daily` | Yahoo |
 | `dart_disclosure_intraday` | 평일 07~20시 2분마다 | `disclosure_event`, `earnings_fact` | DART |
 | `document_ingestion_hourly` | 매시 05분 | `document`, `document_source` | 공식기관·언론 피드 |
-| `document_assessment_hourly` | 매시 25분 | `document`, `document_instrument`, `document_indicator` | xAI Grok |
+| `document_assessment_hourly` | 매시 25분 | `document`, `document_instrument`, `document_indicator` | LLM (`gpt-5.6-luna`) |
 
 수집하는 DAG는 전부 `source_record`도 함께 남깁니다. 관측값이 0건이어도 남겨서, 조회했지만 값이 없는 구간과 아직 조회하지 않은 구간을 구분합니다. 예외는 하나입니다. `document_assessment_hourly`는 새로 수집하지 않고 이미 저장된 문서를 읽습니다.
 
@@ -391,11 +391,11 @@ airflow dags trigger mof_jgb_daily --conf '{\"source_file\": \"all\", \"observat
 
 층마다 맡는 것이 다르고 겹치지 않습니다. 기준 구현은 [airflow/modules/llm.py](airflow/modules/llm.py)와 [airflow/modules/assessment.py](airflow/modules/assessment.py)입니다.
 
-- **모델 호출은 LangChain입니다.** `langchain_xai.ChatXAI`를 쓰고 HTTP를 직접 치지 않습니다. 요청·응답을 손으로 조립하면 추적이 끊기고 툴 호출 왕복을 직접 짜야 합니다.
+- **모델 호출은 LangChain입니다.** `BaseChatModel`(`ChatOpenAI`·`ChatXAI`)을 쓰고 HTTP를 직접 치지 않습니다. 요청·응답을 손으로 조립하면 추적이 끊기고 툴 호출 왕복을 직접 짜야 합니다.
 - **흐름 제어는 LangGraph입니다.** 재시도, 교정 재요청, 문서별 팬아웃(`Send`)을 `StateGraph`의 노드와 엣지로 표현합니다. 노드 이름이 그대로 트레이스에 남아 어디서 몇 번 불렀는지 보이는 것이 이 규칙의 목적입니다.
 - **데이터 모양은 Pydantic입니다.** 설정, 모델 응답, 노드가 주고받는 결과를 `BaseModel`로 선언하고, 응답 스키마는 그 모델에서 뽑아 `response_format`으로 강제합니다. 강제를 지원하지 않는 제공처를 위해 스키마 없이 한 번 더 부르는 경로와 검증을 그대로 남겨 둡니다.
 
-**어떤 모델을 쓸지는 코드가 정합니다.** `llm.py`의 `document_model()`이 LangChain 문법 그대로 모델을 만들고, 바꿀 때 그 함수를 고칩니다. `base_url`과 모델명을 환경변수로 빼서 제공처를 갈아 끼우지 않습니다. LangChain은 제공처마다 클래스와 인자가 달라 문자열 설정 몇 개로 흉내 내면 어느 쪽도 제대로 못 씁니다. **환경에서 오는 것은 API 키뿐이고 그것도 우리가 읽지 않습니다.** `ChatXAI`가 `XAI_API_KEY`를 스스로 읽습니다. 키를 우리 설정 객체에 담으면 로그와 예외에 실릴 자리만 늘어납니다.
+**어떤 모델을 쓸지는 코드가 정합니다.** `llm.py`의 `document_model()`·`thesis_model()`·`expectation_model()`이 LangChain 문법 그대로 모델을 만들고, 바꿀 때 그 함수를 고칩니다. 지금 문서 평가와 이벤트 추출은 `ChatOpenAI`로 `gpt-5.6-luna`를, 시장 추론은 `ChatXAI`로 `grok-4.6`을 부릅니다. `base_url`과 모델명을 환경변수로 빼서 제공처를 갈아 끼우지 않습니다. LangChain은 제공처마다 클래스와 인자가 달라 문자열 설정 몇 개로 흉내 내면 어느 쪽도 제대로 못 씁니다. **환경에서 오는 것은 API 키뿐이고 그것도 우리가 읽지 않습니다.** LangChain 클래스가 자기 이름(`OPENAI_API_KEY`·`XAI_API_KEY`)으로 스스로 읽습니다. 키를 우리 설정 객체에 담으면 로그와 예외에 실릴 자리만 늘어납니다.
 
 **재시도는 Airflow가 합니다.** 모델 클라이언트는 `max_retries=0`으로 만듭니다. SDK가 먼저 재시도하면 태스크 타임아웃 안에서 몇 번을 불렀는지 로그와 트레이스가 어긋납니다. 체크포인터도 붙이지 않습니다. 재실행 단위는 Airflow 태스크입니다.
 

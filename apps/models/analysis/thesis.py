@@ -32,9 +32,18 @@ class RunSlot(StrEnum):
     리뷰(review)다. `post_nxt_close`는 NXT 애프터마켓(15:30~20:00)이 닫힌 뒤의 리뷰이고
     대상이 종목뿐이다 — NXT에는 지수가 없다. 별도 `kind` 컬럼을 두지 않는 이유는 둘이 항상
     같이 움직이기 때문이다 — 슬롯 하나에 종류 둘이 오는 경우가 없다.
+
+    가운데 넷(`intraday_*`·`pre_close`)은 정규장 안에서 도는 전망이다. `pre_open`과 달리
+    **기준가가 전일 종가가 아니라 그 슬롯 `as_of_at` 직전 봉의 종가**라, 채점이 읽는 조회가
+    갈린다. 값을 시각이 아니라 뜻으로 지은 이유는 슬롯 시각이 운영 손잡이여서다 —
+    시각을 30분 옮기는 순간 `intraday_1035` 같은 이름은 거짓이 된다.
     """
 
     PRE_OPEN = "pre_open"
+    INTRADAY_MORNING = "intraday_morning"
+    INTRADAY_MIDDAY = "intraday_midday"
+    INTRADAY_AFTERNOON = "intraday_afternoon"
+    PRE_CLOSE = "pre_close"
     POST_CLOSE = "post_close"
     POST_NXT_CLOSE = "post_nxt_close"
 
@@ -117,7 +126,11 @@ class Thesis(EntityBase):
             "subject_code",
             name="uq_thesis_natural_key",
         ),
-        CheckConstraint("run_slot IN ('pre_open', 'post_close', 'post_nxt_close')", name="ck_thesis_run_slot"),
+        CheckConstraint(
+            "run_slot IN ('pre_open', 'intraday_morning', 'intraday_midday', "
+            "'intraday_afternoon', 'pre_close', 'post_close', 'post_nxt_close')",
+            name="ck_thesis_run_slot",
+        ),
         CheckConstraint("subject_kind IN ('index', 'stock')", name="ck_thesis_subject_kind"),
         CheckConstraint(
             "prob_up BETWEEN 0 AND 1 AND prob_down BETWEEN 0 AND 1 AND prob_flat BETWEEN 0 AND 1",
@@ -139,7 +152,8 @@ class Thesis(EntityBase):
         _enum_column(RunSlot),
         nullable=False,
         comment=(
-            "추론을 만든 슬롯(pre_open은 장전 전망, post_close는 장후 리뷰, "
+            "추론을 만든 슬롯(pre_open은 장전 전망, intraday_morning·intraday_midday·"
+            "intraday_afternoon·pre_close는 장중 전망, post_close는 장후 리뷰, "
             "post_nxt_close는 NXT 애프터마켓 리뷰). 슬롯이 곧 추론의 종류다"
         ),
     )
@@ -152,7 +166,8 @@ class Thesis(EntityBase):
         nullable=False,
         comment=(
             "관측 상태와 툴 조회의 기준 시각(UTC). 벽시계가 아니라 슬롯이 정한다"
-            "(장전 = 당일 08:35 KST, 장후 = 당일 15:30 KST, 애프터마켓 = 당일 20:00 KST). "
+            "(장전 = 당일 08:35 KST, 장중 = 당일 10:35·12:35·14:35·15:00 KST, "
+            "장후 = 당일 15:30 KST, 애프터마켓 = 당일 20:00 KST). "
             "event-time cutoff라 이 시각 이후 감지·평가·갱신된 행은 조회에서 뺀다"
         ),
     )

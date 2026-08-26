@@ -22,6 +22,7 @@ import re
 from collections.abc import Mapping, Sequence
 from contextlib import closing
 from datetime import UTC, date, datetime, time, timedelta
+from types import MappingProxyType
 from typing import Any
 
 from airflow.exceptions import AirflowFailException, AirflowSkipException
@@ -43,6 +44,7 @@ from modules.thesis_state import (
     NxtObservedState,
     ObservedState,
     PastThesis,
+    SameDayThesis,
     SignalObservation,
     StockObservation,
     TechnicalObservation,
@@ -63,7 +65,9 @@ MAX_STATE_SIGNALS = 3
 # 달력 하루만 받는다. ISO 주 표기(2026-W32)와 기본형(20260821)을 걸러 내는 그물이다.
 CALENDAR_DAY_PATTERN = re.compile(r"\d{4}-\d{2}-\d{2}")
 
-# KRX 정규장 마감(KST). 장후 슬롯의 기준 시각이자 지평 채점의 기준 시각이다.
+# KRX 정규장 개장·마감(KST). 마감은 장후 슬롯의 기준 시각이자 지평 채점의 기준 시각이고,
+# 개장은 "오늘 장중에 무엇이 움직였나"를 묻는 매크로 창의 시작이다(장후·장중이 함께 쓴다).
+SESSION_OPEN_TIME = time(9, 0)
 CLOSE_TIME = time(15, 30)
 
 # 세 DAG가 같은 재시도 정책을 쓴다. 재시도 셋은 readiness guard가 선행 DAG의 지연을
@@ -332,13 +336,18 @@ class ThesisRun:
         observed: ObservedState | NxtObservedState,
         past: Mapping[str, Sequence[PastThesis]],
         dag_run_id: str,
+        same_day: Mapping[str, Sequence[SameDayThesis]] = MappingProxyType({}),
     ) -> int:
         """추론을 만들고 저장한다. 저장한 행 수를 준다.
 
         **슬롯으로 갈라지지 않는다.** 슬롯은 값으로 흘러갈 뿐이고, 무엇이 다른지(기준 시각,
-        창의 시작, 관측 세션, 프롬프트에 실을 과거 추론 `past`)는 이미 부르는 쪽이 정해서
-        인자로 넘겼다. `past`는 subject 코드별 `thesis_store.ThesisStore.past_theses` 행이고, 그 `id`가
-        `thesis_precedent` 엣지로 남는다.
+        창의 시작, 관측 세션, 프롬프트에 실을 과거 추론 `past`와 오늘 앞 슬롯 `same_day`)는
+        이미 부르는 쪽이 정해서 인자로 넘겼다. `past`는 subject 코드별
+        `thesis_store.ThesisStore.past_theses` 행이고, 그 `id`가 `thesis_precedent` 엣지로 남는다.
+
+        **`same_day`는 엣지를 남기지 않는다.** 그 행들은 저장된 채점이 아니라 봉에서 계산한
+        중간 경과이고, `thesis_precedent`는 "무엇을 보고 냈나"가 아니라 "어느 과거 추론을
+        보여 줬나"를 남기는 자리다. 같은 날 앞 슬롯은 `run_date`로 이미 이어져 있다.
 
         **첫 성공본 불변.** 행이 있으면 모델을 부르지 않는다 — LLM은 재호출마다 답이 달라서
         덮어쓰면 최초 판단이 사라진다.
@@ -371,6 +380,7 @@ class ThesisRun:
                 subjects=targets,
                 observed_state=observed,
                 past_theses=past,
+                same_day=same_day,
             )
         except ThesisError as error:
             raise AirflowFailException(str(error)) from error
@@ -397,7 +407,7 @@ class ThesisRun:
 
 
 def run_date_param() -> dict[str, Param]:
-    """두 DAG가 같은 Param 하나를 쓴다."""
+    """네 DAG가 같은 Param 하나를 쓴다."""
     return {
         RUN_DATE_PARAM: Param(
             None,
@@ -442,6 +452,14 @@ def resolve_run_date(context: Any) -> date:
 def close_at(day: date) -> datetime:
     """그 날의 KRX 마감 시각(UTC)."""
     return datetime.combine(day, CLOSE_TIME, tzinfo=KST_TIMEZONE).astimezone(UTC)
+
+
+def open_at(day: date) -> datetime:
+    """그 날의 KRX 개장 시각(UTC). 장후·장중의 매크로 창이 여기서 시작한다.
+
+    DB를 보지 않는다 — 오늘 장이 열렸다는 것은 부르는 쪽의 readiness guard가 이미 확인했다.
+    """
+    return datetime.combine(day, SESSION_OPEN_TIME, tzinfo=KST_TIMEZONE).astimezone(UTC)
 
 
 def notify_slack(built: dict[str, Any]) -> str:

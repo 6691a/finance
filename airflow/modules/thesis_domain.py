@@ -59,6 +59,7 @@ from pydantic import BaseModel, ConfigDict
 
 from modules import technical
 from modules.thesis_state import (
+    INTRADAY_SLOT_TIMES,
     RunSlot,
 )
 from modules.thesis_tools import (
@@ -80,7 +81,9 @@ logger = logging.getLogger(__name__)
 # 5: 확률의 뜻을 정의했다(2026-08-25). `prob_flat`이 "±임계 안에 들어올 빈도"임을 밝히고
 #    실측 base rate를 실었다. 그전에는 정의가 없어 모델이 `flat`을 "방향을 모르겠다"로 읽고
 #    30%대를 줬다 — 실제 빈도는 5~11%다.
-PROMPT_VERSION = "5"
+# 6: 장중 슬롯 넷과 그 지시문, 그리고 `## 오늘 앞 슬롯` 절이 붙었다(2026-08-26).
+#    장중 예측은 기준가가 전일 종가가 아니라 지금 가격이라 그 사실을 프롬프트가 밝힌다.
+PROMPT_VERSION = "6"
 
 # 채점 지평. KRX 영업일 수이고 달력일이 아니다. 0은 예측일 세션 하나다.
 HORIZON_DAYS: tuple[int, ...] = (0, 1, 3, 5)
@@ -156,9 +159,11 @@ MAX_PAST_THESES = 10
 # 장전 추론의 프롬프트에 **미리 실어 주는** 같은 대상의 과거 추론 수. 툴로 두면 모델이 부를지
 # 말지를 정하고 불렀는지도 DB에 안 남는다. 미리 실으면 본 것이 확정되고 `thesis_precedent`에
 # 엣지로 남는다. 0이면 끄는 것이다 — 과거 추론을 안 싣고 엣지도 안 남긴다.
-# T+5 지평이 한 주라 한 주치를 준다. **슬롯마다이므로 실제 행 수는 최대 두 배다** — 장전
-# 예측 5건과 장후 리뷰 5건이다.
-PREFETCHED_PAST_THESES = 5
+# T+5 지평이 한 주라 한 주치를 주고 싶지만, **슬롯마다라 실제 행 수는 슬롯 수배다.**
+# 장중 넷이 붙어 슬롯이 여섯(장전·장중 넷·장후)이 되면서 5로 두면 최대 30행이 프롬프트에
+# 실린다. 그래서 2로 내렸다(2026-08-26) — 최대 12행이고 전과 비슷한 길이다.
+# 0이면 끄는 것이다 — 과거 추론을 안 싣고 엣지도 안 남긴다.
+PREFETCHED_PAST_THESES = 2
 
 # 이유 문장 하나의 상한. 넘으면 그 필드만 자른다.
 MAX_REASONING_CHARS = 500
@@ -401,8 +406,15 @@ def _shorten_to(text: str, limit: int) -> str:
     return stripped
 
 # 되돌아보기 제목에 쓰는 짧은 이름. 헤더의 이모지까지 반복하면 줄이 길어진다.
+# 장중 라벨에는 시각이 들어간다. **enum 값과 반대다** — 저쪽은 스케줄이 바뀌어도 거짓이
+# 되면 안 돼서 뜻으로 짓고, 이쪽은 하루 다섯 건이 Slack에 쌓일 때 사람이 구분해야 해서
+# 시각을 적는다. 표에서 만들어 스케줄을 옮길 때 라벨이 따라오게 한다.
 SLOT_LABELS = {
     RunSlot.PRE_OPEN: "장전 전망",
+    **{
+        slot: f"{'마감 전' if slot is RunSlot.PRE_CLOSE else '장중'} 전망({at:%H:%M})"
+        for slot, at in INTRADAY_SLOT_TIMES.items()
+    },
     RunSlot.POST_CLOSE: "장후 리뷰",
     RunSlot.POST_NXT_CLOSE: "애프터마켓 리뷰",
 }

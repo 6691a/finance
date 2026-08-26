@@ -7,12 +7,16 @@
 
 import inspect
 from datetime import UTC, date, datetime, timedelta
+from decimal import Decimal
 from typing import Any, Self
 
 import pytest
 
 from dags import market_thesis_review as dag_module
 from modules import thesis_common, thesis_review
+from modules.thesis_domain import ThesisSubjectKind
+from modules.thesis_state import RunSlot
+from modules.thesis_store import PendingGrade
 
 DAG = dag_module.market_thesis_review
 
@@ -187,3 +191,69 @@ def test_run_hands_build_and_store_every_argument_it_requires(monkeypatch):
     # 리뷰는 해석이라 과거 예측 성적을 싣지 않는다. NXT 리뷰와 같다.
     assert received["past"] == {}
     assert review._run.as_of_at == thesis_review.as_of(run_date)
+
+
+# --- 채점 기준가가 슬롯으로 갈린다 -------------------------------------------
+
+
+class RecordingStore:
+    """`_horizon_return`이 어느 조회를 골랐는지만 본다."""
+
+    def __init__(self) -> None:
+        self.calls: list[tuple[str, dict[str, Any]]] = []
+
+    def horizon_returns(self, **kwargs: Any) -> dict[str, Decimal]:
+        self.calls.append(("daily", kwargs))
+        return {"KOSPI": Decimal("1.5")}
+
+    def intraday_horizon_returns(self, **kwargs: Any) -> dict[str, Decimal]:
+        self.calls.append(("intraday", kwargs))
+        return {"KOSPI": Decimal("0.4")}
+
+
+def pending(run_slot: RunSlot, base_price: Decimal | None) -> PendingGrade:
+    return PendingGrade(
+        thesis_id=11,
+        run_date=date(2026, 8, 26),
+        as_of_at=datetime(2026, 8, 26, 1, 35, tzinfo=UTC),
+        subject_kind=ThesisSubjectKind.INDEX,
+        subject_code="KOSPI",
+        prob_up=Decimal("0.6"),
+        prob_down=Decimal("0.3"),
+        prob_flat=Decimal("0.1"),
+        horizon_days=0,
+        run_slot=run_slot,
+        base_price=base_price,
+    )
+
+
+def test_the_morning_slot_still_divides_by_the_previous_close():
+    store = RecordingStore()
+
+    result = thesis_review._horizon_return(store, pending(RunSlot.PRE_OPEN, None), date(2026, 8, 26))
+
+    assert result == Decimal("1.5")
+    assert store.calls[0][0] == "daily"
+
+
+def test_an_intraday_slot_divides_by_the_price_it_actually_saw():
+    """장중 슬롯의 분모는 그 슬롯이 본 봉이다. 전일 종가로 재면 다른 것을 재게 된다."""
+    store = RecordingStore()
+
+    result = thesis_review._horizon_return(
+        store, pending(RunSlot.INTRADAY_MORNING, Decimal(3150)), date(2026, 8, 26)
+    )
+
+    assert result == Decimal("0.4")
+    kind, kwargs = store.calls[0]
+    assert kind == "intraday"
+    assert kwargs["base_prices"] == {"KOSPI": Decimal(3150)}
+    assert kwargs["target_bar_at"] == thesis_common.close_at(date(2026, 8, 26))
+
+
+def test_an_intraday_thesis_without_a_base_price_stays_ungraded():
+    """0이나 전일 종가로 때우면 조용히 다른 것을 재게 된다. 미채점으로 남긴다."""
+    store = RecordingStore()
+
+    assert thesis_review._horizon_return(store, pending(RunSlot.PRE_CLOSE, None), date(2026, 8, 26)) is None
+    assert store.calls == []

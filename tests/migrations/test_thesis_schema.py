@@ -46,7 +46,13 @@ def test_thesis_constrains_the_closed_value_sets(capsys):
     assert "subject_kind IN ('index', 'stock')" in statement
 
 
-def test_the_slot_axis_ends_with_all_three_slots(capsys):
+ALL_SLOTS = (
+    "'pre_open', 'intraday_morning', 'intraday_midday', "
+    "'intraday_afternoon', 'pre_close', 'post_close', 'post_nxt_close'"
+)
+
+
+def test_the_slot_axis_ends_with_every_slot(capsys):
     """슬롯은 CREATE TABLE 뒤에 ALTER로 늘어난다. 그래서 dump 전체를 본다.
 
     `_table_statement`는 `CREATE TABLE thesis` 한 문장만 잘라 오므로 나중에 붙은 값을
@@ -54,12 +60,13 @@ def test_the_slot_axis_ends_with_all_three_slots(capsys):
     """
     sql = head_sql(capsys)
 
-    assert "CHECK (run_slot IN ('pre_open', 'post_close', 'post_nxt_close'))" in sql
-    # 옛 집합을 만드는 CREATE가 먼저 오고 ALTER가 그것을 갈아 끼운다. 순서가 뒤집히면
+    assert f"CHECK (run_slot IN ({ALL_SLOTS}))" in sql
+    # 옛 집합을 만드는 CREATE가 먼저 오고 ALTER가 차례로 갈아 끼운다. 순서가 뒤집히면
     # 운영 DB에 옛 집합이 남는다.
     assert sql.index("run_slot IN ('pre_open', 'post_close')") < sql.index(
         "run_slot IN ('pre_open', 'post_close', 'post_nxt_close')"
     )
+    assert sql.index("run_slot IN ('pre_open', 'post_close', 'post_nxt_close')") < sql.index(ALL_SLOTS)
 
 
 def test_thesis_constrains_the_three_probabilities(capsys):

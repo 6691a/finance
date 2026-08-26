@@ -1,7 +1,10 @@
 -- 아직 채점하지 않은 (추론, 지평) 조합 전부.
 --
--- `pre_open`만이다. `post_close` 리뷰는 이미 일어난 일의 해석이라 예측이 아니고 채점할
--- 대상이 없다(해설은 붙는다 — `select_pending_narratives.sql`).
+-- **예측 슬롯만이다**(장전 하나 + 장중 넷). `post_close`·`post_nxt_close` 리뷰는 이미
+-- 일어난 일의 해석이라 예측이 아니고 채점할 대상이 없다(해설은 붙는다 —
+-- `select_pending_narratives.sql`).
+--
+-- 슬롯 목록도 지평 목록과 같은 이유로 파라미터다. 원본은 `thesis_state.FORECAST_SLOTS`다.
 --
 -- **날짜 상한이 없다.** 장후가 실패했던 날의 것도 다음 실행이 회수해야 한다. 종가가 영영
 -- 나오지 않는 행(상장폐지 등)은 계속 이 결과에 남는다 — 자연키 UNIQUE가 인덱스를 주므로
@@ -20,10 +23,15 @@ SELECT thesis.id,
        thesis.prob_up,
        thesis.prob_down,
        thesis.prob_flat,
-       horizon.horizon_days
+       horizon.horizon_days,
+       thesis.run_slot,
+       -- 장중 슬롯의 채점 기준가. 모델이 실제로 본 값이라 봉에서 다시 뽑지 않는다
+       -- (`index_bar/select_intraday_horizon_return.sql` 머리말). 장전 슬롯은 이 칸이
+       -- NULL이고 기준가를 전일 종가에서 얻는다.
+       thesis.input_state #>> ARRAY['intraday', thesis.subject_code, 'price'] AS base_price
 FROM thesis
 CROSS JOIN unnest(%s::integer[]) AS horizon(horizon_days)
-WHERE thesis.run_slot = 'pre_open'
+WHERE thesis.run_slot = ANY(%s)
   AND NOT EXISTS (
       SELECT 1
       FROM thesis_outcome

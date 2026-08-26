@@ -53,6 +53,7 @@ import logging
 from collections.abc import Mapping, Sequence
 from datetime import datetime
 from decimal import ROUND_HALF_UP, Decimal
+from types import MappingProxyType
 from typing import Annotated, Any, Literal, TypedDict
 
 from langchain_core.language_models import BaseChatModel
@@ -84,10 +85,12 @@ from modules.thesis_domain import (
     kst_label,
 )
 from modules.thesis_state import (
+    INTRADAY_SLOTS,
     NxtObservedState,
     ObservedState,
     PastThesis,
     RunSlot,
+    SameDayThesis,
 )
 from modules.thesis_toolbox import (
     ThesisToolbox,
@@ -228,7 +231,9 @@ SYSTEM_PROMPT = f"""너는 시장 추론 기록기다. 주어진 관측 상태�
 
 세 확률은 **그 일이 실제로 일어날 빈도**다. 네 확신의 정도가 아니다.
 
-- `prob_flat`은 그 세션의 등락률이 **±{FLAT_THRESHOLD_PCT[0]}% 안**에 들어올 확률이다.
+- `prob_flat`은 채점 창의 등락률이 **±{FLAT_THRESHOLD_PCT[0]}% 안**에 들어올 확률이다.
+  장전·장후는 그 세션 하루이고, **장중이면 지금 가격에서 마감까지**다 — 남은 시간이
+  짧을수록 실제 `flat` 빈도는 아래 기준선보다 높다.
   "방향을 모르겠다"가 아니다. 모르겠으면 `prob_up`과 `prob_down`을 비슷하게 두는 것이
   맞고, `prob_flat`을 올리는 것은 틀리다. RSI 중립이나 히스토그램 0 근처는 방향 정보가
   없다는 뜻이지 등락률이 작을 것이라는 뜻이 아니다.
@@ -262,6 +267,16 @@ SLOT_INSTRUCTION = {
         "오늘 한국 장이 열리기 전이다. 밤사이 해외 시장과 전일 국내 세션을 근거로 "
         "**오늘 각 대상이 어느 방향으로 움직일지**를 가설로 적어라."
     ),
+    **{
+        slot: (
+            "지금 한국 장이 열려 있다. 관측 상태의 `intraday`가 **기준 시각의 현재가**"
+            "(`price`)와 어느 봉을 봤는지(`bar_at`), 그리고 전일 종가 대비 여기까지의 "
+            "등락(`return_pct`)이다. **지금 이 가격에서 오늘 마감까지 어느 방향으로 "
+            "움직일지**를 가설로 적어라. 전일 종가 대비가 아니라 **지금 가격 대비**다 — "
+            "이미 오른 만큼은 네 예측에 들어가지 않는다."
+        )
+        for slot in INTRADAY_SLOTS
+    },
     RunSlot.POST_CLOSE: ("오늘 한국 장이 닫혔다. 오늘의 세션 등락을 근거로 **왜 그렇게 움직였는지**를 가설로 적어라."),
     RunSlot.POST_NXT_CLOSE: (
         "한국 정규장(KRX)이 15:30에 닫히고 NXT 애프터마켓이 20:00에 닫혔다. 관측 상태에 "
@@ -287,11 +302,25 @@ INSTRUCTION = """{slot_instruction}
 {observed_state}
 ```
 
-## 과거 추론과 결과
-같은 대상에 대해 전에 낸 추론과 그 채점·해설이다. `run_slot`이 두 가지를 가른다.
+## 오늘 앞 슬롯
+오늘 같은 대상에 대해 **이미 낸 추론**과 그 뒤 실제로 얼마나 움직였는지다. `base_price`가
+그 슬롯의 기준가, `current_price`가 지금 가격, `return_pct`가 그 사이 등락이다.
 
-- `pre_open` — 그날 장 열리기 전의 **예측**이다. `outcomes`의 `actual_return_pct`가 실제
-  등락이고 `brier_score`가 그 예측의 점수다(낮을수록 맞은 것). 네가 지금 내는 것과 같은 종류다.
+아직 채점되지 않은 값이다 — 확정 종가가 저녁에 들어오고 점수는 그때 매겨진다. 여기 있는
+것은 **중간 경과**다.
+
+앞 슬롯과 방향이 달라져도 된다. 새 정보가 그렇게 말하면 바꾸는 것이 맞다. 다만 **왜
+바뀌었는지가 이유 문장에 있어야 한다.** 반대로 앞 슬롯이 이미 빗나가고 있는데 같은 이유를
+그대로 반복하면 그 기록은 아무 것도 더하지 않는다.
+{same_day}
+
+## 과거 추론과 결과
+같은 대상에 대해 **지난 날들에** 낸 추론과 그 채점·해설이다. `run_slot`이 종류를 가른다.
+
+- `pre_open`과 `intraday_*`·`pre_close` — 그 시점의 **예측**이다. `outcomes`의
+  `actual_return_pct`가 실제 등락이고 `brier_score`가 그 예측의 점수다(낮을수록 맞은 것).
+  네가 지금 내는 것과 같은 종류다. **기준가가 슬롯마다 다르다** — 장전은 전일 종가 대비,
+  장중은 그 시각 가격 대비다.
 - `post_close` — 장이 닫힌 뒤 "왜 그렇게 움직였나"를 적은 **해석**이다. 예측이 아니라
   채점이 없다. 채점 칸이 비어 있다고 빗나간 예측으로 읽지 마라.
 
@@ -303,7 +332,19 @@ INSTRUCTION = """{slot_instruction}
 """
 
 # 과거 추론이 없을 때 그 절에 넣는 말. 절 자체를 빼면 프롬프트 모양이 날마다 달라진다.
+# 오늘 앞 슬롯도 같다 — 장전·장후는 언제나 "(없음)"이고 장중 첫 슬롯도 그렇다.
 NO_PAST_THESES = "(없음)"
+
+def _json_section(rows: Mapping[str, Sequence[BaseModel]]) -> str:
+    """subject 코드별 모델 목록을 프롬프트 블록으로. 비면 `NO_PAST_THESES`다.
+
+    **절 자체를 빼지 않는다.** 빼면 프롬프트 모양이 날마다 달라져 캐시도 비교도 어긋난다.
+    """
+    shown = {code: [row.model_dump(mode="json") for row in items] for code, items in rows.items() if items}
+    if not shown:
+        return NO_PAST_THESES
+    return f"```json\n{json.dumps(shown, ensure_ascii=False, indent=2)}\n```"
+
 
 REPAIR_INSTRUCTION = (
     "이전 응답을 쓸 수 없다. 요청 목록의 subject_code만 쓰고, 세 확률의 합을 정확히 1로 맞추고, "
@@ -359,18 +400,19 @@ class ThesisBuilder:
         subjects: Sequence[Subject],
         observed_state: ObservedState | NxtObservedState,
         past_theses: Mapping[str, Sequence[PastThesis]],
+        same_day: Mapping[str, Sequence[SameDayThesis]] = MappingProxyType({}),
     ) -> list[BaseMessage]:
         """`past_theses`는 subject 코드별 과거 추론 목록(`thesis.past_theses`의 행)이다.
 
         빈 매핑이면 그 절에 `NO_PAST_THESES`가 들어간다. 장후 리뷰가 그 경우다.
 
+        `same_day`는 **오늘 앞 슬롯**의 추론과 그 뒤 실현 등락이다. 장중 슬롯만 채우고
+        나머지는 비운다. 저장된 채점이 아니라 봉에서 계산한 중간 경과라 `past_theses`와
+        절을 나눈다 — 섞으면 모델이 채점된 값으로 읽는다.
+
         **모양은 모델이 정한다**(`thesis_state`). 여기서 하는 것은 JSON으로 바꾸는 것뿐이다.
         """
         subject_lines = "\n".join(f"- {subject.code} ({subject.label}, {subject.kind.value})" for subject in subjects)
-        shown = {
-            code: [past.model_dump(mode="json") for past in rows] for code, rows in past_theses.items() if rows
-        }
-        past_section = f"```json\n{json.dumps(shown, ensure_ascii=False, indent=2)}\n```" if shown else NO_PAST_THESES
         return [
             SystemMessage(SYSTEM_PROMPT),
             HumanMessage(
@@ -379,7 +421,8 @@ class ThesisBuilder:
                     as_of_at=kst_label(as_of_at),
                     subjects=subject_lines or "(없음)",
                     observed_state=json.dumps(observed_state.model_dump(mode="json"), ensure_ascii=False, indent=2),
-                    past_theses=past_section,
+                    same_day=_json_section(same_day),
+                    past_theses=_json_section(past_theses),
                 )
             ),
         ]
@@ -392,6 +435,7 @@ class ThesisBuilder:
         subjects: Sequence[Subject],
         observed_state: ObservedState | NxtObservedState,
         past_theses: Mapping[str, Sequence[PastThesis]],
+        same_day: Mapping[str, Sequence[SameDayThesis]] = MappingProxyType({}),
     ) -> tuple[tuple[ThesisDraft, ...], int]:
         """추론들과 툴 왕복 수. 두 번째도 실패하면 `ThesisError`를 올린다."""
         if not subjects:
@@ -403,6 +447,7 @@ class ThesisBuilder:
                 subjects=subjects,
                 observed_state=observed_state,
                 past_theses=past_theses,
+                same_day=same_day,
             ),
             "subjects": tuple(subjects),
             "tool_rounds": 0,

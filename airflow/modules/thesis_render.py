@@ -52,9 +52,11 @@ from decimal import Decimal
 from typing import Any
 
 from modules.thesis_domain import (
+    SLOT_LABELS,
     ThesisVerdict,
 )
 from modules.thesis_state import (
+    INTRADAY_SLOTS,
     RunSlot,
 )
 from modules.thesis_store import (
@@ -79,10 +81,14 @@ VERDICT_TIE_GAP = Decimal("0.05")
 # 묻힌다. T+5가 해설이 가장 굳은 시점이기도 하다.
 SLACK_REVIEW_HORIZON = 5
 
+# 헤더는 이모지 + 라벨이다. **장중 넷은 이모지가 같고 시각으로 갈린다** — 하루 다섯 건이
+# 같은 채널에 쌓이므로 "언제 기준인가"가 값의 절반이다(차트·표 표기 규칙과 같은 이유).
+# 라벨의 원본은 `thesis_domain.SLOT_LABELS`라 스케줄을 옮기면 여기도 따라온다.
 SLOT_HEADERS = {
-    RunSlot.PRE_OPEN: "🔮 장전 전망",
-    RunSlot.POST_CLOSE: "🔎 장후 리뷰",
-    RunSlot.POST_NXT_CLOSE: "🌙 애프터마켓 리뷰",
+    RunSlot.PRE_OPEN: f"🔮 {SLOT_LABELS[RunSlot.PRE_OPEN]}",
+    **{slot: f"⏱ {SLOT_LABELS[slot]}" for slot in INTRADAY_SLOTS},
+    RunSlot.POST_CLOSE: f"🔎 {SLOT_LABELS[RunSlot.POST_CLOSE]}",
+    RunSlot.POST_NXT_CLOSE: f"🌙 {SLOT_LABELS[RunSlot.POST_NXT_CLOSE]}",
 }
 
 DIRECTION_MARKS = {"up": "▲", "down": "▼", "flat": "–"}

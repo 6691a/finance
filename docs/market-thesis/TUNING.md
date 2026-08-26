@@ -137,11 +137,11 @@ GROUP BY run_slot;
 
 | 손잡이 | 지금 값 | 사는 곳 | 무엇을 보고 | 어느 방향 |
 | --- | --- | --- | --- | --- |
-| `FLAT_THRESHOLD_PCT` | `{0:0.3, 1:0.3, 3:0.5, 5:0.7}` | `thesis.py` | 지평별 `flat` 비율 | 한 지평만 5% 아래면 그 값을 **올리고** 60% 위면 **낮춘다**(2026-08-25 정정 — 반대로 적혀 있었다. 임계를 낮추면 `flat`이 더 희귀해진다). 고치면 `FLAT_BASE_RATE_PCT`도 다시 잰다. **실측이 아니라 `0.3 × sqrt(N)` 반올림이다** — 조정 조건은 코드 주석이 원본 |
+| `FLAT_THRESHOLD_PCT` | `{0:0.3, 1:0.3, 3:0.5, 5:0.7}` | `thesis.py` | 지평별 **그리고 슬롯별** `flat` 비율 | 한 지평만 5% 아래면 그 값을 **올리고** 60% 위면 **낮춘다**(2026-08-25 정정 — 반대로 적혀 있었다. 임계를 낮추면 `flat`이 더 희귀해진다). 고치면 `FLAT_BASE_RATE_PCT`도 다시 잰다. **실측이 아니라 `0.3 × sqrt(N)` 반올림이다** — 조정 조건은 코드 주석이 원본. **2026-08-26부터 T+0 창이 슬롯마다 다르다** — 14:35 슬롯은 55분뿐이라 같은 임계로 `flat`이 과다해질 수 있다. 슬롯별로 비율을 갈라 보고, 갈리면 그때 지평이 아니라 슬롯 축으로 임계를 나눌지 정한다 |
 | `INDEX_SUBJECTS` + `instrument.is_watched` | KOSPI·코스닥 + watched 종목 | `thesis.py` / `instrument` 테이블 | 표본 수 | **표본을 늘리는 가장 싼 손잡이다.** LLM 호출 수는 그대로고 날짜당 건수만 는다([5-followup.md](5-followup.md) 12절). 단 독립 사건 수는 안 는다 — 1절 |
 | `NarrativeVariant` 기본 | `INFORMED` | `thesis.py`, `FollowupNarrator.__init__` | 분기 Brier + `verdict` 분포 | 노트북 재실행으로 재검증. `BLIND`가 남아 있어 되돌리기가 인자 하나다 |
 | `HORIZON_DAYS` | `(0,1,3,5)` | `thesis.py` `HORIZON_DAYS`·`NARRATED_HORIZON_DAYS`, `ops.py` `THESIS_HORIZONS`, DB CHECK — **네 곳** | LLM 호출 비용 | 비용이 문제면 **해설만** T+5 하나로 줄인다. 채점은 SQL이라 공짜다. 네 곳을 같은 커밋에서 만진다 |
-| `PREFETCHED_PAST_THESES` | 5 | `thesis.py` | 도입 전후 지평별 Brier 추이 | 장전 프롬프트에 미리 싣는 과거 추론 수. **슬롯마다다** — 장전 예측 5건과 장후 리뷰 5건이라 최대 10행이고 프롬프트 길이도 그만큼이다. **효과가 관측되지 않으면 0으로 끈다**([5-followup.md](5-followup.md) 5절) — 절은 `(없음)`이 되고 `thesis_precedent` 엣지도 안 남는다. `past_theses` 툴은 그대로다. 분기 판단 |
+| `PREFETCHED_PAST_THESES` | 2 | `thesis.py` | 도입 전후 지평별 Brier 추이 | 장전·장중 프롬프트에 미리 싣는 과거 추론 수. **슬롯마다다** — 슬롯이 여섯이라 최대 12행이고 프롬프트 길이도 그만큼이다. 5에서 2로 내린 것이 2026-08-26 장중 슬롯 추가 때다(그대로 두면 30행). **효과가 관측되지 않으면 0으로 끈다**([5-followup.md](5-followup.md) 5절) — 절은 `(없음)`이 되고 `thesis_precedent` 엣지도 안 남는다. `past_theses` 툴은 그대로다. 분기 판단 |
 | 툴 개수 | 14 | 같은 곳 | **어떤 툴을 실제로 부르는지**와 `tool_rounds` 분포 | 한 번도 안 불리는 툴은 뺀다(문맥만 먹는다). 반대로 상한에 붙어 있으면 왕복을 늘린다. **서브 에이전트로 나누는 것은 여기서 판단한다** — 아래 참고 |
 | `verdict` 값 셋 | `supported`/`contradicted`/`unresolved` | `analysis.py` + CHECK | `contradicted` 비율 | 60% 위가 유지되면 "반박"과 "다른 원인 지목"을 가를지 본다. **지금은 안 가른다** |
 | `MAX_TOOL_ROUNDS` / `MAX_TOOL_CALLS` / `MAX_TOOL_RESULT_CHARS` | 3 / 20 / 40,000 | `thesis.py` | 쿼리 B의 분포 | 상한에 붙어 있으면 올린다. **값이 인자 모델(`RecentDocumentsArgs` 등)의 `Field(description=...)`에 f-string으로 실려 프롬프트가 자동으로 따라간다** |
@@ -151,6 +151,9 @@ GROUP BY run_slot;
 | `SIGNAL_STATE_DAYS` / `MAX_STATE_SIGNALS` | 30일 / 3건 | `thesis_common.py` | 프롬프트 길이 | 관측 상태에 싣는 신호의 창과 개수. 툴(`SIGNAL_HISTORY_DAYS`, 90일)보다 짧다 |
 | `THESIS_WINDOW_DAYS` | 28 | `ops.py` | — | 판을 올린 직후엔 짧게 줄여 새 판만 본다 |
 | 스케줄 | 08:35 / 20:30 KST | `market_thesis_forecast.py` / `market_thesis_review.py` | 쿼리 C + readiness 재시도 | 재시도가 잦으면 늦춘다. 08:35는 문서 평가(매시 25분) 뒤, 20:30은 확정 종가(18:10) 뒤라는 제약이 있다 |
+| 장중 스케줄 | 10:35 / 12:35 / 14:35 / 15:00 KST | `thesis_state.INTRADAY_SLOT_TIMES` + `market_thesis_intraday.SCHEDULE` — **두 곳** | 같은 것 + 슬롯별 발행률 | 앞의 셋은 문서 평가(:25) 뒤라 :35다. 15:00은 "마감 30분 전"이 목적이라 그 제약을 안 받는다. **두 곳을 같은 커밋에서 만진다** — 테스트가 대조하고, 어긋나면 `resolve_slot`이 실행을 죽인다. 슬롯 라벨은 표에서 만들어져 따라온다 |
+| `BAR_STALENESS` | 15분 | `thesis_intraday.py` | `ThesisNotReady`의 "older than" 건수 | 정상인 날 guard가 막으면 늘린다. 지수는 `*/5`, 종목은 WebSocket이라 정상이면 5분 안이다. 반대로 이 값이 크면 오래된 가격을 "지금"으로 읽는다 |
+| 장중 `retries` / `execution_timeout` | 1 × 5분 / 15분 | `market_thesis_intraday.py` | `AirflowTaskTimeout` 건수와 슬롯 간 밀림 | 최악 40분에 묶어 앞 슬롯이 다음 슬롯을 막지 않게 한 값이다. 늘리려면 **슬롯 간격 2시간 안에** 들어와야 한다. 장전·장후(3 × 10분 / 30분)와 일부러 다르다 |
 | `ASSESSMENT_LAG` | 20분 | 같은 파일 | 같은 것 | 평가가 정상인데 guard가 막으면 늘린다 |
 | `thesis_model()` | `grok-4.6` | `llm.py` | 분기 Brier | 교체는 `PROMPT_VERSION`과 **함께** 올린다(1절 넷째) |
 | `THESIS_TIMEOUT_SECONDS` | 1800 | `llm.py` | 타임아웃 실패 건수 | 2026-08-21 첫 실행이 300초에서 죽어 900으로, 툴이 11개로 늘면서 2026-08-22에 1800으로 올렸다. **1800은 관측이 아니라 예방이다** — 900에서 죽은 실행은 아직 없다. 다음 실행들의 실제 소요를 보고 되돌릴 여지가 있다. 또 걸리면 툴 상한(`MAX_TOOL_ROUNDS`)을 먼저 의심한다 — 왕복이 늘수록 한 요청이 길어진다. 문서 태깅의 `REQUEST_TIMEOUT_SECONDS`(300)는 따로다 |
@@ -177,9 +180,12 @@ ops 브리핑의 **추론 적체** 한 줄. **여기서 즉시 대응하는 것�
 
 2절의 손으로 읽는 넷 + `flat` 분포. 대상 손잡이:
 
-- `FLAT_THRESHOLD_PCT` — 지평별 `flat` 비율
+- `FLAT_THRESHOLD_PCT` — 지평별·슬롯별 `flat` 비율
 - `MAX_TOOL_*` — 쿼리 B
-- `SCHEDULE` / `ASSESSMENT_LAG` — 쿼리 C
+- `SCHEDULE` / `ASSESSMENT_LAG` / 장중 스케줄 / `BAR_STALENESS` — 쿼리 C
+- **슬롯별 T+0 Brier** — 여기서 처음 "어느 시간대 예측이 나은가"가 보인다. 15:00이
+  08:35보다 나은 것은 당연하고(남은 시간이 짧다), 볼 것은 격차가 시간에 비례하는지
+  아니면 특정 슬롯이 유독 나쁜지다
 - `INDEX_SUBJECTS` — 쿼리 A로 커버리지를 확인한 뒤 표본을 늘릴지
 - **4단계 Neo4j 유지 여부** — [4-graph.md](4-graph.md)가 이 시점을 지목한다
 
@@ -198,6 +204,8 @@ ops 브리핑의 **추론 적체** 한 줄. **여기서 즉시 대응하는 것�
 | 신호 | 뜻 | 손잡이 |
 | --- | --- | --- |
 | 한 지평만 `flat` < 5% 또는 > 60% | 그 지평의 임계가 틀렸다 | `FLAT_THRESHOLD_PCT[해당 지평]` |
+| 장중 한 슬롯만 `flat` > 60% | T+0 창 길이가 슬롯마다 다른 것이 임계에 안 반영됐다 | 슬롯 축 임계 도입 검토(9-intraday.md 10절) |
+| 장중 슬롯이 readiness로 자주 죽는다 | 봉 또는 문서 평가가 그 시각에 안 온다 | 장중 스케줄 또는 `BAR_STALENESS` |
 | `unresolved` < 20% | 모델이 억지로 판정 중 | 해설 프롬프트 + `NARRATIVE_PROMPT_VERSION` |
 | `contradicted` > 60% 유지 | "반박"과 "다른 원인 지목"이 뭉개짐 | `verdict` 4번째 값 검토 |
 | Slack 블록 45 근접 | 한도 50 임박 | 메시지 분할([3-dag-slack.md](3-dag-slack.md) 4절) |

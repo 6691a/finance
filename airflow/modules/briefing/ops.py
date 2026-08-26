@@ -34,6 +34,7 @@ from pydantic import AwareDatetime, BaseModel, ConfigDict
 from modules.briefing import blocks, documents
 from modules.db import Connection, Cursor
 from modules.sql import read_sql
+from modules.thesis_state import FORECAST_SLOTS, NARRATED_SLOTS
 from modules.utility import KST_TIMEZONE
 
 BRIEFING_WINDOW = read_sql("postgres", "source_record", "select_briefing_window.sql")
@@ -239,7 +240,10 @@ class OpsBriefingReader:
         today = self.now.astimezone(KST_TIMEZONE).date()
         cursor.execute(THESIS_CALIBRATION, (since,))
         rows = cursor.fetchall()
-        cursor.execute(THESIS_BACKLOG, (list(THESIS_HORIZONS), since, today))
+        cursor.execute(
+            THESIS_BACKLOG,
+            (list(THESIS_HORIZONS), since, list(FORECAST_SLOTS), list(NARRATED_SLOTS), today),
+        )
         backlog = cursor.fetchone()
         return ThesisHealth(
             horizons=tuple(

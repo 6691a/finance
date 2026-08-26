@@ -1,9 +1,10 @@
 # 시장 추론(thesis) 기록 설계 — 개요
 
 - 날짜: 2026-08-20 (2026-08-21 리뷰 반영 후 단계별 문서로 분리, 2026-08-22 6·7단계 추가,
-  2026-08-24 8단계 추가)
-- 상태: 1·2·3·5·6·7·8단계 구현 완료(6·7단계는 2026-08-22, 8단계는 2026-08-24,
-  리비전 넷 운영 반영 전), 4단계(그래프) 미착수. 운영 배포 전 선행 조건은 5절
+  2026-08-24 8단계 추가, 2026-08-26 9단계 추가)
+- 상태: 1·2·3·5·6·7·8·9단계 구현 완료(6·7단계는 2026-08-22, 8단계는 2026-08-24,
+  9단계는 2026-08-26, 리비전 다섯 운영 반영 전), 4단계(그래프) 미착수.
+  운영 배포 전 선행 조건은 5절
 
 한 문서로 쓰기엔 범위가 커서(모델·리비전, 모듈 둘, DAG, SQL 열 개, 테스트 넷, compose·
 requirements) **배포 단위(worktree/PR 하나)마다 문서를 나눴다.** 이 파일은 공통 원칙과
@@ -16,6 +17,9 @@ requirements) **배포 단위(worktree/PR 하나)마다 문서를 나눴다.** �
 
 - **장후**: "지수·종목이 오늘 올랐다 → 이유는 이것 같다" — 사후 해석(review)
 - **장전**: "오늘 오를 것 같다 → 근거는 이런 밤사이 지수·기사" — 전망(forecast)
+- **장중**: "지금 이 가격에서 마감까지 이렇게 갈 것 같다" — 장중 전망
+  (2026-08-26, [9-intraday.md](9-intraday.md)). 아침 한 번으로는 개장 뒤에 나온
+  공시·기사·수급을 그날 판단에 못 싣는다
 
 **맞고 틀림은 목적이 아니다.** 정답은 시간이 지나야 알고, 맞추기도 어렵다. 목적은
 "어떤 정보를 근거로 어떤 결론을 냈다"가 기록으로 남는 것이다. 추론과 근거가 노드·엣지로
@@ -62,6 +66,7 @@ requirements) **배포 단위(worktree/PR 하나)마다 문서를 나눴다.** �
 | 6 | [6-analyst.md](6-analyst.md) | `stock_analyst_opinion` 테이블과 리비전, `collectors/kis_analyst_opinion.py`, `dags/kis_analyst_opinion_daily.py`, `analyst_opinions` 툴, `SourceKind.research`와 네이버 리서치 출처 여섯(`document_listings.py`의 `enrich` 단계), 테스트 | 5 | 없음(리포트는 기존 문서 평가가 읽는다) |
 | 7 | [7-nxt-review.md](7-nxt-review.md) | `post_nxt_close` 슬롯, `thesis_nxt_review.py`, `market_thesis_nxt_review` DAG, 애프터마켓 조회 SQL, 수기 리비전(CHECK 확장) | 1, 2, 3 | 있음 |
 | 8 | [8-expectation.md](8-expectation.md) | `stock_event_claim`·`stock_event_extraction`·`stock_event_outcome`과 수기 리비전, `modules/expectation_domain.py`·`expectation_extraction.py`·`expectation_judgment.py`, `event_expectation_hourly` DAG, `event_surprises` 툴, 컨센서스 수집기(후행) | 2, 6 | 추출만 |
+| 9 | [9-intraday.md](9-intraday.md) | 장중 슬롯 넷과 수기 리비전, `thesis_intraday.py`, `market_thesis_intraday` DAG, 장중 봉·되짚기·채점 SQL 다섯, 채점·해설 슬롯 목록 파라미터화 | 1, 2, 3, 5 | 있음 |
 
 **5단계는 1단계의 `thesis` 채점 컬럼을 `thesis_outcome`으로 옮긴다.** 채택했으므로
 (2026-08-21) 그 이동을 1·2단계 코드에 먼저 반영한다. 무엇이 바뀌는지는
@@ -75,6 +80,9 @@ requirements) **배포 단위(worktree/PR 하나)마다 문서를 나눴다.** �
 - **7은 5와 독립이다.** 애프터마켓 리뷰는 예측이 아니라 채점 대상이 아니고 해설도 붙이지
   않아, 5단계의 채점·해설 루프와 만나지 않는다. 다만 그 루프가 새 슬롯을 **자동으로** 집지
   않도록 두 SQL에 슬롯 목록을 걸어야 한다([7-nxt-review.md](7-nxt-review.md) 3절).
+- **9는 반대로 5의 루프 안으로 들어간다.** 장중 슬롯은 예측이라 채점 대상이고 해설도
+  받는다. 7이 리터럴로 걸어 둔 슬롯 목록을 그래서 파라미터로 바꿨다 —
+  원본이 `thesis_state`의 `FORECAST_SLOTS`·`NARRATED_SLOTS` 둘이다.
 - 한 단계가 끝날 때마다 그 단계 문서의 "테스트" 절이 통과해야 다음으로 간다.
 
 **[TUNING.md](TUNING.md)는 단계가 아니다.** 다 만든 뒤에 쓰는 운영 규칙이라 번호가 없다 —
@@ -113,7 +121,6 @@ requirements) **배포 단위(worktree/PR 하나)마다 문서를 나눴다.** �
 - **급변 구간 탐지기** — 이전 반복(2026-08-20)에서 만들었다 접었다. 추론 근거는 세션·창
   단위 등락률로 충분히 시작할 수 있고, 분 단위 급변 탐지가 다시 필요해지면 그때
   Toolbox 툴 하나로 붙인다.
-- **장중 추론** — 장전·장후 두 번이 이번 범위다.
 - **추론 재시도·재평가** — 실패한 추론은 그 슬롯에 없던 것으로 남는다. 다음 슬롯이 새로 쓴다.
 - **체크포인터** — 재실행 단위는 Airflow 태스크다(프로젝트 공통 규칙).
 - **`apps/core/graph.py`** — 그래프를 읽는 소비자(대시보드·API)가 생길 때 만든다.

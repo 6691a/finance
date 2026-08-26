@@ -63,6 +63,9 @@ from modules.thesis_render import (
     render_text,
 )
 from modules.thesis_state import (
+    FORECAST_SLOTS,
+    INTRADAY_SLOTS,
+    NARRATED_SLOTS,
     IndexObservation,
     ObservedState,
     RunSlot,
@@ -87,6 +90,13 @@ OUTCOME_SELECT_BY_IDS = read_sql("postgres", "thesis_outcome", "select_by_thesis
 NTH_OPEN_DAY = read_sql("postgres", "market_session", "select_nth_open_day.sql")
 STOCK_HORIZON_RETURN = read_sql("postgres", "stock_investor_trade_daily", "select_horizon_return.sql")
 INDEX_HORIZON_RETURN = read_sql("postgres", "index_bar", "select_horizon_return.sql")
+STOCK_INTRADAY_HORIZON_RETURN = read_sql(
+    "postgres", "stock_investor_trade_daily", "select_intraday_horizon_return.sql"
+)
+INDEX_INTRADAY_HORIZON_RETURN = read_sql("postgres", "index_bar", "select_intraday_horizon_return.sql")
+INDEX_LATEST_BEFORE = read_sql("postgres", "index_bar", "select_latest_before.sql")
+STOCK_LATEST_BEFORE = read_sql("postgres", "stock_bar", "select_latest_before.sql")
+SAME_DAY_THESES = read_sql("postgres", "thesis", "select_same_day.sql")
 EVIDENCE_INSERT = read_sql("postgres", "thesis_evidence", "insert.sql")
 PRECEDENT_INSERT = read_sql("postgres", "thesis_precedent", "insert.sql")
 EVIDENCE_SELECT_ALL = read_sql("postgres", "thesis_evidence", "select_by_thesis_ids.sql")
@@ -362,7 +372,10 @@ def test_the_thesis_row_carries_no_grading_columns():
 def test_grading_scan_covers_every_horizon_and_has_no_date_limit():
     predicate = body(PENDING_GRADES)
 
-    assert "run_slot = 'pre_open'" in predicate
+    # 슬롯 목록도 지평 목록과 같은 이유로 파라미터다. 리터럴로 박으면 슬롯이 늘 때
+    # 파이썬만 고쳐지고 SQL이 옛 목록을 들고 있는 날이 온다.
+    assert "thesis.run_slot = ANY(%s)" in predicate
+    assert "'pre_open'" not in predicate
     # 지평 목록은 파라미터다. 상수를 SQL과 파이썬 두 곳에 두면 한쪽만 고쳐지는 날이 온다.
     assert "unnest(%s::integer[])" in predicate
     assert "thesis_outcome.evaluated_at IS NOT NULL" in predicate
@@ -420,6 +433,59 @@ def test_session_return_reads_the_settled_close_not_the_minute_bars():
     assert "return_pct" in query
 
 
+@pytest.mark.parametrize("statement", [STOCK_INTRADAY_HORIZON_RETURN, INDEX_INTRADAY_HORIZON_RETURN])
+def test_intraday_horizon_returns_take_the_base_price_as_a_parameter(statement):
+    """장중 슬롯의 분모는 **모델이 실제로 본 가격**이다.
+
+    봉에서 다시 뽑으면 그 사이 수집 재실행이 없던 봉을 채워 "직전 봉"이 달라질 수 있다.
+    그러면 프롬프트가 보여 준 기준가와 채점 분모가 어긋난다.
+    """
+    query = body(statement)
+
+    assert "unnest(%s::text[], %s::numeric[])" in query
+    assert "base_close" in query
+    assert "target_close" in query
+    assert "return_pct" in query
+    # 전일 종가는 장전 슬롯의 분모다. 여기 끼면 두 슬롯이 같은 것을 재게 된다.
+    assert "previous_close" not in query
+
+
+def test_the_intraday_stock_return_still_reads_the_settled_close():
+    query = body(STOCK_INTRADAY_HORIZON_RETURN)
+
+    # 목표가는 기준가와 달리 확정 종가다. 분봉의 is_final은 세션 완결이 아니다.
+    assert "stock_investor_trade_daily" in query
+    assert "close_price" in query
+    assert "stock_bar" not in query
+
+
+@pytest.mark.parametrize("statement", [INDEX_LATEST_BEFORE, STOCK_LATEST_BEFORE])
+def test_the_intraday_bar_lookup_is_bounded_on_both_sides(statement):
+    """상한이 없으면 안 끝난 봉을, 하한이 없으면 어제 마감 봉을 "지금 가격"으로 읽는다."""
+    query = body(statement)
+
+    assert "DISTINCT ON" in query
+    assert "bar_at < %s" in query
+    assert "bar_at >= %s" in query
+    # 장중 봉은 잠정이 정상이다. 확정을 기다리면 장중 추론이 영영 서지 않는다.
+    assert "is_final" not in query
+
+
+def test_the_intraday_stock_bars_come_from_krx_only():
+    # NXT는 같은 종목의 별도 체결이라 섞으면 같은 시각에 값이 둘이 된다.
+    assert "exchange = 'KRX'" in body(STOCK_LATEST_BEFORE)
+
+
+def test_the_same_day_lookback_stays_inside_today_and_before_the_cutoff():
+    query = body(SAME_DAY_THESES)
+
+    assert "run_date = %s" in query
+    assert "as_of_at < %s" in query
+    # 채점 조인이 없다. 당일 결과는 아직 없고, 있는 것처럼 보이면 모델이 점수로 읽는다.
+    assert "thesis_outcome" not in query
+    assert "brier_score" not in query
+
+
 def test_index_session_return_takes_its_bar_time_as_a_parameter():
     query = body(INDEX_SESSION_RETURN)
 
@@ -442,6 +508,11 @@ def test_index_session_return_takes_its_bar_time_as_a_parameter():
         INDEX_SESSION_RETURN,
         STOCK_HORIZON_RETURN,
         INDEX_HORIZON_RETURN,
+        STOCK_INTRADAY_HORIZON_RETURN,
+        INDEX_INTRADAY_HORIZON_RETURN,
+        INDEX_LATEST_BEFORE,
+        STOCK_LATEST_BEFORE,
+        SAME_DAY_THESES,
         NXT_AFTER_HOURS,
     ],
 )
@@ -2219,7 +2290,8 @@ def test_past_theses_clamps_its_count(given, expected):
 
     _, parameters = connection.calls[0]
     assert parameters[0] == AS_OF
-    assert parameters[2] == expected
+    assert parameters[2] == "KOSPI"
+    assert parameters[3] == expected
 
 
 def test_past_theses_results_never_become_evidence():
@@ -2251,8 +2323,10 @@ def test_past_theses_cuts_its_window_at_the_slot_time():
 def test_past_theses_returns_reviews_beside_forecasts():
     query = body(PAST_THESES)
 
-    # 장후 리뷰의 사후 해설이 다음 예측으로 돌아오는 길이 이것 하나다.
-    assert "thesis.run_slot IN ('pre_open', 'post_close')" in query
+    # 장후 리뷰의 사후 해설이 다음 예측으로 돌아오는 길이 이것 하나다. 슬롯 목록은
+    # 파라미터이고 원본은 `thesis_state.NARRATED_SLOTS`다.
+    assert "thesis.run_slot = ANY(%s)" in query
+    assert "'post_close'" not in query
     # 건수 상한은 슬롯마다다. 총량으로 자르면 장후가 들어온 만큼 장전 예측 이력이 짧아진다.
     assert "PARTITION BY thesis.run_slot" in query
     assert "WHERE slot_rank <= %s" in query
@@ -2352,13 +2426,18 @@ def test_narratives_and_backlog_watch_the_same_slots():
     """
     narratives = body(PENDING_NARRATIVES)
     backlog = body(THESIS_BACKLOG)
-    narrated_slots = "IN ('pre_open', 'post_close')"
 
-    assert narrated_slots in narratives
-    assert narrated_slots in backlog
+    # 둘 다 리터럴이 아니라 파라미터로 받는다. 같은 상수를 보게 만드는 것이 어긋남을
+    # 막는 방법이고, 그 상수는 `thesis_state.NARRATED_SLOTS` 하나다.
+    assert "thesis.run_slot = ANY(%s)" in narratives
+    assert "due.run_slot = ANY(%s)" in backlog
+    assert "'pre_open'" not in narratives
+    assert "'pre_open'" not in backlog
     # NXT 애프터마켓 리뷰는 아직 해설 루프 밖이다(`docs/market-thesis/7-nxt-review.md` 3절).
-    assert "post_nxt_close" not in narratives
-    assert "post_nxt_close" not in backlog
+    assert RunSlot.POST_NXT_CLOSE not in NARRATED_SLOTS
+    # 채점 슬롯은 예측만이다. 리뷰 둘은 맞고 틀림을 물을 대상이 아니다.
+    assert set(FORECAST_SLOTS) == {RunSlot.PRE_OPEN, *INTRADAY_SLOTS}
+    assert set(NARRATED_SLOTS) == {*FORECAST_SLOTS, RunSlot.POST_CLOSE}
 
 
 def test_the_narrative_write_never_overwrites():
@@ -2681,7 +2760,7 @@ def test_past_theses_carries_the_id_the_edge_needs():
     assert rows[0].outcomes[0].verdict == "contradicted"
     assert rows[0].run_date == date(2026, 8, 20)
     _, parameters = connection.calls[0]
-    assert parameters == (AS_OF, "KOSPI", PREFETCHED_PAST_THESES)
+    assert parameters == (AS_OF, list(NARRATED_SLOTS), "KOSPI", PREFETCHED_PAST_THESES)
 
 
 def test_past_theses_zero_is_the_off_switch():

@@ -13,7 +13,7 @@
 JSON으로 바꾸는 것은 프롬프트 조립과 저장이다(`model_dump(mode="json")`).
 """
 
-from datetime import date
+from datetime import date, time
 from enum import StrEnum
 
 from pydantic import AwareDatetime, BaseModel, ConfigDict, Field
@@ -27,13 +27,59 @@ class RunSlot(StrEnum):
     감쌀 의존성이 없는 값이라 방화벽 쪽에 두면 셋 다 그대로 본다. `thesis.py`가 재수출하므로
     부르는 쪽은 전과 같다.
 
+    **값은 시각이 아니라 뜻으로 짓는다.** 장중 슬롯의 시각은 `TUNING.md` 3절이 당기라고
+    적어 둔 손잡이라, `intraday_1035` 같은 이름은 시각을 30분 옮기는 순간 거짓이 된다.
+
     값은 `apps/models/analysis/thesis.py`의 같은 이름 enum과 같아야 한다.
     `tests/models/test_analysis_models.py`가 대조한다.
     """
 
     PRE_OPEN = "pre_open"
+    INTRADAY_MORNING = "intraday_morning"
+    INTRADAY_MIDDAY = "intraday_midday"
+    INTRADAY_AFTERNOON = "intraday_afternoon"
+    PRE_CLOSE = "pre_close"
     POST_CLOSE = "post_close"
     POST_NXT_CLOSE = "post_nxt_close"
+
+
+# 예측 슬롯. 채점(`thesis_outcome`의 Brier)이 붙는 슬롯이 이것뿐이다 — 나머지 둘은 이미
+# 일어난 일의 해석이라 맞고 틀림을 물을 대상이 없다. 목록의 원본이 여기 하나이고
+# `select_pending_grades.sql`이 파라미터로 받는다.
+FORECAST_SLOTS: tuple[RunSlot, ...] = (
+    RunSlot.PRE_OPEN,
+    RunSlot.INTRADAY_MORNING,
+    RunSlot.INTRADAY_MIDDAY,
+    RunSlot.INTRADAY_AFTERNOON,
+    RunSlot.PRE_CLOSE,
+)
+
+# 장중 슬롯. 기준가가 전일 종가가 아니라 `as_of` 직전 봉이라 채점 조회가 갈린다.
+INTRADAY_SLOTS: tuple[RunSlot, ...] = (
+    RunSlot.INTRADAY_MORNING,
+    RunSlot.INTRADAY_MIDDAY,
+    RunSlot.INTRADAY_AFTERNOON,
+    RunSlot.PRE_CLOSE,
+)
+
+# 사후 해설을 받는 슬롯. 애프터마켓은 아직 빠져 있다(`7-nxt-review.md` 3절).
+NARRATED_SLOTS: tuple[RunSlot, ...] = (*FORECAST_SLOTS, RunSlot.POST_CLOSE)
+
+# 장중 슬롯의 기준 시각(KST). **분기가 아니라 표다** — 슬롯 값이 인자로 흘러 시각 하나를
+# 고르는 것이고, 슬롯으로 코드 경로가 갈리지 않는다.
+#
+# 여기 있는 이유는 이 값을 보는 곳이 둘이기 때문이다 — Airflow를 끄는 `thesis_intraday`가
+# 기준 시각을 만들고, LangChain을 끄는 `thesis_domain`이 사람이 읽는 라벨을 만든다.
+# 저 둘은 서로를 모듈 수준에서 import할 수 없다.
+#
+# **DAG의 cron과 이 표가 같아야 한다.** 어긋나면 `resolve_slot`이 슬롯을 못 찾아 실행이
+# 죽는다 — 조용히 다른 슬롯으로 떨어지는 것보다 낫다. 테스트가 둘을 대조한다.
+INTRADAY_SLOT_TIMES: dict[RunSlot, time] = {
+    RunSlot.INTRADAY_MORNING: time(10, 35),
+    RunSlot.INTRADAY_MIDDAY: time(12, 35),
+    RunSlot.INTRADAY_AFTERNOON: time(14, 35),
+    RunSlot.PRE_CLOSE: time(15, 0),
+}
 
 
 class IndexObservation(BaseModel):
@@ -51,6 +97,25 @@ class StockObservation(BaseModel):
     model_config = ConfigDict(frozen=True)
 
     close: float
+
+
+class IntradayObservation(BaseModel):
+    """장중 대상 하나의 **기준 시각 현재가**. 확정 종가가 아니다.
+
+    `bar_at`을 함께 담는 이유는 그것이 값의 절반이기 때문이다 — 10:35 슬롯이 보는 봉은
+    10:30 봉이고, 수집이 밀리면 10:20 봉일 수도 있다. 어느 봉을 봤는지가 프롬프트에
+    KST로 실려야 모델이 "지금"을 정확히 읽는다.
+
+    `return_pct`는 **전일 종가 대비**다(봉의 `previous_close`). 예측의 기준가인
+    `price`와 축이 다르다 — 이쪽은 "오늘 여기까지 얼마나 왔나"이고 예측은 "여기서
+    마감까지"다.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    price: float
+    return_pct: float
+    bar_at: AwareDatetime
 
 
 class AfterHoursObservation(BaseModel):
@@ -112,9 +177,13 @@ class TechnicalState(BaseModel):
 
 
 class ObservedState(BaseModel):
-    """장전·장후 두 슬롯이 프롬프트에 싣는 관측 상태.
+    """장전·장중·장후 슬롯이 프롬프트에 싣는 관측 상태.
 
     `session`이 `None`이면 볼 세션이 없다(휴장·미판정). 그때는 나머지가 전부 비어 있다.
+
+    **`index`·`stock`과 `intraday`는 배타적이다.** 앞의 둘은 확정된 세션의 마감값이고
+    `intraday`는 아직 안 끝난 세션의 현재가다. 장중 슬롯은 `session`을 채우지 않는다 —
+    오늘은 아직 마감이 없어 마감값으로 읽히면 안 된다.
     """
 
     model_config = ConfigDict(frozen=True)
@@ -122,6 +191,7 @@ class ObservedState(BaseModel):
     session: date | None = None
     index: dict[str, IndexObservation] = Field(default_factory=dict)
     stock: dict[str, StockObservation] = Field(default_factory=dict)
+    intraday: dict[str, IntradayObservation] = Field(default_factory=dict)
     technical: TechnicalState = TechnicalState()
 
 
@@ -190,3 +260,32 @@ class PastThesis(BaseModel):
     down_reasoning: str
     flat_reasoning: str
     outcomes: tuple[PastOutcome, ...] = ()
+
+
+class SameDayThesis(BaseModel):
+    """오늘 앞 슬롯의 추론 하나와 **그 뒤 실현 등락**. 장중 슬롯의 되짚기다.
+
+    **`thesis_outcome`에 저장하지 않는다.** 정식 채점은 확정 종가가 필요해 18:10 전에는
+    설 수 없고, 장중에 유일하게 가능한 목표(뒤쪽 봉)는 "KRX 영업일 수"와 단위가 다른 새
+    지평 축이라 CHECK·임계값·집계 조회가 전부 갈린다. 다음 슬롯이 실제로 필요한 것은
+    Brier가 아니라 "아침에 상승 62%라 했는데 지금 -0.4%" 한 줄이고, 그건 봉만 있으면
+    프롬프트 조립 시점에 계산된다.
+
+    `base_price`는 그 슬롯이 **채점될 때 쓰일 기준가와 같다.** `pre_open`이면 전일 종가,
+    장중이면 그 슬롯 `as_of_at` 직전 봉의 close다. 여기서 다른 기준을 쓰면 프롬프트가
+    보여 준 성적과 밤에 매겨질 점수가 어긋난다.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    run_slot: RunSlot
+    as_of_at: AwareDatetime
+    prob_up: float
+    prob_down: float
+    prob_flat: float
+    up_reasoning: str
+    down_reasoning: str
+    flat_reasoning: str
+    base_price: float
+    current_price: float
+    return_pct: float

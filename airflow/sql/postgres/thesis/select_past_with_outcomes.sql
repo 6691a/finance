@@ -5,13 +5,16 @@
 -- 피드백 루프는 이 조회 하나이고, 무엇을 보여 줬는지는 `thesis_precedent`가 남긴다.
 -- 첫 컬럼 `thesis.id`가 그 엣지의 끝이다.
 --
--- **슬롯 둘을 함께 준다**(2026-08-25). `pre_open`은 그날의 예측이라 채점이 붙고,
--- `post_close`는 장이 닫힌 뒤의 해석이라 채점 없이 해설·판정만 붙는다. 장후 해설은
--- "그 인과 주장이 이후 보도로 지지됐나"를 담고 있어 다음 예측이 볼 값어치가 크다.
--- 그 전까지는 장후 해설이 Slack T+5 섹션과 그래프로만 나가고 예측으로 돌아오지 않았다.
+-- **슬롯 목록은 파라미터다**(2026-08-25 둘로 시작, 2026-08-26 장중 넷 추가).
+-- 예측 슬롯은 그날의 예측이라 채점이 붙고, `post_close`는 장이 닫힌 뒤의 해석이라 채점
+-- 없이 해설·판정만 붙는다. 장후 해설은 "그 인과 주장이 이후 보도로 지지됐나"를 담고 있어
+-- 다음 예측이 볼 값어치가 크다. 그 전까지는 장후 해설이 Slack T+5 섹션과 그래프로만
+-- 나가고 예측으로 돌아오지 않았다. 원본은 `thesis_state.NARRATED_SLOTS`다.
 --
 -- **건수 상한은 슬롯마다 적용한다.** 하나로 묶어 자르면 장후가 섞여 들어온 만큼 장전 예측
--- 목록이 줄어, 슬롯을 늘린 것이 조용히 예측 이력을 짧게 만든다.
+-- 목록이 줄어, 슬롯을 늘린 것이 조용히 예측 이력을 짧게 만든다. 뒤집어 말하면 **슬롯이
+-- 늘면 총 행 수가 슬롯 수만큼 는다** — 장중 넷이 붙으면서 슬롯당 상한
+-- (`PREFETCHED_PAST_THESES`)을 내린 이유가 이것이다.
 --
 -- **창의 끝은 여기서도 as_of_at이다.** 이것이 없으면 장전 슬롯을 오후에 재실행할 때
 -- 그날 저녁의 채점 결과가 아침 예측에 섞인다. 술어를 셋 다 건다.
@@ -58,7 +61,7 @@ past AS (
            ON outcome.thesis_id = thesis.id
           AND (outcome.evaluated_at IS NULL OR outcome.evaluated_at <= bounds.as_of_at)
           AND (outcome.narrative_at IS NULL OR outcome.narrative_at <= bounds.as_of_at)
-    WHERE thesis.run_slot IN ('pre_open', 'post_close')
+    WHERE thesis.run_slot = ANY(%s)
       AND thesis.subject_code = %s
       AND thesis.run_date < (bounds.as_of_at AT TIME ZONE 'Asia/Seoul')::date
     GROUP BY thesis.id, thesis.run_slot, thesis.run_date

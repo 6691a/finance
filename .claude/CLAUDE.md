@@ -480,6 +480,14 @@ DAG가 쓰는 코드는 **위치는 Airflow를, 규칙은 백엔드를** 따른�
 기다리는데 시각만 여럿이면 `MultipleCronTriggerTimetable` 하나로 둔다
 (`slack_kr_market_briefing`이 그 예다).
 
+**한 DAG에 슬롯이 여럿이면 슬롯을 벽시계로 떨어뜨리지 않는 장치를 함께 둔다.**
+`market_thesis_intraday`(장중 전망 넷)가 그 형태다 — 넷이 같은 봉과 같은 문서 평가를 같은
+이유로 기다려 DAG 하나이고, `thesis_intraday.resolve_slot`이 ① Param → ② `logical_date` →
+③ **실패** 순으로 슬롯을 정한다. 가까운 슬롯으로 반올림하지도 않는다. 조용히 다른 슬롯을
+도는 것보다 안 도는 편이 낫다는 것이 2026-08-21에 얻은 교훈이고, 그것을 지키면 시각이
+여럿인 것 자체는 문제가 아니다. 슬롯 시각의 원본은 상수 하나(`INTRADAY_SLOT_TIMES`)이고
+DAG의 cron과 어긋나지 않게 테스트가 둘을 대조한다.
+
 ### 모드로 갈리는 함수도 나눈다
 
 DAG를 나눈 뒤 공유 모듈에 `if mode == "..."`가 남으면 절반만 나눈 것이다. 읽는 사람이

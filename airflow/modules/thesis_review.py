@@ -14,7 +14,7 @@
 
 import logging
 from contextlib import closing
-from datetime import UTC, date, datetime, time
+from datetime import UTC, date, datetime
 from decimal import Decimal
 from typing import TYPE_CHECKING, Any
 
@@ -23,8 +23,7 @@ from airflow.sdk import get_current_context
 
 from modules import thesis_common
 from modules.thesis_domain import ThesisSubjectKind
-from modules.thesis_state import RunSlot, ThesisRunResult
-from modules.utility import KST_TIMEZONE
+from modules.thesis_state import INTRADAY_SLOTS, RunSlot, ThesisRunResult
 
 if TYPE_CHECKING:
     # 런타임 import는 안 한다 — 타입 이름 하나 때문에 모듈을 끌고 올 이유가 없다.
@@ -34,9 +33,6 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 SLOT = "post_close"
-
-# 매크로 창의 시작 = 당일 개장. "오늘 장중에 무엇이 움직였나"가 이 창이다.
-SESSION_OPEN_TIME = time(9, 0)
 
 # readiness guard가 확인하는 지수. 둘 다 마감 봉이 있어야 관측 상태가 선다.
 GUARD_INDEX_SYMBOLS = ["KOSPI", "KOSDAQ"]
@@ -104,9 +100,10 @@ class PostCloseReview:
 def macro_window_start(run_date: date) -> datetime:
     """매크로 창의 시작 = 당일 09:00. 장전의 창(전 개장일 마감부터)과 다르다.
 
-    DB를 보지 않는다 — 오늘 장이 열렸다는 것은 readiness guard가 이미 확인했다.
+    **장중 슬롯도 같은 창을 쓴다.** 그래서 시각 상수와 계산은 `thesis_common`이 갖는다 —
+    두 슬롯 모듈에 09:00을 각각 적으면 한쪽만 고쳐지는 날이 온다.
     """
-    return datetime.combine(run_date, SESSION_OPEN_TIME, tzinfo=KST_TIMEZONE).astimezone(UTC)
+    return thesis_common.open_at(run_date)
 
 
 def build() -> ThesisRunResult:
@@ -237,8 +234,31 @@ def _horizon_return(
     item: "PendingGrade",
     target_day: date,
 ) -> Decimal | None:
-    """지평 하나의 누적 등락률. 종목은 확정 종가, 지수는 마감 봉을 본다."""
-    if item.subject_kind is ThesisSubjectKind.STOCK:
+    """지평 하나의 누적 등락률. 목표가는 종목이 확정 종가, 지수가 마감 봉이다.
+
+    **분모가 슬롯으로 갈린다.** 장전은 예측일 전 영업일 종가이고 장중은 그 슬롯이 실제로
+    본 봉의 종가다(`PendingGrade.base_price`). 이미 `subject_kind`로 갈리고 있는 자리에
+    축이 하나 더 붙는 것이고, 조회 파일도 그만큼 넷이다.
+
+    장중 슬롯인데 기준가가 없으면 채점하지 않는다. `input_state`에 그 대상의 현재가가
+    없었다는 뜻이고, 0이나 전일 종가로 때우면 조용히 다른 것을 재게 된다.
+    """
+    if item.run_slot in INTRADAY_SLOTS:
+        if item.base_price is None:
+            logger.warning(
+                "thesis %s (%s %s) has no intraday base price; left ungraded",
+                item.thesis_id,
+                item.run_slot.value,
+                item.subject_code,
+            )
+            return None
+        returns = store.intraday_horizon_returns(
+            subject_kind=item.subject_kind,
+            target_date=target_day,
+            target_bar_at=thesis_common.close_at(target_day),
+            base_prices={item.subject_code: item.base_price},
+        )
+    elif item.subject_kind is ThesisSubjectKind.STOCK:
         returns = store.horizon_returns(
             subject_kind=item.subject_kind,
             run_date=item.run_date,

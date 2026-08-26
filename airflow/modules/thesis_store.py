@@ -82,6 +82,8 @@ from modules.thesis_outcomes import (
     NarrativeTarget,
 )
 from modules.thesis_state import (
+    FORECAST_SLOTS,
+    NARRATED_SLOTS,
     NxtObservedState,
     ObservedState,
     PastOutcome,
@@ -203,6 +205,13 @@ INSERT_GRADE = read_sql("postgres", "thesis_outcome", "insert_grade.sql")
 NTH_OPEN_DAY = read_sql("postgres", "market_session", "select_nth_open_day.sql")
 STOCK_HORIZON_RETURN = read_sql("postgres", "stock_investor_trade_daily", "select_horizon_return.sql")
 INDEX_HORIZON_RETURN = read_sql("postgres", "index_bar", "select_horizon_return.sql")
+# 장중 슬롯은 기준가가 전일 종가가 아니라 그 슬롯이 본 봉이라 조회가 갈린다. 기존 두
+# 파일에 분기를 얹지 않고 파일을 나눴다 — 잘 돌고 있는 `pre_open` 경로가 조용히 따라
+# 바뀌면 안 된다(각 파일 머리말).
+STOCK_INTRADAY_HORIZON_RETURN = read_sql(
+    "postgres", "stock_investor_trade_daily", "select_intraday_horizon_return.sql"
+)
+INDEX_INTRADAY_HORIZON_RETURN = read_sql("postgres", "index_bar", "select_intraday_horizon_return.sql")
 
 
 class PendingGrade(BaseModel):
@@ -219,6 +228,10 @@ class PendingGrade(BaseModel):
     prob_down: Decimal
     prob_flat: Decimal
     horizon_days: int
+    run_slot: RunSlot
+    # 장중 슬롯의 채점 기준가. 추론 행의 `input_state`에 박혀 있는, **모델이 실제로 본**
+    # 가격이다. 장전 슬롯은 `None`이고 기준가를 전일 종가에서 얻는다.
+    base_price: Decimal | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -296,11 +309,13 @@ class ThesisStore:
     def past_theses(self, *, as_of_at: datetime, subject_code: str, n: int) -> list[PastThesis]:
         """이 대상의 지난 추론과 지평별 결과. **슬롯마다** 최근 것부터 `n`건이다.
 
-        피드백 루프는 이 조회 하나다. 장전 예측(`pre_open`)과 장후 리뷰(`post_close`)를 함께
+        피드백 루프는 이 조회 하나다. 예측 슬롯 다섯과 장후 리뷰(`post_close`)를 함께
         돌려준다 — 리뷰에 붙는 사후 해설이 "그 인과 주장이 이후 보도로 지지됐나"를 담고 있어
         다음 예측이 볼 값어치가 크다.
 
         **`n`은 슬롯마다다.** 총량으로 자르면 장후가 섞여 들어온 만큼 장전 예측 이력이 짧아진다.
+        뒤집어 말하면 총 행 수가 슬롯 수배라, 장중 넷이 붙으면서 `PREFETCHED_PAST_THESES`를
+        내렸다.
 
         **창의 끝은 `as_of_at`이다.** 없으면 장전 슬롯을 오후에 재실행할 때 그날 저녁의 채점이
         아침 예측에 섞인다. SQL이 술어 셋을 건다.
@@ -310,7 +325,7 @@ class ThesisStore:
         if n <= 0:
             return []
         with self._connection.cursor() as cursor:
-            cursor.execute(PAST_THESES, (as_of_at, subject_code, n))
+            cursor.execute(PAST_THESES, (as_of_at, list(NARRATED_SLOTS), subject_code, n))
             rows = cursor.fetchall()
         return [
             PastThesis(
@@ -413,9 +428,13 @@ class ThesisStore:
         return self.existing_theses(run_date=run_date, run_slot=run_slot)
 
     def pending_grades(self, horizons: Sequence[int] = HORIZON_DAYS) -> tuple[PendingGrade, ...]:
-        """아직 채점하지 않은 (추론, 지평) 전부. `pre_open`만이다."""
+        """아직 채점하지 않은 (추론, 지평) 전부. **예측 슬롯만이다.**
+
+        슬롯 목록도 지평 목록과 같은 이유로 파라미터다 — 상수를 SQL과 파이썬 두 곳에 두면
+        한쪽만 고쳐지는 날이 온다. 원본은 `thesis_state.FORECAST_SLOTS`다.
+        """
         with self._connection.cursor() as cursor:
-            cursor.execute(PENDING_GRADES, (list(horizons),))
+            cursor.execute(PENDING_GRADES, (list(horizons), list(FORECAST_SLOTS)))
             rows = cursor.fetchall()
         return tuple(
             PendingGrade(
@@ -428,6 +447,9 @@ class ThesisStore:
                 prob_down=row[6],
                 prob_flat=row[7],
                 horizon_days=row[8],
+                run_slot=RunSlot(row[9]),
+                # SQL이 jsonb에서 뽑은 문자열이다. 없으면(장전 슬롯) NULL이 온다.
+                base_price=None if row[10] is None else Decimal(row[10]),
             )
             for row in rows
         )
@@ -472,6 +494,40 @@ class ThesisStore:
             rows = cursor.fetchall()
         return {row[0]: row[4] for row in rows if row[4] is not None}
 
+    def intraday_horizon_returns(
+        self,
+        *,
+        subject_kind: ThesisSubjectKind,
+        target_date: date,
+        target_bar_at: datetime | None = None,
+        base_prices: Mapping[str, Decimal],
+    ) -> dict[str, Decimal]:
+        """장중 슬롯의 대상별 누적 등락률. **기준가를 우리가 준다.**
+
+        `horizon_returns`와 갈리는 축은 분모 하나다. 저쪽은 예측일 전 영업일 종가를 SQL이
+        찾아 쓰고, 이쪽은 그 슬롯이 실제로 본 봉의 종가를 부르는 쪽이 준다. 봉에서 다시
+        뽑지 않는 이유는 그 사이 수집 재실행이 없던 봉을 채워 "직전 봉"이 달라질 수 있기
+        때문이다 — 모델이 본 값과 채점 분모가 어긋나면 안 된다.
+
+        지수는 목표 봉 시각(KST 경계 계산은 파이썬이 한다), 종목은 목표 거래일을 쓴다.
+        값이 없으면 그 대상은 결과에 없고 부르는 쪽이 미채점으로 남긴다.
+        """
+        if not base_prices:
+            return {}
+        codes = list(base_prices)
+        prices = [base_prices[code] for code in codes]
+        if subject_kind is ThesisSubjectKind.STOCK:
+            statement, parameters = STOCK_INTRADAY_HORIZON_RETURN, (codes, prices, target_date)
+        else:
+            if target_bar_at is None:
+                raise ThesisError("index intraday horizon returns need the target bar timestamp")
+            statement, parameters = INDEX_INTRADAY_HORIZON_RETURN, (codes, prices, target_bar_at)
+
+        with self._connection.cursor() as cursor:
+            cursor.execute(statement, parameters)
+            rows = cursor.fetchall()
+        return {row[0]: row[3] for row in rows if row[3] is not None}
+
     def store_grade(
         self,
         *,
@@ -510,7 +566,7 @@ class ThesisStore:
         run_date: date,
         horizon_days: int,
     ) -> tuple[NarrativeTarget, ...]:
-        """그 지평에서 아직 해설이 없는 대상. **두 슬롯 모두 온다.**
+        """그 지평에서 아직 해설이 없는 대상. **`NARRATED_SLOTS` 전부가 온다.**
 
         채점 값이 있으면 함께 담는다. 프롬프트에 실을지는 `FollowupNarrator`의
         `include_outcome`이 정한다 — 이 함수는 있는 대로 준다.
@@ -521,7 +577,7 @@ class ThesisStore:
         if horizon_days not in NARRATED_HORIZON_DAYS:
             raise ThesisError(f"horizon {horizon_days} does not take a narrative; known: {NARRATED_HORIZON_DAYS}")
         with self._connection.cursor() as cursor:
-            cursor.execute(PENDING_NARRATIVES, (horizon_days, run_date))
+            cursor.execute(PENDING_NARRATIVES, (horizon_days, run_date, list(NARRATED_SLOTS)))
             rows = cursor.fetchall()
         return tuple(
             NarrativeTarget(

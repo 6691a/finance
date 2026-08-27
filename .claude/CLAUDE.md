@@ -295,7 +295,7 @@ DAG가 쓰는 코드는 **위치는 Airflow를, 규칙은 백엔드를** 따른�
 자격 증명을 쥐는 수집기 10모듈(2026-08-23)과 연결·기준 시각을 쥐는 흐름 코드
 9곳(2026-08-25)은 클래스로 옮겼고, 수집기는 도메인 폴더로 내려갔다(2026-08-25).
 **`connection`을 첫 인자로 받는 모듈 함수는 이제 `modules/dedup.py`·`market_session.py`·
-`technical_signals.py`처럼 진입점이 하나뿐인 곳에만 남아 있다** — 새로 만들 때 그 형태를
+`technical/signals.py`처럼 진입점이 하나뿐인 곳에만 남아 있다** — 새로 만들 때 그 형태를
 따라가지 않는다. 남은 단계는 없다.
 [docs/convention/collectors-class-migration.md](../docs/convention/collectors-class-migration.md)가 폴더
 구조(도메인별 `market/`·`document/`·`indicator/`·`calendar/`·`analyst/`)와 어디서
@@ -468,7 +468,7 @@ DAG가 쓰는 코드는 **위치는 Airflow를, 규칙은 백엔드를** 따른�
 - **pyrefly가 대신 볼 수 있는 것을 사람이 본다.** 모델이면 필드 이름 오타가 정적 검사에서 죽는다.
 
 기준 구현은 `airflow/modules/thesis_state.py`(`ObservedState`·`TechnicalState`·`PastThesis`)와
-`airflow/modules/technical.py`(`DailyBar`·`TechnicalSnapshot`·`SignalEvent`)다.
+`airflow/modules/technical/indicators.py`(`DailyBar`·`TechnicalSnapshot`·`SignalEvent`)다.
 
 - **모델은 `ConfigDict(frozen=True)`다.** 재시도 경로에서 값이 바뀌면 원본과 저장값이 어긋난다.
 - **JSON으로 바꾸는 것은 경계에서 한 번뿐이다.** `model_dump(mode="json")`을 프롬프트 조립과

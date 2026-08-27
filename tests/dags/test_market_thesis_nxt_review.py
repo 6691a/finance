@@ -13,7 +13,8 @@ import pytest
 from airflow.exceptions import AirflowSkipException
 
 from dags import market_thesis_nxt_review as dag_module
-from modules import base_rate, thesis_common, thesis_nxt_review
+from modules import thesis_common, thesis_nxt_review
+from modules.technical import base_rate
 from modules.thesis_nxt_review import AfterHoursBar, NxtAfterHoursReview
 
 DAG = dag_module.market_thesis_nxt_review

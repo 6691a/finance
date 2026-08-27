@@ -153,7 +153,7 @@ class SignalBaseRate(BaseModel):
     **둘을 같은 객체에 담는다.** 조건부만 보면 그 심볼의 평소 분포를 모른 채 읽게 된다 —
     신호 뒤 상승 60퍼센트라도 평소가 55퍼센트면 그 신호가 더하는 것은 5퍼센트포인트다.
 
-    값을 만드는 것은 `modules/base_rate.py`다. 모델이 여기 있는 것은 그 모듈이 DB와 SQL
+    값을 만드는 것은 `modules/technical/base_rate.py`다. 모델이 여기 있는 것은 그 모듈이 DB와 SQL
     파일을 import하기 때문이다 — 이 모듈의 방화벽(모듈 docstring)을 지켜야 한다.
     """
 

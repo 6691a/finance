@@ -252,7 +252,7 @@ class ThesisRun:
 
         슬롯으로 갈리지 않는다 — 기준 시각은 부르는 쪽이 이미 정해서 넘겼다.
         """
-        from modules import base_rate
+        from modules.technical import base_rate
 
         codes = list(subject_codes)
         if not codes:
@@ -273,7 +273,7 @@ class ThesisRun:
 
         슬롯으로 갈리지 않는다 — 세션과 기준 시각은 부르는 쪽이 이미 정해서 넘겼다.
         """
-        from modules import base_rate, technical
+        from modules.technical import base_rate, indicators
 
         # SQL 상수는 툴박스가 갖고 그 모듈이 LangChain을 끈다. 늦게 import한다.
         from modules.thesis_toolbox import DAILY_HISTORY, RECENT_SIGNALS
@@ -300,7 +300,7 @@ class ThesisRun:
                     # 종목의 지표가 프롬프트에 실린다.
                     "include_watched": False,
                     "as_of_at": as_of_at,
-                    "limit": technical.TECHNICAL_LOOKBACK_BARS,
+                    "limit": indicators.TECHNICAL_LOOKBACK_BARS,
                 },
             )
             rows = list(cursor.fetchall())
@@ -342,11 +342,11 @@ class ThesisRun:
                 subjects[code] = None
                 continue
             ascending = list(reversed(subject_rows))
-            snapshot = technical.summarize(
+            snapshot = indicators.summarize(
                 code,
                 str(ascending[0][2] or code),
                 [
-                    technical.DailyBar(
+                    indicators.DailyBar(
                         business_date=row[5],
                         open=float(row[6]),
                         high=float(row[7]),

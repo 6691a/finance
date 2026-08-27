@@ -8,7 +8,7 @@
 `thesis_common.py`(Airflow)가 서로를 모듈 수준에서 import할 수 없어서인데, 툴 응답 모델은
 `thesis.py`만 쓴다. 그렇다고 이미 2950줄인 `thesis.py`에 더 얹지도 않는다.
 
-**이 모듈은 LangChain·Airflow·DB를 import하지 않는다.** pydantic과 `modules.technical`,
+**이 모듈은 LangChain·Airflow·DB를 import하지 않는다.** pydantic과 `modules.technical.indicators`,
 `modules.thesis_state`뿐이다.
 
 두 무리로 나뉘고 규칙이 다르다.
@@ -26,7 +26,7 @@ from typing import Any, ClassVar
 
 from pydantic import AwareDatetime, BaseModel, ConfigDict, SerializerFunctionWrapHandler, model_serializer
 
-from modules import technical
+from modules.technical import indicators
 from modules.thesis_state import SignalObservation
 
 
@@ -264,7 +264,7 @@ class DailyHistoryPayload(ToolModel):
 
     symbol: str
     bars: tuple[DailyBarRow, ...] = ()
-    technical_snapshot: technical.TechnicalSnapshot | None = None
+    technical_snapshot: indicators.TechnicalSnapshot | None = None
     recent_signals: tuple[SignalObservation, ...] = ()
 
 

@@ -4,7 +4,7 @@ from datetime import date, timedelta
 
 import pytest
 
-from modules.technical import (
+from modules.technical.indicators import (
     RSI_OVERBOUGHT,
     RSI_OVERSOLD,
     RULE_VERSION,

@@ -236,8 +236,8 @@ import하므로 이제 `monkeypatch.setattr(kis_quote, "send_get", ...)`다. 형
 
 | 위치 | 겉보기 신호 | 제외 이유 |
 | --- | --- | --- |
-| `modules/technical.py` | `bars`·`period` 각 3 | 호출마다 바뀌는 **입력**이지 상태가 아니다. 규칙상 메서드 인자에 해당한다 |
-| `modules/technical_signals.py` | — | 최상위 함수가 `detect_and_store` 하나. 반복 0 |
+| `modules/technical/indicators.py` | `bars`·`period` 각 3 | 호출마다 바뀌는 **입력**이지 상태가 아니다. 규칙상 메서드 인자에 해당한다 |
+| `modules/technical/signals.py` | — | 최상위 함수가 `detect_and_store` 하나. 반복 0 |
 | `modules/market_session.py` | `connection` 3, `session_date` 3 | `krx_open_day`·`us_equity_open_day`가 `market_open_day`의 한 줄 래퍼다. DB를 만지는 건 하나뿐이고 각 DAG은 하나만 부른다 |
 | `modules/dedup.py` | `connection` 3 | `link_duplicates`가 유일한 진입점이고 나머지는 순수 판정이다. DAG은 그 한 줄만 부른다 |
 | `modules/llm.py` | — | 규칙이 명시적으로 함수라고 못박은 자리다. 모델 정의와 오류 분류는 감쌀 상태가 없고 **API 키를 우리가 안 쥔다** |
@@ -332,7 +332,7 @@ uv run pyrefly check
   (`precedents` 추가)로 문서보다 늘어 있었다.
 - Protocol 중복 18→20파일.
 - `modules/briefing/documents.py`를 표에서 뺐고, `migrations/env.py`·`heartbeat.py`·
-  `technical_signals.py`·`market_session.py`·`dedup.py`를 검토해 "함수로 두는 것이 맞는"으로
+  `technical/signals.py`·`market_session.py`·`dedup.py`를 검토해 "함수로 두는 것이 맞는"으로
   판정했다.
 
 남은 것은 3단계(수집기 아홉 모듈의 폴더 이동)와 규칙 밖 정리 둘(`modules/db.py`,

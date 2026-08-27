@@ -19,9 +19,9 @@ from langchain_core.messages import AIMessage, ToolMessage
 from sqlalchemy import Table
 
 from apps.models.analysis import Thesis, ThesisEvidence, ThesisOutcome, ThesisPrecedent
-from modules import base_rate
 from modules.sql import read_sql
-from modules.technical import TECHNICAL_LOOKBACK_BARS
+from modules.technical import base_rate
+from modules.technical.indicators import TECHNICAL_LOOKBACK_BARS
 from modules.thesis_domain import (
     DART_VIEWER_URL,
     FLAT_THRESHOLD_PCT,

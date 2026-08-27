@@ -23,7 +23,7 @@
 재백필마다 그것도 무효화해야 하고, 그 무효화를 빠뜨리면 옛 기준의 기저율이 조용히 나간다.
 
 **연결과 기준 날짜를 받아 한 번 계산하고 끝난다.** 여러 호출에 걸쳐 들고 돌 상태가 없어
-클래스가 아니라 함수다(`technical_signals.py`·`market_session.py`와 같은 형태).
+클래스가 아니라 함수다(`technical/signals.py`·`market_session.py`와 같은 형태).
 """
 
 import logging
@@ -34,7 +34,7 @@ from decimal import Decimal
 
 from modules.db import Connection
 from modules.sql import read_sql
-from modules.technical import RULE_VERSION
+from modules.technical.indicators import RULE_VERSION
 from modules.thesis_domain import ThesisDirection, classify_outcome
 from modules.thesis_state import HorizonBaseRate, SignalBaseRate
 

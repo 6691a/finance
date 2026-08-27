@@ -69,9 +69,9 @@ from langgraph.prebuilt import ToolNode
 from langgraph.prebuilt.tool_node import ToolInvocationError
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
 
-from modules import base_rate, technical
 from modules.db import TransactionalConnection as Connection
 from modules.sql import read_sql
+from modules.technical import base_rate, indicators
 from modules.thesis_domain import (
     BASIS_POINT_INDICATOR_KINDS,
     BASIS_POINT_KINDS,
@@ -1352,7 +1352,7 @@ def _change_label(kind: str, first_close: Decimal, last_close: Decimal) -> str:
     return f"{float((last_close - first_close) / first_close) * 100:+.2f}%"
 
 
-def _technical_snapshot(subject_code: str, rows: Sequence[Sequence[Any]]) -> technical.TechnicalSnapshot | None:
+def _technical_snapshot(subject_code: str, rows: Sequence[Sequence[Any]]) -> indicators.TechnicalSnapshot | None:
     """`technical/select_history.sql` 행에서 지표 한 벌을 만든다. 못 만들면 `None`이다.
 
     조회는 최신순이고 계산기는 오름차순을 받는다. **국내 KIS 행에만 35% 단절 guard를 건다** —
@@ -1361,7 +1361,7 @@ def _technical_snapshot(subject_code: str, rows: Sequence[Sequence[Any]]) -> tec
     ascending = list(reversed(rows))
     try:
         bars = [
-            technical.DailyBar(
+            indicators.DailyBar(
                 business_date=row[5],
                 open=float(row[6]),
                 high=float(row[7]),
@@ -1377,7 +1377,7 @@ def _technical_snapshot(subject_code: str, rows: Sequence[Sequence[Any]]) -> tec
         logger.warning("technical snapshot for %s skipped: %s", subject_code, error)
         return None
     domestic_kis = ascending[0][0] == "kis" and ascending[0][4] == "KR"
-    return technical.summarize(
+    return indicators.summarize(
         subject_code,
         str(ascending[0][2] or subject_code),
         bars,

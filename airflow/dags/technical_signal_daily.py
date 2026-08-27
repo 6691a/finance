@@ -48,8 +48,8 @@ from airflow.providers.postgres.hooks.postgres import PostgresHook
 from airflow.sdk import Param, dag, get_current_context, task
 
 from modules.market_session import krx_open_day
-from modules.technical import SIGNAL_SCAN_BARS_MAX, TECHNICAL_LOOKBACK_BARS
-from modules.technical_signals import TechnicalSignalError, detect_and_store
+from modules.technical.indicators import SIGNAL_SCAN_BARS_MAX, TECHNICAL_LOOKBACK_BARS
+from modules.technical.signals import TechnicalSignalError, detect_and_store
 from modules.utility import CONNECTION_ID, KST_TIMEZONE, atomic
 
 logger = logging.getLogger(__name__)

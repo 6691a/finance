@@ -9,8 +9,9 @@ from typing import Any, Self
 
 import pytest
 
-from modules import base_rate, thesis_common
-from modules.technical import TECHNICAL_LOOKBACK_BARS
+from modules import thesis_common
+from modules.technical import base_rate
+from modules.technical.indicators import TECHNICAL_LOOKBACK_BARS
 from modules.thesis_domain import RSI_OVERBOUGHT, RSI_OVERSOLD, ThesisSubjectKind
 from modules.thesis_generation import SYSTEM_PROMPT
 from modules.thesis_state import (

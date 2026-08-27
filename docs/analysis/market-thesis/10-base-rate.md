@@ -7,8 +7,8 @@
   [9-intraday.md](9-intraday.md)
 - 산출물: `kis_index_daily`의 `start_date` Param과 창 단위 백필 루프,
   `kis_investor_trade_daily`의 `walk_back`·소급 조정 가드·자동 재백필,
-  `kis_investor_flow.close_conflicts`, `technical_signals.detect_and_store`의 `lookback_bars`,
-  `airflow/modules/base_rate.py`, SQL 셋, `thesis_state`의 `SignalBaseRate`·`HorizonBaseRate`와
+  `kis_investor_flow.close_conflicts`, `technical/signals.detect_and_store`의 `lookback_bars`,
+  `airflow/modules/technical/base_rate.py`, SQL 셋, `thesis_state`의 `SignalBaseRate`·`HorizonBaseRate`와
   `SignalObservation` 확장, `thesis_common`·`thesis_toolbox` 주입, `flat_base_rates`와
   `ObservedState.flat_base_rate`(14절), 프롬프트 교체(`PROMPT_VERSION` 7), 테스트 다섯
 
@@ -62,7 +62,7 @@
 | KOSPI(0001) · KOSDAQ(1001) · KOSPI200(2001) | 2000-10-17 | **50봉/페이지 고정**, `tr_cont`는 빈 문자열 |
 
 셋을 다 확인했지만 `kis_index_daily`가 받는 것은 `MOVEMENT_INDEXES`인 KOSPI·KOSDAQ
-둘이고, 신호 검출 대상(`technical_signals.SIGNAL_INDEXES`)도 같은 둘이다. 백필 대상은
+둘이고, 신호 검출 대상(`technical/signals.SIGNAL_INDEXES`)도 같은 둘이다. 백필 대상은
 **지수 둘 + 종목 둘, 합 넷**이다.
 
 **지수는 2016-08-15, 종목은 2018-12-10부터 받는다.** 지수는 해외 지수의 시작일과 맞춘다 —
@@ -313,11 +313,11 @@ SQL은 원시 등락률만 돌려주고 버킷팅은 파이썬이 한다. thesis
   전 거래일의 지평별 등락률.
 - 기존 `technical/select_history.sql`을 재사용하지 않는다. 브리핑·툴 쿼리와 조회 목적이
   달라, 상한과 파라미터를 얹기 시작하면 한쪽을 고칠 때 다른 쪽이 조용히 따라 바뀐다.
-- 모듈 `airflow/modules/base_rate.py`. 연결과 기준 날짜를 받아 한 번 계산하고 끝나므로
-  클래스가 아니라 함수다(`technical_signals.py`·`market_session.py`와 같은 형태).
+- 모듈 `airflow/modules/technical/base_rate.py`. 연결과 기준 날짜를 받아 한 번 계산하고 끝나므로
+  클래스가 아니라 함수다(`technical/signals.py`·`market_session.py`와 같은 형태).
 - 모델 `SignalBaseRate`·`HorizonBaseRate`(Pydantic, `frozen=True`)는 **`thesis_state.py`가
-  갖고** `base_rate.py`가 그것을 import한다. 값을 만드는 모듈에 두는 것이 기본이지만,
-  `base_rate.py`가 DB와 SQL 파일을 import해서 `thesis_state.py`의 방화벽(그 모듈 docstring)을
+  갖고** `technical/base_rate.py`가 그것을 import한다. 값을 만드는 모듈에 두는 것이 기본이지만,
+  `technical/base_rate.py`가 DB와 SQL 파일을 import해서 `thesis_state.py`의 방화벽(그 모듈 docstring)을
   깨뜨린다. CLAUDE.md의 "무거운 의존성이 없는 모듈로 따로 뺀다" 예외가 이 경우다.
 - `rule_version`이 현재 값(`technical.RULE_VERSION`)인 사건만 센다. 규칙이 바뀌면 옛 사건은
   다른 정의의 사건이다.

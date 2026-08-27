@@ -10,7 +10,7 @@ from typing import Any, Self
 
 import pytest
 
-from modules import base_rate
+from modules.technical import base_rate
 from modules.thesis_domain import FLAT_THRESHOLD_PCT
 
 AS_OF = date(2026, 8, 26)

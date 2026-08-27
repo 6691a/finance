@@ -3,9 +3,9 @@ from decimal import Decimal
 
 import pytest
 
-from modules import technical
 from modules.briefing import chart
 from modules.briefing.market_data import ChartSeries, DailyChartSeries
+from modules.technical import indicators
 
 # KST 2026-08-18(화) 12:30.
 MIDDAY = datetime(2026, 8, 18, 3, 30, tzinfo=UTC)
@@ -37,7 +37,7 @@ def test_renders_one_png_per_series():
 def daily_series(count: int, kind: str = "equity") -> DailyChartSeries:
     """오르내리는 종가 `count`개. 이동평균이 갈리도록 방향을 한 번 바꾼다."""
     bars = tuple(
-        technical.DailyBar(
+        indicators.DailyBar(
             business_date=date(2026, 1, 1) + timedelta(days=index),
             open=70000.0 + index,
             high=70000.0 + index,
@@ -52,12 +52,12 @@ def daily_series(count: int, kind: str = "equity") -> DailyChartSeries:
 def test_too_few_bars_is_an_error():
     """지표를 못 내는 계열을 빈 차트로 올리지 않는다. 생략 판단은 부르는 쪽이 한다."""
     with pytest.raises(chart.ChartError):
-        chart.render_daily_png(daily_series(technical.TECHNICAL_MIN_BARS - 1))
+        chart.render_daily_png(daily_series(indicators.TECHNICAL_MIN_BARS - 1))
 
 
 def test_renders_a_daily_indicator_png():
     pytest.importorskip("matplotlib")
-    png = chart.render_daily_png(daily_series(technical.TECHNICAL_LOOKBACK_BARS))
+    png = chart.render_daily_png(daily_series(indicators.TECHNICAL_LOOKBACK_BARS))
 
     assert png[:8] == b"\x89PNG\r\n\x1a\n"
 
@@ -72,8 +72,8 @@ def test_only_stocks_and_indexes_get_candles_and_indicator_panels():
 def test_a_fx_series_renders_a_shorter_png():
     """단이 하나뿐이라 세로가 짧다. 같은 함수가 두 모양을 그린다."""
     pytest.importorskip("matplotlib")
-    stock = chart.render_daily_png(daily_series(technical.TECHNICAL_LOOKBACK_BARS))
-    fx = chart.render_daily_png(daily_series(technical.TECHNICAL_LOOKBACK_BARS, kind="fx"))
+    stock = chart.render_daily_png(daily_series(indicators.TECHNICAL_LOOKBACK_BARS))
+    fx = chart.render_daily_png(daily_series(indicators.TECHNICAL_LOOKBACK_BARS, kind="fx"))
 
     assert fx[:8] == b"\x89PNG\r\n\x1a\n"
     assert _png_height(fx) < _png_height(stock)

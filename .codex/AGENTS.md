@@ -192,7 +192,7 @@ uv run ruff check apps airflow migrations tests
 - 함수로 두는 것: 파싱·정규화·계산처럼 감쌀 상태가 없는 것, 그 클래스의 관심사가 아닌 조회(`watched_stocks`). 클래스 안이 읽기 좋으면 `@staticmethod`.
 - 데이터 모양은 언제나 Pydantic 모델이다. 수집기 클래스 안에 중첩하지 않는다.
 - **감쌀 상태가 없는 것을 클래스로 만들지 않는다.** 메서드가 전부 `@staticmethod`면 그건 모듈이다.
-- 자격 증명을 쥐는 수집기 10모듈(2026-08-23)과 연결·기준 시각을 쥐는 흐름 코드 9곳(2026-08-25)은 클래스로 옮겼고, 수집기는 도메인 폴더로 내려갔다(2026-08-25). `connection`을 첫 인자로 받는 모듈 함수는 진입점이 하나뿐인 곳(`dedup.py`·`market_session.py`·`technical_signals.py`)에만 남아 있다. 남은 단계는 없다. 폴더 구조(도메인별 `market/`·`document/`·`indicator/`·`calendar/`·`analyst/`)와 단계별 순서, 함수로 두는 것이 맞다고 판정한 모듈과 그 이유는 `docs/convention/collectors-class-migration.md`에 있다. **새 수집기는 처음부터 그 형태로 쓴다.**
+- 자격 증명을 쥐는 수집기 10모듈(2026-08-23)과 연결·기준 시각을 쥐는 흐름 코드 9곳(2026-08-25)은 클래스로 옮겼고, 수집기는 도메인 폴더로 내려갔다(2026-08-25). `connection`을 첫 인자로 받는 모듈 함수는 진입점이 하나뿐인 곳(`dedup.py`·`market_session.py`·`technical/signals.py`)에만 남아 있다. 남은 단계는 없다. 폴더 구조(도메인별 `market/`·`document/`·`indicator/`·`calendar/`·`analyst/`)와 단계별 순서, 함수로 두는 것이 맞다고 판정한 모듈과 그 이유는 `docs/convention/collectors-class-migration.md`에 있다. **새 수집기는 처음부터 그 형태로 쓴다.**
 
 ## 수집기 작성 규칙
 
@@ -288,7 +288,7 @@ uv run ruff check apps airflow migrations tests
 
 **`dict[str, Any]`·`list[dict]`·`Mapping[str, Any]`를 반환 타입으로 쓰지 않는다.** 모듈 경계를 넘는 값은 모델로 선언한다. 이유는 셋이다. 키 오타가 런타임까지 살아 있고(프롬프트나 JSONB로 나가는 값이면 아무도 못 잡는다), 부르는 쪽이 무슨 키를 기대해도 되는지 코드에 안 남고, pyrefly가 대신 볼 수 있는 것을 사람이 보게 된다.
 
-기준 구현은 `airflow/modules/thesis_state.py`(`ObservedState`·`TechnicalState`·`PastThesis`)와 `airflow/modules/technical.py`(`DailyBar`·`TechnicalSnapshot`·`SignalEvent`)다.
+기준 구현은 `airflow/modules/thesis_state.py`(`ObservedState`·`TechnicalState`·`PastThesis`)와 `airflow/modules/technical/indicators.py`(`DailyBar`·`TechnicalSnapshot`·`SignalEvent`)다.
 
 - 모델은 `ConfigDict(frozen=True)`다. 재시도 경로에서 값이 바뀌면 원본과 저장값이 어긋난다.
 - **JSON으로 바꾸는 것은 경계에서 한 번뿐이다.** `model_dump(mode="json")`을 프롬프트 조립과 DB 저장 자리에서만 부른다. 중간 층은 모델을 그대로 들고 간다. `json.dumps(..., default=str)`로 때우지 않는다 — `date`가 조용히 문자열이 되는 자리가 늘어난다.

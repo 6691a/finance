@@ -60,7 +60,7 @@ from typing import Any
 
 from pydantic import AwareDatetime, BaseModel, ConfigDict, Field
 
-from modules import technical
+from modules.technical import indicators
 from modules.thesis_state import (
     INTRADAY_SLOT_TIMES,
     RunSlot,
@@ -247,7 +247,7 @@ MIN_HISTORY_DAYS = 1
 MAX_HISTORY_DAYS = 30
 
 # 지표 계산에 받는 봉 수. 모델에게 보여 주는 봉(`days`)과 다르다.
-TECHNICAL_LOOKBACK_BARS = technical.TECHNICAL_LOOKBACK_BARS
+TECHNICAL_LOOKBACK_BARS = indicators.TECHNICAL_LOOKBACK_BARS
 
 # 국내 종목의 하루 가격제한폭보다 큰 인접 종가 단절은 분할·병합이나 원천 이상을 의심한다.
 # 그 구간의 이동평균을 그대로 보여 주느니 지표를 내지 않는 편이 안전하다.
@@ -259,8 +259,8 @@ SIGNAL_HISTORY_DAYS = 90
 
 # 프롬프트가 지표를 읽는 기준. 검출 규칙과 **같은 상수**를 쓴다 — 두 곳에 숫자를 적으면
 # 반드시 어긋난다. 거래량 기준만 여기에 있다(검출에 쓰지 않아서다).
-RSI_OVERBOUGHT = technical.RSI_OVERBOUGHT
-RSI_OVERSOLD = technical.RSI_OVERSOLD
+RSI_OVERBOUGHT = indicators.RSI_OVERBOUGHT
+RSI_OVERSOLD = indicators.RSI_OVERSOLD
 VOLUME_HEAVY_RATIO = 1.5
 VOLUME_LIGHT_RATIO = 0.7
 class ThesisError(RuntimeError):

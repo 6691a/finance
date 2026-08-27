@@ -1,7 +1,7 @@
 # 국내 기술적 보조지표·매매 신호
 
 - 날짜: 2026-08-23 (검토 반영)
-- 상태: **구현 완료.** `airflow/modules/technical.py`(계산)·`technical_signals.py`(검출·저장),
+- 상태: **구현 완료.** `airflow/modules/technical/indicators.py`(계산)·`technical/signals.py`(검출·저장),
   `airflow/dags/technical_signal_daily.py`, `apps/models/analysis/technical.py`의 `TechnicalSignal`,
   리비전 `c9f4b2e70a18`까지 있다. 남은 것은 코드가 아니라 관측이다 — 12.6절 SQL로 신호 셋의
   지평별 적중률을 본다
@@ -99,7 +99,7 @@ KIS 국내주식업종기간별시세
 stock_investor_trade_daily ────┼─> technical/select_history.sql
   watched 국내 종목            │       │
                                │       ▼
-                               └─> modules/technical.py
+                               └─> modules/technical/indicators.py
                                         │
                   ┌─────────────────────┼─────────────────────┐
                   ▼                     ▼                     ▼
@@ -117,7 +117,7 @@ stock_investor_trade_daily ────┼─> technical/select_history.sql
 
 1. 수집기는 외부 응답을 검증해 원천 일봉만 저장한다.
 2. SQL은 지수와 종목의 서로 다른 컬럼명을 한 모양으로 읽는다.
-3. `modules/technical.py`는 DB·Airflow·LLM을 import하지 않는 순수 계산 모듈이다. 지표 snapshot과
+3. `modules/technical/indicators.py`는 DB·Airflow·LLM을 import하지 않는 순수 계산 모듈이다. 지표 snapshot과
    신호 검출이 **같은 시리즈 계산**을 쓴다. 두 벌이 되면 Slack의 SMA와 신호의 SMA가 어긋나는 날이 온다.
 4. thesis만 방향 확률을 만든다. 기술지표 모듈과 Slack 표는 관측값을 해석하지 않는다. 신호는
    "교차가 일어났다"는 사건이지 "사라" 판정이 아니고, 그 사건이 유효했는지는 사후 수익률이 답한다.
@@ -472,7 +472,7 @@ signals: tuple[RecentSignal, ...] = ()   # 12.4절. symbol, signal_date, kind, d
 **Files:**
 
 - Create: `tests/modules/test_technical.py`
-- Create: `airflow/modules/technical.py`
+- Create: `airflow/modules/technical/indicators.py`
 
 - [ ] `test_technical.py`에 120봉 고정 벡터, 평평한 가격(RSI 50), 59봉 미만, 거래량 결측·0, 날짜 역순·중복, NaN·무한대, 35% 초과 가격 단절 테스트를 먼저 작성한다.
 - [ ] 실패를 확인한다.
@@ -487,7 +487,7 @@ uv run pytest tests/modules/test_technical.py -q
 
 ```bash
 uv run pytest tests/modules/test_technical.py -q
-uv run ruff check airflow/modules/technical.py tests/modules/test_technical.py
+uv run ruff check airflow/modules/technical/indicators.py tests/modules/test_technical.py
 ```
 
 ### Task 2: KIS 지수 일봉 수집을 기존 collector에 추가한다
@@ -576,7 +576,7 @@ uv run pytest tests/modules/test_thesis_pipeline.py -q
 
 ```bash
 uv run pytest tests/modules/test_technical.py tests/modules/test_thesis_pipeline.py -q
-uv run ruff check airflow/modules/technical.py airflow/modules/thesis_toolbox.py tests/modules/test_technical.py tests/modules/test_thesis_pipeline.py
+uv run ruff check airflow/modules/technical/indicators.py airflow/modules/thesis_toolbox.py tests/modules/test_technical.py tests/modules/test_thesis_pipeline.py
 ```
 
 ### Task 5: 한국장 Slack에 기술적 관측 표를 추가한다
@@ -687,7 +687,7 @@ Task 1~6이 지표 층이고 아래 Task 7~11이 신호 층(12절)이다. 신호
 
 **Files:**
 
-- Modify: `airflow/modules/technical.py`
+- Modify: `airflow/modules/technical/indicators.py`
 - Modify: `tests/modules/test_technical.py`
 
 - [ ] 고정 벡터를 먼저 쓴다. 종가가 60봉 내림(120→61) 뒤 60봉 오름(61→120)인 계단형에서 `sma_cross` up이 정확히 한 번, 계산한 날짜에 나는지. 5.3 단조 증가 벡터에서는 `sma_cross`·`macd_cross`가 0건이고 RSI가 100에 붙어 `rsi_reversal`도 0건인지. MACD 교차와 RSI 30 재돌파는 각각 작은 손제작 벡터로 잡는다. 같은 날 셋이 동시에 나도 셋 다 돌려주는지. `scan_bars=1`이면 마지막 봉만, `scan_bars=5`면 마지막 다섯 봉의 사건을 전부 돌려주는지. 60봉 미만·35% 단절이면 빈 리스트인지.
@@ -702,7 +702,7 @@ uv run pytest tests/modules/test_technical.py -q
 
 ```bash
 uv run pytest tests/modules/test_technical.py -q
-uv run ruff check airflow/modules/technical.py tests/modules/test_technical.py
+uv run ruff check airflow/modules/technical/indicators.py tests/modules/test_technical.py
 ```
 
 ### Task 8: `technical_signal` 모델과 수기 리비전
@@ -729,7 +729,7 @@ uv run ruff check apps migrations tests
 
 **Files:**
 
-- Create: `airflow/modules/technical_signals.py`
+- Create: `airflow/modules/technical/signals.py`
 - Create: `airflow/sql/postgres/technical_signal/upsert.sql`
 - Create: `airflow/dags/technical_signal_daily.py`
 - Create: `tests/modules/test_technical_signals.py`
@@ -743,7 +743,7 @@ uv run ruff check apps migrations tests
 
 ```bash
 uv run pytest tests/modules/test_technical_signals.py tests/dags/test_technical_signal_daily.py -q
-uv run ruff check airflow/modules/technical_signals.py airflow/dags/technical_signal_daily.py tests
+uv run ruff check airflow/modules/technical/signals.py airflow/dags/technical_signal_daily.py tests
 ```
 
 ### Task 10: Slack 표에 신호 열을 붙인다
@@ -902,10 +902,10 @@ def detect_signals(
 - 자동 실행은 KRX 휴장일이면 skip — `kis_index_daily`와 같은 guard를 쓴다. 수동 실행은 guard를 타지 않는다.
 - Param `scan_bars`: 기본 5, 최소 1, 최대 `SIGNAL_SCAN_BARS_MAX`(120). `title`·`description` 필수. upsert라 재검출은 무해하므로 기본값을 1이 아니라 5로 둬서 앞단이 하루 늦게 복구돼도 사건이 빠지지 않는다. 초기 백필은 120.
 - 조회는 6절 `technical/select_history.sql` 한 번 — `symbols=["KOSPI", "KOSDAQ"]`, `include_watched=true`, `as_of_at=now`, `limit=120`. 새 조회 SQL을 만들지 않는다.
-- 새 모듈 `airflow/modules/technical_signals.py`가 "조회 → subject별 오름차순 정렬 → `detect_signals()` → `technical_signal/upsert.sql`"을 한다. 국내 KIS 행에는 `max_abs_daily_change_pct=35.0`을 준다(Task 4와 같음). subject마다 `atomic(connection)`이다.
+- 새 모듈 `airflow/modules/technical/signals.py`가 "조회 → subject별 오름차순 정렬 → `detect_signals()` → `technical_signal/upsert.sql`"을 한다. 국내 KIS 행에는 `max_abs_daily_change_pct=35.0`을 준다(Task 4와 같음). subject마다 `atomic(connection)`이다.
 - 실패 판정은 "항목별 실패 수집"이다. 60봉 미만 subject는 건너뛰고 이름을 모아 로그에 남긴다. **전부 건너뛰면 `AirflowFailException`** — 조용한 성공을 만들지 않는다. 계산·DB 예외는 그대로 올린다.
 - `dag_display_name="📐 국내 기술적 매매 신호 (계산)"`, 한 문장 `description`, `doc_md=__doc__`.
-- `technical.py`는 계속 DB·Airflow를 모른다. 연결을 쥐는 것은 `technical_signals.py`뿐이다.
+- `technical/indicators.py`는 계속 DB·Airflow를 모른다. 연결을 쥐는 것은 `technical/signals.py`뿐이다.
 
 ### 12.4 Slack
 

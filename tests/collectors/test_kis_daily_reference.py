@@ -25,17 +25,17 @@ from pathlib import Path
 
 import pytest
 
-from modules import technical
+from modules.technical import indicators
 
 FIXTURE = Path(__file__).parent / "fixtures" / "kis_inquire_daily_itemchartprice_005930.json"
 
 
-def reference_bars() -> list[technical.DailyBar]:
+def reference_bars() -> list[indicators.DailyBar]:
     """정답지를 오름차순 일봉으로 읽는다. 응답은 최신순이라 뒤집는다."""
     payload = json.loads(FIXTURE.read_text())
     rows = sorted(payload["output2"], key=lambda row: row["stck_bsop_date"])
     return [
-        technical.DailyBar(
+        indicators.DailyBar(
             business_date=date.fromisoformat(
                 f"{row['stck_bsop_date'][:4]}-{row['stck_bsop_date'][4:6]}-{row['stck_bsop_date'][6:]}"
             ),
@@ -72,7 +72,7 @@ def test_the_exchange_high_is_the_regular_session_high():
 
 def test_indicators_computed_from_the_exchange_series_stay_put():
     """거래소 종가 100봉으로 낸 지표. 이 수가 바뀌면 계산이 바뀐 것이다."""
-    snapshot = technical.summarize("005930", "삼성전자", reference_bars())
+    snapshot = indicators.summarize("005930", "삼성전자", reference_bars())
 
     assert snapshot is not None
     assert snapshot.as_of_date == date(2026, 8, 25)
@@ -92,8 +92,8 @@ def test_more_history_moves_the_ema_but_not_the_moving_averages():
     브리핑은 `briefing/market_data.INDICATOR_HISTORY_BARS` 하나로 표와 차트를 함께 맞춘다.
     """
     bars = reference_bars()
-    short = technical.summarize("005930", "삼성전자", bars[-70:])
-    full = technical.summarize("005930", "삼성전자", bars)
+    short = indicators.summarize("005930", "삼성전자", bars[-70:])
+    full = indicators.summarize("005930", "삼성전자", bars)
 
     assert short is not None and full is not None
     assert short.sma20 == full.sma20

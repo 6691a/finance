@@ -132,7 +132,7 @@ def upgrade_default() -> None:
             "rule_version",
             sa.Text(),
             nullable=False,
-            comment="검출 규칙 버전(modules/technical.py의 RULE_VERSION). thesis.prompt_version과 같은 역할이다",
+            comment="검출 규칙 버전(modules/technical/indicators.py의 RULE_VERSION). thesis.prompt_version과 같은 역할이다",
         ),
         sa.Column(
             "created_at",

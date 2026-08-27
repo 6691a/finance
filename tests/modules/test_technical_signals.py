@@ -9,8 +9,8 @@ import pytest
 from sqlalchemy import Table
 
 from apps.models.analysis import TechnicalSignal
-from modules import technical_signals
-from modules.technical import RULE_VERSION, SignalKind
+from modules.technical import signals
+from modules.technical.indicators import RULE_VERSION, SignalKind
 
 AS_OF = datetime(2026, 8, 24, 9, 40, tzinfo=UTC)
 
@@ -76,14 +76,14 @@ def upsert_calls(connection: FakeConnection) -> list[tuple]:
 def test_the_query_asks_for_the_indexes_and_the_watched_stocks():
     connection = FakeConnection(history_rows())
 
-    technical_signals.detect_and_store(connection, as_of_at=AS_OF, scan_bars=5)
+    signals.detect_and_store(connection, as_of_at=AS_OF, scan_bars=5)
 
     statement, parameters = connection.calls[0]
     assert "WITH requested AS" in statement
-    assert parameters["symbols"] == list(technical_signals.SIGNAL_INDEXES)
+    assert parameters["symbols"] == list(signals.SIGNAL_INDEXES)
     assert parameters["include_watched"] is True
     assert parameters["as_of_at"] == AS_OF
-    assert parameters["limit"] == technical_signals.TECHNICAL_LOOKBACK_BARS
+    assert parameters["limit"] == signals.TECHNICAL_LOOKBACK_BARS
 
 
 def test_the_lookback_widens_only_when_asked():
@@ -94,7 +94,7 @@ def test_the_lookback_widens_only_when_asked():
     """
     connection = FakeConnection(history_rows())
 
-    technical_signals.detect_and_store(connection, as_of_at=AS_OF, scan_bars=5, lookback_bars=3000)
+    signals.detect_and_store(connection, as_of_at=AS_OF, scan_bars=5, lookback_bars=3000)
 
     _statement, parameters = connection.calls[0]
     assert parameters["limit"] == 3000
@@ -103,7 +103,7 @@ def test_the_lookback_widens_only_when_asked():
 def test_events_are_stored_in_column_order():
     connection = FakeConnection(history_rows())
 
-    result = technical_signals.detect_and_store(connection, as_of_at=AS_OF, scan_bars=120)
+    result = signals.detect_and_store(connection, as_of_at=AS_OF, scan_bars=120)
 
     calls = upsert_calls(connection)
     assert result.stored == len(calls) > 0
@@ -121,7 +121,7 @@ def test_events_are_stored_in_column_order():
 def test_a_golden_cross_is_stored_for_the_index():
     connection = FakeConnection(history_rows())
 
-    technical_signals.detect_and_store(connection, as_of_at=AS_OF, scan_bars=120)
+    signals.detect_and_store(connection, as_of_at=AS_OF, scan_bars=120)
 
     crosses = [call for call in upsert_calls(connection) if call[3] == SignalKind.SMA_CROSS.value]
     assert [call[4] for call in crosses] == ["up"]
@@ -130,7 +130,7 @@ def test_a_golden_cross_is_stored_for_the_index():
 def test_scan_bars_narrows_how_far_back_events_are_written():
     connection = FakeConnection(history_rows())
 
-    technical_signals.detect_and_store(connection, as_of_at=AS_OF, scan_bars=1)
+    signals.detect_and_store(connection, as_of_at=AS_OF, scan_bars=1)
 
     assert upsert_calls(connection) == []
 
@@ -139,22 +139,22 @@ def test_every_subject_too_short_is_an_error_that_names_them():
     """조용한 성공을 만들지 않는다. 볼 대상이 하나도 없으면 태스크가 죽어야 한다."""
     connection = FakeConnection(history_rows(count=30))
 
-    with pytest.raises(technical_signals.TechnicalSignalError, match="KOSPI"):
-        technical_signals.detect_and_store(connection, as_of_at=AS_OF, scan_bars=5)
+    with pytest.raises(signals.TechnicalSignalError, match="KOSPI"):
+        signals.detect_and_store(connection, as_of_at=AS_OF, scan_bars=5)
 
 
 def test_no_bars_at_all_is_an_error():
     connection = FakeConnection([])
 
-    with pytest.raises(technical_signals.TechnicalSignalError, match="No daily bars"):
-        technical_signals.detect_and_store(connection, as_of_at=AS_OF, scan_bars=5)
+    with pytest.raises(signals.TechnicalSignalError, match="No daily bars"):
+        signals.detect_and_store(connection, as_of_at=AS_OF, scan_bars=5)
 
 
 def test_zero_events_is_a_normal_success():
     """교차가 없는 날은 정상이다. 볼 대상이 없는 것과 다르다."""
     connection = FakeConnection(history_rows())
 
-    result = technical_signals.detect_and_store(connection, as_of_at=AS_OF, scan_bars=1)
+    result = signals.detect_and_store(connection, as_of_at=AS_OF, scan_bars=1)
 
     assert result.stored == 0
     assert result.subjects == ("KOSPI",)
@@ -165,7 +165,7 @@ def test_one_short_subject_does_not_stop_the_others():
     rows = history_rows() + history_rows("005930", "삼성전자", "equity", count=30)
     connection = FakeConnection(rows)
 
-    result = technical_signals.detect_and_store(connection, as_of_at=AS_OF, scan_bars=120)
+    result = signals.detect_and_store(connection, as_of_at=AS_OF, scan_bars=120)
 
     assert result.skipped == ("005930",)
     assert result.stored > 0
@@ -188,7 +188,7 @@ def _required_columns(table: Table) -> set[str]:
 
 
 def test_the_upsert_matches_the_model():
-    statement = technical_signals.SIGNAL_UPSERT
+    statement = signals.SIGNAL_UPSERT
     table = TechnicalSignal.__table__
     columns = _inserted_columns(statement)
 
@@ -199,4 +199,4 @@ def test_the_upsert_matches_the_model():
 
 def test_the_upsert_key_matches_the_natural_key():
     """멱등 키가 어긋나면 매일 같은 사건이 새 행으로 쌓인다."""
-    assert "ON CONFLICT (provider, symbol, signal_date, kind) DO UPDATE" in technical_signals.SIGNAL_UPSERT
+    assert "ON CONFLICT (provider, symbol, signal_date, kind) DO UPDATE" in signals.SIGNAL_UPSERT

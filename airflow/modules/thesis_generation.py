@@ -65,9 +65,9 @@ from langgraph.graph.message import add_messages
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from modules import llm
-from modules.base_rate import FLAT_BASE_RATE_BARS
 from modules.llm import UnsupportedResponseFormat
 from modules.schema import SchemaError, json_object, response_format
+from modules.technical.base_rate import FLAT_BASE_RATE_BARS
 from modules.thesis_domain import (
     FLAT_THRESHOLD_PCT,
     MAX_EXPECTED_RETURN_PCT,

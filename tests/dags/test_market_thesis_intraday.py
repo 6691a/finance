@@ -14,7 +14,8 @@ import pytest
 from airflow.exceptions import AirflowFailException
 
 from dags import market_thesis_intraday as dag_module
-from modules import base_rate, thesis_common, thesis_intraday
+from modules import thesis_common, thesis_intraday
+from modules.technical import base_rate
 from modules.thesis_domain import ThesisSubjectKind
 from modules.thesis_state import INTRADAY_SLOT_TIMES, IntradayObservation, RunSlot
 

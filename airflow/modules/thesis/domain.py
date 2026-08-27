@@ -117,7 +117,7 @@ logger = logging.getLogger(__name__)
 #     이하라 그 칸을 매번 버렸다(실측: `intraday_midday` 넷 전부 up=0.0 down=0.0).
 #     확률과 이유는 살아 있었으므로 저장되는 추론 수는 같지만, **조건부 크기가 NULL이 아닌
 #     값으로 저장되기 시작하므로** 판을 가른다.
-PROMPT_VERSION = "10"
+PROMPT_VERSION = "11"
 
 # 채점 지평. KRX 영업일 수이고 달력일이 아니다. 0은 예측일 세션 하나다.
 HORIZON_DAYS: tuple[int, ...] = (0, 1, 3, 5)

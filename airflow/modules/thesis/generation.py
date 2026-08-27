@@ -62,6 +62,7 @@ from decimal import ROUND_HALF_UP, Decimal
 from types import MappingProxyType
 from typing import Annotated, Any, Literal, TypedDict
 
+from langchain_core.callbacks import UsageMetadataCallbackHandler
 from langchain_core.language_models import BaseChatModel
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, SystemMessage
 from langgraph.graph import END, START, StateGraph
@@ -351,7 +352,17 @@ class ThesisBuilder:
         self._toolbox = toolbox
         self._schema = response_format(Answers, "market_theses")
         self._tool_node = tool_node(toolbox)
+        self._usage = UsageMetadataCallbackHandler()
         self._graph = self._build_graph()
+
+    @property
+    def usage(self) -> llm.TokenUsage:
+        """그래프가 지금까지 청구된 토큰. **예외가 나도 읽을 수 있다.**
+
+        `toolbox.round_count`와 같은 자리다 — 실패한 대화는 최종 상태를 못 받으므로
+        원장에 실을 값은 그래프 밖에 살아야 한다(`modules/llm.py`).
+        """
+        return llm.token_usage(self._usage)
 
     @staticmethod
     def build_messages(
@@ -425,6 +436,7 @@ class ThesisBuilder:
             config={
                 "run_name": "build_theses",
                 "metadata": {"run_slot": run_slot.value, "subjects": len(subjects)},
+                "callbacks": [self._usage],
             },
         )
         drafts = final.get("drafts")

@@ -438,8 +438,9 @@ class ThesisRun:
             llm_model=model_name(model),
             prompt_version=PROMPT_VERSION,
         )
+        builder = ThesisBuilder(model, toolbox)
         try:
-            investigation = ThesisBuilder(model, toolbox).run(
+            investigation = builder.run(
                 run_slot=run_slot,
                 as_of_at=self._as_of_at,
                 subjects=targets,
@@ -454,6 +455,7 @@ class ThesisRun:
                 status=LlmRunStatus.FAILED,
                 records=closed_records(toolbox),
                 tool_rounds=toolbox.round_count,
+                usage=builder.usage,
                 error=f"{type(error).__name__}: {error}",
             )
             if isinstance(error, ThesisError):
@@ -470,6 +472,7 @@ class ThesisRun:
             investigation_truncated=investigation.truncated,
             subjects_requested=investigation.subjects_requested,
             subjects_answered=len(investigation.drafts),
+            usage=builder.usage,
         )
 
         rows = store.store_theses(

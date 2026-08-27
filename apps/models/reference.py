@@ -20,10 +20,14 @@ class SeriesKind(StrEnum):
     금리 둘로 시작했지만 이 테이블은 금리 전용이 아니다. 물가지수와 실물활동이 들어오면서
     종류가 넷이 됐다. **단위가 다른 값을 한 화면에 못 놓기 때문에** 물가지수(지수, 300 근처)와
     실물활동(백만 달러, 70만 근처)을 갈라 둔다.
+
+    **정책금리는 `money_market`이 아니다.** CD 91일은 시장이 만드는 값이고 정책금리는
+    중앙은행이 정하는 값이다. 한 축에 섞으면 시장금리 패널이 정책금리 계단을 함께 그린다.
     """
 
     GOVERNMENT_BOND = "government_bond"
     MONEY_MARKET = "money_market"
+    POLICY_RATE = "policy_rate"
     PRICE_INDEX = "price_index"
     ACTIVITY = "activity"
 
@@ -49,7 +53,7 @@ class IndicatorSeries(EntityBase):
             name="uq_indicator_series_natural_key",
         ),
         CheckConstraint(
-            "kind IN ('government_bond', 'money_market', 'price_index', 'activity')",
+            "kind IN ('government_bond', 'money_market', 'policy_rate', 'price_index', 'activity')",
             name="ck_indicator_series_kind",
         ),
         # 만기가 없는 지표는 NULL이다. 0으로 채우지 않는다. 0을 넣으면 만기별 비교 쿼리가
@@ -101,8 +105,8 @@ class IndicatorSeries(EntityBase):
         ),
         nullable=False,
         comment=(
-            "시계열의 종류(government_bond, money_market, price_index 또는 activity). "
-            "국채 곡선에서 단기 자금시장 금리를 가르고, 단위가 다른 거시지표를 그 곡선에서 뺀다"
+            "시계열의 종류(government_bond, money_market, policy_rate, price_index 또는 activity). "
+            "국채 곡선에서 단기 자금시장 금리와 중앙은행 정책금리를 가르고, 단위가 다른 거시지표를 그 곡선에서 뺀다"
         ),
     )
     label: Mapped[str] = mapped_column(

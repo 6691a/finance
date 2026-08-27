@@ -96,7 +96,7 @@ class QuoteSymbol(StrEnum):
     Enum 값을 `quote_bar.symbol`에 그대로 저장한다. `ES=F`나 `^SOX`를 저장하면 제공처를
     바꿀 때 저장된 식별자까지 따라 바뀌어야 하고, DB만 보고 무슨 값인지 읽기도 어렵다.
     Yahoo 좌표는 `yahoo_symbol`이 들고 있다가 요청 URL에만 쓰고
-    `source_record.metadata`에 남긴다. `ecos.py`의 `MarketRateSeries`와 같은 규칙이다.
+    `source_record.metadata`에 남긴다. `ecos.py`의 `EcosSeries`와 같은 규칙이다.
 
     심볼을 늘리려면 여기에만 추가한다. 저장 계약은 `symbol`로 갈라지므로 그 밖의 코드
     변경이 없다.

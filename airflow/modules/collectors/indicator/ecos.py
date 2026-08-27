@@ -18,7 +18,7 @@
   `{"RESULT": {"CODE": ...}}` 본문으로 답한다. 그래서 `EcosResultError`가 본문의 코드를
   담아 올라가고 재시도 여부는 DAG가 그 코드로 판단한다.
 - **결측을 알리지 않는다.** 휴장일은 행 자체가 없고, 없는 항목코드를 물어도 데이터 없음과
-  같은 `INFO-200`이 온다. 오타가 조용한 0건이 되지 않도록 항목코드는 `MarketRateSeries`가
+  같은 `INFO-200`이 온다. 오타가 조용한 0건이 되지 않도록 항목코드는 `EcosSeries`가
   막는다.
 - **행 수를 넘겨도 경고하지 않는다.** 요청한 범위보다 데이터가 많으면 앞부분만 돌려주므로
   `list_total_count`와 받은 행 수를 대조해 잘림을 실패로 만든다.
@@ -55,49 +55,100 @@ from modules.sql import read_sql
 ECOS_URL = "https://ecos.bok.or.kr/api/StatisticSearch"
 SOURCE = "ecos"
 
-# 통계표 `1.3.2.1. 시장금리(일별)`. 주기 D로만 조회한다.
-STAT_CODE = "817Y002"
-CYCLE = "D"
+# 통계표. 계열마다 다르므로 Enum이 들고 간다. 초판은 시장금리 하나뿐이라 모듈 상수였다.
+MARKET_RATE_STAT_CODE = "817Y002"  # 1.3.2.1. 시장금리(일별)
+POLICY_RATE_STAT_CODE = "722Y001"  # 1.3.1. 한국은행 기준금리 및 여수신금리
+FOREIGN_POLICY_RATE_STAT_CODE = "902Y006"  # 9.1.1.3. 국제 주요국 중앙은행 정책금리
+
+DAILY_CYCLE = "D"
+MONTHLY_CYCLE = "M"
 
 
-class MarketRateSeries(StrEnum):
-    """수집 대상 시계열. 저장 식별자, ECOS 항목코드, 한국어 이름을 한 줄에 묶는다.
+class EcosSeries(StrEnum):
+    """수집 대상 시계열. 저장 식별자, ECOS 좌표, 주기, 단위, 종류, 한국어 이름을 한 줄에 묶는다.
 
     Enum 값은 `indicator_observation.series_id`에 그대로 저장한다. 항목코드
     (`010210000`)를 저장하면 DB와 대시보드에서 무슨 값인지 읽을 수 없다. 항목코드는
     `item_code`로 들고 있다가 요청 URL에만 쓰고 `source_record.metadata`에 남긴다.
 
-    `item_code`는 `StatisticItemList/817Y002`가 실제로 돌려준 코드다. ECOS는 없는
+    `item_code`는 그 통계표의 `StatisticItemList`가 실제로 돌려준 코드다. ECOS는 없는
     항목코드에도 데이터 없음(`INFO-200`)으로 답하므로 오타를 응답으로는 잡을 수 없다.
     그래서 여기에 없는 코드는 요청 전에 막는다. 시계열을 늘리려면 항목 목록을 다시 확인해
     여기에만 추가한다. 저장 계약은 `series_id`로 갈라지므로 그 밖의 코드 변경이 없다.
+
+    **통계표·주기·단위 표기를 계열마다 단다.** 초판은 시장금리 하나뿐이라 모듈 상수 셋이었다.
+    정책금리가 다른 통계표에 있고 일본은 월별이라 그 상수들이 거짓이 됐다. `fred.py`의
+    `FredSeries`가 단위를 계열마다 다는 것과 같은 이유다.
+
+    **월간 계열은 `_M`으로 끝난다.** 한 테이블에 일별과 월간이 섞여 있어 표시가 없으면
+    조회하는 쪽이 주기를 구분할 수 없다.
 
     저장 컬럼은 `Text`로 둔다. `series_id`는 제공처마다 값 집합이 다른 열린 식별자라
     DB `CHECK` 제약을 걸면 시계열을 늘릴 때마다 제약을 다시 만들어야 한다. 허용 값은
     이 Enum이 막는다.
     """
 
+    stat_code: str
     item_code: str
+    cycle: str
+    source_unit_name: str
+    kind: str
     label: str
 
-    def __new__(cls, series_id: str, item_code: str, label: str) -> Self:
+    def __new__(
+        cls,
+        series_id: str,
+        stat_code: str,
+        item_code: str,
+        cycle: str,
+        source_unit_name: str,
+        kind: str,
+        label: str,
+    ) -> Self:
         member = str.__new__(cls, series_id)
         member._value_ = series_id
+        member.stat_code = stat_code
         member.item_code = item_code
+        member.cycle = cycle
+        member.source_unit_name = source_unit_name
+        member.kind = kind
         member.label = label
         return member
 
-    KTB_2Y = ("KTB2Y", "010195000", "국고채 2년")
-    KTB_3Y = ("KTB3Y", "010200000", "국고채 3년")
-    KTB_10Y = ("KTB10Y", "010210000", "국고채 10년")
-    KTB_30Y = ("KTB30Y", "010230000", "국고채 30년")
-    CD_91D = ("CD91D", "010502000", "CD 91일")
+    @property
+    def is_monthly(self) -> bool:
+        return self.cycle == MONTHLY_CYCLE
+
+    # 시장이 만드는 값. 통계표 하나에 주기 D, 단위 `연%`다.
+    KTB_2Y = ("KTB2Y", MARKET_RATE_STAT_CODE, "010195000", DAILY_CYCLE, "연%", "government_bond", "국고채 2년")
+    KTB_3Y = ("KTB3Y", MARKET_RATE_STAT_CODE, "010200000", DAILY_CYCLE, "연%", "government_bond", "국고채 3년")
+    KTB_10Y = ("KTB10Y", MARKET_RATE_STAT_CODE, "010210000", DAILY_CYCLE, "연%", "government_bond", "국고채 10년")
+    KTB_30Y = ("KTB30Y", MARKET_RATE_STAT_CODE, "010230000", DAILY_CYCLE, "연%", "government_bond", "국고채 30년")
+    CD_91D = ("CD91D", MARKET_RATE_STAT_CODE, "010502000", DAILY_CYCLE, "연%", "money_market", "CD 91일")
+
+    # 중앙은행이 정하는 값. 좌표·주기·단위는 2026-08-27에 `StatisticItemList`로 확인했다.
+    #
+    # 한국은행 기준금리는 **달력 하루도 빠짐없이** 채워 온다(주말 포함). 국채 계열과 날짜 축이
+    # 같아 `KTB10Y - KRBASE`가 조인 하나다.
+    #
+    # **일본은 월별뿐이다.** 국제 정책금리 통계표(`902Y006`)에 국가 코드가 항목코드로 들어 있고
+    # 주기는 M이다. FRED의 일별 대안(`IRSTCB01JPM156N`)은 2023-12에 끊겼다. 월별이라 일본에
+    # 대해서는 발표일 전후 며칠을 보는 선반영 분석이 성립하지 않는다.
+    KR_BASE = ("KRBASE", POLICY_RATE_STAT_CODE, "0101000", DAILY_CYCLE, "연%", "policy_rate", "한국은행 기준금리")
+    JP_BASE_M = (
+        "JPBASE_M",
+        FOREIGN_POLICY_RATE_STAT_CODE,
+        "JP",
+        MONTHLY_CYCLE,
+        "%",
+        "policy_rate",
+        "일본은행 정책금리(월별)",
+    )
 
 
-MARKET_RATE_SERIES: tuple[str, ...] = tuple(series.value for series in MarketRateSeries)
-
-# ECOS가 이 통계표에 붙여 보내는 단위 표기. 값이 바뀌면 의미가 달라진 것이므로 실패시킨다.
-SOURCE_UNIT_NAME = "연%"
+# DAG이 태스크를 매핑하는 단위. 시장금리는 일별로, 정책금리는 주별로 돈다.
+MARKET_RATE_SERIES: tuple[str, ...] = tuple(series.value for series in EcosSeries if series.kind != "policy_rate")
+POLICY_RATE_SERIES: tuple[str, ...] = tuple(series.value for series in EcosSeries if series.kind == "policy_rate")
 
 # 저장 표기는 FRED와 맞춘다. 두 나라 금리를 한 쿼리로 비교하려면 단위 문자열이 같아야 한다.
 SERIES_UNIT = "Percent"
@@ -105,8 +156,9 @@ SERIES_UNIT = "Percent"
 # 데이터가 없다는 정상 응답. 휴장일만 걸린 구간이거나 아직 발표 전이다.
 NO_DATA_CODE = "INFO-200"
 
-# 일별 주기의 `TIME`은 구분자가 없는 YYYYMMDD다.
+# `TIME`은 구분자가 없다. 일별은 YYYYMMDD, 월별은 YYYYMM이다.
 DAILY_TIME_LENGTH = 8
+MONTHLY_TIME_LENGTH = 6
 
 # ECOS가 한 번에 허용하는 최대 조회 건수. 넘겨 요청해도 오류가 아니라 앞부분만 돌아온다.
 MAX_ROWS_PER_REQUEST = 100000
@@ -142,7 +194,7 @@ class EcosRequest(BaseModel):
 
     model_config = ConfigDict(frozen=True)
 
-    series: MarketRateSeries
+    series: EcosSeries
     observation_start: date
     observation_end: date
 
@@ -161,6 +213,17 @@ class EcosRequest(BaseModel):
     def item_code(self) -> str:
         """ECOS 항목코드. 요청 URL과 응답 대조에만 쓰고 저장하지 않는다."""
         return self.series.item_code
+
+    @property
+    def period_bounds(self) -> tuple[str, str]:
+        """URL에 넣는 조회 구간 표기. 주기가 정한다.
+
+        월별 통계표에 YYYYMMDD를 넘기면 ECOS는 오류가 아니라 데이터 없음(`INFO-200`)으로
+        답한다. 조용한 0건이 되므로 주기별로 갈라 만든다.
+        """
+        if self.series.is_monthly:
+            return self.observation_start.strftime("%Y%m"), self.observation_end.strftime("%Y%m")
+        return self.observation_start.strftime("%Y%m%d"), self.observation_end.strftime("%Y%m%d")
 
 
 class EcosObservation(BaseModel):
@@ -188,18 +251,34 @@ class EcosRawRow(BaseModel):
     item_code: str = Field(alias="ITEM_CODE1")
     item_name: str = Field(alias="ITEM_NAME1")
     unit_name: str = Field(alias="UNIT_NAME")
-    observation_date: date = Field(alias="TIME")
+    time: str = Field(alias="TIME")
     value: str | None = Field(alias="DATA_VALUE", default=None)
 
-    @field_validator("observation_date", mode="before")
-    @classmethod
-    def parse_compact_date(cls, value: object) -> date:
-        # 일별 주기의 TIME은 `20260806`처럼 구분자가 없어 Pydantic의 date 파서가 읽지 못한다.
-        # 다른 형태는 받지 않는다. 월별이면 `202608`이 오므로, 여기서 통과시키면 주기를 잘못
-        # 요청한 결과가 일별 관측값으로 저장된다.
-        if not isinstance(value, str) or len(value) != DAILY_TIME_LENGTH or not value.isdigit():
-            raise ValueError(f"daily TIME must be YYYYMMDD, got {value!r}")
-        return date(int(value[:4]), int(value[4:6]), int(value[6:8]))
+
+def parse_time(text: str, cycle: str) -> date:
+    """`TIME`을 날짜로 바꾼다. 요청한 주기의 표기만 받는다.
+
+    ECOS의 `TIME`은 구분자가 없어 Pydantic의 date 파서가 읽지 못한다. 그리고 일별
+    (`20260806`)과 월별(`202608`)이 같은 칸에 다른 길이로 온다. **요청한 주기가 아닌 표기를
+    통과시키면 월별 값이 일별 관측값으로 저장된다.** 그래서 주기를 아는 자리에서 변환한다.
+
+    월별 관측일은 **그 달의 1일**이다. `ecb_irs.py`·`fred.py`의 월간 계열과 같은 규약이라
+    조회하는 쪽이 주기별로 다른 날짜 규칙을 알 필요가 없다.
+    """
+    if cycle == MONTHLY_CYCLE:
+        if len(text) != MONTHLY_TIME_LENGTH or not text.isdigit():
+            raise EcosPayloadError(f"monthly TIME must be YYYYMM, got {text!r}")
+        day = "01"
+    else:
+        if len(text) != DAILY_TIME_LENGTH or not text.isdigit():
+            raise EcosPayloadError(f"daily TIME must be YYYYMMDD, got {text!r}")
+        day = text[6:8]
+
+    try:
+        return date(int(text[:4]), int(text[4:6]), int(day))
+    except ValueError as error:
+        # 길이와 숫자 여부만 보면 `20261331` 같은 값이 통과한다.
+        raise EcosPayloadError(f"TIME {text!r} is not a real calendar date") from error
 
 
 class EcosStatisticSearch(BaseModel):
@@ -293,17 +372,19 @@ def parse_observations(body: bytes, request: EcosRequest) -> tuple[EcosObservati
             f"ECOS returned {len(search.row)} of {search.list_total_count} rows; widen the requested row range"
         )
 
+    series = request.series
     observations: list[EcosObservation] = []
     for row in search.row:
         if row.item_code != request.item_code:
             # 항목코드가 요청과 다르면 값이 엉뚱한 시계열로 저장된다.
             raise EcosPayloadError(f"ECOS returned item {row.item_code!r} for a request of {request.item_code!r}")
-        if row.unit_name != SOURCE_UNIT_NAME:
+        if row.unit_name != series.source_unit_name:
             raise EcosPayloadError(f"ECOS changed the unit of {row.item_code} to {row.unit_name!r}")
         if not row.value:
             continue
+        observation_date = parse_time(row.time, series.cycle)
         try:
-            observations.append(EcosObservation(observation_date=row.observation_date, value=Decimal(row.value)))
+            observations.append(EcosObservation(observation_date=observation_date, value=Decimal(row.value)))
         except (ValidationError, ArithmeticError) as error:
             raise EcosPayloadError(f"ECOS returned a non-numeric value for {row.item_code}") from error
 
@@ -341,10 +422,9 @@ class EcosCollector:
                 "kr",
                 "1",
                 str(MAX_ROWS_PER_REQUEST),
-                STAT_CODE,
-                CYCLE,
-                request.observation_start.strftime("%Y%m%d"),
-                request.observation_end.strftime("%Y%m%d"),
+                request.series.stat_code,
+                request.series.cycle,
+                *request.period_bounds,
                 request.item_code,
             )
         )
@@ -393,11 +473,11 @@ class EcosCollector:
                 "http_status": response.status,
                 # 저장하는 `series_id`는 읽을 수 있는 ID다. 그 값이 ECOS의 어느 시계열에서 왔는지는
                 # 통계표 코드와 항목코드가 있어야 되짚을 수 있으므로 여기 남긴다.
-                "stat_code": STAT_CODE,
+                "stat_code": response.request.series.stat_code,
                 "item_code": response.request.item_code,
                 "item_name": response.request.series.label,
-                "cycle": CYCLE,
-                "source_unit_name": SOURCE_UNIT_NAME,
+                "cycle": response.request.series.cycle,
+                "source_unit_name": response.request.series.source_unit_name,
                 "observation_start": response.request.observation_start.isoformat(),
                 "observation_end": response.request.observation_end.isoformat(),
             }

@@ -22,18 +22,21 @@ import pytest
 from modules.assessment import PROMPT_VERSION as ASSESSMENT_PROMPT_VERSION
 from modules.expectation_domain import PROMPT_VERSION as EXPECTATION_PROMPT_VERSION
 from modules.prompt import PROMPT_ROOT
+from modules.thesis_outcomes import NARRATIVE_PROMPT_VERSION
 
 # 판이 붙는 프롬프트 파일. 흐름의 현재 판을 키에 함께 적는다.
 # **문장을 고쳤으면 판을 올리고 이 해시도 같이 바꾼다. 둘을 같은 커밋에서 만진다.**
 PROMPT_HASHES: dict[tuple[str, str], str] = {
     ("assessment", "3"): "98ca6e74ed7f241abeb7b4b459a86a3c22a459ff8189af6c063d92bc92ea8a79",
     ("expectation_extraction", "1"): "5cb01ff795ddca24281d51d878814611765dd7dd86a05a059fb476963423d790",
+    ("thesis_narrative", "2"): "0a503a18737d468feb0fe6803ffbec1ff54e2b33d9b123953612e005e7546aea",
 }
 
 # 현재 판을 어디서 읽는지. 표의 키와 대조하는 데만 쓴다.
 PROMPT_VERSIONS: dict[str, str] = {
     "assessment": ASSESSMENT_PROMPT_VERSION,
     "expectation_extraction": EXPECTATION_PROMPT_VERSION,
+    "thesis_narrative": NARRATIVE_PROMPT_VERSION,
 }
 
 # 채점하지 않는 흐름이라 판을 가를 이유가 없는 파일. 표에 넣지 않는다.

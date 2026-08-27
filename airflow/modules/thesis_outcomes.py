@@ -4,6 +4,11 @@
 `classify_outcome`·`brier_score`가 순수 함수로 갖는다. LLM은 산문을 쓰는 자리에만 있다.
 
 채점 값을 읽고 쓰는 것은 `thesis_store.ThesisStore`다.
+
+**문장은 여기 없다.** 해설 프롬프트는 `modules/prompts/thesis_narrative.yaml`이 갖는다.
+읽는 방법은 `modules/prompt.py`에 있다. **여기 문장에는 판이 붙는다** — 고치면
+`NARRATIVE_PROMPT_VERSION`을 올리고 `tests/modules/test_prompt_versions.py`의 해시를
+같은 커밋에서 바꾼다.
 """
 
 """시장 추론(thesis)을 만들고, 저장하고, 채점한다.
@@ -64,6 +69,7 @@ from pydantic import BaseModel, ConfigDict, ValidationError
 
 from modules import llm
 from modules.llm import UnsupportedResponseFormat
+from modules.prompt import read_prompt
 from modules.schema import SchemaError, json_object, response_format
 from modules.thesis_domain import (
     MAX_TOOL_CALLS,
@@ -180,57 +186,12 @@ class NarrativeDraft(BaseModel):
     evidence_refs: tuple[str, ...] = ()
 
 
-NARRATIVE_SYSTEM_PROMPT = f"""너는 지나간 시장 추론을 되돌아보는 기록자다.
+PROMPTS = read_prompt("thesis_narrative")
 
-며칠 전에 쓴 추론과 그 뒤 쌓인 보도를 놓고 두 가지를 남긴다.
-
-1. **해설**(`narrative`) — 그 기간 보도가 무엇을 말하는지. {MAX_NARRATIVE_CHARS}자 이내 한국어.
-2. **판정**(`verdict`) — 그 추론이 **든 이유**가 이후 보도로 지지됐는가.
-
-## 판정 규칙 — 여기가 이 작업의 핵심이다
-
-- `supported` — 후속 보도가 원 추론의 이유를 **직접** 뒷받침했다.
-- `contradicted` — 후속 보도가 그 이유를 반박했거나 다른 원인을 지목했다.
-- `unresolved` — 후속 보도가 그 이유를 다루지 않았다. **이것이 기본값이고 가장 흔한 답이다.**
-
-**`supported`나 `contradicted`를 고르면 그 판단의 근거가 된 ref를 반드시 인용하라.**
-인용할 문서가 없으면 `unresolved`다. 근거 없는 판정은 저장 전에 `unresolved`로 내려간다.
-
-**가격이 어느 쪽으로 움직였는지는 판정의 근거가 아니다.** 방향이 맞았는지는 시스템이
-Brier 점수로 따로 잰다. 네가 답할 것은 **이유가 맞았는가**이고 그 답은 문서에서만 나온다.
-움직임을 보고 이유를 거꾸로 맞추지 마라 — 그건 사후확신이지 검증이 아니다.
-
-## 그 밖의 규칙
-
-- 툴 결과에 없는 사실·숫자를 쓰지 마라.
-- **확률을 다시 내지 마라.** 원 추론의 확률은 불변이고, 결과를 아는 상태의 확률은 채점할 수 없다.
-- 투자 조언, 매수·매도 권유, 앞으로의 방향 예측을 쓰지 마라.
-- 대상마다 **정확히 하나씩** 답한다. 같은 대상을 두 번 쓰지 마라.
-- 해설은 단정하지 말고 "이 기사들은 …라고 본다" 형태로 쓴다. 너는 결과를 아는 자리에서
-  쓰고 있고 그 자리는 편향돼 있다.
-
-{llm.NUMBER_STYLE}
-
-출력 형식:
-{{"narratives": [{{"subject_code": "", "narrative": "", "verdict": "unresolved", "evidence_refs": []}}]}}"""
-
-NARRATIVE_INSTRUCTION = """{run_date} {slot_label}에 쓴 추론을 {horizon_days}영업일 뒤에 되돌아본다.
-
-기준 시각(이 시각 이후의 정보는 너에게 주어지지 않는다): {as_of_at}
-
-**툴이 돌려주는 시각(`published_at`, `detected_at`, `window_start`, `window_end`)은 UTC다.**
-한국 시장 시각으로 읽으려면 9시간을 더한다. 날짜 필드는 이미 한국 기준 영업일이다.
-
-필요하면 툴로 그동안 쌓인 문서·공시·시세 변화를 직접 가져와라.
-
-## 되돌아볼 추론
-{targets}
-"""
-
-NARRATIVE_REPAIR_INSTRUCTION = (
-    "이전 응답을 쓸 수 없다. 주어진 subject_code만 쓰고, verdict는 "
-    "supported·contradicted·unresolved 중 하나로, JSON 객체 하나를 다시 출력하라."
+NARRATIVE_SYSTEM_PROMPT = PROMPTS.render(
+    "system", max_narrative_chars=MAX_NARRATIVE_CHARS, number_style=llm.NUMBER_STYLE
 )
+NARRATIVE_REPAIR_INSTRUCTION = PROMPTS.repair
 
 
 class NarrativeState(TypedDict):
@@ -288,7 +249,8 @@ class FollowupNarrator:
         return [
             SystemMessage(NARRATIVE_SYSTEM_PROMPT),
             HumanMessage(
-                NARRATIVE_INSTRUCTION.format(
+                PROMPTS.render(
+                    "instruction",
                     run_date=run_date.isoformat(),
                     slot_label=SLOT_LABELS[run_slot],
                     horizon_days=horizon_days,

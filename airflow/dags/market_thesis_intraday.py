@@ -18,10 +18,10 @@
 **오늘 앞 슬롯을 되짚어 프롬프트에 싣는다.** 아침 예측이 지금 맞고 있는지가 다음 판단의
 재료다. `thesis_outcome`에 저장하지는 않는다 — 이유는 `thesis.state.SameDayThesis`.
 
-## 왜 10:35 / 12:35 / 14:35 / 15:00 인가
+## 왜 10:35 / 12:35 / 15:00 인가
 
 문서 평가(`document_assessment_hourly`, 매시 25분)가 끝난 뒤라야 직전 정시 수집분(:05)이
-근거 후보에 든다. 장전이 08:35인 것과 같은 이유이고, 그래서 세 슬롯이 :35다.
+근거 후보에 든다. 장전이 08:35인 것과 같은 이유이고, 그래서 앞 두 슬롯이 :35다.
 15:00만 예외다 — 그 슬롯의 목적이 "마감 30분 전"이라 시각이 먼저 정해진다(문서는 14:25
 평가분까지 본다).
 
@@ -29,11 +29,11 @@
 봉이 아예 없으면 수집이 멈춘 것이고, 오래된 봉만 있으면 지연이다. 둘 다 `ThesisNotReady`로
 올려 Airflow 재시도에 맡긴다.
 
-## 왜 슬롯 넷이 DAG 하나인가
+## 왜 슬롯 셋이 DAG 하나인가
 
 저장소 규칙은 "슬롯·모드로 갈리는 DAG는 나눈다"이고, 2026-08-21에 `market_thesis_analysis`를
 장전·장후로 가른 것이 그 규칙의 출처다. **그때 문제는 시각이 여럿인 것이 아니라 앞단
-데이터와 실패 성격이 다른 둘을 시계로 뭉뚱그린 것이었다.** 장중 넷은 같은 봉과 같은 문서
+데이터와 실패 성격이 다른 둘을 시계로 뭉뚱그린 것이었다.** 장중 셋은 같은 봉과 같은 문서
 평가를 같은 이유로 기다린다 — `slack_kr_market_briefing`이
 `MultipleCronTriggerTimetable` 하나로 남아 있는 것과 같은 경우다.
 
@@ -101,7 +101,6 @@ from modules.utility import KST_TIMEZONE
 SCHEDULE = MultipleCronTriggerTimetable(
     "35 10 * * 1-5",  # KST 평일 10:35 = UTC 월~금 01:35
     "35 12 * * 1-5",  # KST 평일 12:35 = UTC 월~금 03:35
-    "35 14 * * 1-5",  # KST 평일 14:35 = UTC 월~금 05:35
     "0 15 * * 1-5",  # KST 평일 15:00 = UTC 월~금 06:00
     timezone=KST_TIMEZONE,
 )
@@ -114,7 +113,7 @@ BUILD_TIMEOUT = timedelta(minutes=15)
 @dag(
     dag_id="market_thesis_intraday",
     dag_display_name="🧠 시장 추론 · 장중 전망 (LLM)",
-    description="장중 네 시각에 지금 가격 기준의 방향을 확률로 적고 근거와 함께 Slack에 보낸다.",
+    description="장중 세 시각에 지금 가격 기준의 방향을 확률로 적고 근거와 함께 Slack에 보낸다.",
     schedule=SCHEDULE,
     start_date=pendulum.datetime(2026, 8, 26, tz=KST_TIMEZONE),  # KST 2026-08-26 00:00 = UTC 2026-08-25 15:00
     catchup=False,

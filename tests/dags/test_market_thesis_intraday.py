@@ -63,13 +63,17 @@ def test_every_slot_can_see_the_last_document_assessment():
         assert gap + timedelta(hours=1) > intraday.ASSESSMENT_LAG, slot
 
 
-def test_the_slot_table_is_the_four_the_user_asked_for():
+def test_the_slot_table_is_the_three_the_user_asked_for():
+    """`intraday_afternoon`(14:35)은 `pre_close`(15:00)와 25분 차이라 2026-08-27에 뺐다.
+
+    값 자체는 `RunSlot`에 남는다 — 이미 저장된 행을 채점·해설하는 쪽이 그것을 읽는다.
+    """
     assert INTRADAY_SLOT_TIMES == {
         RunSlot.INTRADAY_MORNING: time(10, 35),
         RunSlot.INTRADAY_MIDDAY: time(12, 35),
-        RunSlot.INTRADAY_AFTERNOON: time(14, 35),
         RunSlot.PRE_CLOSE: time(15, 0),
     }
+    assert RunSlot.INTRADAY_AFTERNOON not in INTRADAY_SLOT_TIMES
 
 
 def test_the_tasks_run_in_one_line():
@@ -406,13 +410,13 @@ def test_run_hands_build_and_store_every_argument_it_requires(monkeypatch):
     monkeypatch.setattr(store, "ThesisStore", FakeStore)
     monkeypatch.setattr(common.ThesisRun, "build_and_store", fake_build_and_store)
 
-    run = forecast(FakeConnection([]), RunSlot.INTRADAY_AFTERNOON)
+    run = forecast(FakeConnection([]), RunSlot.INTRADAY_MIDDAY)
     written = run.run(dag_run_id="manual__1", try_number=1)
 
     assert written == 2
     signature.bind(run._run, **received)
-    assert received["run_slot"] is RunSlot.INTRADAY_AFTERNOON
+    assert received["run_slot"] is RunSlot.INTRADAY_MIDDAY
     # 창의 시작은 당일 09:00이다. 장후와 같은 창이라 계산이 `common`에 있다.
     assert received["macro_window_start"] == common.open_at(RUN_DATE)
     assert received["same_day"] == {}
-    assert run._run.as_of_at == intraday.as_of(RUN_DATE, RunSlot.INTRADAY_AFTERNOON)
+    assert run._run.as_of_at == intraday.as_of(RUN_DATE, RunSlot.INTRADAY_MIDDAY)

@@ -38,6 +38,9 @@ PROMPT_HASHES: dict[tuple[str, str], str] = {
     # 판 9는 교정 문구 하나(`variants.repair_short_answer`)가 늘어 해시가 갈린다.
     # 문장보다 결과가 달라진 판이다 — 대상이 모자란 답을 한 번 다시 묻는다.
     ("thesis_generation", "9"): "09339dfae4c0ea0c32fe751b0b29d5b5becd9d431e5cefe158df59935879043f",
+    # 판 10은 출력 형식 스켈레톤의 크기 자리표시자가 `0.0`에서 `null`로 바뀌어 해시가 갈린다.
+    # `0.0`을 그대로 베낀 답이 매번 임계에서 버려지고 있었다.
+    ("thesis_generation", "10"): "0c6aae2d149ccc8845d521cb87c8d60c633a8cc98104f8d7525d4dd13be01e91",
     ("thesis_narrative", "2"): "1baea1c554c90619576036db58ad42d2a1e24052fc8ab982978e605c6e696b8b",
 }
 

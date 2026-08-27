@@ -124,7 +124,7 @@ system: |-
 
   출력 형식:
   {"theses": [{"subject_code": "", "prob_up": 0.0, "prob_down": 0.0, "prob_flat": 0.0,
-   "up_return_pct": 0.0, "down_return_pct": 0.0,
+   "up_return_pct": null, "down_return_pct": null,
    "up_reasoning": "", "down_reasoning": "", "flat_reasoning": "",
    "claims": [{"ref": "", "direction": "up", "mechanism": ""}]}]}
 

@@ -279,7 +279,6 @@ SLOT_INSTRUCTION = {
     RunSlot.POST_NXT_CLOSE: PROMPTS.variants["post_nxt_close"],
 }
 
-REPAIR_INSTRUCTION = PROMPTS.repair
 
 
 # 과거 추론이 없을 때 그 절에 넣는 말. 절 자체를 빼면 프롬프트 모양이 날마다 달라진다.
@@ -526,7 +525,11 @@ class ThesisBuilder:
         if dropped:
             logger.warning("dropped %s theses: %s", len(dropped), dropped)
         if parsed.theses and not kept:
-            raise ThesisError(f"Model returned {len(parsed.theses)} theses, none of them usable")
+            # 교정 문구가 이 사유를 그대로 싣는다. 사유가 없으면 모델은 "형식이 틀렸나"만
+            # 보고 같은 답을 다시 낸다(2026-08-27 intraday: 이유 없음으로 두 번 연속 실패).
+            raise ThesisError(
+                f"Model returned {len(parsed.theses)} theses, none of them usable: {', '.join(dropped)}"
+            )
         return kept
 
     def _known_claims(self, answer: ThesisAnswer) -> tuple[Claim, ...]:
@@ -653,7 +656,7 @@ class ThesisBuilder:
         instruction = (
             PROMPTS.render_variant("repair_short_answer", missing=", ".join(missing))
             if missing
-            else REPAIR_INSTRUCTION
+            else PROMPTS.render("repair", reason=state["error"] or "")
         )
         logger.warning("retrying the theses once after %s", state["error"])
         return {

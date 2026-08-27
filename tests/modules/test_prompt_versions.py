@@ -41,6 +41,9 @@ PROMPT_HASHES: dict[tuple[str, str], str] = {
     # 판 10은 출력 형식 스켈레톤의 크기 자리표시자가 `0.0`에서 `null`로 바뀌어 해시가 갈린다.
     # `0.0`을 그대로 베낀 답이 매번 임계에서 버려지고 있었다.
     ("thesis_generation", "10"): "0c6aae2d149ccc8845d521cb87c8d60c633a8cc98104f8d7525d4dd13be01e91",
+    # 판 11은 교정 문구가 **버린 사유**를 싣는다(2026-08-27 intraday: 세 이유가 모두 비어
+    # 전부 버려졌는데, 사유 없는 교정을 받은 모델이 같은 답을 다시 냈다).
+    ("thesis_generation", "11"): "91166bc5f5e98244b1759f031763ba2828b2fc7afd0ed50ae364ef8fc3da6672",
     ("thesis_narrative", "2"): "1baea1c554c90619576036db58ad42d2a1e24052fc8ab982978e605c6e696b8b",
 }
 

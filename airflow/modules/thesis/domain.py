@@ -112,7 +112,12 @@ logger = logging.getLogger(__name__)
 #    조사해 놓고 하나만 답했고 태스크는 `written=1`로 성공이었다. 같은 실행이 이 판에서는
 #    넷을 채우거나, 못 채우면 그 사실이 원장(`subjects_requested`·`subjects_answered`)에
 #    남는다. **저장되는 추론 수가 달라지므로 판을 가른다.**
-PROMPT_VERSION = "9"
+# 10: 출력 형식 스켈레톤의 크기 자리표시자를 `0.0`에서 `null`로 바꿨다(2026-08-27).
+#     `0.0`은 유효한 숫자처럼 보여 모델이 그대로 베꼈고, `normalize_return_pct`가 임계
+#     이하라 그 칸을 매번 버렸다(실측: `intraday_midday` 넷 전부 up=0.0 down=0.0).
+#     확률과 이유는 살아 있었으므로 저장되는 추론 수는 같지만, **조건부 크기가 NULL이 아닌
+#     값으로 저장되기 시작하므로** 판을 가른다.
+PROMPT_VERSION = "10"
 
 # 채점 지평. KRX 영업일 수이고 달력일이 아니다. 0은 예측일 세션 하나다.
 HORIZON_DAYS: tuple[int, ...] = (0, 1, 3, 5)

@@ -30,7 +30,11 @@ from modules.thesis.outcomes import NARRATIVE_PROMPT_VERSION
 PROMPT_HASHES: dict[tuple[str, str], str] = {
     ("assessment", "3"): "98ca6e74ed7f241abeb7b4b459a86a3c22a459ff8189af6c063d92bc92ea8a79",
     ("expectation_extraction", "1"): "7108eab56e598ff642aeb7269f0f07ab9ef21707798202447db6a6b0a3b52a41",
+    # 판 8은 문장이 아니라 **자리표시자에 들어가는 값의 모양**이 바뀐 것이다(2026-08-27).
+    # 관측 상태·과거 추론 JSON에서 들여쓰기를 뺐다 — 모델이 보는 입력이 달라지므로 판을
+    # 가르지만 YAML은 그대로라 해시가 7과 같다. **같은 해시가 두 판에 걸린 것이 정상이다.**
     ("thesis_generation", "7"): "ba0a741a06869b16aa3a439ebe56c33cdfa8b4084366c3d6ec183e8d5c426154",
+    ("thesis_generation", "8"): "ba0a741a06869b16aa3a439ebe56c33cdfa8b4084366c3d6ec183e8d5c426154",
     ("thesis_narrative", "2"): "1baea1c554c90619576036db58ad42d2a1e24052fc8ab982978e605c6e696b8b",
 }
 

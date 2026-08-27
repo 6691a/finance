@@ -55,7 +55,6 @@
 설계는 `docs/analysis/market-thesis/1-storage.md`와 `docs/analysis/market-thesis/2-agent.md`에 있다.
 """
 
-import json
 import logging
 from collections.abc import Mapping, Sequence
 from datetime import datetime
@@ -71,7 +70,7 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from modules import llm
 from modules.llm import UnsupportedResponseFormat
-from modules.prompt import read_prompt
+from modules.prompt import json_dump, read_prompt
 from modules.schema import SchemaError, json_object, response_format
 from modules.technical.base_rate import FLAT_BASE_RATE_BARS
 from modules.thesis.domain import (
@@ -291,7 +290,7 @@ def _json_section(rows: Mapping[str, Sequence[BaseModel]]) -> str:
     shown = {code: [row.model_dump(mode="json") for row in items] for code, items in rows.items() if items}
     if not shown:
         return NO_PAST_THESES
-    return f"```json\n{json.dumps(shown, ensure_ascii=False, indent=2)}\n```"
+    return f"```json\n{json_dump(shown)}\n```"
 
 
 # ---------------------------------------------------------------------------
@@ -366,7 +365,7 @@ class ThesisBuilder:
                     slot_instruction=SLOT_INSTRUCTION[run_slot],
                     as_of_at=kst_label(as_of_at),
                     subjects=subject_lines or "(없음)",
-                    observed_state=json.dumps(observed_state.model_dump(mode="json"), ensure_ascii=False, indent=2),
+                    observed_state=json_dump(observed_state.model_dump(mode="json")),
                     same_day=_json_section(same_day),
                     past_theses=_json_section(past_theses),
                 )

@@ -82,11 +82,14 @@ def test_the_briefing_model_is_its_own_function(monkeypatch):
     한쪽만 바꾸고 싶어질 때 그 함수만 고치면 된다."""
     monkeypatch.setenv("XAI_API_KEY", "secret-key")
 
-    model = briefing_model()
+    model = briefing_model("test-conv")
 
     assert model_name(model) == "grok-4.6"
     assert model.max_retries == 0
     assert model.request_timeout == REQUEST_TIMEOUT_SECONDS
+    # 캐시는 서버마다다. 이 헤더가 없으면 같은 대화의 다음 요청이 다른 서버로 가 접두를
+    # 못 만난다(`modules/llm.py`의 "대화 하나는 서버 하나로 보낸다").
+    assert model.default_headers == {"x-grok-conv-id": "test-conv"}
 
 
 def test_the_thesis_model_is_its_own_function(monkeypatch):
@@ -94,7 +97,7 @@ def test_the_thesis_model_is_its_own_function(monkeypatch):
     한쪽만 바꾸고 싶어질 때 그 함수만 고치면 된다."""
     monkeypatch.setenv("XAI_API_KEY", "secret-key")
 
-    model = thesis_model()
+    model = thesis_model("test-conv")
 
     assert model_name(model) == "grok-4.6"
     assert model.max_retries == 0
@@ -103,6 +106,8 @@ def test_the_thesis_model_is_its_own_function(monkeypatch):
     # 그대로 둔다(한 번에 손잡이 하나).
     assert model.request_timeout == THESIS_TIMEOUT_SECONDS
     assert THESIS_TIMEOUT_SECONDS > REQUEST_TIMEOUT_SECONDS
+    # 툴 왕복마다 대화 전체가 재전송되는 흐름이라 이 헤더가 제일 급한 자리다.
+    assert model.default_headers == {"x-grok-conv-id": "test-conv"}
 
 
 def test_invoke_binds_the_schema_and_no_tools():

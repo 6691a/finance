@@ -145,7 +145,7 @@ GROUP BY run_slot;
 | 툴 개수 | 14 | 같은 곳 | **어떤 툴을 실제로 부르는지**와 `tool_rounds` 분포. 앞의 것은 **DB로 못 읽는다** — `thesis_evidence`는 열넷 중 다섯 툴만 ref를 남기고 그것도 "불렀다"가 아니라 "인용됐다"라, 안 불림·빈 결과·인용 안 함이 전부 0으로 보인다. LangSmith 트레이스(`run_name = build_theses`)를 사람이 열어 센다 | 한 번도 안 불리는 툴은 뺀다(문맥만 먹는다). 반대로 상한에 붙어 있으면 왕복을 늘린다. **툴을 더 열기 전에 `MAX_TOOL_CALLS`부터 본다** — 세어야 할 것은 툴 개수가 아니라 **대상 수 × 대상별 툴 수**다(5절 실측은 26호출). **서브 에이전트로 나누는 것은 여기서 판단한다** — 5절 참고 |
 | `verdict` 값 셋 | `supported`/`contradicted`/`unresolved` | `apps/models/analysis/thesis.py` + CHECK | `contradicted` 비율 | 60% 위가 유지되면 "반박"과 "다른 원인 지목"을 가를지 본다. **지금은 안 가른다** |
 | `MAX_TOOL_ROUNDS` / `MAX_TOOL_CALLS` / `MAX_TOOL_RESULT_CHARS` | 5 / 32 / 250,000 | `thesis/domain.py` | **`thesis_llm_run.investigation_truncated`가 이제 직접 센다**(2026-08-27 추가). 그 전에는 쿼리 B의 `tool_rounds` 분포로 추정할 수밖에 없었다 | **끊긴 실행 비율이 다시 보이면 왕복을 올린다.** 왕복 상한이 곧 빌드 길이라 `BUILD_TIMEOUT`(30분)이 아니라 **장전 창**(08:35 시작, 09:00 개장)이 실질 울타리다 — 왕복당 약 2분이라 5왕복이 12~14분, 7왕복이면 창에 붙는다. 호출 상한은 인자 모델의 `Field(description=...)`에 f-string으로 실려 프롬프트가 따라간다. 문자 상한은 폭주만 받는 안전망이라 **호출 상한을 다 써도 남아야 한다** |
-| `PROMPT_VERSION` / `NARRATIVE_PROMPT_VERSION` | `"7"` / `"2"` | `thesis/domain.py` / `thesis/outcomes.py` | — | 프롬프트를 고치면 올린다. 올린 뒤 28일은 ops 창이 두 판에 걸친다. **판마다 무엇이 바뀌었는지는 `thesis.domain.PROMPT_VERSION` 위 주석이 원본이다** — 여기 옮겨 적으면 두 벌이 어긋난다. 요약하면 `"3"` 기술적 보조지표(2026-08-24), `"4"` 과거 추론 절에 장후 리뷰(2026-08-25), `"5"` `## 확률` 절 정의(2026-08-25), `"6"` 숫자 표기 규칙 + 장중 슬롯(2026-08-26), `"7"` 조건부 기저율 + 동적 `flat` 기준선 + 방향별 기대 등락률(2026-08-26)이다 |
+| `PROMPT_VERSION` / `NARRATIVE_PROMPT_VERSION` | `"8"` / `"2"` | `thesis/domain.py` / `thesis/outcomes.py` | — | 프롬프트를 고치면 올린다. 올린 뒤 28일은 ops 창이 두 판에 걸친다. **판마다 무엇이 바뀌었는지는 `thesis.domain.PROMPT_VERSION` 위 주석이 원본이다** — 여기 옮겨 적으면 두 벌이 어긋난다. 요약하면 `"3"` 기술적 보조지표(2026-08-24), `"4"` 과거 추론 절에 장후 리뷰(2026-08-25), `"5"` `## 확률` 절 정의(2026-08-25), `"6"` 숫자 표기 규칙 + 장중 슬롯(2026-08-26), `"7"` 조건부 기저율 + 동적 `flat` 기준선 + 방향별 기대 등락률(2026-08-26), `"8"` JSON 들여쓰기 제거(2026-08-27, 문장은 그대로이고 자리표시자 값의 모양만 바뀌었다)다 |
 | `RULE_VERSION` | `"1"` | `technical/indicators.py` | `kind`·`direction`별 지평 적중률(기술지표 문서 12.6절) | 신호 검출 규칙을 고치면 올린다. `PROMPT_VERSION`과 같은 역할이고 축이 다르다 — 저쪽은 "모델이 잘 읽었나", 이쪽은 "신호가 좋았나"다 |
 | `RSI_OVERBOUGHT` / `RSI_OVERSOLD` | 70 / 30 | `technical/indicators.py` | 같은 것 | 검출과 프롬프트가 **같은 상수**를 본다. `rsi_reversal` 건수가 너무 적거나 많으면 여기서 당긴다 |
 | `SIGNAL_STATE_DAYS` / `MAX_STATE_SIGNALS` | 30일 / 3건 | `thesis/common.py` | 프롬프트 길이 | 관측 상태에 싣는 신호의 창과 개수. 툴(`SIGNAL_HISTORY_DAYS`, 90일)보다 짧다 |
@@ -156,6 +156,8 @@ GROUP BY run_slot;
 | 장중 `retries` / `execution_timeout` | 1 × 5분 / 15분 | `market_thesis_intraday.py` | `AirflowTaskTimeout` 건수와 슬롯 간 밀림 | 최악 40분에 묶어 앞 슬롯이 다음 슬롯을 막지 않게 한 값이다. 늘리려면 **슬롯 간격 2시간 안에** 들어와야 한다. 장전·장후(3 × 10분 / 30분)와 일부러 다르다 |
 | `ASSESSMENT_LAG` | 20분 | 같은 파일 | 같은 것 | 평가가 정상인데 guard가 막으면 늘린다 |
 | `thesis_model()` | `grok-4.6` | `llm.py` | 분기 Brier | 교체는 `PROMPT_VERSION`과 **함께** 올린다(1절 넷째) |
+| `x-grok-conv-id` | 실행마다 하나 (`thesis-{run_date}-{slot}`) | `llm.py` `_conversation_headers`, 부르는 곳 넷 | LangSmith의 `prompt_token_details.cache_read` ÷ `prompt_tokens` | **xAI 캐시는 서버마다다.** 헤더가 없으면 왕복마다 다른 서버로 가 대화 전체를 새로 낸다 — 2026-08-27 실측에서 적중이 21.5%(246,395 중 52,992)였다. 값은 **결정적**이어야 한다(난수면 재시도가 캐시를 버린다). 적중률이 안 오르면 값이 실행마다 갈리고 있는지부터 본다 |
+| 프롬프트 JSON 들여쓰기 | 없음 (`prompt.json_dump`) | `modules/prompt.py` | 프롬프트 문자 수 | 들여쓰기 공백은 그대로 입력 토큰이고 **툴 왕복마다 재전송**된다. 2026-08-27 실측: 관측 상태 블록 15,144자 → 6,744자(-55%), 세 블록 합 -14,450자, 네 왕복이라 약 32,000 토큰. **되돌릴 이유가 생기기 어렵다** — 모델은 들여쓰기 없는 JSON을 똑같이 읽고 사람이 볼 때는 LangSmith가 포매팅한다 |
 | `THESIS_TIMEOUT_SECONDS` | 1800 | `llm.py` | 타임아웃 실패 건수 | 2026-08-21 첫 실행이 300초에서 죽어 900으로, 툴이 11개로 늘면서 2026-08-22에 1800으로 올렸다. **1800은 관측이 아니라 예방이다** — 900에서 죽은 실행은 아직 없다. 다음 실행들의 실제 소요를 보고 되돌릴 여지가 있다. 또 걸리면 툴 상한(`MAX_TOOL_ROUNDS`)을 먼저 의심한다 — 왕복이 늘수록 한 요청이 길어진다. 문서 태깅의 `REQUEST_TIMEOUT_SECONDS`(300)는 따로다 |
 | `BUILD_TIMEOUT` | 30분 | `thesis/common.py` | `build_thesis`의 `AirflowTaskTimeout` 건수와 성공 실행의 소요 분포 | 요청 타임아웃의 바깥 울타리. 한 빌드는 모델을 최대 왕복 3 + 답변 + 교정 = 6번 부른다. 장전이 09:00 개장 전에 닿아야 해서 이 값이고, 걸리면 `MAX_TOOL_ROUNDS`를 먼저 의심한다. 재시도 셋은 그대로라 최악 4회 × (30 + 10)분이다 |
 | `SLACK_EVIDENCE_LIMIT` | 3 | `thesis/render.py` | 사람 눈 | 줄이 길어 안 읽히면 줄인다. 조회 상한(`EVIDENCE_FETCH_LIMIT`, 12)은 따로다 — 결론 방향으로 거른 뒤에도 이만큼 남아야 한다 |
@@ -347,3 +349,28 @@ ops 브리핑의 **추론 적체** 한 줄. **여기서 즉시 대응하는 것�
 
 `PROMPT_VERSION`은 올리지 않았다. 두 상수 모두 프롬프트 문장에 실리지 않는다
 (`MAX_TOOL_CALLS`만 인자 모델 설명에 실리고 그 값은 안 바꿨다).
+
+### 2026-08-27 — 비용 손잡이 둘 (LangSmith 실측 기반)
+
+`market_thesis_intraday` 12:35 슬롯 트레이스 하나가 근거다. 한 실행 $0.525, 입력이 79%.
+모델 호출은 넷뿐이라 **왕복 수가 아니라 왕복당 재전송량**이 비용이었다.
+
+| 조각 | 값 |
+| --- | --- |
+| 입력 / 출력 토큰 | 246,395 / 18,681 |
+| 캐시 적중 | 52,992 (21.5%) |
+| 최종 대화 크기 | 81,230 |
+| 재전송분 | 165,165 (입력의 67%) |
+| reasoning 토큰 | 15,182 (출력의 81%) |
+
+**당긴 것 둘.** ① 프롬프트 JSON 들여쓰기 제거(-12.3%, 정보 손실 0). ② `x-grok-conv-id`
+헤더(최대 -23%, 정보 손실 0). 둘 다 모델이 받는 **정보**는 그대로라 1절의 "한 번에 한
+손잡이"를 품질 축에서는 어기지 않는다 — 비용 축에서만 둘이다.
+
+**안 당긴 것.** `PREFETCHED_PAST_THESES` 2→1(과거 추론 블록이 사람 메시지의 57%인
+31,259자다). 정보를 실제로 빼는 손잡이라 위 둘의 효과를 먼저 재고 판단한다.
+reasoning 토큰(비용의 17%)도 그대로 뒀다.
+
+**다음에 볼 것.** 배포 뒤 슬롯 하나의 트레이스에서 `prompt_tokens`와 `cache_read`를
+다시 잰다. 헤더가 먹으면 2·4번째 호출의 `cache_read`가 512에서 앞 호출의 `prompt_tokens`
+근처로 올라간다.

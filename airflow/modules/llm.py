@@ -25,6 +25,19 @@
 `UnsupportedResponseFormat`으로 바꾸고, 부르는 쪽이 스키마 없이 한 번 더 부른다. 프롬프트에
 출력 형식을 그대로 적어 둔 이유가 이것이다. **강제가 되면 좋고, 안 되면 검증이 받는다.**
 
+## 대화 하나는 서버 하나로 보낸다
+
+xAI의 프롬프트 캐시는 **서버마다 따로** 저장된다. 같은 대화의 다음 요청이 다른 서버로 가면
+앞의 접두를 못 만나 전부 새 입력으로 청구된다. `x-grok-conv-id` 헤더가 같은 값을 가진
+요청을 같은 서버로 보내는 sticky 라우팅이고, 그래서 **툴 왕복이 있는 흐름은 이 헤더가
+없으면 왕복마다 대화 전체를 새로 낸다.**
+
+2026-08-27 `market_thesis_intraday` 실측이 그 값이다. 모델 호출 네 번 중 캐시를 만난 것은
+셋째 하나였고(51,968 토큰), 나머지 셋은 512였다 — 입력 246,395 토큰 중 캐시 적중이 21.5%다.
+
+`conv_id`는 **결정적 문자열**이다. 실행마다 난수를 만들면 재시도가 새 대화가 되어 캐시를
+버린다. 날짜와 슬롯처럼 그 실행을 가리키는 값을 쓴다.
+
 ## 오류는 여기서만 분류한다
 
 `ChatXAI`는 `BaseChatOpenAI` 서브클래스라 제공처 오류가 `openai` 예외로 그대로 올라온다.
@@ -122,22 +135,32 @@ def expectation_model() -> BaseChatModel:
     )
 
 
-def briefing_model() -> BaseChatModel:
+def _conversation_headers(conv_id: str) -> dict[str, str]:
+    """같은 대화를 같은 서버로 보내는 헤더. 모듈 docstring의 "대화 하나는 서버 하나로" 참고."""
+    if not conv_id:
+        raise ValueError("conv_id must not be empty — the cache is keyed per server by this header")
+    return {"x-grok-conv-id": conv_id}
+
+
+def briefing_model(conv_id: str) -> BaseChatModel:
     """Slack 브리핑 선별(`modules/briefing/picks.py`)이 쓰는 모델.
 
     지금은 `document_model`과 같은 모델이지만 함수를 나눠 둔다. 태깅은 문서 한 건을 읽고
     JSON을 내는 일이고 브리핑은 집계 표를 읽고 글을 쓰는 일이라, 한쪽만 다른 모델로 옮기고
     싶어질 때 그 함수만 고치면 된다.
+
+    `conv_id`는 이 발송 하나를 가리키는 결정적 문자열이다(모듈 docstring 참고).
     """
     return ChatXAI(
         model="grok-4.6",
         timeout=REQUEST_TIMEOUT_SECONDS,
+        default_headers=_conversation_headers(conv_id),
         # 재시도는 Airflow가 한다. 위 모듈 docstring 참고.
         max_retries=0,
     )
 
 
-def thesis_model() -> BaseChatModel:
+def thesis_model(conv_id: str) -> BaseChatModel:
     """시장 추론(`modules/thesis/generation.py`·`thesis/outcomes.py`)이 쓰는 모델.
 
     툴 왕복이 많은 작업이라 툴 호출 품질로 고른다. 브리핑 선별과 같은 `grok-4.6`이지만 함수를
@@ -147,10 +170,14 @@ def thesis_model() -> BaseChatModel:
     키는 이 클래스가 `XAI_API_KEY`에서 스스로 읽는다. 우리가 넘기지 않는다.
     **운영 키를 먼저 확인한다** — 2026-08-20 실측에서 `compose/prod/airflow/.env`의
     `XAI_API_KEY`가 `Incorrect API key provided`였다. 키가 무효면 이 DAG는 매 슬롯 실패한다.
+
+    `conv_id`는 이 실행 하나를 가리키는 결정적 문자열이다. **이 흐름이 헤더가 제일 급한
+    자리다** — 툴 왕복마다 대화 전체가 재전송되기 때문이다(모듈 docstring 참고).
     """
     return ChatXAI(
         model="grok-4.6",
         timeout=THESIS_TIMEOUT_SECONDS,
+        default_headers=_conversation_headers(conv_id),
         # 재시도는 Airflow가 한다. 위 모듈 docstring 참고.
         max_retries=0,
     )

@@ -110,7 +110,9 @@ def _highlight(
     from modules.llm import LlmError, briefing_model
 
     try:
-        highlights = DisclosurePicker(briefing_model()).highlight(
+        # 흐름 이름으로 고정한다. 평일 10분마다 도는 흐름이라 시스템 프롬프트 접두가
+        # 같은 서버 캐시에 남는 값어치가 크다(`modules/llm.py`).
+        highlights = DisclosurePicker(briefing_model("disclosure-picks")).highlight(
             disclosures.pick_input(batch),
             batch.allowed_ids,
         )

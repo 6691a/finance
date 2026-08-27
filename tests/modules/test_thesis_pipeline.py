@@ -2848,7 +2848,9 @@ def test_the_prompt_carries_the_past_theses_it_was_given():
     )[1].content
 
     assert "## 과거 추론과 결과" in prompt
-    assert '"run_date": "2026-08-20"' in prompt
+    # 들여쓰기 없는 JSON이다. 그 공백은 그대로 입력 토큰이고 툴 왕복마다 재전송된다
+    # (`modules/prompt.json_dump`).
+    assert '"run_date":"2026-08-20"' in prompt
     assert "contradicted" in prompt
     # 해설은 사실이 아니라 그때의 해석이라고 프롬프트가 직접 말한다(사후확신 순환 방지).
     assert "그때의 해석" in prompt

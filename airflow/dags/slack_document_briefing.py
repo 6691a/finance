@@ -125,7 +125,10 @@ def slack_document_briefing():
         if summary.is_empty:
             return None, None
         try:
-            picks = DocumentPicker(briefing_model()).pick(
+            # 한 실행에 모델 호출이 하나뿐이라 실행마다 다른 id는 아무 것도 못 만난다.
+            # 흐름 이름으로 고정하면 실행들이 같은 서버로 가 시스템 프롬프트 접두가
+            # 캐시에 남는다(`modules/llm.py`).
+            picks = DocumentPicker(briefing_model("document-picks")).pick(
                 summary.window_hours,
                 documents.pick_input(summary),
                 summary.allowed_ids,

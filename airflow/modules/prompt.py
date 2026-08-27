@@ -27,6 +27,7 @@ compose는 건드리지 않는 것이 저장소 규칙이다. `config/`는 `.git
 자리표시자가 그대로 모델에게 나가는 것보다 태스크가 죽는 편이 낫다.
 """
 
+import json
 from pathlib import Path
 from string import Template
 from typing import Any
@@ -92,6 +93,23 @@ def read_fragments(name: str) -> dict[str, str]:
     if not all(isinstance(value, str) for value in raw.values()):
         raise PromptError(f"every fragment must be a string: {name}")
     return raw
+
+
+def json_dump(value: Any) -> str:
+    """프롬프트에 실을 JSON 블록. **들여쓰기를 넣지 않는다.**
+
+    사람이 읽을 문서가 아니라 모델에게 가는 입력이라 들여쓰기 공백이 그대로 입력 토큰이
+    된다. 툴 왕복이 있는 흐름은 이 블록이 매 왕복 재전송돼서 그 비용이 라운드 수만큼
+    곱해진다 — 2026-08-27 `market_thesis_intraday` 실측에서 관측 상태 블록이
+    `indent=2` 때문에 15,144자였고 압축하면 6,744자였다(-55%). 세 블록 합이 한 실행에서
+    14,450자, 네 왕복이라 약 32,000 입력 토큰이다.
+
+    모델은 들여쓰기 없는 JSON을 똑같이 읽는다. 사람이 봐야 할 때는 LangSmith가 포매팅한다.
+
+    **울타리(```json)는 붙이지 않는다.** 어떤 프롬프트는 YAML 템플릿이 이미 감싸고 있어
+    여기서 붙이면 이중이 된다. 감쌀지는 부르는 쪽이 정한다.
+    """
+    return json.dumps(value, ensure_ascii=False, separators=(",", ":"))
 
 
 def _load(path: Path) -> dict[str, Any]:

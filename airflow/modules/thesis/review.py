@@ -176,7 +176,9 @@ def narrate_followups(built: dict[str, Any]) -> int:
     dag_run_id = str(context["dag_run"].run_id)
     # 재시도는 새 대화다. dag_run_id는 재시도에도 같아 이 칸이 없으면 구분할 수 없다.
     try_number = int(context["ti"].try_number)
-    model = thesis_model()
+    # 지평마다 호출이 갈리지만 시스템 프롬프트 접두는 같다. conv_id 하나로 묶으면 그
+    # 접두가 같은 서버의 캐시에 남는다(`modules/llm.py`).
+    model = thesis_model(f"thesis-narrate-{run_date}")
     written = 0
     attempted = 0
     failures: list[str] = []

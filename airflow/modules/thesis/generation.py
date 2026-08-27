@@ -615,15 +615,39 @@ class ThesisBuilder:
         return {"messages": update["messages"], "tool_rounds": state["tool_rounds"] + 1}
 
     def _answer(self, state: ThesisState) -> dict[str, Any]:
-        """툴을 빼고 스키마를 강제한다. 제공처가 스키마를 안 받으면 그때만 한 번 더."""
+        """툴을 빼고 스키마를 강제한다. **조사 단계가 이미 답을 냈으면 다시 묻지 않는다.**
+
+        조사 루프의 마지막 응답은 툴을 더 안 부르겠다는 뜻이고, 모델이 거기서 답 JSON을
+        통째로 내는 경우가 많다. 그것이 `parse`를 통과하면 그대로 쓴다.
+
+        **재요청이 값을 잃는 것을 봤다**(2026-08-27 장중 트레이스). 조사 단계 답의
+        크기 0.42·0.48이 스키마 강제 재요청에서 전부 `0`으로 돌아왔고 확률·이유·claims는
+        글자 그대로 같았다. 같은 답을 두 번 사는 자리이기도 하다 — 그 응답이 5,800자였다.
+
+        스키마 강제는 조사 단계 답이 못 쓸 때의 안전망으로 남는다. 제공처가 스키마를
+        안 받으면 그때만 한 번 더.
+        """
         messages = state["messages"]
+        previous = state["partial_drafts"]
+
+        reply = messages[-1]
+        # 교정 경로에서는 마지막이 교정 지시(HumanMessage)라 재사용 대상이 아니다.
+        # 툴을 부르자고 한 응답도 답이 아니다(왕복 상한에서 끊긴 경우).
+        if isinstance(reply, AIMessage) and not getattr(reply, "tool_calls", None):
+            try:
+                drafts = self.parse(_text(reply), state["subjects"])
+            except ThesisError as error:
+                logger.info("조사 단계 답을 그대로 쓰지 못해 스키마로 다시 묻는다: %s", error)
+            else:
+                # 그 응답은 이미 상태에 있다. 다시 넣으면 대화가 한 번 더 늘어난다.
+                return self._resolve(state, drafts=drafts, messages=[])
+
         try:
             reply = llm.invoke(self._model, messages, schema=self._schema)
         except UnsupportedResponseFormat as error:
             logger.warning("provider does not accept a response schema; falling back to validation: %s", error)
             reply = llm.invoke(self._model, messages)
 
-        previous = state["partial_drafts"]
         try:
             drafts = self.parse(_text(reply), state["subjects"])
         except ThesisError as error:
@@ -634,6 +658,21 @@ class ThesisBuilder:
                 return {"messages": [reply], "drafts": previous, "error": None}
             return {"messages": [reply], "drafts": None, "error": str(error)}
 
+        return self._resolve(state, drafts=drafts, messages=[reply])
+
+    def _resolve(
+        self,
+        state: ThesisState,
+        *,
+        drafts: tuple[ThesisDraft, ...],
+        messages: list[BaseMessage],
+    ) -> dict[str, Any]:
+        """읽어 낸 답을 어떻게 다룰지 정한다. 조사 단계 답과 스키마 답이 같은 판정을 받는다.
+
+        `messages`는 대화에 **더할** 것이다. 조사 단계 답을 재사용할 때는 그 응답이 이미
+        상태에 있으므로 빈 리스트다.
+        """
+        previous = state["partial_drafts"]
         missing = missing_subjects(state["subjects"], drafts)
         if missing:
             # **요청한 대상이 안 온 것을 여기서 처음 센다.** `parse`는 온 것 중 버린 것만
@@ -650,7 +689,7 @@ class ThesisBuilder:
         # 교정은 한 번뿐이고, 그 답이 더 적으면 첫 답으로 되돌아간다.
         if missing and state["attempts"] == 0:
             return {
-                "messages": [reply],
+                "messages": messages,
                 "drafts": None,
                 "error": f"대상 {len(missing)}개가 빠졌다: {', '.join(missing)}",
                 "missing_subjects": missing,
@@ -658,8 +697,8 @@ class ThesisBuilder:
             }
         if len(drafts) < len(previous):
             logger.warning("교정 답이 %s건으로 더 적어 첫 답 %s건을 쓴다", len(drafts), len(previous))
-            return {"messages": [reply], "drafts": previous, "error": None}
-        return {"messages": [reply], "drafts": drafts, "error": None}
+            return {"messages": messages, "drafts": previous, "error": None}
+        return {"messages": messages, "drafts": drafts, "error": None}
 
     def _repair(self, state: ThesisState) -> dict[str, Any]:
         """한 번만 다시 묻는다. **무엇이 잘못됐는지에 따라 문구가 다르다.**

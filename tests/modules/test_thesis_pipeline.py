@@ -1168,6 +1168,37 @@ def test_the_builder_investigates_with_tools_then_answers_with_a_schema():
     assert any(isinstance(message, ToolMessage) for message in model.calls[-1])
 
 
+def test_an_investigation_that_already_answered_is_not_asked_again():
+    """조사 단계 답이 `parse`를 통과하면 스키마 재요청을 건너뛴다.
+
+    재요청은 값을 잃는다 — 2026-08-27 장중 트레이스에서 조사 단계 답의 크기 0.42·0.48이
+    전부 `0`으로 돌아왔고 확률·이유는 글자 그대로 같았다. 같은 답을 두 번 사기도 한다.
+    """
+    connection = FakeConnection({"documents": [document_row(7)]})
+    # 조사 단계가 툴 없이 답을 통째로 낸다. 뒤에 올 응답은 없다 — 부르면 IndexError로 죽는다.
+    model = ScriptedModel(answer_message(thesis_payload(refs=["document:7"], up_return_pct=0.42)))
+    builder = build(model, connection)
+
+    investigation = run_builder(builder)
+
+    assert len(model.calls) == 1
+    assert "response_format" not in model.bound
+    assert investigation.drafts[0].up_return_pct == Decimal("0.42")
+
+
+def test_an_unusable_investigation_answer_still_gets_the_schema_ask():
+    """조사 단계가 답이 아닌 말을 하면 지금까지처럼 스키마를 걸어 다시 묻는다."""
+    connection = FakeConnection({"documents": [document_row(7)]})
+    model = scripted(answer_message(thesis_payload(refs=["document:7"])))
+    builder = build(model, connection)
+
+    investigation = run_builder(builder)
+
+    assert len(model.calls) == 2
+    assert "response_format" in model.bound
+    assert len(investigation.drafts) == 1
+
+
 def test_the_tool_schema_is_derived_from_the_code_not_hand_written():
     """`args_schema`에서 뽑는다. 손으로 쓴 wire format dict는 코드와 어긋나도 아무도 못 잡는다."""
     box = toolbox(FakeConnection())

@@ -55,7 +55,7 @@ class FredSeries(StrEnum):
 
     **FRED id를 저장 식별자로 쓰지 않는 계열이 있다.** `DGS10`은 사람이 읽으니 그대로 두지만
     `CPIAUCSL`은 DB만 보고 무슨 값인지 알 수 없다. 그런 계열은 읽히는 이름을 만들어 저장하고
-    FRED 좌표는 요청과 `source_record.metadata`에만 쓴다. `ecos.py`의 `MarketRateSeries`가
+    FRED 좌표는 요청과 `source_record.metadata`에만 쓴다. `ecos.py`의 `EcosSeries`가
     항목코드를 다루는 방식과 같다.
 
     **월간 계열은 `M`으로 끝난다.** 한 테이블에 일별과 월간이 섞여 있어 표시가 없으면 조회하는
@@ -96,11 +96,28 @@ class FredSeries(StrEnum):
     UNEMPLOYMENT_M = ("UNEMPLOYMENT_M", "UNRATE", "Percent", "activity", "미국 실업률")
     NONFARM_PAYROLL_M = ("NONFARM_PAYROLL_M", "PAYEMS", "Thousands of Persons", "activity", "미국 비농업고용")
 
+    # 중앙은행이 정하는 값. 위의 국채·거시가 전부 시장이나 통계청이 만드는 값이라 여기 없었다.
+    # 둘 다 `Daily, 7-Day`라 주말에도 값이 있고, 계단이 매일 채워져 국채와 날짜 축이 맞는다.
+    # 좌표·단위·이력은 2026-08-27에 `series` 엔드포인트로 확인했다.
+    #
+    # **연준은 목표범위 상단 하나만 받는다.** 하단과 실효금리(EFFR)는 "정책금리가 언제 얼마나
+    # 바뀌었나"에 값을 더하지 않는다. 필요해지면 여기 한 줄이다.
+    #
+    # **유로 지역은 ECB 원본이 아니라 FRED를 경유한다.** ECB Data Portal의 같은 값(dataflow
+    # `FM`)과 대조해 일치를 확인했고, 하루 늦게 갱신된다. 주 1회 도는 수집이라 그 지연이
+    # 보이지 않고, 대신 ECB dataflow 하나를 위한 모듈이 늘지 않는다.
+    DFEDTARU = ("DFEDTARU", "DFEDTARU", "Percent", "policy_rate", "미국 연방기금 목표범위 상단")
+    EADFR = ("EADFR", "ECBDFR", "Percent", "policy_rate", "ECB 예금금리")
+
 
 # DAG이 태스크를 매핑하는 단위. 국채와 거시는 발표 주기가 달라 되돌아볼 구간이 다르고,
 # 그래서 DAG도 나뉜다.
+#
+# **세 목록이 계열 전부를 덮는지 테스트가 본다.** 국채는 `kind`로, 거시는 `is_monthly`로
+# 걸러서 어느 쪽에도 안 맞는 계열(일별 정책금리가 그렇다)이 조용히 어느 DAG에도 안 실린다.
 TREASURY_SERIES: tuple[str, ...] = tuple(series.value for series in FredSeries if series.kind == "government_bond")
 MACRO_SERIES: tuple[str, ...] = tuple(series.value for series in FredSeries if series.is_monthly)
+POLICY_RATE_SERIES: tuple[str, ...] = tuple(series.value for series in FredSeries if series.kind == "policy_rate")
 
 # FRED가 휴장일과 미발표일에 값 대신 넣는 표시.
 MISSING_VALUE = "."

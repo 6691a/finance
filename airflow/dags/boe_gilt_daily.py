@@ -3,7 +3,8 @@
 태스크는 하나다. 잉글랜드은행 IADB가 세 시계열을 한 응답에 담아 주기 때문에 시계열마다
 요청할 일이 없다. `fred_treasury_daily`, `ecos_market_rate_daily`가 시계열마다 태스크를
 매핑하는 것과 다르고 `mof_jgb_daily`와 같다. 수집 대상은
-`modules.collectors.boe.GiltSeries`가 정한다(현재 `GILT5Y`, `GILT10Y`, `GILT20Y`).
+`modules.collectors.boe.GILT_DATASET`이 정한다(현재 `GILT5Y`, `GILT10Y`, `GILT20Y`).
+같은 IADB에서 받는 영란은행 기준금리는 주기가 달라 `policy_rate_weekly`가 따로 받는다.
 시계열을 늘려도 이 파일은 바뀌지 않는다.
 
 IADB의 명목 par yield 노드가 일별로 고시하는 만기는 5·10·20년 셋뿐이다. 0.5~40년 전
@@ -115,6 +116,7 @@ from airflow.sdk import Param, dag, get_current_context, task
 from airflow.sdk.exceptions import AirflowFailException
 
 from modules.collectors.indicator.boe import (
+    GILT_DATASET,
     BoeHTTPError,
     BoePayloadError,
     BoeRequest,
@@ -178,7 +180,11 @@ def boe_gilt_daily():
         except PeriodError as error:
             raise AirflowFailException(str(error)) from error
 
-        request = BoeRequest(observation_start=observation_start, observation_end=observation_end)
+        request = BoeRequest(
+            dataset=GILT_DATASET,
+            observation_start=observation_start,
+            observation_end=observation_end,
+        )
 
         try:
             response = fetch_curve(request)

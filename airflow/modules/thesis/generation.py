@@ -80,6 +80,7 @@ from modules.thesis.domain import (
     MAX_MECHANISM_CHARS,
     MAX_REASONING_CHARS,
     MAX_TOOL_ROUNDS,
+    MIN_REASONING_CHARS,
     PROB_QUANTUM,
     PROB_SUM_TOLERANCE,
     RETURN_QUANTUM,
@@ -429,6 +430,16 @@ class ThesisBuilder:
             if probabilities is None:
                 dropped.append(f"{answer.subject_code}(확률 합 {answer.prob_up + answer.prob_down + answer.prob_flat})")
                 continue
+            reasonings = (
+                _shorten(answer.up_reasoning),
+                _shorten(answer.down_reasoning),
+                _shorten(answer.flat_reasoning),
+            )
+            # 이유가 셋 다 자리표시자면 확률만 남는다. 그 상태로 저장하면 Slack에 근거 없는
+            # 결론 한 줄이 나가고 채점은 그것을 정상 추론으로 센다.
+            if all(len(text) < MIN_REASONING_CHARS for text in reasonings):
+                dropped.append(f"{answer.subject_code}(이유 없음)")
+                continue
             up_return = normalize_return_pct(answer.up_return_pct)
             down_return = normalize_return_pct(answer.down_return_pct)
             # 크기 하나가 규칙을 어겨도 추론은 살린다(`normalize_return_pct`). 다만 조용히
@@ -450,9 +461,9 @@ class ThesisBuilder:
                     prob_flat=probabilities[2],
                     up_return_pct=up_return,
                     down_return_pct=down_return,
-                    up_reasoning=_shorten(answer.up_reasoning),
-                    down_reasoning=_shorten(answer.down_reasoning),
-                    flat_reasoning=_shorten(answer.flat_reasoning),
+                    up_reasoning=reasonings[0],
+                    down_reasoning=reasonings[1],
+                    flat_reasoning=reasonings[2],
                     claims=self._known_claims(answer),
                 )
             )

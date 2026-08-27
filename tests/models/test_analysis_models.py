@@ -351,6 +351,28 @@ def test_causal_enums_are_checked_in_the_database():
     assert "ck_market_causal_path_target_kind" in checks
 
 
+def test_causal_returns_declare_their_unit():
+    """가격은 %, 금리는 bp다. 한 칸에 섞으면 크기 비교가 조용히 무의미해진다 —
+    `KTB10Y` 4.239→4.313은 +1.75%가 아니라 +7.4bp이고, KOSPI의 +10.77%와 나란히 둘 수 없다.
+
+    이름이 `_pct`가 아니라 `_change`인 이유가 그것이다.
+    """
+    from apps.models.analysis import MarketCausalPath
+
+    columns = MarketCausalPath.__table__.c
+    for name in ("return_week_change", "return_t1_change", "return_t5_change"):
+        assert name in columns
+        assert columns[name].nullable is False
+    assert columns["return_unit"].nullable is False
+
+    checks = {
+        constraint.name
+        for constraint in MarketCausalPath.__table__.constraints
+        if isinstance(constraint, CheckConstraint)
+    }
+    assert "ck_market_causal_path_return_unit" in checks
+
+
 def test_causal_enum_columns_are_varchar_not_native():
     """PostgreSQL native enum은 값 추가·삭제 비용이 커서 쓰지 않는다(프로젝트 규칙)."""
     from apps.models.analysis import MarketCausalPath

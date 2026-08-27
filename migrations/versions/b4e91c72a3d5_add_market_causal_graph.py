@@ -197,22 +197,34 @@ def upgrade_default() -> None:
             comment="이 경로를 설명하는 한 문장. 모델이 만든다",
         ),
         sa.Column(
-            "return_week_pct",
+            "return_week_change",
             sa.Numeric(precision=10, scale=4),
             nullable=False,
-            comment="그 주 대상 등락률(%). SQL이 계산한다. 경로가 작용했다고 주장하는 창이다",
+            comment=(
+                "그 주 대상 변화(단위는 return_unit). SQL이 계산한다. "
+                "경로가 작용했다고 주장하는 창이다"
+            ),
         ),
         sa.Column(
-            "return_t1_pct",
+            "return_t1_change",
             sa.Numeric(precision=10, scale=4),
             nullable=False,
-            comment="주 종료 다음 KRX 거래일까지의 등락률(%). SQL이 계산한다",
+            comment="주 종료 다음 KRX 거래일까지의 변화(단위는 return_unit). SQL이 계산한다",
         ),
         sa.Column(
-            "return_t5_pct",
+            "return_t5_change",
             sa.Numeric(precision=10, scale=4),
             nullable=False,
-            comment="주 종료 +5 KRX 거래일까지의 등락률(%). SQL이 계산한다",
+            comment="주 종료 +5 KRX 거래일까지의 변화(단위는 return_unit). SQL이 계산한다",
+        ),
+        sa.Column(
+            "return_unit",
+            sa.String(length=20),
+            nullable=False,
+            comment=(
+                "실현 등락 셋의 단위. 가격·지수·환율은 percent, 금리는 basis_point다. "
+                "조회하는 쪽은 이 칸을 반드시 걸어야 한다 — 안 걸면 7bp와 10%가 한 축에 섞인다"
+            ),
         ),
         sa.Column(
             "input_hash",
@@ -248,6 +260,10 @@ def upgrade_default() -> None:
         sa.CheckConstraint(
             _in_list("target_kind", ("instrument", "index", "quote", "indicator")),
             name="ck_market_causal_path_target_kind",
+        ),
+        sa.CheckConstraint(
+            _in_list("return_unit", ("percent", "basis_point")),
+            name="ck_market_causal_path_return_unit",
         ),
         comment="주간 인과 그래프의 경로 하나. 사건에서 대상까지의 주장과 실현 등락이다",
     )

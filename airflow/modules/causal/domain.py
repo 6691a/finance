@@ -13,7 +13,7 @@ from collections.abc import Iterable
 from datetime import UTC, date, datetime, time, timedelta
 from enum import StrEnum
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 
 from modules.utility import KST_TIMEZONE
 
@@ -310,3 +310,43 @@ class ChannelOption(BaseModel):
     node_id: str
     """`c:<id>` 꼴."""
     name: str
+
+
+class NodeChoice(BaseModel):
+    """사건이나 경로 한 칸. 기존 것을 고르거나 새로 만든다.
+
+    **이 한 칸이 §4 전체를 담는다.** 모델이 후보 목록에서 고르면 `existing_id`, 없으면
+    `new_name`이고, 그 선택이 서로 다른 주의 그래프를 잇거나 새 노드를 만든다.
+
+    LLM 응답 스키마의 일부지만 여기 둔다 — `store.py`가 이것을 읽어야 하는데, generation에
+    두면 저장 층이 LangChain을 끌고 와 DAG 파일이 그 무게를 문다.
+    """
+
+    existing_id: str = Field(
+        default="",
+        description="후보 목록에 있는 id(e:12 또는 c:3). 새로 만들면 빈 문자열",
+    )
+    new_name: str = Field(
+        default="",
+        description="새로 만들 이름. 기존을 고르면 빈 문자열",
+    )
+
+    @property
+    def is_new(self) -> bool:
+        return not self.existing_id and bool(self.new_name)
+
+
+class VerifiedPath(BaseModel):
+    """검증을 마친 경로 하나. 저장 코드는 이것만 본다."""
+
+    model_config = ConfigDict(frozen=True)
+
+    event: NodeChoice
+    event_date: str
+    channels: tuple[NodeChoice, ...]
+    target_kind: str
+    target_code: str
+    sign: str
+    confidence: str
+    reasoning: str
+    evidence_refs: tuple[str, ...]

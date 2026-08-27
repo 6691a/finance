@@ -151,7 +151,7 @@ def briefing_model() -> BaseChatModel:
 
 
 def thesis_model() -> BaseChatModel:
-    """시장 추론(`modules/thesis_generation.py`·`thesis_outcomes.py`)이 쓰는 모델.
+    """시장 추론(`modules/thesis/generation.py`·`thesis/outcomes.py`)이 쓰는 모델.
 
     툴 왕복이 많은 작업이라 툴 호출 품질로 고른다. 브리핑 선별과 같은 `grok-4.6`이지만 함수를
     나눠 둔다 — 선별은 목록을 읽고 고르는 일이고 추론은 툴을 여러 번 돌며 가설을 세우는

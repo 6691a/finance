@@ -13,7 +13,7 @@
   `airflow/dags/event_expectation_hourly.py`, `modules/llm.py`의 `expectation_model()`,
   SQL 아홉(`stock_event_claim/*` 넷, `stock_event_extraction/upsert.sql`,
   `stock_event_outcome/*` 둘, `document/select_pending_extraction.sql`,
-  `earnings_fact/select_actual_for_judgment.sql`), `thesis_toolbox.py`에 `event_surprises` 툴,
+  `earnings_fact/select_actual_for_judgment.sql`), `thesis/toolbox.py`에 `event_surprises` 툴,
   테스트 넷. 컨센서스 수집기는 후행(6절)
 
 ## 0. 왜 — 기대치가 숫자로 안 쌓여서 "미달"을 판단하지 못한다

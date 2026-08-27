@@ -9,12 +9,12 @@ from typing import Any, Self
 
 import pytest
 
-from modules import thesis_common
 from modules.technical import base_rate
 from modules.technical.indicators import TECHNICAL_LOOKBACK_BARS
-from modules.thesis_domain import RSI_OVERBOUGHT, RSI_OVERSOLD, ThesisSubjectKind
-from modules.thesis_generation import SYSTEM_PROMPT
-from modules.thesis_state import (
+from modules.thesis import common
+from modules.thesis.domain import RSI_OVERBOUGHT, RSI_OVERSOLD, ThesisSubjectKind
+from modules.thesis.generation import SYSTEM_PROMPT
+from modules.thesis.state import (
     IndexObservation,
     ObservedState,
     SignalObservation,
@@ -116,7 +116,7 @@ def both_subjects(count: int = 120) -> list[tuple]:
 
 
 def state(connection: FakeConnection) -> ObservedState:
-    run = thesis_common.ThesisRun(connection, run_date=SESSION, as_of_at=AS_OF)
+    run = common.ThesisRun(connection, run_date=SESSION, as_of_at=AS_OF)
     return run.observed_state(SESSION, TARGETS)
 
 
@@ -220,7 +220,7 @@ def test_the_technical_query_asks_only_for_the_targets():
 
 def test_no_session_gives_an_empty_state():
     """휴장·미판정이면 관측 상태 자체가 비어 있다."""
-    run = thesis_common.ThesisRun(FakeConnection(), run_date=SESSION, as_of_at=AS_OF)
+    run = common.ThesisRun(FakeConnection(), run_date=SESSION, as_of_at=AS_OF)
     result = run.observed_state(None, TARGETS)
 
     assert result == ObservedState()
@@ -254,7 +254,7 @@ def test_the_previous_open_day_is_read_once():
     창은 어제 마감부터인데 관측은 오늘 세션을 보는 상태가 그대로 프롬프트에 실린다.
     """
     connection = FakeConnection({"session": [(date(2026, 8, 20),)]})
-    run = thesis_common.ThesisRun(connection, run_date=SESSION, as_of_at=AS_OF)
+    run = common.ThesisRun(connection, run_date=SESSION, as_of_at=AS_OF)
 
     assert run.previous_open_day() == run.previous_open_day() == date(2026, 8, 20)
     assert len([call for call in connection.calls if _key(call[0]) == "session"]) == 1
@@ -263,7 +263,7 @@ def test_the_previous_open_day_is_read_once():
 def test_an_unfilled_calendar_is_remembered_as_none():
     """달력이 아직 없는 것도 답이다. 두 번째 호출이 다시 조회하지 않는다."""
     connection = FakeConnection()
-    run = thesis_common.ThesisRun(connection, run_date=SESSION, as_of_at=AS_OF)
+    run = common.ThesisRun(connection, run_date=SESSION, as_of_at=AS_OF)
 
     assert run.previous_open_day() is None
     assert run.previous_open_day() is None
@@ -294,9 +294,9 @@ def test_the_flat_baseline_rides_in_the_observed_state():
 
 def test_the_prompt_no_longer_hardcodes_the_flat_baseline():
     """상수는 132거래일로 잰 값이라 반년 만에 낡았다. 프롬프트가 관측 상태를 가리켜야 한다."""
-    from modules import thesis_domain
+    from modules.thesis import domain
 
-    assert not hasattr(thesis_domain, "FLAT_BASE_RATE_PCT")
+    assert not hasattr(domain, "FLAT_BASE_RATE_PCT")
     assert "flat_base_rate" in SYSTEM_PROMPT
     # 지수·종목을 한 숫자로 묶어 부르던 표현이 남아 있으면 안 된다.
     assert "개별 종목 6%" not in SYSTEM_PROMPT

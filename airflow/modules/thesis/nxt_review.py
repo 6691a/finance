@@ -1,7 +1,7 @@
 """NXT 애프터마켓 리뷰(`post_nxt_close`)에만 쓰는 것. `market_thesis_nxt_review` DAG가 부른다.
 
 여기 있는 것은 전부 "정규장이 닫힌 뒤"라서 그런 것이다. 다른 슬롯과 공유하지 않는다 —
-공유하면 다시 `if slot ==`이 생긴다. 슬롯을 모르는 것은 `thesis_common.py`에 있다.
+공유하면 다시 `if slot ==`이 생긴다. 슬롯을 모르는 것은 `thesis/common.py`에 있다.
 
 ## 왜 슬롯을 또 나눴나 (2026-08-22)
 
@@ -47,16 +47,16 @@ from airflow.exceptions import AirflowSkipException
 from airflow.sdk import get_current_context
 from pydantic import AwareDatetime, BaseModel, ConfigDict
 
-from modules import thesis_common
 from modules.sql import read_sql
-from modules.thesis_domain import LlmRunKind, ThesisSubjectKind
-from modules.thesis_state import AfterHoursObservation, NxtObservedState, RunSlot, ThesisRunResult
+from modules.thesis import common
+from modules.thesis.domain import LlmRunKind, ThesisSubjectKind
+from modules.thesis.state import AfterHoursObservation, NxtObservedState, RunSlot, ThesisRunResult
 from modules.utility import KST_TIMEZONE
 
 if TYPE_CHECKING:
     # 런타임 import는 안 한다 — 타입 이름 하나 때문에 모듈을 끌고 올 이유가 없다.
     # `TYPE_CHECKING`은 런타임에 돌지 않는다.
-    from modules.thesis_domain import Subject
+    from modules.thesis.domain import Subject
 
 logger = logging.getLogger(__name__)
 
@@ -135,7 +135,7 @@ class NxtAfterHoursReview:
     """
 
     def __init__(self, connection: Any, *, run_date: date) -> None:
-        self._run = thesis_common.ThesisRun(connection, run_date=run_date, as_of_at=as_of(run_date))
+        self._run = common.ThesisRun(connection, run_date=run_date, as_of_at=as_of(run_date))
         self._connection = connection
         self._run_date = run_date
         self._bars: tuple[AfterHoursBar, ...] | None = None
@@ -145,7 +145,7 @@ class NxtAfterHoursReview:
     def targets(self) -> tuple["Subject", ...]:
         """이번 실행의 추론 대상. **종목뿐이다** — NXT에 지수가 없다(모듈 docstring)."""
         if self._targets is None:
-            from modules.thesis_store import ThesisStore
+            from modules.thesis.store import ThesisStore
 
             subjects = ThesisStore(self._connection).subjects()
             self._targets = tuple(s for s in subjects if s.kind is ThesisSubjectKind.STOCK)
@@ -182,7 +182,7 @@ class NxtAfterHoursReview:
             raise AirflowSkipException(f"no NXT after-hours bars for {self._run_date}")
 
         if not any(bar.all_final for bar in self.bars):
-            raise thesis_common.ThesisNotReady(
+            raise common.ThesisNotReady(
                 f"NXT bars for {self._run_date} are all provisional; the REST backfill has not run"
             )
 
@@ -194,7 +194,7 @@ class NxtAfterHoursReview:
         **정규장 등락을 함께 주는 이유**: 애프터 등락만 주면 "왜 애프터에서 더 빠졌나"를 말할
         수 없다. 정규장에서 이미 빠진 종목이 더 빠진 것과, 오른 종목이 빠진 것은 다른 이야기다.
 
-        정규장 값은 `thesis_common.observed_state`가 만든 것을 그대로 쓴다 — 채점이 보는 것과
+        정규장 값은 `common.observed_state`가 만든 것을 그대로 쓴다 — 채점이 보는 것과
         같은 원본(18:10 확정 종가, 15:30 지수 마감 봉)이어야 한다.
 
         **지수는 `index_regular`라는 이름으로 준다.** subject가 아니라 맥락이라는 사실이 키에서
@@ -244,11 +244,11 @@ class NxtAfterHoursReview:
 def build() -> ThesisRunResult:
     """Airflow 태스크 진입점. 컨텍스트를 읽어 리뷰 하나를 돌린다."""
     context = get_current_context()
-    run_date = thesis_common.resolve_run_date(context)
+    run_date = common.resolve_run_date(context)
     dag_run_id = str(context["dag_run"].run_id)
     # 재시도는 새 대화다. dag_run_id는 재시도에도 같아 이 칸이 없으면 구분할 수 없다.
     try_number = int(context["ti"].try_number)
 
-    with closing(thesis_common.connection()) as conn:
+    with closing(common.connection()) as conn:
         written = NxtAfterHoursReview(conn, run_date=run_date).run(dag_run_id=dag_run_id, try_number=try_number)
     return ThesisRunResult(run_date=run_date, slot=SLOT, written=written)

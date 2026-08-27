@@ -5,7 +5,7 @@
 - 상태: 구현 완료 (2026-08-26). 리비전은 운영 반영 전
 - 의존: [1-storage.md](1-storage.md), [2-agent.md](2-agent.md), [3-dag-slack.md](3-dag-slack.md),
   [5-followup.md](5-followup.md)
-- 산출물: `RunSlot`에 슬롯 넷(두 곳)과 수기 리비전, `airflow/modules/thesis_intraday.py`,
+- 산출물: `RunSlot`에 슬롯 넷(두 곳)과 수기 리비전, `airflow/modules/thesis/intraday.py`,
   `airflow/dags/market_thesis_intraday.py`, SQL 다섯, 채점·해설 슬롯 목록 파라미터화,
   `tests/dags/test_market_thesis_intraday.py`
 
@@ -39,7 +39,7 @@ out-of-scope로 적어 뒀던 항목이고, 이 단계가 그것을 연다.
 쌓이므로 "언제 기준인가"가 값의 절반이다. 라벨은 `INTRADAY_SLOT_TIMES` 표에서 만들어
 스케줄을 옮기면 따라온다.
 
-시각의 원본은 `thesis_state.INTRADAY_SLOT_TIMES` 하나이고 DAG의 cron이 그것과 같아야 한다.
+시각의 원본은 `thesis.state.INTRADAY_SLOT_TIMES` 하나이고 DAG의 cron이 그것과 같아야 한다.
 어긋나면 `resolve_slot`이 슬롯을 못 찾아 실행이 죽는다 — 조용히 다른 슬롯으로 떨어지는
 것보다 낫고, 애초에 어긋나지 않게 `test_the_schedule_matches_the_slot_table`이 둘을 묶는다.
 
@@ -139,7 +139,7 @@ guard가 조회한 봉을 그대로 돌려주고 관측 상태가 그것을 쓴�
 
 7단계가 새 슬롯이 루프에 **자동으로** 들어오지 않도록 SQL에 슬롯 목록을 리터럴로 박아
 뒀다([7-nxt-review.md](7-nxt-review.md) 3절). 슬롯이 일곱이 되면서 그 리터럴이 네 파일에
-흩어지므로 파라미터로 바꾼다. 원본은 `thesis_state`의 상수 둘이다.
+흩어지므로 파라미터로 바꾼다. 원본은 `thesis.state`의 상수 둘이다.
 
 | 파일 | 목록 |
 | --- | --- |

@@ -36,7 +36,7 @@ from pydantic import AwareDatetime, BaseModel, ConfigDict, Field
 from modules.briefing import blocks
 from modules.db import Connection
 from modules.sql import read_sql
-from modules.thesis_domain import DART_VIEWER_URL
+from modules.thesis.domain import DART_VIEWER_URL
 from modules.utility import KST_TIMEZONE
 
 logger = logging.getLogger(__name__)

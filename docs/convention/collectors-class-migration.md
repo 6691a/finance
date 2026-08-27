@@ -121,7 +121,7 @@ airflow/modules/collectors/
 ### 2단계 — 연결·기준 시각·레지스트리를 도는 흐름 코드 (완료, 2026-08-25)
 
 수집기가 아니지만 같은 규칙에 걸리던 곳이다. 기준 구현은
-`airflow/modules/thesis_nxt_review.py`의 `NxtAfterHoursReview`였다 — 그 클래스 docstring이
+`airflow/modules/thesis/nxt_review.py`의 `NxtAfterHoursReview`였다 — 그 클래스 docstring이
 규칙을 그대로 적어 뒀다("연결과 세션 날짜가 상태다… 함수로 두면 인자에 매번 다시 들어간다",
 "기준 시각 계산은 모듈 함수다"). 나머지는 전부 그것의 미적용판이었다.
 
@@ -131,9 +131,9 @@ airflow/modules/collectors/
 | 위치 | 전(반복 인자) | 후 |
 | --- | --- | --- |
 | `modules/thesis.py` | `connection` 12, `run_date` 6, `as_of_at` 4, `run_slot` 4, `registry` 3. `store_theses` 인자 11 | `ThesisStore(connection)` — 조회·저장 열두 개가 메서드. `connection` 0 |
-| `modules/thesis_common.py` | `conn` 7(저장소 최다), `run_date` 3, `as_of_at` 3. `build_and_store` 인자 9 | `ThesisRun(connection, run_date, as_of_at)` — 반복 0, `build_and_store` 인자 6 |
-| `modules/thesis_forecast.py` | `conn` 2, `run_date` 2 | `PreOpenForecast(connection, run_date)` — 반복 0 |
-| `modules/thesis_review.py` | `conn` 2, `run_date` 3 | `PostCloseReview(connection, run_date)` — `run_date` 2(순수 시각 계산 둘) |
+| `modules/thesis/common.py` | `conn` 7(저장소 최다), `run_date` 3, `as_of_at` 3. `build_and_store` 인자 9 | `ThesisRun(connection, run_date, as_of_at)` — 반복 0, `build_and_store` 인자 6 |
+| `modules/thesis/forecast.py` | `conn` 2, `run_date` 2 | `PreOpenForecast(connection, run_date)` — 반복 0 |
+| `modules/thesis/review.py` | `conn` 2, `run_date` 3 | `PostCloseReview(connection, run_date)` — `run_date` 2(순수 시각 계산 둘) |
 | `modules/expectation.py` | `connection` 3, `dag_run_id` 2, `prompt_version` 2 | `ExpectationStore(connection, prompt_version)` — `connection` 0. 파일은 2026-08-25에 `expectation/domain`·`expectation/extraction`·`expectation/judgment`로 갈렸다 |
 | `modules/assessment.py` | `connection` 3, `prompt_revision` 2. `store_assessment` 인자 8 | `AssessmentStore(connection, prompt_revision)` — 반복 0, `store` 인자 6 |
 | `modules/briefing/market.py` | `connection` 6, `now` 5 | `MarketBriefingReader(connection, now)`(2026-08-24 선행) |
@@ -272,8 +272,8 @@ import하므로 이제 `monkeypatch.setattr(kis_quote, "send_get", ...)`다. 형
 
 | 파일 | 유지 이유 |
 | --- | --- |
-| `airflow/modules/thesis_tools.py` | 작은 Pydantic DTO 카탈로그이며 운영 소비자가 `thesis_toolbox.py` 하나뿐 |
-| `airflow/modules/thesis_state.py` | 관측 상태·XCom 계약을 모은 의존성 방화벽이며 아홉 파일이 쓴다 |
+| `airflow/modules/thesis/tools.py` | 작은 Pydantic DTO 카탈로그이며 운영 소비자가 `thesis/toolbox.py` 하나뿐 |
+| `airflow/modules/thesis/state.py` | 관측 상태·XCom 계약을 모은 의존성 방화벽이며 아홉 파일이 쓴다 |
 | `airflow/modules/collectors/indicator/ecos.py` | 한 제공처의 wire model과 collector가 응집돼 있음 |
 | `airflow/modules/assessment.py` | 두 LangGraph 클래스와 DTO가 하나의 평가 배치 흐름을 구성 |
 | `airflow/modules/collectors/document/dart.py` | 한 인증·전송 계약 아래 공시와 실적 파서가 이미 함수 경계로 갈려 있음 |
@@ -326,7 +326,7 @@ uv run pyrefly check
 
 - 2단계 표의 신호 열을 **줄 수에서 반복 인자 개수로** 바꿨다. 줄 수는 커밋마다 낡는다.
 - `modules/expectation.py`가 표에 없었다. 문서 작성 뒤 생겼고 `assessment.py`와 같은 모양이다.
-- `thesis_nxt_review.py`의 `NxtAfterHoursReview`를 2단계 기준 구현으로 명시했다.
+- `thesis/nxt_review.py`의 `NxtAfterHoursReview`를 2단계 기준 구현으로 명시했다.
   그 커밋이 형제 모듈을 안 건드려서 세 슬롯 중 하나만 클래스인 비대칭이 남아 있었다.
 - 인자 개수를 다시 셌다. `build_and_store` 8→9(`past` 추가), `store_theses` 10→11
   (`precedents` 추가)로 문서보다 늘어 있었다.

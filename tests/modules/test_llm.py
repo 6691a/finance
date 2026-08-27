@@ -25,8 +25,8 @@ from modules.llm import (
     thesis_model,
 )
 from modules.schema import response_format, strict_json_schema
-from modules.thesis_generation import SYSTEM_PROMPT as THESIS_PROMPT
-from modules.thesis_outcomes import NARRATIVE_SYSTEM_PROMPT
+from modules.thesis.generation import SYSTEM_PROMPT as THESIS_PROMPT
+from modules.thesis.outcomes import NARRATIVE_SYSTEM_PROMPT
 
 
 class ScriptedModel:

@@ -1,4 +1,4 @@
-"""장중 전망 DAG와 `modules/thesis_intraday.py`.
+"""장중 전망 DAG와 `modules/thesis/intraday.py`.
 
 추론의 알맹이는 `modules/thesis_*.py`에 있고 `tests/modules/test_thesis_pipeline.py`가 덮는다.
 여기 남은 것은 `@dag`가 만든 객체를 읽어야 알 수 있는 것(스케줄, 태스크 그래프, 재시도),
@@ -14,10 +14,10 @@ import pytest
 from airflow.exceptions import AirflowFailException
 
 from dags import market_thesis_intraday as dag_module
-from modules import thesis_common, thesis_intraday
 from modules.technical import base_rate
-from modules.thesis_domain import ThesisSubjectKind
-from modules.thesis_state import INTRADAY_SLOT_TIMES, IntradayObservation, RunSlot
+from modules.thesis import common, intraday
+from modules.thesis.domain import ThesisSubjectKind
+from modules.thesis.state import INTRADAY_SLOT_TIMES, IntradayObservation, RunSlot
 
 DAG = dag_module.market_thesis_intraday
 RUN_DATE = date(2026, 8, 26)
@@ -59,8 +59,8 @@ def test_every_slot_can_see_the_last_document_assessment():
     for slot, at in INTRADAY_SLOT_TIMES.items():
         minutes = at.hour * 60 + at.minute
         gap = timedelta(minutes=(minutes - assessment_minute) % 60)
-        assert gap <= thesis_intraday.ASSESSMENT_LAG, slot
-        assert gap + timedelta(hours=1) > thesis_intraday.ASSESSMENT_LAG, slot
+        assert gap <= intraday.ASSESSMENT_LAG, slot
+        assert gap + timedelta(hours=1) > intraday.ASSESSMENT_LAG, slot
 
 
 def test_the_slot_table_is_the_four_the_user_asked_for():
@@ -91,14 +91,14 @@ def test_a_slow_slot_cannot_block_the_next_one():
     worst_case += DAG.default_args["retry_delay"] * DAG.default_args["retries"]
 
     assert worst_case < timedelta(hours=2)
-    assert DAG.default_args["retries"] < thesis_common.DEFAULT_ARGS["retries"]
+    assert DAG.default_args["retries"] < common.DEFAULT_ARGS["retries"]
 
 
 def test_the_dag_carries_its_display_metadata():
     assert DAG.dag_display_name.startswith("🧠")
     assert DAG.description
     assert DAG.doc_md
-    for name in (thesis_common.RUN_DATE_PARAM, thesis_intraday.RUN_SLOT_PARAM):
+    for name in (common.RUN_DATE_PARAM, intraday.RUN_SLOT_PARAM):
         param = DAG.params.get_param(name)
         assert param.description
         assert param.schema.get("title")
@@ -110,14 +110,14 @@ def test_the_dag_carries_its_display_metadata():
 def test_the_scheduled_time_picks_the_slot():
     context = {"logical_date": MIDDAY_AS_OF}
 
-    assert thesis_intraday.resolve_slot(context) is RunSlot.INTRADAY_MIDDAY
+    assert intraday.resolve_slot(context) is RunSlot.INTRADAY_MIDDAY
 
 
 def test_a_param_beats_the_scheduled_time():
     """수동 실행의 정식 경로다. 스케줄 시각이 있어도 Param이 이긴다."""
     context = {"logical_date": MIDDAY_AS_OF, "params": {"run_slot": "pre_close"}}
 
-    assert thesis_intraday.resolve_slot(context) is RunSlot.PRE_CLOSE
+    assert intraday.resolve_slot(context) is RunSlot.PRE_CLOSE
 
 
 def test_a_manual_run_without_a_param_fails_instead_of_guessing():
@@ -127,28 +127,28 @@ def test_a_manual_run_without_a_param_fails_instead_of_guessing():
     수동 실행이 벽시계로 떨어져 UI의 Trigger 버튼이 조용히 다른 슬롯을 돌렸다.
     """
     with pytest.raises(AirflowFailException, match="must choose run_slot"):
-        thesis_intraday.resolve_slot({})
+        intraday.resolve_slot({})
 
 
 def test_an_off_schedule_logical_time_fails_too():
     # 11:00에 clear해 돌리면 어느 슬롯도 아니다. 가까운 슬롯으로 반올림하지 않는다.
     with pytest.raises(AirflowFailException, match="not an intraday slot"):
-        thesis_intraday.resolve_slot({"logical_date": datetime(2026, 8, 26, 2, 0, tzinfo=UTC)})
+        intraday.resolve_slot({"logical_date": datetime(2026, 8, 26, 2, 0, tzinfo=UTC)})
 
 
 @pytest.mark.parametrize("given", ["post_close", "pre_open", "nonsense"])
 def test_a_non_intraday_slot_is_refused(given):
     with pytest.raises(AirflowFailException):
-        thesis_intraday.resolve_slot({"params": {"run_slot": given}})
+        intraday.resolve_slot({"params": {"run_slot": given}})
 
 
 def test_the_as_of_time_is_the_slot_time_not_the_wall_clock():
-    assert thesis_intraday.as_of(RUN_DATE, RunSlot.INTRADAY_MORNING) == MORNING_AS_OF
-    assert thesis_intraday.as_of(RUN_DATE, RunSlot.PRE_CLOSE) == datetime(2026, 8, 26, 6, 0, tzinfo=UTC)
+    assert intraday.as_of(RUN_DATE, RunSlot.INTRADAY_MORNING) == MORNING_AS_OF
+    assert intraday.as_of(RUN_DATE, RunSlot.PRE_CLOSE) == datetime(2026, 8, 26, 6, 0, tzinfo=UTC)
 
 
 def test_the_param_offers_exactly_the_intraday_slots():
-    enum = DAG.params.get_param(thesis_intraday.RUN_SLOT_PARAM).schema["enum"]
+    enum = DAG.params.get_param(intraday.RUN_SLOT_PARAM).schema["enum"]
 
     assert set(enum) == {None, *(slot.value for slot in INTRADAY_SLOT_TIMES)}
 
@@ -211,8 +211,8 @@ def bar(minutes_before: int, close: str, previous: str, as_of: datetime = MORNIN
     return (as_of - timedelta(minutes=minutes_before), Decimal(close), Decimal(previous))
 
 
-def forecast(connection: Any, slot: RunSlot = RunSlot.INTRADAY_MORNING) -> thesis_intraday.IntradayForecast:
-    return thesis_intraday.IntradayForecast(connection, run_date=RUN_DATE, run_slot=slot)
+def forecast(connection: Any, slot: RunSlot = RunSlot.INTRADAY_MORNING) -> intraday.IntradayForecast:
+    return intraday.IntradayForecast(connection, run_date=RUN_DATE, run_slot=slot)
 
 
 # --- 봉 조회와 guard ----------------------------------------------------------
@@ -226,21 +226,21 @@ def test_the_bar_lookup_floors_at_the_open():
 
     for _, parameters in connection.cursor_object.calls:
         assert parameters[1] == MORNING_AS_OF
-        assert parameters[2] == thesis_common.open_at(RUN_DATE)
+        assert parameters[2] == common.open_at(RUN_DATE)
 
 
 def test_a_missing_bar_is_a_stopped_collector_not_a_delay():
     # 지수 봉만 있고 종목 봉이 없다. 0건은 지연이 아니다.
     connection = FakeConnection([[("KOSPI", *bar(5, "3150", "3125"))], []])
 
-    with pytest.raises(thesis_common.ThesisNotReady, match="no intraday bars today for 005930"):
+    with pytest.raises(common.ThesisNotReady, match="no intraday bars today for 005930"):
         forecast(connection).check_ready(TARGETS)
 
 
 def test_a_stale_bar_waits_for_a_retry():
     connection = FakeConnection([[("KOSPI", *bar(40, "3150", "3125"))], [("005930", *bar(1, "71500", "70000"))]])
 
-    with pytest.raises(thesis_common.ThesisNotReady, match="older than"):
+    with pytest.raises(common.ThesisNotReady, match="older than"):
         forecast(connection).check_ready(TARGETS)
 
 
@@ -269,13 +269,13 @@ def test_a_dead_document_collector_does_not_pass_the_guard():
         ]
     )
 
-    with pytest.raises(thesis_common.ThesisNotReady, match="has not caught up"):
+    with pytest.raises(common.ThesisNotReady, match="has not caught up"):
         forecast(connection).check_ready(TARGETS)
 
 
 def test_settled_closes_are_never_required_intraday():
     """`stock_investor_trade_daily`는 18:10에 들어온다. 장중에 요구하면 영영 안 돈다."""
-    source = inspect.getsource(thesis_intraday.IntradayForecast.check_ready)
+    source = inspect.getsource(intraday.IntradayForecast.check_ready)
 
     assert "require_settled_closes" not in source
 
@@ -369,7 +369,7 @@ def test_a_missing_base_price_drops_that_row_not_the_run():
 
 
 class FakeStore:
-    """`thesis_store.ThesisStore` 대역. LangChain 경로를 타지 않고 대상과 과거만 준다."""
+    """`store.ThesisStore` 대역. LangChain 경로를 타지 않고 대상과 과거만 준다."""
 
     def __init__(self, connection: Any) -> None:
         self.connection = connection
@@ -385,26 +385,26 @@ class FakeStore:
 def test_run_hands_build_and_store_every_argument_it_requires(monkeypatch):
     """`run()`이 넘기는 kwargs를 `build_and_store`의 시그니처에 묶는다.
 
-    `thesis_forecast`의 같은 이름 테스트와 짝이다 — 인자가 하나 늘 때 한쪽만 고쳐지면
+    `thesis.forecast`의 같은 이름 테스트와 짝이다 — 인자가 하나 늘 때 한쪽만 고쳐지면
     매 실행 `TypeError`이고, 충돌 없이 합쳐지는 자리라 테스트만이 잡는다.
     """
-    from modules import thesis_store
+    from modules.thesis import store
 
-    signature = inspect.signature(thesis_common.ThesisRun.build_and_store)
+    signature = inspect.signature(common.ThesisRun.build_and_store)
     received: dict[str, Any] = {}
 
     def fake_build_and_store(self: Any, **kwargs: Any) -> int:
         received.update(kwargs)
         return 2
 
-    monkeypatch.setattr(thesis_common.ThesisRun, "skip_unless_open", lambda self: None)
-    monkeypatch.setattr(thesis_intraday.IntradayForecast, "check_ready", lambda self, targets: {})
+    monkeypatch.setattr(common.ThesisRun, "skip_unless_open", lambda self: None)
+    monkeypatch.setattr(intraday.IntradayForecast, "check_ready", lambda self, targets: {})
     monkeypatch.setattr(
-        thesis_intraday.IntradayForecast, "observed_state", lambda self, targets, bars: {"intraday": {}}
+        intraday.IntradayForecast, "observed_state", lambda self, targets, bars: {"intraday": {}}
     )
-    monkeypatch.setattr(thesis_intraday.IntradayForecast, "same_day", lambda self, targets, bars: {})
-    monkeypatch.setattr(thesis_store, "ThesisStore", FakeStore)
-    monkeypatch.setattr(thesis_common.ThesisRun, "build_and_store", fake_build_and_store)
+    monkeypatch.setattr(intraday.IntradayForecast, "same_day", lambda self, targets, bars: {})
+    monkeypatch.setattr(store, "ThesisStore", FakeStore)
+    monkeypatch.setattr(common.ThesisRun, "build_and_store", fake_build_and_store)
 
     run = forecast(FakeConnection([]), RunSlot.INTRADAY_AFTERNOON)
     written = run.run(dag_run_id="manual__1", try_number=1)
@@ -412,7 +412,7 @@ def test_run_hands_build_and_store_every_argument_it_requires(monkeypatch):
     assert written == 2
     signature.bind(run._run, **received)
     assert received["run_slot"] is RunSlot.INTRADAY_AFTERNOON
-    # 창의 시작은 당일 09:00이다. 장후와 같은 창이라 계산이 `thesis_common`에 있다.
-    assert received["macro_window_start"] == thesis_common.open_at(RUN_DATE)
+    # 창의 시작은 당일 09:00이다. 장후와 같은 창이라 계산이 `common`에 있다.
+    assert received["macro_window_start"] == common.open_at(RUN_DATE)
     assert received["same_day"] == {}
-    assert run._run.as_of_at == thesis_intraday.as_of(RUN_DATE, RunSlot.INTRADAY_AFTERNOON)
+    assert run._run.as_of_at == intraday.as_of(RUN_DATE, RunSlot.INTRADAY_AFTERNOON)

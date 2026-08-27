@@ -266,7 +266,7 @@ def test_fallback_text_is_one_line():
 
 
 def test_the_horizon_list_matches_the_thesis_module():
-    from modules.thesis_domain import HORIZON_DAYS
+    from modules.thesis.domain import HORIZON_DAYS
 
     # ops는 LLM 층을 import하지 않는다 — 감시하는 쪽이 감시받는 쪽을 부르면 그쪽이 죽은 날
     # 이 리포트도 같이 흔들린다. 대신 값을 한 벌 더 두고 여기서 대조한다.

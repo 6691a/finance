@@ -4,7 +4,7 @@
 `args_schema`에서 뽑는다 — wire format dict를 손으로 쓰지 않는다(프로젝트 규칙).
 
 **상한은 코드 상수로 강제하고 그 값을 `Field(description=...)`에 f-string으로 싣는다.**
-상수를 고치면 프롬프트가 따라간다. 상수는 `thesis_domain`에 있다.
+상수를 고치면 프롬프트가 따라간다. 상수는 `thesis.domain`에 있다.
 """
 
 """시장 추론(thesis)을 만들고, 저장하고, 채점한다.
@@ -72,7 +72,7 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_valida
 from modules.db import TransactionalConnection as Connection
 from modules.sql import read_sql
 from modules.technical import base_rate, indicators
-from modules.thesis_domain import (
+from modules.thesis.domain import (
     BASIS_POINT_INDICATOR_KINDS,
     BASIS_POINT_KINDS,
     CLOSE_REF_SUFFIX,
@@ -105,12 +105,12 @@ from modules.thesis_domain import (
     evidence_ref,
     kst_label,
 )
-from modules.thesis_state import (
+from modules.thesis.state import (
     PastThesis,
     SignalBaseRate,
     SignalObservation,
 )
-from modules.thesis_tools import (
+from modules.thesis.tools import (
     AnalystOpinionsPayload,
     AvailableSymbolRow,
     DailyBarRow,
@@ -1117,10 +1117,10 @@ class ThesisToolbox:
             raise ToolLimitExceeded("이번 실행에는 대상 목록이 없어 past_theses를 쓸 수 없다")
         if code not in self._subject_codes:
             raise ToolLimitExceeded(f"대상 목록 밖이다: {code!r}. 쓸 수 있는 것은 {sorted(self._subject_codes)}")
-        # 모듈 수준에서 import하지 않는다. `thesis_store`가 초안 모델 때문에
-        # `thesis_generation`을 보고, 그쪽이 다시 이 모듈을 본다. 툴박스가 store를 보는 곳은
+        # 모듈 수준에서 import하지 않는다. `thesis.store`가 초안 모델 때문에
+        # `thesis.generation`을 보고, 그쪽이 다시 이 모듈을 본다. 툴박스가 store를 보는 곳은
         # 여기 하나뿐이라 늦은 import로 끊는다.
-        from modules.thesis_store import ThesisStore
+        from modules.thesis.store import ThesisStore
 
         count = _clamp_int(arguments.get("n"), MIN_PAST_THESES, MAX_PAST_THESES, MIN_PAST_THESES)
         return ThesisStore(self._connection).past_theses(as_of_at=self._as_of_at, subject_code=code, n=count)

@@ -12,7 +12,7 @@
 
 ## 분류는 채점과 같은 함수로 한다
 
-`thesis_domain.classify_outcome`을 그대로 쓴다. 임계(`FLAT_THRESHOLD_PCT`)는 TUNING 문서가
+`thesis.domain.classify_outcome`을 그대로 쓴다. 임계(`FLAT_THRESHOLD_PCT`)는 TUNING 문서가
 당기라고 적어 둔 손잡이라, 기저율과 채점이 다른 임계를 쓰면 두 숫자가 다른 세계를 말한다.
 
 버킷팅이 SQL이 아니라 여기 있는 이유도 채점 수식과 같다 — 경계값을 DB 없이 테스트한다.
@@ -35,8 +35,8 @@ from decimal import Decimal
 from modules.db import Connection
 from modules.sql import read_sql
 from modules.technical.indicators import RULE_VERSION
-from modules.thesis_domain import ThesisDirection, classify_outcome
-from modules.thesis_state import HorizonBaseRate, SignalBaseRate
+from modules.thesis.domain import ThesisDirection, classify_outcome
+from modules.thesis.state import HorizonBaseRate, SignalBaseRate
 
 logger = logging.getLogger(__name__)
 

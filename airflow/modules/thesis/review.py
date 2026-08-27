@@ -2,7 +2,7 @@
 
 리뷰는 **예측이 아니다.** 이미 일어난 일의 해석이라 채점 대상이 아니고, 대신 지난
 예측을 채점하고 되돌아보는 일이 여기 붙는다. 장전과 공유하지 않는다 — 공유하면 다시
-`if slot ==`이 생긴다. 슬롯을 모르는 것은 `thesis_common.py`에 있다.
+`if slot ==`이 생긴다. 슬롯을 모르는 것은 `thesis/common.py`에 있다.
 
 ## 기준 시각이 실행 시각이 아니다
 
@@ -21,14 +21,14 @@ from typing import TYPE_CHECKING, Any
 from airflow.exceptions import AirflowFailException
 from airflow.sdk import get_current_context
 
-from modules import thesis_common
-from modules.thesis_domain import LlmRunKind, ThesisSubjectKind
-from modules.thesis_state import INTRADAY_SLOTS, RunSlot, ThesisRunResult
+from modules.thesis import common
+from modules.thesis.domain import LlmRunKind, ThesisSubjectKind
+from modules.thesis.state import INTRADAY_SLOTS, RunSlot, ThesisRunResult
 
 if TYPE_CHECKING:
     # 런타임 import는 안 한다 — 타입 이름 하나 때문에 모듈을 끌고 올 이유가 없다.
     # `TYPE_CHECKING`은 런타임에 돌지 않는다.
-    from modules.thesis_store import PendingGrade
+    from modules.thesis.store import PendingGrade
 
 logger = logging.getLogger(__name__)
 
@@ -40,21 +40,21 @@ GUARD_INDEX_SYMBOLS = ["KOSPI", "KOSDAQ"]
 
 def as_of(run_date: date) -> datetime:
     """조회 창의 끝(UTC) = 그날 15:30 마감. **실행 시각이 아니다**(모듈 docstring)."""
-    return thesis_common.close_at(run_date)
+    return common.close_at(run_date)
 
 
 class PostCloseReview:
     """장후 리뷰 한 번. 연결과 세션 날짜를 들고 돈다.
 
-    `thesis_nxt_review.NxtAfterHoursReview`와 같은 모양이다 — 슬롯을 아는 것은 이 클래스이고,
-    슬롯을 모르는 조회·저장은 `thesis_common.ThesisRun`이 갖는다.
+    `thesis.nxt_review.NxtAfterHoursReview`와 같은 모양이다 — 슬롯을 아는 것은 이 클래스이고,
+    슬롯을 모르는 조회·저장은 `common.ThesisRun`이 갖는다.
 
     **기준 시각 계산(`as_of`·`macro_window_start`)은 모듈 함수로 남는다.** 날짜 하나를 받아
     시각 하나를 주는 순수 계산이라 감쌀 상태가 없다.
     """
 
     def __init__(self, connection: Any, *, run_date: date) -> None:
-        self._run = thesis_common.ThesisRun(connection, run_date=run_date, as_of_at=as_of(run_date))
+        self._run = common.ThesisRun(connection, run_date=run_date, as_of_at=as_of(run_date))
 
     @property
     def connection(self) -> Any:
@@ -73,11 +73,11 @@ class PostCloseReview:
                 (self._run.as_of_at, GUARD_INDEX_SYMBOLS),
             )
             if cursor.fetchone()[0] < len(GUARD_INDEX_SYMBOLS):
-                raise thesis_common.ThesisNotReady(f"index closing bars for {self._run.run_date} are missing")
+                raise common.ThesisNotReady(f"index closing bars for {self._run.run_date} are missing")
 
     def run(self, *, dag_run_id: str, try_number: int) -> int:
         """휴장 판정 → readiness guard → 관측 상태 → LLM → 저장. 저장한 행 수를 준다."""
-        from modules.thesis_store import ThesisStore
+        from modules.thesis.store import ThesisStore
 
         self._run.skip_unless_open()
 
@@ -102,21 +102,21 @@ class PostCloseReview:
 def macro_window_start(run_date: date) -> datetime:
     """매크로 창의 시작 = 당일 09:00. 장전의 창(전 개장일 마감부터)과 다르다.
 
-    **장중 슬롯도 같은 창을 쓴다.** 그래서 시각 상수와 계산은 `thesis_common`이 갖는다 —
+    **장중 슬롯도 같은 창을 쓴다.** 그래서 시각 상수와 계산은 `common`이 갖는다 —
     두 슬롯 모듈에 09:00을 각각 적으면 한쪽만 고쳐지는 날이 온다.
     """
-    return thesis_common.open_at(run_date)
+    return common.open_at(run_date)
 
 
 def build() -> ThesisRunResult:
     """Airflow 태스크 진입점. 컨텍스트를 읽어 리뷰 하나를 돌린다."""
     context = get_current_context()
-    run_date = thesis_common.resolve_run_date(context)
+    run_date = common.resolve_run_date(context)
     dag_run_id = str(context["dag_run"].run_id)
     # 재시도는 새 대화다. dag_run_id는 재시도에도 같아 이 칸이 없으면 구분할 수 없다.
     try_number = int(context["ti"].try_number)
 
-    with closing(thesis_common.connection()) as conn:
+    with closing(common.connection()) as conn:
         written = PostCloseReview(conn, run_date=run_date).run(dag_run_id=dag_run_id, try_number=try_number)
     return ThesisRunResult(run_date=run_date, slot=SLOT, written=written)
 
@@ -130,11 +130,11 @@ def grade_followups() -> int:
     **`ThesisRun`을 쓰지 않는다.** 채점은 이 실행의 세션이 아니라 *지난* 추론의 날짜를 돌기
     때문에, 세션 날짜를 쥔 객체에 담으면 그 값이 항목마다 거짓이 된다. 연결만 상태다.
     """
-    from modules.thesis_store import ThesisStore
+    from modules.thesis.store import ThesisStore
 
     dag_run_id = str(get_current_context()["dag_run"].run_id)
     graded = 0
-    with closing(thesis_common.connection()) as conn:
+    with closing(common.connection()) as conn:
         store = ThesisStore(conn)
         pending = store.pending_grades()
         for item in pending:
@@ -148,7 +148,7 @@ def grade_followups() -> int:
                 continue
             store.store_grade(
                 pending=item,
-                as_of_at=thesis_common.close_at(target_day),
+                as_of_at=common.close_at(target_day),
                 dag_run_id=dag_run_id,
                 return_pct=value,
                 evaluated_at=datetime.now(UTC),
@@ -166,10 +166,10 @@ def narrate_followups(built: dict[str, Any]) -> int:
     대상을 가져 한 호출에 섞으면 응답을 대상에 되돌릴 수 없다.
     """
     from modules.llm import LlmError, RetryableLlmError, model_name, thesis_model
-    from modules.thesis_domain import NARRATED_HORIZON_DAYS, LlmRunStatus, ThesisError
-    from modules.thesis_outcomes import FollowupNarrator
-    from modules.thesis_store import ThesisStore
-    from modules.thesis_toolbox import ThesisToolbox
+    from modules.thesis.domain import NARRATED_HORIZON_DAYS, LlmRunStatus, ThesisError
+    from modules.thesis.outcomes import FollowupNarrator
+    from modules.thesis.store import ThesisStore
+    from modules.thesis.toolbox import ThesisToolbox
 
     run_date = ThesisRunResult.model_validate(built).run_date
     context = get_current_context()
@@ -180,9 +180,9 @@ def narrate_followups(built: dict[str, Any]) -> int:
     written = 0
     attempted = 0
     failures: list[str] = []
-    as_of_at = thesis_common.close_at(run_date)
-    with closing(thesis_common.connection()) as conn:
-        run = thesis_common.ThesisRun(conn, run_date=run_date, as_of_at=as_of_at)
+    as_of_at = common.close_at(run_date)
+    with closing(common.connection()) as conn:
+        run = common.ThesisRun(conn, run_date=run_date, as_of_at=as_of_at)
         store = ThesisStore(conn)
         for horizon in NARRATED_HORIZON_DAYS:
             # 그 지평의 원 추론일을 거슬러 찾는다. 오늘이 T+N이면 추론일은 N영업일 전이다.
@@ -197,7 +197,7 @@ def narrate_followups(built: dict[str, Any]) -> int:
                 toolbox = ThesisToolbox(
                     conn,
                     as_of_at=as_of_at,
-                    macro_window_start=thesis_common.close_at(origin),
+                    macro_window_start=common.close_at(origin),
                     watched_codes=[t.subject.code for t in targets],
                     subject_codes=[t.subject.code for t in targets],
                 )
@@ -223,7 +223,7 @@ def narrate_followups(built: dict[str, Any]) -> int:
                     store.finish_llm_run(
                         llm_run_id,
                         status=LlmRunStatus.FAILED,
-                        records=thesis_common.closed_records(toolbox),
+                        records=common.closed_records(toolbox),
                         tool_rounds=toolbox.round_count,
                         error=f"{type(error).__name__}: {error}",
                     )
@@ -242,7 +242,7 @@ def narrate_followups(built: dict[str, Any]) -> int:
                 store.finish_llm_run(
                     llm_run_id,
                     status=LlmRunStatus.SUCCEEDED,
-                    records=thesis_common.closed_records(toolbox),
+                    records=common.closed_records(toolbox),
                     tool_rounds=toolbox.round_count,
                 )
 
@@ -292,7 +292,7 @@ def _horizon_return(
         returns = store.intraday_horizon_returns(
             subject_kind=item.subject_kind,
             target_date=target_day,
-            target_bar_at=thesis_common.close_at(target_day),
+            target_bar_at=common.close_at(target_day),
             base_prices={item.subject_code: item.base_price},
         )
     elif item.subject_kind is ThesisSubjectKind.STOCK:
@@ -308,7 +308,7 @@ def _horizon_return(
             run_date=item.run_date,
             target_date=target_day,
             codes=[item.subject_code],
-            base_bar_at=thesis_common.close_at(item.run_date),
-            target_bar_at=thesis_common.close_at(target_day),
+            base_bar_at=common.close_at(item.run_date),
+            target_bar_at=common.close_at(target_day),
         )
     return returns.get(item.subject_code)

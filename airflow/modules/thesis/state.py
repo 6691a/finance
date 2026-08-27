@@ -6,10 +6,10 @@
 되는지도 코드에 안 남는다.
 
 **이 모듈은 LangChain·Airflow·DB를 import하지 않는다.** `thesis.py`(LangChain)와
-`thesis_common.py`(Airflow) 둘이 모듈 수준에서 이것을 import하는데, 저 둘은 서로를 모듈
-수준에서 import할 수 없기 때문이다(DagBag 30초 타임아웃, `thesis_common` docstring).
+`thesis/common.py`(Airflow) 둘이 모듈 수준에서 이것을 import하는데, 저 둘은 서로를 모듈
+수준에서 import할 수 없기 때문이다(DagBag 30초 타임아웃, `thesis.common` docstring).
 
-값을 만드는 것은 `thesis_common.observed_state`·`technical_state`와 `thesis.past_theses`이고,
+값을 만드는 것은 `thesis.common.observed_state`·`technical_state`와 `thesis.past_theses`이고,
 JSON으로 바꾸는 것은 프롬프트 조립과 저장이다(`model_dump(mode="json")`).
 """
 
@@ -23,7 +23,7 @@ class RunSlot(StrEnum):
     """추론을 만든 슬롯. 슬롯이 곧 추론의 종류다.
 
     `thesis.py`가 아니라 여기 있는 것은 슬롯을 아는 코드가 셋으로 갈려 있기 때문이다 —
-    LangChain을 끄는 `thesis.py`, Airflow를 끄는 `thesis_common.py`, 그리고 슬롯 모듈 셋이다.
+    LangChain을 끄는 `thesis.py`, Airflow를 끄는 `thesis/common.py`, 그리고 슬롯 모듈 셋이다.
     감쌀 의존성이 없는 값이라 방화벽 쪽에 두면 셋 다 그대로 본다. `thesis.py`가 재수출하므로
     부르는 쪽은 전과 같다.
 
@@ -68,8 +68,8 @@ NARRATED_SLOTS: tuple[RunSlot, ...] = (*FORECAST_SLOTS, RunSlot.POST_CLOSE)
 # 장중 슬롯의 기준 시각(KST). **분기가 아니라 표다** — 슬롯 값이 인자로 흘러 시각 하나를
 # 고르는 것이고, 슬롯으로 코드 경로가 갈리지 않는다.
 #
-# 여기 있는 이유는 이 값을 보는 곳이 둘이기 때문이다 — Airflow를 끄는 `thesis_intraday`가
-# 기준 시각을 만들고, LangChain을 끄는 `thesis_domain`이 사람이 읽는 라벨을 만든다.
+# 여기 있는 이유는 이 값을 보는 곳이 둘이기 때문이다 — Airflow를 끄는 `thesis.intraday`가
+# 기준 시각을 만들고, LangChain을 끄는 `thesis.domain`이 사람이 읽는 라벨을 만든다.
 # 저 둘은 서로를 모듈 수준에서 import할 수 없다.
 #
 # **DAG의 cron과 이 표가 같아야 한다.** 어긋나면 `resolve_slot`이 슬롯을 못 찾아 실행이

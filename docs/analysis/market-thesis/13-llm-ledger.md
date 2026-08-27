@@ -9,8 +9,8 @@
   [7-nxt-review.md](7-nxt-review.md)(NXT 리뷰). [12-api.md](12-api.md)가 이 원장을 응답에
   싣는다 — **12보다 먼저 나가는 것이 낫다.**
 - 산출물(예정): `thesis_llm_run`·`thesis_tool_call` 테이블과 수기 리비전(+`thesis`·
-  `thesis_outcome`에 연결 칸 하나씩), `thesis_toolbox.py`의 기록 래퍼,
-  `thesis_common.py`·`thesis_review.py`의 저장 호출, SQL 넷, 테스트
+  `thesis_outcome`에 연결 칸 하나씩), `thesis/toolbox.py`의 기록 래퍼,
+  `thesis/common.py`·`thesis/review.py`의 저장 호출, SQL 넷, 테스트
 
 ## 0. 왜 — 판단만 남고 과정이 사라진다
 
@@ -252,9 +252,9 @@ nullable인 이유는 리비전 전 행을 채울 수 없어서다(`thesis`는 �
 
 ### 2.2 대화 행은 흐름이 쓴다
 
-- 생성(`forecast`·`review`·`nxt_review`) — `thesis_common.ThesisRun.build_and_store`.
+- 생성(`forecast`·`review`·`nxt_review`) — `thesis.common.ThesisRun.build_and_store`.
   세 DAG이 전부 이 메서드를 지난다.
-- 해설(`narration`) — `thesis_review.py`의 (지평, 슬롯) 루프. 반복마다 툴박스와
+- 해설(`narration`) — `thesis/review.py`의 (지평, 슬롯) 루프. 반복마다 툴박스와
   `FollowupNarrator`를 새로 만드는 자리가 곧 대화 하나다.
 
 그래프 호출 전에 `start_llm_run`으로 running 행을 커밋한다. 그 뒤를
@@ -340,11 +340,11 @@ thesis를 만들기 때문에 같은 호출 배열을 thesis마다 복제하지 
 | --- | --- |
 | `apps/models/analysis/thesis.py` | `ThesisLlmRun`·`ThesisToolCall`과 enum 셋(`LlmRunKind`·`LlmRunStatus`·`ToolCallErrorKind`), `Thesis.llm_run_id`·`ThesisOutcome.narration_run_id` |
 | `migrations/versions/<신규>.py` | 수기 리비전 하나. 11단계 리비전 뒤에 얹는다. 올릴 창은 [11-expected-return.md](11-expected-return.md) 7절과 같다 — `thesis`·`thesis_outcome`에 FK 칸을 더하므로 그쪽도 잠근다 |
-| `airflow/modules/thesis_domain.py` | `LlmRunKind`·`LlmRunStatus`·`ToolCallErrorKind`(Airflow 쪽 vocabulary 복제) |
-| `airflow/modules/thesis_toolbox.py` | `begin_round`·`finish_round`, `_record` 래퍼, `tool_calls`·`round_count`, `ToolCallRecord` 모델 |
-| `airflow/modules/thesis_store.py` | `start_llm_run`·`finish_llm_run`, `store_theses`에 `llm_run_id` |
-| `airflow/modules/thesis_common.py` | `build_and_store`가 대화를 열고 닫는다(`finally` 포함) |
-| `airflow/modules/thesis_review.py` | 해설 루프가 대화를 열고 닫는다 |
+| `airflow/modules/thesis/domain.py` | `LlmRunKind`·`LlmRunStatus`·`ToolCallErrorKind`(Airflow 쪽 vocabulary 복제) |
+| `airflow/modules/thesis/toolbox.py` | `begin_round`·`finish_round`, `_record` 래퍼, `tool_calls`·`round_count`, `ToolCallRecord` 모델 |
+| `airflow/modules/thesis/store.py` | `start_llm_run`·`finish_llm_run`, `store_theses`에 `llm_run_id` |
+| `airflow/modules/thesis/common.py` | `build_and_store`가 대화를 열고 닫는다(`finally` 포함) |
+| `airflow/modules/thesis/review.py` | 해설 루프가 대화를 열고 닫는다 |
 | `airflow/sql/postgres/thesis_llm_run/{insert,update_finish}.sql`, `thesis_tool_call/insert.sql` | |
 | `tests/models/test_analysis_models.py`·`tests/migrations/test_thesis_schema.py`·`tests/modules/test_thesis_pipeline.py` | 테이블·CHECK와 성공·unknown tool·인자 오류·상한·DB 예외·running 행을 기록하는지 |
 
@@ -357,8 +357,8 @@ thesis를 만들기 때문에 같은 호출 배열을 thesis마다 복제하지 
 ### 확인 끝 (2026-08-26 운영 DB 읽기 전용 실측 포함)
 
 - **`try_number`는 DAG을 하나도 안 고쳐도 된다.** 모듈 진입점이 이미 `get_current_context()`를
-  부르고 거기서 `dag_run_id`를 꺼낸다(`thesis_forecast.build`, `thesis_review`의 진입점 셋,
-  `thesis_intraday`, `thesis_nxt_review`). **같은 자리에서 `context["ti"].try_number`를 함께
+  부르고 거기서 `dag_run_id`를 꺼낸다(`thesis.forecast.build`, `thesis.review`의 진입점 셋,
+  `thesis.intraday`, `thesis.nxt_review`). **같은 자리에서 `context["ti"].try_number`를 함께
   꺼내** `run(...)`·`build_and_store(...)`에 넘기면 끝이다. 재시도 대화가 서로 구분돼야
   한다는 것은 사용자 결정(2026-08-26)이고, `dag_run_id`는 재시도에도 같아서 이 칸이
   없으면 구분할 방법이 없다.
@@ -372,7 +372,7 @@ thesis를 만들기 때문에 같은 호출 배열을 thesis마다 복제하지 
   자라면 몇 달 만에 이 표에서 가장 큰 테이블이 된다. 크기가 제약이 아니라는 전제는
   그대로지만 그 사실은 알고 시작한다.
 - **생성 흐름 넷이 전부 `ThesisRun.build_and_store`를 지난다**(2026-08-26 확인).
-  `thesis_forecast.py`·`thesis_review.py`·`thesis_intraday.py`·`thesis_nxt_review.py`가
+  `thesis/forecast.py`·`thesis/review.py`·`thesis/intraday.py`·`thesis/nxt_review.py`가
   각각 `self._run.build_and_store(...)`를 부른다. 계측 자리는 정말 하나다.
 - 모델 요청 인자는 `AIMessage.tool_calls`, 실제 함수 인자는 공통 래퍼에서 각각 잡는다.
   둘 중 하나를 골라 버리지 않는다.

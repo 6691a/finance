@@ -1,17 +1,17 @@
 """장중 전망(`intraday_*`·`pre_close`)에만 쓰는 것. `market_thesis_intraday` DAG가 부른다.
 
 여기 있는 것은 전부 "장이 열려 있는 동안"이라서 그런 것이다. 장전·장후와 공유하지 않는다 —
-공유하면 다시 `if slot ==`이 생긴다. 슬롯을 모르는 것은 `thesis_common.py`에 있다.
+공유하면 다시 `if slot ==`이 생긴다. 슬롯을 모르는 것은 `thesis/common.py`에 있다.
 
 ## 무엇이 다른가
 
 - **기준가가 전일 종가가 아니라 지금 가격이다.** 10:35 슬롯은 "10:35 가격에서 마감까지"를
   맞힌다. 이미 오른 만큼은 예측에 안 들어간다. 그래서 채점 조회도 갈린다
-  (`thesis_store.intraday_horizon_returns`).
+  (`thesis.store.intraday_horizon_returns`).
 - **확정 종가를 못 본다.** `stock_investor_trade_daily`는 18:10에 들어오고 KIS가 15:40 전
   당일 조회를 거절한다. 관측 상태를 `index_bar`·`stock_bar`의 봉에서 만드는 이유다.
 - **오늘 앞 슬롯을 되짚는다.** 아침 예측이 지금 맞고 있는지가 다음 판단의 재료다.
-  저장하지 않고 프롬프트에만 싣는다 — 자세한 이유는 `thesis_state.SameDayThesis`.
+  저장하지 않고 프롬프트에만 싣는다 — 자세한 이유는 `thesis.state.SameDayThesis`.
 
 ## 왜 슬롯 넷이 DAG 하나인가
 
@@ -32,11 +32,11 @@ from typing import Any
 from airflow.exceptions import AirflowFailException
 from airflow.sdk import Param, get_current_context
 
-from modules import thesis_common
 from modules.db import Connection
 from modules.sql import read_sql
-from modules.thesis_domain import SLOT_LABELS, LlmRunKind, ThesisSubjectKind
-from modules.thesis_state import (
+from modules.thesis import common
+from modules.thesis.domain import SLOT_LABELS, LlmRunKind, ThesisSubjectKind
+from modules.thesis.state import (
     INTRADAY_SLOT_TIMES,
     IntradayObservation,
     ObservedState,
@@ -75,7 +75,7 @@ def as_of(run_date: date, run_slot: RunSlot) -> datetime:
     """조회 창의 끝(UTC). 모든 툴이 이 시각까지만 본다.
 
     **벽시계를 쓰지 않는다** — 저녁에 이 DAG를 clear해 다시 돌려도 마감 뒤 정보로 오전
-    판단을 덮지 않는다. 슬롯이 시각을 정하고 그 표는 `thesis_state`에 있다.
+    판단을 덮지 않는다. 슬롯이 시각을 정하고 그 표는 `thesis.state`에 있다.
     """
     slot_time = INTRADAY_SLOT_TIMES.get(run_slot)
     if slot_time is None:
@@ -131,14 +131,14 @@ def resolve_slot(context: Any) -> RunSlot:
 class IntradayForecast:
     """장중 전망 한 번. 연결·세션 날짜·슬롯을 들고 돈다.
 
-    `thesis_forecast.PreOpenForecast`와 같은 모양이고 슬롯을 생성자로 받는 것만 다르다.
+    `thesis.forecast.PreOpenForecast`와 같은 모양이고 슬롯을 생성자로 받는 것만 다르다.
     슬롯은 **값으로 흐를 뿐** 이 클래스 안에서 분기를 만들지 않는다 — 시각 하나를 고르는
     표 조회(`as_of`)가 전부다.
     """
 
     def __init__(self, connection: Connection, *, run_date: date, run_slot: RunSlot) -> None:
         self._slot = run_slot
-        self._run = thesis_common.ThesisRun(connection, run_date=run_date, as_of_at=as_of(run_date, run_slot))
+        self._run = common.ThesisRun(connection, run_date=run_date, as_of_at=as_of(run_date, run_slot))
 
     @property
     def connection(self) -> Connection:
@@ -151,9 +151,9 @@ class IntradayForecast:
     def macro_window_start(self) -> datetime:
         """매크로 창의 시작 = 당일 09:00. "오늘 장중에 무엇이 움직였나"가 이 창이다.
 
-        장후 리뷰와 같은 창이라 계산이 `thesis_common`에 있다.
+        장후 리뷰와 같은 창이라 계산이 `common`에 있다.
         """
-        return thesis_common.open_at(self._run.run_date)
+        return common.open_at(self._run.run_date)
 
     # -- 봉 조회 -------------------------------------------------------------
 
@@ -195,10 +195,10 @@ class IntradayForecast:
         missing = sorted(s.code for s in targets if s.code not in bars)
         if missing:
             # 0건은 지연이 아니라 수집이 멈춘 것이다. 메시지를 나눠 로그에서 갈린다.
-            raise thesis_common.ThesisNotReady(f"no intraday bars today for {', '.join(missing)}")
+            raise common.ThesisNotReady(f"no intraday bars today for {', '.join(missing)}")
         stale = sorted(code for code, (bar_at, _, _) in bars.items() if as_of_at - bar_at > BAR_STALENESS)
         if stale:
-            raise thesis_common.ThesisNotReady(
+            raise common.ThesisNotReady(
                 f"intraday bars for {', '.join(stale)} are older than {BAR_STALENESS} at {as_of_at}"
             )
 
@@ -224,7 +224,7 @@ class IntradayForecast:
         if last_hour == 0 and last_day > 0:
             logger.info("no documents arrived in the last hour; nothing was waiting for assessment")
             return
-        raise thesis_common.ThesisNotReady(f"document assessment has not caught up to {as_of_at}")
+        raise common.ThesisNotReady(f"document assessment has not caught up to {as_of_at}")
 
     # -- 관측 상태와 되짚기 --------------------------------------------------
 
@@ -320,8 +320,8 @@ class IntradayForecast:
 
     def run(self, *, dag_run_id: str, try_number: int) -> int:
         """휴장 판정 → readiness guard → 관측 상태 → 되짚기 → LLM → 저장. 저장한 행 수를 준다."""
-        from modules.thesis_domain import PREFETCHED_PAST_THESES
-        from modules.thesis_store import ThesisStore
+        from modules.thesis.domain import PREFETCHED_PAST_THESES
+        from modules.thesis.store import ThesisStore
 
         self._run.skip_unless_open()
 
@@ -362,13 +362,13 @@ def _bar_close(bars: dict[str, Bar] | None, code: str) -> Decimal | None:
 def build() -> ThesisRunResult:
     """Airflow 태스크 진입점. 컨텍스트를 읽어 장중 전망 하나를 돌린다."""
     context = get_current_context()
-    run_date = thesis_common.resolve_run_date(context)
+    run_date = common.resolve_run_date(context)
     run_slot = resolve_slot(context)
     dag_run_id = str(context["dag_run"].run_id)
     # 재시도는 새 대화다. dag_run_id는 재시도에도 같아 이 칸이 없으면 구분할 수 없다.
     try_number = int(context["ti"].try_number)
     logger.info("building the %s thesis for %s", SLOT_LABELS[run_slot], run_date)
 
-    with closing(thesis_common.connection()) as conn:
+    with closing(common.connection()) as conn:
         written = IntradayForecast(conn, run_date=run_date, run_slot=run_slot).run(dag_run_id=dag_run_id, try_number=try_number)
     return ThesisRunResult(run_date=run_date, slot=run_slot, written=written)

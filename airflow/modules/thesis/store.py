@@ -62,7 +62,7 @@ from pydantic import BaseModel, ConfigDict
 from modules.db import Cursor
 from modules.db import TransactionalConnection as Connection
 from modules.sql import read_sql
-from modules.thesis_domain import (
+from modules.thesis.domain import (
     HORIZON_DAYS,
     NARRATED_HORIZON_DAYS,
     PROMPT_VERSION,
@@ -77,15 +77,15 @@ from modules.thesis_domain import (
     classify_outcome,
     return_error,
 )
-from modules.thesis_generation import (
+from modules.thesis.generation import (
     Claim,
     ThesisDraft,
 )
-from modules.thesis_outcomes import (
+from modules.thesis.outcomes import (
     NarrativeDraft,
     NarrativeTarget,
 )
-from modules.thesis_state import (
+from modules.thesis.state import (
     FORECAST_SLOTS,
     NARRATED_SLOTS,
     NxtObservedState,
@@ -245,7 +245,7 @@ class PendingGrade(BaseModel):
     # 장중 슬롯의 채점 기준가. 추론 행의 `input_state`에 박혀 있는, **모델이 실제로 본**
     # 가격이다. 장전 슬롯은 `None`이고 기준가를 전일 종가에서 얻는다.
     base_price: Decimal | None = None
-    # 크기 채점의 입력. 실현된 방향에 대응하는 쪽만 쓰인다(`thesis_domain.return_error`).
+    # 크기 채점의 입력. 실현된 방향에 대응하는 쪽만 쓰인다(`thesis.domain.return_error`).
     up_return_pct: Decimal | None = None
     down_return_pct: Decimal | None = None
 
@@ -533,7 +533,7 @@ class ThesisStore:
         """아직 채점하지 않은 (추론, 지평) 전부. **예측 슬롯만이다.**
 
         슬롯 목록도 지평 목록과 같은 이유로 파라미터다 — 상수를 SQL과 파이썬 두 곳에 두면
-        한쪽만 고쳐지는 날이 온다. 원본은 `thesis_state.FORECAST_SLOTS`다.
+        한쪽만 고쳐지는 날이 온다. 원본은 `thesis.state.FORECAST_SLOTS`다.
         """
         with self._connection.cursor() as cursor:
             cursor.execute(PENDING_GRADES, (list(horizons), list(FORECAST_SLOTS)))

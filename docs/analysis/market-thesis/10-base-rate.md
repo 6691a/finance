@@ -8,13 +8,13 @@
 - 산출물: `kis_index_daily`의 `start_date` Param과 창 단위 백필 루프,
   `kis_investor_trade_daily`의 `walk_back`·소급 조정 가드·자동 재백필,
   `kis_investor_flow.close_conflicts`, `technical/signals.detect_and_store`의 `lookback_bars`,
-  `airflow/modules/technical/base_rate.py`, SQL 셋, `thesis_state`의 `SignalBaseRate`·`HorizonBaseRate`와
-  `SignalObservation` 확장, `thesis_common`·`thesis_toolbox` 주입, `flat_base_rates`와
+  `airflow/modules/technical/base_rate.py`, SQL 셋, `thesis.state`의 `SignalBaseRate`·`HorizonBaseRate`와
+  `SignalObservation` 확장, `thesis.common`·`thesis.toolbox` 주입, `flat_base_rates`와
   `ObservedState.flat_base_rate`(14절), 프롬프트 교체(`PROMPT_VERSION` 7), 테스트 다섯
 
 ## 0. 왜 — 확률을 요구하면서 빈도를 주지 않는다
 
-프롬프트가 스스로 자백해 놓은 구멍이다(`thesis_generation.py`의 `SYSTEM_PROMPT`,
+프롬프트가 스스로 자백해 놓은 구멍이다(`thesis/generation.py`의 `SYSTEM_PROMPT`,
 "기술적 관측" 절).
 
 > `recent_signals`는 **교차가 일어났다는 사건**이다. 골든크로스가 곧 상승이 아니다.
@@ -33,7 +33,7 @@
 
 이 단계는 두 번째를 푼다. 첫 번째(인용 채널의 기사 편향)는 별개 작업이다 — 6절을 본다.
 
-`FLAT_BASE_RATE_PCT`(`thesis_domain.py`)가 이미 같은 처방의 축소판이었다. 무조건 `flat`
+`FLAT_BASE_RATE_PCT`(`thesis/domain.py`)가 이미 같은 처방의 축소판이었다. 무조건 `flat`
 빈도를 실측해 프롬프트에 실었더니 모델이 `prob_flat`을 30%대에서 내렸다. 이 단계는 그것을
 **무조건에서 조건부로** 넓히고, 그 상수 자체도 실행마다 다시 재는 값으로 바꾼다(14절).
 
@@ -278,7 +278,7 @@ base rate는 저장하지 않으므로(5.4절) 다음 실행에 자동으로 새
 
 ### 5.3 분류는 SQL이 아니라 파이썬이 한다
 
-`thesis_domain.classify_outcome(return_pct, horizon_days)`를 그대로 쓴다. 채점과 base rate가
+`thesis.domain.classify_outcome(return_pct, horizon_days)`를 그대로 쓴다. 채점과 base rate가
 같은 `FLAT_THRESHOLD_PCT`를 써야 두 숫자가 같은 세계를 말한다. 임계를 나중에 당길 때
 (TUNING 문서의 손잡이다) 양쪽이 함께 따라가야 한다.
 
@@ -315,17 +315,17 @@ SQL은 원시 등락률만 돌려주고 버킷팅은 파이썬이 한다. thesis
   달라, 상한과 파라미터를 얹기 시작하면 한쪽을 고칠 때 다른 쪽이 조용히 따라 바뀐다.
 - 모듈 `airflow/modules/technical/base_rate.py`. 연결과 기준 날짜를 받아 한 번 계산하고 끝나므로
   클래스가 아니라 함수다(`technical/signals.py`·`market_session.py`와 같은 형태).
-- 모델 `SignalBaseRate`·`HorizonBaseRate`(Pydantic, `frozen=True`)는 **`thesis_state.py`가
+- 모델 `SignalBaseRate`·`HorizonBaseRate`(Pydantic, `frozen=True`)는 **`thesis/state.py`가
   갖고** `technical/base_rate.py`가 그것을 import한다. 값을 만드는 모듈에 두는 것이 기본이지만,
-  `technical/base_rate.py`가 DB와 SQL 파일을 import해서 `thesis_state.py`의 방화벽(그 모듈 docstring)을
+  `technical/base_rate.py`가 DB와 SQL 파일을 import해서 `thesis/state.py`의 방화벽(그 모듈 docstring)을
   깨뜨린다. CLAUDE.md의 "무거운 의존성이 없는 모듈로 따로 뺀다" 예외가 이 경우다.
 - `rule_version`이 현재 값(`technical.RULE_VERSION`)인 사건만 센다. 규칙이 바뀌면 옛 사건은
   다른 정의의 사건이다.
 
 ## 6. 주입 — 관측 상태에 붙인다
 
-`thesis_common.ThesisRun.technical_state()`가 만드는 `SignalObservation`
-(`thesis_state.py`)에 칸을 더한다. 지평별 `sample_size` · `up`/`flat`/`down` 비율 ·
+`thesis.common.ThesisRun.technical_state()`가 만드는 `SignalObservation`
+(`thesis/state.py`)에 칸을 더한다. 지평별 `sample_size` · `up`/`flat`/`down` 비율 ·
 중앙 등락률과, 같은 지평의 무조건 기저다.
 
 **전용 툴을 새로 만들지 않는다.** 지금 프롬프트가 "지표만으로 확률을 기울이지 마라"고

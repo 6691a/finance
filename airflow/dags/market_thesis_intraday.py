@@ -12,11 +12,11 @@
 
 **기준가가 전일 종가가 아니라 지금 가격이다.** 10:35 슬롯은 "10:35 가격에서 마감까지"를
 맞힌다. 이미 오른 만큼은 예측에 안 들어가고, 그래서 채점 조회도 갈린다
-(`thesis_store.intraday_horizon_returns`). 관측 상태도 확정 종가가 아니라 봉에서 만든다 —
+(`thesis.store.intraday_horizon_returns`). 관측 상태도 확정 종가가 아니라 봉에서 만든다 —
 `stock_investor_trade_daily`는 18:10에 들어오고 KIS가 15:40 전 당일 조회를 거절한다.
 
 **오늘 앞 슬롯을 되짚어 프롬프트에 싣는다.** 아침 예측이 지금 맞고 있는지가 다음 판단의
-재료다. `thesis_outcome`에 저장하지는 않는다 — 이유는 `thesis_state.SameDayThesis`.
+재료다. `thesis_outcome`에 저장하지는 않는다 — 이유는 `thesis.state.SameDayThesis`.
 
 ## 왜 10:35 / 12:35 / 14:35 / 15:00 인가
 
@@ -38,7 +38,7 @@
 `MultipleCronTriggerTimetable` 하나로 남아 있는 것과 같은 경우다.
 
 그때 실제로 사고를 낸 것("`logical_date`가 없는 수동 실행이 벽시계로 떨어져 조용히 다른
-모드를 돈다")은 `thesis_intraday.resolve_slot`이 막는다. Param도 `logical_date`도 없으면
+모드를 돈다")은 `intraday.resolve_slot`이 막는다. Param도 `logical_date`도 없으면
 **실패시킨다.** 조용히 다른 슬롯을 도는 것보다 안 도는 편이 낫다.
 
 ## 태스크 둘
@@ -93,10 +93,10 @@ import pendulum
 from airflow.sdk import dag, task
 from airflow.timetables.trigger import MultipleCronTriggerTimetable
 
-from modules import thesis_common, thesis_intraday
+from modules.thesis import common, intraday
 from modules.utility import KST_TIMEZONE
 
-# **`thesis_state.INTRADAY_SLOT_TIMES`와 같아야 한다.** 어긋나면 `resolve_slot`이 슬롯을
+# **`thesis.state.INTRADAY_SLOT_TIMES`와 같아야 한다.** 어긋나면 `resolve_slot`이 슬롯을
 # 못 찾아 실행이 죽는다 — 조용히 다른 슬롯으로 떨어지는 것보다 낫다. 테스트가 둘을 대조한다.
 SCHEDULE = MultipleCronTriggerTimetable(
     "35 10 * * 1-5",  # KST 평일 10:35 = UTC 월~금 01:35
@@ -120,7 +120,7 @@ BUILD_TIMEOUT = timedelta(minutes=15)
     catchup=False,
     max_active_runs=1,
     default_args=DEFAULT_ARGS,
-    params={**thesis_common.run_date_param(), **thesis_intraday.run_slot_param()},
+    params={**common.run_date_param(), **intraday.run_slot_param()},
     doc_md=__doc__,
     tags=["thesis", "llm", "market", "korea"],
 )
@@ -128,11 +128,11 @@ def market_thesis_intraday():
     @task(task_display_name="추론 생성", execution_timeout=BUILD_TIMEOUT)
     def build_thesis() -> dict[str, Any]:
         # XCom 경계다. Airflow가 Pydantic 모델을 어떻게 직렬화하는지에 기대지 않는다.
-        return thesis_intraday.build().model_dump(mode="json")
+        return intraday.build().model_dump(mode="json")
 
     @task(task_display_name="Slack 발송")
     def notify_slack(built: dict[str, Any]) -> str:
-        return thesis_common.notify_slack(built)
+        return common.notify_slack(built)
 
     notify_slack(build_thesis())
 

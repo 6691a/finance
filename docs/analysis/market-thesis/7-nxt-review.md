@@ -1,7 +1,7 @@
 # 7단계 — NXT 애프터마켓 리뷰 슬롯 (`post_nxt_close`)
 
 - 날짜: 2026-08-22
-- 상태: **구현 완료(2026-08-22).** `airflow/modules/thesis_nxt_review.py`(`NxtAfterHoursReview`),
+- 상태: **구현 완료(2026-08-22).** `airflow/modules/thesis/nxt_review.py`(`NxtAfterHoursReview`),
   `airflow/dags/market_thesis_nxt_review.py`, `stock_bar/select_nxt_after_hours.sql`,
   리비전 `d7a2f4e91c68`(`post_nxt_close` 슬롯)까지 있다
 - 의존: 1·2·3단계(저장, 에이전트, DAG·Slack). 5단계와는 **분리된다**(채점·해설 대상이 아니다)
@@ -13,9 +13,9 @@
 (`slack_kr_market_briefing` 모듈 docstring). 그런데 **추론 층은 그 구간을 아예 보지 않는다.**
 
 - 장후 리뷰(`market_thesis_review`)의 `as_of`는 **15:30 마감**이다. 그 이후 정보는 재실행마다
-  근거가 달라지는 것을 막으려고 **일부러** 뺀다(`modules/thesis_review.py` docstring).
+  근거가 달라지는 것을 막으려고 **일부러** 뺀다(`modules/thesis/review.py` docstring).
 - 관측 상태와 채점은 `stock_investor_trade_daily.close_price`(18:10 수집 확정 종가)만 읽는다
-  (`modules/thesis_common.py`의 `observed_state`). 분봉을 쓰지 않는 것은 2026-08-13 005930의
+  (`modules/thesis/common.py`의 `observed_state`). 분봉을 쓰지 않는 것은 2026-08-13 005930의
   마감 동시호가 누락 실측 때문이고 그 판단은 지금도 유효하다.
 - 추론 툴 `macro_changes`는 `quote_bar` 뷰를 읽는데 **그 뷰는 NXT를 태우지 않는다**
   (`b91f4e2a6c53_add_sk_hynix_adr.py`, 같은 종목·같은 분에 두 줄이 생기기 때문). 모델이
@@ -68,7 +68,7 @@ KRX 마감                          NXT 애프터 마감    DAG 실행
 }
 ```
 
-- `regular`와 `index_regular`는 `thesis_common.observed_state`가 이미 만드는 값과 **같은
+- `regular`와 `index_regular`는 `thesis.common.observed_state`가 이미 만드는 값과 **같은
   원본**(확정 종가, 15:30 `index_bar`)이라 그 함수를 그대로 부른다.
 - `index_regular`라는 이름을 쓰는 이유는 **지수가 subject가 아니라 맥락이기 때문이다.**
   키 이름이 그 사실을 밝혀야 모델이 지수에 대한 추론을 쓰지 않는다.
@@ -88,7 +88,7 @@ KRX 마감                          NXT 애프터 마감    DAG 실행
 
 `thesis_outcome/select_pending_narratives.sql`에는 **슬롯 필터가 없다**
 (`WHERE thesis.run_date = %s AND outcome.narrative IS NULL`). 그래서 새 슬롯 행이 그대로
-T+1·3·5 해설 대상이 된다. 그런데 `thesis_review.narrate_followups`가
+T+1·3·5 해설 대상이 된다. 그런데 `thesis.review.narrate_followups`가
 `run_slot=RunSlot.PRE_OPEN`을 **하드코딩**해서 넘기고,
 `FollowupNarrator.build_messages`는 `"전" if run_slot is RunSlot.PRE_OPEN else "후"`라는
 **이진 분기**다. 결과: 새 슬롯 추론이 "장전에 쓴 추론"으로 라벨링돼 프롬프트가 거짓말을 한다.
@@ -114,9 +114,9 @@ T+1·3·5 해설 대상이 된다. 그런데 `thesis_review.narrate_followups`�
 **나중에 붙이려면** `NarrativeTarget`에 `run_slot`을 싣고 슬롯별로 호출을 나눠야 한다
 (지평당 최대 3배). 그건 `post_close`의 기존 라벨 결함과 함께 별건으로 푼다(9절).
 
-## 4. 새 모듈 `airflow/modules/thesis_nxt_review.py`
+## 4. 새 모듈 `airflow/modules/thesis/nxt_review.py`
 
-**`thesis_common.py`에는 아무 것도 추가하지 않는다** — 그 모듈의 원칙은 "슬롯을 알 필요가
+**`thesis/common.py`에는 아무 것도 추가하지 않는다** — 그 모듈의 원칙은 "슬롯을 알 필요가
 없는 것만 둔다"이고, 여기 있는 것은 전부 슬롯을 안다.
 
 저장소 규칙 "클래스와 함수를 가르는 기준"을 따른다. **연결과 세션 날짜가 상태다** — 조회
@@ -175,9 +175,9 @@ def build() -> dict[str, Any]      # Airflow 컨텍스트를 읽는 얇은 진�
   값이 조용히 옆 칸으로 밀린다. 컬럼 순서를 아는 자리는 `from_row` 하나뿐이다.
 - **대상 필터는 `targets` 안에 있다.** `subjects()`가 주는 지수 둘을 여기서 뺀다.
 
-`run()`은 `thesis_common.build_and_store(...)`를 그대로 부른다 — 그 함수는 이미 슬롯
+`run()`은 `thesis.common.build_and_store(...)`를 그대로 부른다 — 그 함수는 이미 슬롯
 무관이고 `targets`·`observed`·`as_of_at`만 다르게 받는다. Slack 발송도
-`thesis_common.notify_slack`을 그대로 쓴다(`SLOT_HEADERS`에 한 줄 추가하면 통과한다).
+`thesis.common.notify_slack`을 그대로 쓴다(`SLOT_HEADERS`에 한 줄 추가하면 통과한다).
 
 ### readiness guard — 판정 넷
 
@@ -232,7 +232,7 @@ KST 경계를 UTC로 만드는 일은 파이썬이 한다(`index_bar/select_sess
 
 ## 6. 슬롯 어휘와 스키마
 
-### 추론 모듈 (`thesis_toolbox.py`·`thesis_store.py`)
+### 추론 모듈 (`thesis/toolbox.py`·`thesis/store.py`)
 
 | 자리 | 추가 |
 | --- | --- |
@@ -344,7 +344,7 @@ CHECK 문자열과 두 enum의 일치를 강제한다.
   나눠야 한다.
 - **NXT 휴장 캘린더** — `market_session`에 NXT market_code가 없다. NXT 달력이 KRX와 다른
   날이 실제로 생기면 그때 만든다. 지금은 `krx_open_day` 하나를 본다.
-- ~~**`thesis_review.narrate_followups`의 `RunSlot.PRE_OPEN` 하드코딩**~~ — 2026-08-23에
+- ~~**`thesis.review.narrate_followups`의 `RunSlot.PRE_OPEN` 하드코딩**~~ — 2026-08-23에
   풀었다. `NarrativeTarget`이 `run_slot`을 들고 `narrate_followups`가 (지평, 슬롯)마다 호출을
   나눈다. `FollowupNarrator.run`은 대상에서 슬롯을 읽고 섞이면 `ThesisError`다. 결함은
   라벨만이 아니었다 — 응답을 `subject_code`로 대상에 되돌리는데 같은 날 장전·장후가 같은

@@ -64,7 +64,7 @@ from typing import Any
 import pendulum
 from airflow.sdk import dag, task
 
-from modules import thesis_common, thesis_review
+from modules.thesis import common, review
 from modules.utility import KST_TIMEZONE
 
 
@@ -76,28 +76,28 @@ from modules.utility import KST_TIMEZONE
     start_date=pendulum.datetime(2026, 8, 21, tz=KST_TIMEZONE),  # KST 2026-08-21 00:00 = UTC 2026-08-20 15:00
     catchup=False,
     max_active_runs=1,
-    default_args=thesis_common.DEFAULT_ARGS,
-    params=thesis_common.run_date_param(),
+    default_args=common.DEFAULT_ARGS,
+    params=common.run_date_param(),
     doc_md=__doc__,
     tags=["thesis", "llm", "market", "korea"],
 )
 def market_thesis_review():
-    @task(task_display_name="추론 생성", execution_timeout=thesis_common.BUILD_TIMEOUT)
+    @task(task_display_name="추론 생성", execution_timeout=common.BUILD_TIMEOUT)
     def build_thesis() -> dict[str, Any]:
         # XCom 경계다. Airflow가 Pydantic 모델을 어떻게 직렬화하는지에 기대지 않는다.
-        return thesis_review.build().model_dump(mode="json")
+        return review.build().model_dump(mode="json")
 
     @task(task_display_name="지평별 채점")
     def grade_followups() -> int:
-        return thesis_review.grade_followups()
+        return review.grade_followups()
 
     @task(task_display_name="사후 해설·판정")
     def narrate_followups(built: dict[str, Any]) -> int:
-        return thesis_review.narrate_followups(built)
+        return review.narrate_followups(built)
 
     @task(task_display_name="Slack 발송")
     def notify_slack(built: dict[str, Any]) -> str:
-        return thesis_common.notify_slack(built)
+        return common.notify_slack(built)
 
     built = build_thesis()
     built >> grade_followups() >> narrate_followups(built) >> notify_slack(built)

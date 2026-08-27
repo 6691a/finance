@@ -50,6 +50,7 @@
 | `migrations/` | Alembic. 리비전 파일은 `migrations/versions` 하나를 모든 별칭이 공유한다 |
 | `migrations/routing.py` | 어떤 테이블이 어떤 DB 별칭에 속하는지 판단하는 순수 함수 |
 | `airflow/dags/` | Airflow DAG |
+| `airflow/modules/` | DAG이 쓰는 공유 코드. 도메인 폴더(`collectors/`·`briefing/`·`expectation/`·`technical/`·`thesis/`)로 나누고 최상위에는 공용 잎만 둔다. 하위 패키지 `__init__.py`는 비운다 — 재수출하면 가벼운 모듈 하나를 import해도 LangChain이 딸려 온다. 판단 근거는 `docs/convention/modules-folder-split.md` |
 | `tests/` | pytest |
 
 `apps/models/`의 모듈은 도메인 단위로 나눈다(`raw.py`, `reference.py`, `content.py`).
@@ -187,7 +188,7 @@ uv run ruff check apps airflow migrations tests
 
 **상태를 쥔 동작은 클래스로 묶고, 상태 없는 변환은 함수로 둔다.** 저장소 전체 규칙이다.
 
-- 클래스로 묶는 것: 자격 증명·토큰·DB 연결·기준 시각·출처 행처럼 여러 호출에 걸쳐 안 변하는 값을 들고 도는 동작. 그 값이 함수마다 인자로 다시 들어가고 있으면 그게 신호다. 기준 구현은 `collectors/analyst/kis_opinion.py`의 `KisAnalystOpinionCollector`, `collectors/document/naver_research.py`의 `NaverResearchCollector`, `assessment.py`의 `DocumentAssessor`, `thesis.py`의 `ThesisToolbox`·`ThesisBuilder`·`FollowupNarrator`. 연결을 쥐는 흐름 코드는 `thesis_nxt_review.py`의 `NxtAfterHoursReview`, `thesis_common.py`의 `ThesisRun`, `thesis.py`의 `ThesisStore`가 기준이다.
+- 클래스로 묶는 것: 자격 증명·토큰·DB 연결·기준 시각·출처 행처럼 여러 호출에 걸쳐 안 변하는 값을 들고 도는 동작. 그 값이 함수마다 인자로 다시 들어가고 있으면 그게 신호다. 기준 구현은 `collectors/analyst/kis_opinion.py`의 `KisAnalystOpinionCollector`, `collectors/document/naver_research.py`의 `NaverResearchCollector`, `assessment.py`의 `DocumentAssessor`, `thesis.py`의 `ThesisToolbox`·`ThesisBuilder`·`FollowupNarrator`. 연결을 쥐는 흐름 코드는 `thesis/nxt_review.py`의 `NxtAfterHoursReview`, `thesis/common.py`의 `ThesisRun`, `thesis.py`의 `ThesisStore`가 기준이다.
 - 생성자는 그 실행 동안 안 변하는 것만 받는다. 종목·구간처럼 호출마다 바뀌는 것은 메서드 인자다.
 - 함수로 두는 것: 파싱·정규화·계산처럼 감쌀 상태가 없는 것, 그 클래스의 관심사가 아닌 조회(`watched_stocks`). 클래스 안이 읽기 좋으면 `@staticmethod`.
 - 데이터 모양은 언제나 Pydantic 모델이다. 수집기 클래스 안에 중첩하지 않는다.
@@ -288,13 +289,13 @@ uv run ruff check apps airflow migrations tests
 
 **`dict[str, Any]`·`list[dict]`·`Mapping[str, Any]`를 반환 타입으로 쓰지 않는다.** 모듈 경계를 넘는 값은 모델로 선언한다. 이유는 셋이다. 키 오타가 런타임까지 살아 있고(프롬프트나 JSONB로 나가는 값이면 아무도 못 잡는다), 부르는 쪽이 무슨 키를 기대해도 되는지 코드에 안 남고, pyrefly가 대신 볼 수 있는 것을 사람이 보게 된다.
 
-기준 구현은 `airflow/modules/thesis_state.py`(`ObservedState`·`TechnicalState`·`PastThesis`)와 `airflow/modules/technical/indicators.py`(`DailyBar`·`TechnicalSnapshot`·`SignalEvent`)다.
+기준 구현은 `airflow/modules/thesis/state.py`(`ObservedState`·`TechnicalState`·`PastThesis`)와 `airflow/modules/technical/indicators.py`(`DailyBar`·`TechnicalSnapshot`·`SignalEvent`)다.
 
 - 모델은 `ConfigDict(frozen=True)`다. 재시도 경로에서 값이 바뀌면 원본과 저장값이 어긋난다.
 - **JSON으로 바꾸는 것은 경계에서 한 번뿐이다.** `model_dump(mode="json")`을 프롬프트 조립과 DB 저장 자리에서만 부른다. 중간 층은 모델을 그대로 들고 간다. `json.dumps(..., default=str)`로 때우지 않는다 — `date`가 조용히 문자열이 되는 자리가 늘어난다.
 - **`dict[str, 모델]`은 괜찮다.** 키가 심볼·종목코드처럼 열린 값이면 매핑이 맞는 모양이다. 금지하는 것은 값이 `Any`인 매핑이다.
 - **키와 값이 층을 섞으면 한 단 내린다.** `{"as_of_date": ..., "KOSPI": {...}}`는 모델로 표현할 수 없다. `{"as_of_date": ..., "subjects": {"KOSPI": {...}}}`로 만든다.
-- **모델을 두는 곳은 그 값을 만드는 모듈이다.** 단 그 모듈이 LangChain·Airflow를 import하는데 다른 모듈도 같은 모델을 봐야 하면 무거운 의존성이 없는 모듈로 따로 뺀다(`thesis_state.py`가 그 예다). 소비자가 하나뿐이어도 그 모듈이 이미 크면 따로 뺀다(`thesis_tools.py`).
+- **모델을 두는 곳은 그 값을 만드는 모듈이다.** 단 그 모듈이 LangChain·Airflow를 import하는데 다른 모듈도 같은 모델을 봐야 하면 무거운 의존성이 없는 모듈로 따로 뺀다(`thesis/state.py`가 그 예다). 소비자가 하나뿐이어도 그 모듈이 이미 크면 따로 뺀다(`thesis/tools.py`).
 - 테스트도 모델로 넘긴다. 픽스처가 맨 dict면 프롬프트에 실릴 키가 테스트에서만 존재할 수 있다.
 
 **wire 조립 경계는 예외다.** Slack 블록, LangGraph 노드 반환, JSON Schema, 검증 전 외부 응답 파싱, 그리고 모델을 JSON으로 펴는 자리(`thesis._tool_row`·`_body`)는 dict로 둔다. 그 dict는 제공처 규격이거나 모델을 JSON으로 바꾸는 경계 그 자체라 모델로 감싸면 같은 검증이 두 번이 된다. 그 밖의 도메인 값은 **처음부터 모델로 쓴다.**
@@ -364,7 +365,7 @@ uv run ruff check apps airflow migrations tests
 
 **한 DAG에 슬롯이 여럿이면 슬롯을 벽시계로 떨어뜨리지 않는 장치를 함께 둔다.**
 `market_thesis_intraday`(장중 전망 넷)가 그 형태다 — 넷이 같은 봉과 같은 문서 평가를 같은
-이유로 기다려 DAG 하나이고, `thesis_intraday.resolve_slot`이 ① Param → ② `logical_date` →
+이유로 기다려 DAG 하나이고, `thesis.intraday.resolve_slot`이 ① Param → ② `logical_date` →
 ③ **실패** 순으로 슬롯을 정한다. 가까운 슬롯으로 반올림하지도 않는다. 조용히 다른 슬롯을
 도는 것보다 안 도는 편이 낫다는 것이 2026-08-21에 얻은 교훈이고, 그것을 지키면 시각이
 여럿인 것 자체는 문제가 아니다. 슬롯 시각의 원본은 상수 하나(`INTRADAY_SLOT_TIMES`)이고
@@ -379,8 +380,8 @@ DAG를 나눈 뒤 공유 모듈에 `if mode == "..."`가 남으면 절반만 나
   글자 그대로 같은 것이다. 모드는 **값으로 흘러갈 수는 있다**(`run_slot`을 저장 함수에
   넘기는 것) — 금지하는 것은 그 값으로 **분기**하는 것이다.
 - **모드마다 다른 것은 모드별 모듈이 갖는다.** 기준 시각, readiness guard, 조회 창의 시작,
-  어느 세션을 볼지 같은 것이다. 기준 구현은 `airflow/modules/thesis_common.py`와
-  `thesis_forecast.py`·`thesis_review.py` 셋이다.
+  어느 세션을 볼지 같은 것이다. 기준 구현은 `airflow/modules/thesis/common.py`와
+  `thesis/forecast.py`·`thesis/review.py` 셋이다.
 - 공유 함수가 모드별 값을 **인자로 받게** 만들면 분기가 사라진다. `observed_state`가
   슬롯 대신 세션 날짜를 받는 것이 그 형태다 — 어느 세션을 볼지는 부르는 쪽이 정한다.
 
@@ -424,7 +425,7 @@ LLM을 부르는 코드는 **Pydantic, LangChain, LangGraph 위에서만 쓴다.
   쓰지 않는다 — 그건 제공처 wire format이라 이름·타입이 실제 함수와 어긋나도 아무도 못 잡는다.
   툴이 연결·기준 시각·레지스트리 같은 상태를 봐야 하면 모듈 수준 `@tool` 대신 **바인드된
   메서드**를 `StructuredTool.from_function(func=self._tool_x, args_schema=XArgs)`로 감싼다.
-  기준 구현은 `airflow/modules/thesis_toolbox.py`의 `ThesisToolbox._build_tools`다.
+  기준 구현은 `airflow/modules/thesis/toolbox.py`의 `ThesisToolbox._build_tools`다.
 - **툴 실행 루프를 손으로 짜지 않는다.** `langgraph.prebuilt.ToolNode`가 tool_call을 돌리고
   `tool_call_id`마다 `ToolMessage` 하나를 보장한다. 직접 짜면 그 보장이 우리 책임이 되고,
   빠지거나 둘이면 제공처가 다음 요청을 거절한다.
@@ -464,8 +465,8 @@ LLM을 부르는 코드는 **Pydantic, LangChain, LangGraph 위에서만 쓴다.
 - **빠진 값은 실패다.** `safe_substitute`를 쓰지 않는다. 자리표시자가 그대로 모델에게 나가는 것보다 태스크가 죽는 편이 낫다.
 - **숫자 상한은 YAML에 적지 않는다.** `MAX_TOOL_CALLS`·`MAX_REASON_CHARS` 같은 값은 코드 상수가 원본이고 자리표시자로 들어간다. 두 곳에 적으면 반드시 어긋난다.
 - **파일은 import 시점에 읽고 검증한다.** 칸이 빠지거나 오타가 나면 그 모듈을 쓰는 DAG이 DagBag 단계에서 죽는다. 실행 중에 프롬프트가 비는 것보다 낫다.
-- **기존 프롬프트를 한꺼번에 옮기지 않는다.** `assessment.py`·`picks.py`·`thesis_generation.py`·`expectation/extraction.py`는 아직 파이썬 안에 있다. **새로 쓰거나 크게 고치는 프롬프트만** 이 형태로 만든다. 옮길 때는 그 흐름의 테스트가 문장을 대조하는지 함께 본다.
-- 프롬프트 판을 세는 흐름(`thesis_domain.PROMPT_VERSION`)은 그 상수를 그대로 둔다. YAML로 옮긴다고 버전 칸이 파일로 가지 않는다 — 채점과 이어져 있어 코드가 원본이다.
+- **기존 프롬프트를 한꺼번에 옮기지 않는다.** `assessment.py`·`picks.py`·`thesis/generation.py`·`expectation/extraction.py`는 아직 파이썬 안에 있다. **새로 쓰거나 크게 고치는 프롬프트만** 이 형태로 만든다. 옮길 때는 그 흐름의 테스트가 문장을 대조하는지 함께 본다.
+- 프롬프트 판을 세는 흐름(`thesis.domain.PROMPT_VERSION`)은 그 상수를 그대로 둔다. YAML로 옮긴다고 버전 칸이 파일로 가지 않는다 — 채점과 이어져 있어 코드가 원본이다.
 
 ## 수집 계보 테이블 규칙
 

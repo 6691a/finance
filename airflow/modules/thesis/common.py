@@ -1,7 +1,7 @@
 """장전·장후 두 추론 DAG가 **분기 없이** 함께 쓰는 것만 둔다.
 
 여기 있는 것은 슬롯을 알 필요가 없다. 슬롯마다 달라지는 것(기준 시각, readiness guard,
-매크로 창의 시작, 관측 상태의 세션 날짜)은 `thesis_forecast.py`와 `thesis_review.py`가
+매크로 창의 시작, 관측 상태의 세션 날짜)은 `thesis/forecast.py`와 `thesis/review.py`가
 각각 갖는다.
 
 **슬롯 문자열을 받아 `if`로 가르는 함수를 두지 않는다.** 전에는 DAG 하나가 `logical_date`의
@@ -32,7 +32,7 @@ from pydantic import SecretStr
 
 from modules.market_session import krx_open_day
 from modules.slack import SlackClient, SlackError
-from modules.thesis_domain import (
+from modules.thesis.domain import (
     DOMESTIC_MAX_DAILY_CHANGE_PCT,
     PROMPT_VERSION,
     LlmRunStatus,
@@ -41,7 +41,7 @@ from modules.thesis_domain import (
     ThesisSubjectKind,
     evidence_ref,
 )
-from modules.thesis_state import (
+from modules.thesis.state import (
     HorizonBaseRate,
     IndexObservation,
     NxtObservedState,
@@ -108,7 +108,7 @@ class ThesisRun:
 
     세 슬롯 모듈이 전부 이 셋을 들고 돈다. 전에는 조회·판정·저장 일곱 함수가 `conn`을
     각각 다시 받았고(저장소 최다 반복), `build_and_store`는 인자 아홉 개였다.
-    기준 구현은 `thesis_nxt_review.NxtAfterHoursReview`다.
+    기준 구현은 `thesis.nxt_review.NxtAfterHoursReview`다.
 
     **슬롯을 모른다.** 슬롯은 `build_and_store`의 인자로 흘러갈 뿐 여기서 분기하지 않는다.
     슬롯마다 다른 것(기준 시각 계산, readiness guard, 매크로 창의 시작)은 슬롯별 모듈이 갖는다.
@@ -201,7 +201,7 @@ class ThesisRun:
         14.1절). 이력과 대상 밖 심볼은 그대로 `daily_history` 툴 몫이다.
 
         **맨 dict가 아니라 모델을 돌려준다.** 이 값은 프롬프트와 JSONB 컬럼 둘로 나가므로 키
-        오타가 조용히 살아남으면 안 된다(`thesis_state` 모듈 docstring).
+        오타가 조용히 살아남으면 안 된다(`thesis.state` 모듈 docstring).
         """
         if session is None:
             return ObservedState()
@@ -276,7 +276,7 @@ class ThesisRun:
         from modules.technical import base_rate, indicators
 
         # SQL 상수는 툴박스가 갖고 그 모듈이 LangChain을 끈다. 늦게 import한다.
-        from modules.thesis_toolbox import DAILY_HISTORY, RECENT_SIGNALS
+        from modules.thesis.toolbox import DAILY_HISTORY, RECENT_SIGNALS
 
         codes = list(subject_codes)
         if not codes:
@@ -393,7 +393,7 @@ class ThesisRun:
         **슬롯으로 갈라지지 않는다.** 슬롯은 값으로 흘러갈 뿐이고, 무엇이 다른지(기준 시각,
         창의 시작, 관측 세션, 프롬프트에 실을 과거 추론 `past`와 오늘 앞 슬롯 `same_day`)는
         이미 부르는 쪽이 정해서 인자로 넘겼다. `past`는 subject 코드별
-        `thesis_store.ThesisStore.past_theses` 행이고, 그 `id`가 `thesis_precedent` 엣지로 남는다.
+        `thesis.store.ThesisStore.past_theses` 행이고, 그 `id`가 `thesis_precedent` 엣지로 남는다.
 
         **`same_day`는 엣지를 남기지 않는다.** 그 행들은 저장된 채점이 아니라 봉에서 계산한
         중간 경과이고, `thesis_precedent`는 "무엇을 보고 냈나"가 아니라 "어느 과거 추론을
@@ -403,11 +403,11 @@ class ThesisRun:
         덮어쓰면 최초 판단이 사라진다.
         """
         # LangChain·LangGraph를 끄는 모듈은 여기서 늦게 import한다(DagBag 30초 타임아웃).
-        # `thesis_domain`은 가벼워서 모듈 수준에 있다.
+        # `thesis.domain`은 가벼워서 모듈 수준에 있다.
         from modules.llm import LlmError, RetryableLlmError, model_name, thesis_model
-        from modules.thesis_generation import ThesisBuilder
-        from modules.thesis_store import ThesisStore
-        from modules.thesis_toolbox import ThesisToolbox
+        from modules.thesis.generation import ThesisBuilder
+        from modules.thesis.store import ThesisStore
+        from modules.thesis.toolbox import ThesisToolbox
 
         store = ThesisStore(self._connection)
         stored = store.existing_theses(run_date=self._run_date, run_slot=run_slot)
@@ -547,11 +547,11 @@ def notify_slack(built: dict[str, Any]) -> str:
     보는 사람이 읽고, "우리 추론이 잘 맞고 있나"는 운영자가 본다. 지표는
     `slack_ops_briefing`이 OPS 채널로 낸다.
 
-    두 DAG가 같은 함수를 쓴다. 렌더링이 슬롯으로 갈리는 것은 `thesis_render.render_blocks`
+    두 DAG가 같은 함수를 쓴다. 렌더링이 슬롯으로 갈리는 것은 `thesis.render.render_blocks`
     안이고, 그건 문구를 고르는 일이지 흐름이 갈리는 것이 아니다.
     """
-    from modules.thesis_render import render_blocks, render_text
-    from modules.thesis_store import ThesisStore
+    from modules.thesis.render import render_blocks, render_text
+    from modules.thesis.store import ThesisStore
 
     token, channel = slack_settings()
     result = ThesisRunResult.model_validate(built)

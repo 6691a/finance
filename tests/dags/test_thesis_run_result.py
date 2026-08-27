@@ -9,10 +9,10 @@ from datetime import date
 import pytest
 from pydantic import ValidationError
 
-from modules import thesis_forecast, thesis_nxt_review, thesis_review
-from modules.thesis_state import ThesisRunResult
+from modules.thesis import forecast, nxt_review, review
+from modules.thesis.state import ThesisRunResult
 
-BUILDERS = (thesis_forecast, thesis_review, thesis_nxt_review)
+BUILDERS = (forecast, review, nxt_review)
 
 
 def test_the_three_slots_agree_on_the_result_shape():

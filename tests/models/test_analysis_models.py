@@ -287,3 +287,128 @@ def test_the_extraction_ledger_keeps_one_row_per_document():
     assert ("document_id",) in unique_columns
     # 주장 0건도 남는다 — "뽑았는데 없었다"와 "아직 안 뽑았다"를 가른다.
     assert StockEventExtraction.__table__.c["claim_count"].nullable is False
+
+
+# --- 주간 인과 그래프 (docs/analysis/market-causal-graph.md) -------------------
+
+
+def _unique_columns(model) -> set[tuple[str, ...]]:
+    return {
+        tuple(column.name for column in constraint.columns)
+        for constraint in model.__table__.constraints
+        if isinstance(constraint, UniqueConstraint)
+    }
+
+
+def test_market_event_is_keyed_by_title_and_date():
+    """같은 제목이 다른 날 다시 일어나면 다른 사건이다(설계 §3.2)."""
+    from apps.models.analysis import MarketEvent
+
+    assert ("title", "occurred_on") in _unique_columns(MarketEvent)
+
+
+def test_market_channel_is_keyed_by_name_alone():
+    """채널에는 날짜가 없다 — `할인율`은 언제 나와도 같은 `할인율`이고 그것이 주를 잇는다."""
+    from apps.models.analysis import MarketChannel
+
+    assert ("name",) in _unique_columns(MarketChannel)
+
+
+def test_causal_path_key_carries_the_chain():
+    """같은 사건이 같은 대상에 다른 경로로 닿는 것을 자연키가 담아야 한다(설계 §3.3).
+
+    `chain_key`가 빠지면 두 번째 경로가 `ON CONFLICT DO NOTHING`에 조용히 삼켜진다.
+    """
+    from apps.models.analysis import MarketCausalPath
+
+    assert (
+        "week_start",
+        "event_id",
+        "target_kind",
+        "target_code",
+        "chain_key",
+    ) in _unique_columns(MarketCausalPath)
+
+
+def test_causal_step_is_keyed_by_path_and_position():
+    from apps.models.analysis import MarketCausalStep
+
+    assert ("path_id", "position") in _unique_columns(MarketCausalStep)
+
+
+def test_causal_enums_are_checked_in_the_database():
+    """Enum 컬럼에는 허용 값을 제한하는 CHECK를 함께 둔다(프로젝트 규칙)."""
+    from apps.models.analysis import MarketCausalPath
+
+    checks = {
+        constraint.name
+        for constraint in MarketCausalPath.__table__.constraints
+        if isinstance(constraint, CheckConstraint)
+    }
+
+    assert "ck_market_causal_path_sign" in checks
+    assert "ck_market_causal_path_confidence" in checks
+    assert "ck_market_causal_path_target_kind" in checks
+
+
+def test_causal_enum_columns_are_varchar_not_native():
+    """PostgreSQL native enum은 값 추가·삭제 비용이 커서 쓰지 않는다(프로젝트 규칙)."""
+    from apps.models.analysis import MarketCausalPath
+
+    for name in ("sign", "confidence", "target_kind"):
+        column_type = MarketCausalPath.__table__.c[name].type
+        assert isinstance(column_type, SqlEnum)
+        assert column_type.native_enum is False
+
+
+def test_every_causal_column_has_a_comment():
+    """값의 의미를 DB가 들고 있어야 한다(프로젝트 규칙). 공통 칸은 `EntityBase`가 준다."""
+    from apps.models.analysis import (
+        MarketCausalPath,
+        MarketCausalStep,
+        MarketChannel,
+        MarketEvent,
+    )
+
+    missing = [
+        f"{model.__tablename__}.{column.name}"
+        for model in (MarketEvent, MarketChannel, MarketCausalPath, MarketCausalStep)
+        for column in model.__table__.columns
+        if not column.comment
+    ]
+
+    assert not missing, f"주석 없는 컬럼: {missing}"
+
+
+def test_llm_run_ledger_accepts_the_causal_kind():
+    """주간 인과 그래프도 같은 원장을 쓴다(설계 §3.5). 원장을 나누지 않는 이유는 그 목적이
+    "툴 호출 패턴과 결과의 상관을 재는 것"이고 여기에도 그대로 적용되기 때문이다."""
+    from apps.models.analysis import LlmRunKind
+
+    assert LlmRunKind.CAUSAL.value == "causal"
+
+
+def test_llm_run_slot_is_optional_only_for_causal():
+    """주간 분석에는 슬롯이 없다. 대신 다른 종류가 슬롯을 빠뜨리는 것은 막아야 한다."""
+    from apps.models.analysis import ThesisLlmRun
+
+    assert ThesisLlmRun.__table__.c["run_slot"].nullable is True
+    checks = {
+        constraint.name
+        for constraint in ThesisLlmRun.__table__.constraints
+        if isinstance(constraint, CheckConstraint)
+    }
+    assert "ck_thesis_llm_run_slot_shape" in checks
+
+
+def test_causal_tables_live_in_the_default_alias():
+    from apps.models.analysis import (
+        MarketCausalPath,
+        MarketCausalStep,
+        MarketChannel,
+        MarketEvent,
+    )
+
+    for model in (MarketEvent, MarketChannel, MarketCausalPath, MarketCausalStep):
+        assert model.__table__.schema is None
+        assert model.__table__.info == {"database": "default", "managed": True}

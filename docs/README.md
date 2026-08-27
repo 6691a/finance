@@ -17,6 +17,7 @@
 | [dart-disclosure-earnings.md](collection/dart-disclosure-earnings.md) | DART 공시와 잠정실적 숫자 추출 | 구현 완료 |
 | [ecb-convergence-monthly.md](collection/ecb-convergence-monthly.md) | 유로 회원국 10년물 월평균 | 구현 완료 |
 | [us-macro-indicators.md](collection/us-macro-indicators.md) | FRED 물가·실물 다섯 계열. `indicator_series`가 금리 전용에서 벗어난 경위 | 구현 완료 |
+| [policy-rate-collection.md](collection/policy-rate-collection.md) | 국채 수집국 중앙은행 다섯의 정책금리. `kind='policy_rate'`를 더한다 | **미구현. 구현 계약.** 계열 ID 실측이 선행 |
 
 ## `analysis/` — LLM 평가·기술지표·시장 추론
 

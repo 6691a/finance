@@ -4,7 +4,7 @@ from datetime import UTC, date, datetime
 from typing import Self
 
 import pytest
-from airflow.exceptions import AirflowSkipException
+from airflow.sdk.exceptions import AirflowSkipException
 
 from dags import kis_overseas_index_close, slack_us_market_briefing
 from modules.briefing import market_data

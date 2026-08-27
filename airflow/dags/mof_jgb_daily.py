@@ -108,9 +108,9 @@ from contextlib import closing
 from datetime import timedelta
 
 import pendulum
-from airflow.exceptions import AirflowFailException
 from airflow.providers.postgres.hooks.postgres import PostgresHook
 from airflow.sdk import Param, dag, get_current_context, task
+from airflow.sdk.exceptions import AirflowFailException
 
 from modules.collectors.indicator.mof import (
     MofFile,

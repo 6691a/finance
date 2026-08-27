@@ -7,7 +7,7 @@
 from datetime import UTC, datetime
 
 import pytest
-from airflow.exceptions import AirflowFailException
+from airflow.sdk.exceptions import AirflowFailException
 
 from dags import technical_signal_daily
 from modules.technical.indicators import SIGNAL_SCAN_BARS_MAX

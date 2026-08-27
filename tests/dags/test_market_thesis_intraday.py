@@ -11,7 +11,7 @@ from decimal import Decimal
 from typing import Any, Self
 
 import pytest
-from airflow.exceptions import AirflowFailException
+from airflow.sdk.exceptions import AirflowFailException
 
 from dags import market_thesis_intraday as dag_module
 from modules.technical import base_rate

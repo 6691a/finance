@@ -10,7 +10,7 @@ from decimal import Decimal
 from typing import Any, Self
 
 import pytest
-from airflow.exceptions import AirflowSkipException
+from airflow.sdk.exceptions import AirflowSkipException
 
 from dags import market_thesis_nxt_review as dag_module
 from modules.technical import base_rate

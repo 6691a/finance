@@ -43,9 +43,9 @@ from datetime import UTC, datetime, timedelta
 from typing import Any
 
 import pendulum
-from airflow.exceptions import AirflowFailException, AirflowSkipException
 from airflow.providers.postgres.hooks.postgres import PostgresHook
 from airflow.sdk import Param, dag, get_current_context, task
+from airflow.sdk.exceptions import AirflowFailException, AirflowSkipException
 
 from modules.market_session import krx_open_day
 from modules.technical.indicators import SIGNAL_SCAN_BARS_MAX, TECHNICAL_LOOKBACK_BARS

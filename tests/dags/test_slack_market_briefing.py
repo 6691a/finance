@@ -5,7 +5,7 @@
 """
 
 import pytest
-from airflow.exceptions import AirflowFailException
+from airflow.sdk.exceptions import AirflowFailException
 
 from dags import (
     slack_document_briefing,

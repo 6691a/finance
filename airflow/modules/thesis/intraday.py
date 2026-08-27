@@ -29,8 +29,8 @@ from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 from typing import Any
 
-from airflow.exceptions import AirflowFailException
 from airflow.sdk import Param, get_current_context
+from airflow.sdk.exceptions import AirflowFailException
 
 from modules.db import Connection
 from modules.sql import read_sql

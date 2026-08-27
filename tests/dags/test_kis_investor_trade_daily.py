@@ -8,7 +8,7 @@ from datetime import UTC, date, datetime, timedelta
 from types import SimpleNamespace
 
 import pytest
-from airflow.exceptions import AirflowFailException
+from airflow.sdk.exceptions import AirflowFailException
 
 from dags import kis_investor_trade_daily
 from modules.collectors.market.kis_investor_flow import InvestorFlowStock

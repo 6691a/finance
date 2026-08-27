@@ -275,11 +275,40 @@ def test_token_usage_folds_every_model_the_conversation_touched():
     assert usage.reasoning == 13977
 
 
+def test_token_usage_counts_the_cache_hits_inside_the_prompt():
+    """캐시 몫이 없으면 최적화 효과를 못 잰다. 왕복을 줄여도 그 몫이 캐시였으면 청구는 그대로다.
+
+    `cached`는 `prompt`에 **포함된다.** 더하면 입력을 두 번 센다.
+    """
+    usage = token_usage(
+        _handler(
+            {
+                "grok-4.6": {
+                    "input_tokens": 246395,
+                    "input_token_details": {"cache_read": 52992},
+                    "output_tokens": 17593,
+                    "output_token_details": {"reasoning": 13975},
+                }
+            }
+        )
+    )
+
+    assert usage.prompt == 246395
+    assert usage.cached == 52992
+
+
+def test_token_usage_survives_a_provider_that_hides_the_cache_split():
+    """`input_token_details`가 없는 제공처는 캐시 몫이 0이다. 입력 합은 그대로 온다."""
+    usage = token_usage(_handler({"gpt-5.6-luna": {"input_tokens": 10, "output_tokens": 3}}))
+
+    assert (usage.prompt, usage.cached) == (10, 0)
+
+
 def test_token_usage_is_zero_when_the_model_never_ran():
     """모델을 못 부르고 죽은 대화는 0이다. NULL("안 쟀다")과 갈려야 한다."""
     usage = token_usage(_handler({}))
 
-    assert (usage.prompt, usage.completion, usage.reasoning) == (0, 0, 0)
+    assert (usage.prompt, usage.cached, usage.completion, usage.reasoning) == (0, 0, 0, 0)
 
 
 def test_token_usage_survives_a_provider_that_hides_reasoning():

@@ -19,9 +19,11 @@
 -- (2026-08-27 실측: 넷을 조사하고 하나만 답한 실행이 `written=1`로 성공했다).
 -- 해설 경로는 대상 개념이 달라 NULL을 넣는다.
 --
--- 토큰 셋은 **콜백이 누적한 값이라 실패한 대화에도 있다**(`modules/llm.token_usage`).
--- `completion_tokens`는 `reasoning_tokens`를 포함한다 — 제공처가 사고 토큰도 출력 단가로
--- 청구한다. 모델을 한 번도 못 부르고 죽었으면 셋 다 0이다. NULL은 이 칸이 생기기 전 행뿐이다.
+-- 토큰 넷은 **콜백이 누적한 값이라 실패한 대화에도 있다**(`modules/llm.token_usage`).
+-- `completion_tokens`는 `reasoning_tokens`를 포함하고 `cached_prompt_tokens`는
+-- `prompt_tokens`에 포함된다 — 제공처가 사고 토큰도 출력 단가로 청구하고 캐시에서 읽은
+-- 입력은 훨씬 싸게 청구한다. 모델을 한 번도 못 부르고 죽었으면 넷 다 0이다. NULL은 이 칸이
+-- 생기기 전 행뿐이다.
 UPDATE thesis_llm_run
 SET status = %s,
     finished_at = %s,
@@ -33,6 +35,7 @@ SET status = %s,
     subjects_requested = %s,
     subjects_answered = %s,
     prompt_tokens = %s,
+    cached_prompt_tokens = %s,
     completion_tokens = %s,
     reasoning_tokens = %s,
     updated_at = now()

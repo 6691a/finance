@@ -175,7 +175,7 @@ def test_every_highlight_error_falls_back_instead_of_killing_the_task(send, monk
             raise error
 
     monkeypatch.setattr("modules.briefing.disclosure_picks.DisclosurePicker", ExplodingPicker)
-    monkeypatch.setattr("modules.llm.briefing_model", lambda: object())
+    monkeypatch.setattr("modules.llm.briefing_model", lambda conv_id: object())
 
     assert send() == "1724740000.000100"
     assert FakeSlack.instances[0].posts

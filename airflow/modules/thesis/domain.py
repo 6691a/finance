@@ -99,7 +99,14 @@ logger = logging.getLogger(__name__)
 #    ③ 방향별 기대 등락률(`## 크기` 절과 출력 칸 둘)이 붙었다. 확률만으로는 "얼마나"를
 #    못 읽어 0.4% 하락과 3% 하락이 같은 줄로 나갔다
 #    (docs/analysis/market-thesis/11-expected-return.md).
-PROMPT_VERSION = "7"
+# 8: **문장은 한 글자도 안 바뀌었다**(2026-08-27). 자리표시자에 들어가는 값의 모양만 바꿨다 —
+#    관측 상태·오늘 앞 슬롯·과거 추론 JSON에서 들여쓰기를 뺐다(`modules/prompt.json_dump`).
+#    모델이 받는 정보는 같지만 **보는 글자가 달라지므로** 판을 가른다. 근거는 LangSmith
+#    실측이다: 세 블록 합 53,187자 → 38,737자이고 툴 왕복마다 재전송돼 한 실행에 약
+#    32,000 입력 토큰이었다(docs/analysis/market-thesis/TUNING.md 2026-08-27 항목).
+#    **YAML 해시는 7과 같다** — `tests/modules/test_prompt_versions.py`가 두 판에 같은
+#    해시를 걸고 있고 그게 정상이다.
+PROMPT_VERSION = "8"
 
 # 채점 지평. KRX 영업일 수이고 달력일이 아니다. 0은 예측일 세션 하나다.
 HORIZON_DAYS: tuple[int, ...] = (0, 1, 3, 5)

@@ -33,7 +33,6 @@
 "공시 없음"이라 아무도 안 읽는다. 수집 생존은 `slack_ops_briefing`이 이미 보고한다.
 """
 
-import json
 import logging
 from collections.abc import Sequence
 from datetime import date, datetime
@@ -44,6 +43,7 @@ from pydantic import AwareDatetime, BaseModel, ConfigDict, Field
 
 from modules.briefing import blocks
 from modules.db import Connection
+from modules.prompt import json_dump
 from modules.sql import read_sql
 from modules.thesis.domain import DART_VIEWER_URL
 from modules.utility import KST_TIMEZONE
@@ -267,7 +267,7 @@ def pick_input(batch: DisclosureBatch) -> str:
             for disclosure in batch.disclosures
         ],
     }
-    return json.dumps(payload, ensure_ascii=False, indent=2)
+    return json_dump(payload)
 
 
 def render_blocks(

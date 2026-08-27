@@ -415,7 +415,9 @@ class ThesisRun:
             logger.info("thesis for %s %s already exists; skipping the model", self._run_date, run_slot.value)
             return 0
 
-        model = thesis_model()
+        # 캐시는 서버마다라 같은 대화를 같은 서버로 보내야 한다(`modules/llm.py`). 날짜와
+        # 슬롯이면 재시도도 같은 대화로 이어진다 — 난수를 쓰면 재시도가 캐시를 버린다.
+        model = thesis_model(f"thesis-{self._run_date}-{run_slot.value}")
         toolbox = ThesisToolbox(
             self._connection,
             as_of_at=self._as_of_at,

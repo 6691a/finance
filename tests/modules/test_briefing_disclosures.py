@@ -35,17 +35,20 @@ DISCLOSURE_ROWS = [
     ),
 ]
 
+# 실제 응답 모양이다. 정기보고서는 3개월에 전년값이 없고 누계에만 있다(2026-08-27 실측).
 EARNINGS_ROWS = [
-    ("20260827000123", "revenue", "CFS", date(2026, 6, 30), Decimal(74120000000000), Decimal(66000000000000)),
+    ("20260827000123", "revenue", "CFS", "period", date(2026, 6, 30), Decimal(74120000000000), None),
+    ("20260827000123", "operating_profit", "CFS", "period", date(2026, 6, 30), Decimal(9340000000000), None),
+    ("20260827000123", "net_income", "CFS", "period", date(2026, 6, 30), Decimal(7100000000000), None),
     (
         "20260827000123",
-        "operating_profit",
+        "revenue",
         "CFS",
+        "cumulative",
         date(2026, 6, 30),
-        Decimal(9340000000000),
-        Decimal(6960000000000),
+        Decimal(140000000000000),
+        Decimal(124000000000000),
     ),
-    ("20260827000123", "net_income", "CFS", date(2026, 6, 30), Decimal(7100000000000), None),
 ]
 
 
@@ -129,7 +132,12 @@ def test_earnings_are_attached_to_their_disclosure():
     batch = collect()
 
     samsung, hynix = batch.disclosures
-    assert [line.metric for line in samsung.earnings] == ["revenue", "operating_profit", "net_income"]
+    assert [(line.amount_basis, line.metric) for line in samsung.earnings] == [
+        ("period", "revenue"),
+        ("period", "operating_profit"),
+        ("period", "net_income"),
+        ("cumulative", "revenue"),
+    ]
     assert hynix.earnings == ()
 
 
@@ -233,17 +241,53 @@ def test_a_highlighted_disclosure_gets_a_star_and_the_reason():
     assert "⭐ *SK하이닉스*" not in body
 
 
-def test_earnings_lines_show_the_year_over_year_only_when_the_base_exists():
+def test_each_amount_basis_gets_its_own_labelled_line():
+    """**기준을 안 적으면 3개월치가 누계로 읽힌다.** 실측에서 둘이 171조와 305조였다."""
     batch = collect()
     body = "".join(
         block["text"]["text"] for block in disclosures.render_blocks(batch) if block["type"] == "section"
     )
 
-    assert "매출 74조 1,200억 원 (전년 대비 +12.3%)" in body
-    assert "영업이익 9조 3,400억 원 (전년 대비 +34.2%)" in body
-    # 전년 값이 없는 지표는 금액만 나간다. 0%로 메우지 않는다.
-    assert "순이익 7조 1,000억 원" in body
+    assert "`3개월` 매출 74조 1,200억 원" in body
+    assert "`누계` 매출 140조 원 (전년 대비 +12.9%)" in body
+
+
+def test_the_year_over_year_appears_only_where_the_base_exists():
+    """정기보고서는 3개월에 전년값이 없다. 0%로 메우지 않는다."""
+    body = "".join(
+        block["text"]["text"] for block in disclosures.render_blocks(collect()) if block["type"] == "section"
+    )
+
+    assert "매출 74조 1,200억 원 (전년" not in body
     assert "순이익 7조 1,000억 원 (전년" not in body
+
+
+def test_an_unknown_basis_is_still_drawn():
+    """조용히 빠지지 않는다. 저장값에 새 기준이 생기면 화면에 그대로 보인다."""
+    batch = sample_batch(
+        disclosures=(
+            NewDisclosure(
+                rcept_no="1",
+                stock_code="005930",
+                company_name="삼성전자",
+                report_name="분기보고서",
+                receipt_date=date(2026, 8, 27),
+                detected_at=NOW,
+                earnings=(
+                    EarningsLine(
+                        metric="revenue",
+                        statement_scope="CFS",
+                        amount_basis="annualised",
+                        current_amount=Decimal(100000000000),
+                    ),
+                ),
+            ),
+        )
+    )
+    body = "".join(
+        block["text"]["text"] for block in disclosures.render_blocks(batch) if block["type"] == "section"
+    )
+    assert "`annualised` 매출 1,000억 원" in body
 
 
 def test_a_separate_statement_scope_is_marked():
@@ -258,7 +302,7 @@ def test_a_separate_statement_scope_is_marked():
                 receipt_date=date(2026, 8, 27),
                 detected_at=NOW,
                 earnings=(
-                    EarningsLine(metric="revenue", statement_scope="OFS", current_amount=Decimal(100000000000)),
+                    EarningsLine(metric="revenue", statement_scope="OFS", amount_basis="period", current_amount=Decimal(100000000000)),
                 ),
             ),
         )
@@ -266,7 +310,7 @@ def test_a_separate_statement_scope_is_marked():
     body = "".join(
         block["text"]["text"] for block in disclosures.render_blocks(batch) if block["type"] == "section"
     )
-    assert "매출(별도) 1,000억 원" in body
+    assert "`3개월` 매출(별도) 1,000억 원" in body
 
 
 def test_the_detected_time_is_labelled_as_first_seen():
@@ -325,6 +369,7 @@ def test_the_pick_input_carries_kst_times():
 def test_the_pick_input_carries_formatted_amounts_not_raw_numbers():
     payload = disclosures.pick_input(collect())
     assert "74조 1,200억 원" in payload
+    assert "3개월" in payload
     assert "74120000000000" not in payload
 
 
@@ -337,3 +382,45 @@ def test_a_long_highlight_error_is_trimmed_before_it_reaches_slack():
     assert shown.startswith("⚠️ 공시 강조 실패: ValidationError: 1 validation error for ChatXAI")
     assert len(shown) < disclosures.MAX_ERROR_CHARS + 40
     assert "\n" not in shown
+
+
+def test_the_earnings_query_does_not_pick_a_basis():
+    """기준 고르기는 SQL이 아니라 화면의 몫이다.
+
+    어느 기준에 전년 대비가 있는지가 공시 종류마다 다르다 — 정기보고서는 누계에만,
+    잠정실적은 둘 다다. SQL이 하나로 좁히면 그 차이를 화면이 볼 수 없다.
+    """
+    connection = FakeConnection([DISCLOSURE_ROWS, EARNINGS_ROWS])
+    disclosures.collect_batch(connection, NOW, WINDOW_START, WINDOW_END)
+
+    statement, _ = connection.cursor_object.calls[1]
+    assert "amount_basis = 'period'" not in statement
+    assert "earnings_fact.amount_basis" in statement
+
+
+def test_a_four_digit_percentage_carries_its_comma():
+    """`llm.NUMBER_STYLE`과 같은 규칙이다. 실측에서 전년 대비 +1,191.4%가 나왔다."""
+    line = EarningsLine(
+        metric="operating_profit",
+        statement_scope="CFS",
+        amount_basis="cumulative",
+        current_amount=Decimal(146725209000000),
+        prior_year_amount=Decimal(11361329000000),
+    )
+    batch = sample_batch(
+        disclosures=(
+            NewDisclosure(
+                rcept_no="1",
+                stock_code="005930",
+                company_name="삼성전자",
+                report_name="반기보고서",
+                receipt_date=date(2026, 8, 27),
+                detected_at=NOW,
+                earnings=(line,),
+            ),
+        )
+    )
+    body = "".join(
+        block["text"]["text"] for block in disclosures.render_blocks(batch) if block["type"] == "section"
+    )
+    assert "(전년 대비 +1,191.4%)" in body

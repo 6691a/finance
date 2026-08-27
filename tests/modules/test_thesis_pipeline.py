@@ -51,6 +51,7 @@ from modules.thesis.domain import (
     evidence_ref,
 )
 from modules.thesis.generation import (
+    Investigation,
     ThesisBuilder,
     normalize_probabilities,
 )
@@ -1126,7 +1127,7 @@ def build(model: ScriptedModel, connection: FakeConnection) -> ThesisBuilder:
     return ThesisBuilder(model, toolbox(connection))
 
 
-def run_builder(builder: ThesisBuilder) -> tuple[Any, int]:
+def run_builder(builder: ThesisBuilder) -> Investigation:
     return builder.run(
         run_slot=RunSlot.PRE_OPEN,
         as_of_at=AS_OF,
@@ -1145,7 +1146,8 @@ def test_the_builder_investigates_with_tools_then_answers_with_a_schema():
     )
     builder = build(model, connection)
 
-    drafts, tool_rounds = run_builder(builder)
+    investigation = run_builder(builder)
+    drafts, tool_rounds = investigation.drafts, investigation.tool_rounds
 
     assert tool_rounds == 1
     assert len(drafts) == 1
@@ -1752,9 +1754,47 @@ def test_the_round_cap_forces_the_answer_step():
     model = ScriptedModel(*replies, answer_message(thesis_payload()))
     builder = build(model, connection)
 
-    _, tool_rounds = run_builder(builder)
+    investigation = run_builder(builder)
 
-    assert tool_rounds == MAX_TOOL_ROUNDS
+    assert investigation.tool_rounds == MAX_TOOL_ROUNDS
+
+
+def test_a_run_cut_by_the_round_cap_is_marked_truncated():
+    """**끊긴 실행은 조용히 답변으로 넘어간다.** 그 사실이 원장에 남아야 상한을 올릴지
+    판단할 근거가 생긴다. `tool_rounds`만으로는 스스로 끝낸 실행과 구분되지 않는다."""
+    connection = FakeConnection({"documents": []})
+    replies = [tool_call_message() for _ in range(MAX_TOOL_ROUNDS + 2)]
+    model = ScriptedModel(*replies, answer_message(thesis_payload()))
+    builder = build(model, connection)
+
+    assert run_builder(builder).truncated is True
+
+
+def test_a_run_that_stops_asking_for_tools_is_not_truncated():
+    """반대 방향도 잰다. 상한에 닿지 않고 스스로 끝낸 실행은 끊긴 것이 아니다."""
+    connection = FakeConnection({"documents": []})
+    model = ScriptedModel(
+        tool_call_message(),
+        AIMessage(DONE_INVESTIGATING),
+        answer_message(thesis_payload()),
+    )
+    builder = build(model, connection)
+
+    investigation = run_builder(builder)
+
+    assert investigation.tool_rounds < MAX_TOOL_ROUNDS
+    assert investigation.truncated is False
+
+
+def test_a_run_that_never_asks_for_tools_is_not_truncated():
+    connection = FakeConnection()
+    model = scripted(answer_message(thesis_payload()))
+    builder = build(model, connection)
+
+    investigation = run_builder(builder)
+
+    assert investigation.tool_rounds == 0
+    assert investigation.truncated is False
 
 
 def test_subjects_outside_the_request_list_are_dropped():
@@ -1762,7 +1802,7 @@ def test_subjects_outside_the_request_list_are_dropped():
     model = scripted(answer_message(thesis_payload("KOSPI"), thesis_payload("AAPL")))
     builder = build(model, connection)
 
-    drafts, _ = run_builder(builder)
+    drafts = run_builder(builder).drafts
 
     assert [draft.subject.code for draft in drafts] == ["KOSPI"]
 
@@ -1776,7 +1816,7 @@ def test_a_subject_answered_twice_is_refused_entirely():
     )
     builder = build(model, connection)
 
-    drafts, _ = run_builder(builder)
+    drafts = run_builder(builder).drafts
 
     # 어느 쪽이 진짜인지 알 수 없다. 먼저 넣은 것도 함께 뺀다.
     assert [draft.subject.code for draft in drafts] == ["000660"]
@@ -1787,7 +1827,7 @@ def test_a_missing_subject_is_left_out_and_never_re_requested():
     model = scripted(answer_message(thesis_payload("KOSPI")))
     builder = build(model, connection)
 
-    drafts, _ = run_builder(builder)
+    drafts = run_builder(builder).drafts
 
     assert [draft.subject.code for draft in drafts] == ["KOSPI"]
     # 조사 한 번, 답변 한 번. 빠진 subject를 다시 묻지 않는다.
@@ -1804,7 +1844,7 @@ def test_a_subject_whose_probabilities_do_not_sum_to_one_is_dropped():
     )
     builder = build(model, connection)
 
-    drafts, _ = run_builder(builder)
+    drafts = run_builder(builder).drafts
 
     assert [draft.subject.code for draft in drafts] == ["000660"]
 
@@ -1814,7 +1854,7 @@ def test_everything_unusable_triggers_exactly_one_repair():
     model = scripted(answer_message(thesis_payload("AAPL")), answer_message(thesis_payload("KOSPI")))
     builder = build(model, connection)
 
-    drafts, _ = run_builder(builder)
+    drafts = run_builder(builder).drafts
 
     assert [draft.subject.code for draft in drafts] == ["KOSPI"]
     # 조사 한 번, 답변 한 번, 교정 뒤 답변 한 번.
@@ -1839,7 +1879,7 @@ def test_refs_no_tool_returned_are_dropped_and_duplicates_keep_their_first_rank(
     )
     builder = build(model, connection)
 
-    drafts, _ = run_builder(builder)
+    drafts = run_builder(builder).drafts
 
     # 순서가 곧 rank다. 중복은 첫 등장 자리에 합쳐지고 목록 밖 ref는 버려진다.
     assert drafts[0].evidence_refs == ("document:9", "document:7")
@@ -1850,7 +1890,7 @@ def test_a_thesis_with_no_evidence_is_allowed():
     model = scripted(answer_message(thesis_payload(refs=[])))
     builder = build(model, connection)
 
-    drafts, _ = run_builder(builder)
+    drafts = run_builder(builder).drafts
 
     # 억지 인용이 근거 없음보다 나쁘다.
     assert drafts[0].evidence_refs == ()
@@ -1864,7 +1904,7 @@ def test_each_reasoning_field_is_trimmed_on_its_own():
     )
     builder = build(model, connection)
 
-    drafts, _ = run_builder(builder)
+    drafts = run_builder(builder).drafts
 
     assert len(drafts[0].up_reasoning) == MAX_REASONING_CHARS
     assert len(drafts[0].flat_reasoning) == MAX_REASONING_CHARS
@@ -1904,13 +1944,13 @@ def draft_for(builder_connection: FakeConnection) -> Any:
     box = toolbox(connection)
     box.run("recent_documents", {"hours": 6, "min_score": 0})
     builder = ThesisBuilder(model, box)
-    drafts, _ = builder.run(
+    drafts = builder.run(
         run_slot=RunSlot.PRE_OPEN,
         as_of_at=AS_OF,
         subjects=SUBJECTS,
         observed_state=OBSERVED,
         past_theses={},
-    )
+    ).drafts
     return drafts, box.registry
 
 
@@ -2019,9 +2059,9 @@ def test_evidence_ranks_follow_the_citation_order():
     box.run("macro_changes", {})
     model = scripted(answer_message(thesis_payload(refs=["macro_change:SP500_FUT", "document:9"])))
     builder = ThesisBuilder(model, box)
-    drafts, _ = builder.run(
+    drafts = builder.run(
         run_slot=RunSlot.PRE_OPEN, as_of_at=AS_OF, subjects=SUBJECTS, observed_state=OBSERVED, past_theses={}
-    )
+    ).drafts
 
     writer = FakeConnection({"thesis_insert": [(11,)], "select_by_run": [stored_row(11)]})
     ThesisStore(writer).store_theses(
@@ -2896,7 +2936,7 @@ def test_each_claim_keeps_its_direction_and_mechanism():
     )
     builder = build(model, connection)
 
-    drafts, _ = run_builder(builder)
+    drafts = run_builder(builder).drafts
 
     # 산문 이유와 별개로 근거마다 "어느 쪽으로, 왜"가 남는다. 이것이 그래프 엣지 속성이다.
     assert [(c.ref, c.direction, c.mechanism) for c in drafts[0].claims] == [
@@ -2919,7 +2959,7 @@ def test_a_repeated_ref_keeps_its_first_claim():
     )
     builder = build(model, connection)
 
-    drafts, _ = run_builder(builder)
+    drafts = run_builder(builder).drafts
 
     # 행이 ref당 하나라 방향 둘을 담을 수 없다. 첫 것이 남고 rank도 하나다.
     assert [(c.direction, c.mechanism) for c in drafts[0].claims] == [(ThesisDirection.UP, "첫 번째")]
@@ -2934,7 +2974,7 @@ def test_a_long_mechanism_is_trimmed_on_its_own():
     )
     builder = build(model, connection)
 
-    drafts, _ = run_builder(builder)
+    drafts = run_builder(builder).drafts
 
     # 경로 한 문장 때문에 인용을 버리지 않는다. 그 칸만 자른다.
     assert len(drafts[0].claims[0].mechanism) == MAX_MECHANISM_CHARS

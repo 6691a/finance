@@ -227,6 +227,17 @@ def test_the_llm_ledger_has_no_natural_key(capsys):
     assert "try_number" in statement
 
 
+def test_the_ledger_records_a_truncated_investigation(capsys):
+    """왕복 상한에서 끊긴 실행은 조용히 답변으로 넘어간다. `tool_rounds`만으로는 스스로
+    끝낸 실행과 구분되지 않아 상한을 올릴지 판단할 근거가 없었다."""
+    sql = head_sql(capsys)
+
+    # 원장을 만든 리비전 뒤에 붙은 칸이라 CREATE TABLE이 아니라 ALTER로 나온다.
+    assert "ALTER TABLE thesis_llm_run ADD COLUMN investigation_truncated BOOLEAN DEFAULT false NOT NULL" in sql
+    # 이미 있는 행은 끊겼는지 알 수 없다. server_default가 그것을 false로 채운다.
+    assert "DEFAULT false" in sql
+
+
 def test_the_llm_run_status_shape_is_constrained(capsys):
     sql = head_sql(capsys)
 

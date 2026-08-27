@@ -9,6 +9,10 @@
 --
 -- `tool_result_chars`는 **모델에게 실제로 돌아간 것만** 센다(`delivered = true`).
 -- 툴박스의 예산 카운터와 다른 수이고, `MAX_TOOL_RESULT_CHARS`와 직접 비교하지 않는다.
+--
+-- `investigation_truncated`는 모델이 툴을 더 부르겠다고 했는데 `MAX_TOOL_ROUNDS`에서
+-- 끊긴 실행인지다. 끊기면 조용히 답변으로 넘어가므로 `tool_rounds`만으로는 스스로 끝낸
+-- 실행과 구분되지 않는다. 해설 경로는 왕복 상한이 없어 언제나 false다.
 UPDATE thesis_llm_run
 SET status = %s,
     finished_at = %s,
@@ -16,6 +20,7 @@ SET status = %s,
     tool_rounds = %s,
     tool_calls = %s,
     tool_result_chars = %s,
+    investigation_truncated = %s,
     updated_at = now()
 WHERE id = %s
   AND status = 'running'

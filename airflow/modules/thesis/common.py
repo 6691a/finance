@@ -437,7 +437,7 @@ class ThesisRun:
             prompt_version=PROMPT_VERSION,
         )
         try:
-            drafts, rounds = ThesisBuilder(model, toolbox).run(
+            investigation = ThesisBuilder(model, toolbox).run(
                 run_slot=run_slot,
                 as_of_at=self._as_of_at,
                 subjects=targets,
@@ -465,6 +465,7 @@ class ThesisRun:
             status=LlmRunStatus.SUCCEEDED,
             records=closed_records(toolbox),
             tool_rounds=toolbox.round_count,
+            investigation_truncated=investigation.truncated,
         )
 
         rows = store.store_theses(
@@ -472,15 +473,22 @@ class ThesisRun:
             run_slot=run_slot,
             as_of_at=self._as_of_at,
             dag_run_id=dag_run_id,
-            drafts=drafts,
+            drafts=investigation.drafts,
             registry=toolbox.registry,
             observed_state=observed,
             llm_model=model_name(model),
-            tool_rounds=rounds,
+            tool_rounds=investigation.tool_rounds,
             llm_run_id=llm_run_id,
             precedents={code: [row.id for row in rows] for code, rows in past.items()},
         )
-        logger.info("stored %s theses for %s %s (%s tool rounds)", len(rows), self._run_date, run_slot.value, rounds)
+        logger.info(
+            "stored %s theses for %s %s (%s tool rounds%s)",
+            len(rows),
+            self._run_date,
+            run_slot.value,
+            investigation.tool_rounds,
+            ", truncated" if investigation.truncated else "",
+        )
         return len(rows)
 
 

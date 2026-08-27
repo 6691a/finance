@@ -161,6 +161,21 @@ class Claim(BaseModel):
     mechanism: str
 
 
+class Investigation(BaseModel):
+    """조사 한 번의 결과. 추론들과 그것을 만든 조사의 모양이다.
+
+    **`truncated`가 이 모델을 만든 이유다.** 전에는 `(drafts, rounds)` 튜플이었는데, 왕복
+    상한에서 끊긴 실행과 스스로 끝낸 실행이 `rounds` 하나로는 구분되지 않는다. 원장이
+    그것을 세야 다음에 상한을 올릴지 근거로 판단한다.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    drafts: tuple["ThesisDraft", ...]
+    tool_rounds: int
+    truncated: bool
+
+
 class ThesisDraft(BaseModel):
     """검증·정규화를 마친 추론 하나. 그대로 `thesis` 행이 된다."""
 
@@ -296,6 +311,9 @@ class ThesisState(TypedDict):
     # 요청한 대상. 답변을 거를 때 노드가 읽으므로 상태에 있어야 한다.
     subjects: tuple[Subject, ...]
     tool_rounds: int
+    # 모델이 툴을 더 부르겠다고 했는데 왕복 상한에서 끊긴 실행이다. **조용히 답변으로
+    # 넘어가는 자리라 이 칸이 없으면 DB에서 "3왕복에 스스로 끝낸 것"과 구분되지 않는다.**
+    investigation_truncated: bool
     drafts: tuple[ThesisDraft, ...] | None
     error: str | None
     attempts: int
@@ -363,10 +381,10 @@ class ThesisBuilder:
         observed_state: ObservedState | NxtObservedState,
         past_theses: Mapping[str, Sequence[PastThesis]],
         same_day: Mapping[str, Sequence[SameDayThesis]] = MappingProxyType({}),
-    ) -> tuple[tuple[ThesisDraft, ...], int]:
-        """추론들과 툴 왕복 수. 두 번째도 실패하면 `ThesisError`를 올린다."""
+    ) -> "Investigation":
+        """추론들과 조사 결과. 두 번째도 실패하면 `ThesisError`를 올린다."""
         if not subjects:
-            return (), 0
+            return Investigation(drafts=(), tool_rounds=0, truncated=False)
         state: ThesisState = {
             "messages": self.build_messages(
                 run_slot=run_slot,
@@ -378,6 +396,7 @@ class ThesisBuilder:
             ),
             "subjects": tuple(subjects),
             "tool_rounds": 0,
+            "investigation_truncated": False,
             "drafts": None,
             "error": None,
             "attempts": 0,
@@ -392,7 +411,11 @@ class ThesisBuilder:
         drafts = final.get("drafts")
         if drafts is None:
             raise ThesisError(final.get("error") or "Model did not return any thesis")
-        return drafts, final["tool_rounds"]
+        return Investigation(
+            drafts=drafts,
+            tool_rounds=final["tool_rounds"],
+            truncated=bool(final.get("investigation_truncated")),
+        )
 
     def parse(self, raw: str, subjects: Sequence[Subject]) -> tuple[ThesisDraft, ...]:
         """응답을 검증하고 쓸 수 없는 항목을 버린다.
@@ -493,8 +516,15 @@ class ThesisBuilder:
         graph.add_node("tools", self._tools)
         graph.add_node("answer", self._answer)
         graph.add_node("repair", self._repair)
+        # 상한에서 끊긴 사실을 남기는 노드. 조건부 엣지는 상태를 못 바꾸므로 답변 앞에 둔다.
+        graph.add_node("close_investigation", self._mark_truncation)
         graph.add_edge(START, "investigate")
-        graph.add_conditional_edges("investigate", self._after_investigate, {"tools": "tools", "answer": "answer"})
+        graph.add_conditional_edges(
+            "investigate",
+            self._after_investigate,
+            {"tools": "tools", "answer": "close_investigation"},
+        )
+        graph.add_edge("close_investigation", "answer")
         graph.add_edge("tools", "investigate")
         graph.add_conditional_edges("answer", self._after_answer, {"repair": "repair", END: END})
         graph.add_edge("repair", "answer")
@@ -553,6 +583,21 @@ class ThesisBuilder:
         if getattr(reply, "tool_calls", None) and state["tool_rounds"] < MAX_TOOL_ROUNDS:
             return "tools"
         return "answer"
+
+    @staticmethod
+    def _mark_truncation(state: ThesisState) -> dict[str, Any]:
+        """상한에서 끊겼으면 그 사실을 상태에 남긴다.
+
+        **경로 판정(`_after_investigate`)에서 쓰기를 하지 않는다** — 조건부 엣지의 반환값은
+        다음 노드 이름이라 상태를 못 바꾼다. 그래서 답변 노드 앞에 이 노드를 둔다.
+        """
+        reply = state["messages"][-1]
+        if getattr(reply, "tool_calls", None) and state["tool_rounds"] >= MAX_TOOL_ROUNDS:
+            logger.warning(
+                "investigation truncated: the model asked for more tools after %s rounds", state["tool_rounds"]
+            )
+            return {"investigation_truncated": True}
+        return {}
 
     @staticmethod
     def _after_answer(state: ThesisState) -> str:

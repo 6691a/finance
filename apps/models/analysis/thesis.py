@@ -10,6 +10,7 @@ from enum import StrEnum
 
 from sqlalchemy import (
     BigInteger,
+    Boolean,
     CheckConstraint,
     DateTime,
     ForeignKey,
@@ -17,6 +18,7 @@ from sqlalchemy import (
     Numeric,
     Text,
     UniqueConstraint,
+    text,
 )
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
@@ -781,6 +783,17 @@ class ThesisLlmRun(EntityBase):
         comment=(
             "모델에게 실제로 돌아간 결과의 누적 문자 수(delivered=true만). **예산 카운터와 "
             "다른 수다** — 그쪽은 버려진 결과도 센다. MAX_TOOL_RESULT_CHARS와 직접 비교하지 않는다"
+        ),
+    )
+    investigation_truncated: Mapped[bool] = mapped_column(
+        Boolean,
+        nullable=False,
+        default=False,
+        server_default=text("false"),
+        comment=(
+            "모델이 툴을 더 부르겠다고 했는데 MAX_TOOL_ROUNDS에서 끊긴 실행인지. "
+            "끊긴 실행은 조용히 답변으로 넘어가므로 이 칸이 없으면 스스로 끝낸 실행과 "
+            "tool_rounds 하나로는 구분되지 않는다. 상한을 올릴지 판단하는 근거다"
         ),
     )
 

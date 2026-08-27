@@ -193,18 +193,23 @@ def thesis_model(conv_id: str) -> BaseChatModel:
 
 
 class TokenUsage(BaseModel):
-    """대화 하나가 청구된 토큰. `thesis_llm_run`의 세 칸이 이 값을 그대로 받는다.
+    """대화 하나가 청구된 토큰. `thesis_llm_run`의 네 칸이 이 값을 그대로 받는다.
 
-    셋을 나눠 두는 이유는 **서로 다른 손잡이에 붙기 때문이다.** `prompt`는 왕복마다 대화
+    넷을 나눠 두는 이유는 **서로 다른 손잡이에 붙기 때문이다.** `prompt`는 왕복마다 대화
     전체가 재전송된 결과라 프롬프트 블록 크기와 왕복 상한이 움직이고, `reasoning`은 대화에
     남지 않아 재전송되지도 캐시되지도 않는다. 한 칸으로 묶으면 어느 쪽이 늘었는지 못 가른다.
 
-    **`completion`은 `reasoning`을 포함한다.** 제공처가 사고 토큰도 출력 단가로 청구한다.
+    **`completion`은 `reasoning`을 포함하고, `cached`는 `prompt`에 포함된다.** 제공처가 사고
+    토큰도 출력 단가로 청구하고, 캐시에서 읽은 입력은 입력 토큰으로 세되 훨씬 싸게 청구한다.
+
+    **`cached`가 없으면 최적화 효과를 못 잰다.** 왕복 하나를 줄여 `prompt`가 20% 줄어도 그
+    20%가 전부 캐시 히트였으면 청구는 거의 그대로다. 반대도 같다. 제공처가 안 알려 주면 0이다.
     """
 
     model_config = ConfigDict(frozen=True)
 
     prompt: int = 0
+    cached: int = 0
     completion: int = 0
     reasoning: int = 0
 
@@ -218,12 +223,14 @@ def token_usage(handler: UsageMetadataCallbackHandler) -> TokenUsage:
     **모델을 한 번도 못 부르고 죽은 대화는 전부 0이다.** NULL이 아니다 — 0은 "안 썼다"이고
     NULL은 "안 쟀다"라, 원장에서 그 둘이 갈려야 한다.
     """
-    prompt = completion = reasoning = 0
+    prompt = cached = completion = reasoning = 0
     for usage in handler.usage_metadata.values():
         prompt += usage.get("input_tokens", 0)
+        # LangChain이 제공처의 캐시 히트를 이 칸으로 모은다. 안 주는 제공처면 0이다.
+        cached += (usage.get("input_token_details") or {}).get("cache_read", 0)
         completion += usage.get("output_tokens", 0)
         reasoning += (usage.get("output_token_details") or {}).get("reasoning", 0)
-    return TokenUsage(prompt=prompt, completion=completion, reasoning=reasoning)
+    return TokenUsage(prompt=prompt, cached=cached, completion=completion, reasoning=reasoning)
 
 
 def model_name(model: BaseChatModel) -> str:

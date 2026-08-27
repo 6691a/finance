@@ -397,6 +397,7 @@ class ThesisStore:
                     subjects_requested,
                     subjects_answered,
                     usage.prompt if usage else None,
+                    usage.cached if usage else None,
                     usage.completion if usage else None,
                     usage.reasoning if usage else None,
                     llm_run_id,

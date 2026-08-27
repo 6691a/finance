@@ -106,6 +106,8 @@ class LlmRunKind(StrEnum):
     REVIEW = "review"
     NXT_REVIEW = "nxt_review"
     NARRATION = "narration"
+    CAUSAL = "causal"
+    """주간 사후 인과 그래프(`docs/analysis/market-causal-graph.md`). 슬롯이 없는 유일한 종류다."""
 
 
 class LlmRunStatus(StrEnum):
@@ -664,8 +666,14 @@ class ThesisLlmRun(EntityBase):
     __tablename__ = "thesis_llm_run"
     __table_args__ = (
         CheckConstraint(
-            "kind IN ('forecast', 'review', 'nxt_review', 'narration')",
+            "kind IN ('forecast', 'review', 'nxt_review', 'narration', 'causal')",
             name="ck_thesis_llm_run_kind",
+        ),
+        # 주간 인과 그래프에는 슬롯이 없다. 나머지 종류가 슬롯을 빠뜨리는 것은 그대로 막는다.
+        CheckConstraint(
+            "(kind = 'causal' AND run_slot IS NULL)"
+            " OR (kind <> 'causal' AND run_slot IS NOT NULL)",
+            name="ck_thesis_llm_run_slot_shape",
         ),
         CheckConstraint(
             "status IN ('running', 'succeeded', 'failed')",
@@ -704,10 +712,13 @@ class ThesisLlmRun(EntityBase):
             "thesis와 같은 축으로 조인하기 위해서다. 실행일은 as_of_at과 dag_run_id가 말한다"
         ),
     )
-    run_slot: Mapped[RunSlot] = mapped_column(
+    run_slot: Mapped[RunSlot | None] = mapped_column(
         _enum_column(RunSlot),
-        nullable=False,
-        comment="대상 슬롯. 해설이면 원 추론의 슬롯이다",
+        nullable=True,
+        comment=(
+            "대상 슬롯. 해설이면 원 추론의 슬롯이다. "
+            "주간 인과 그래프(kind='causal')만 슬롯이 없어 NULL이고 CHECK가 그것을 강제한다"
+        ),
     )
     horizon_days: Mapped[int | None] = mapped_column(
         Integer,

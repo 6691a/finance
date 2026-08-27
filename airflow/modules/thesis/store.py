@@ -359,6 +359,8 @@ class ThesisStore:
         records: Sequence[ToolCallRecord],
         tool_rounds: int,
         investigation_truncated: bool = False,
+        subjects_requested: int | None = None,
+        subjects_answered: int | None = None,
         error: str | None = None,
     ) -> None:
         """대화를 닫고 그 안의 툴 호출을 한 트랜잭션에 쓴다.
@@ -370,6 +372,9 @@ class ThesisStore:
 
         `investigation_truncated`의 기본이 `False`인 것은 **해설 경로에는 왕복 상한이 없기
         때문이다.** 그쪽은 이 인자를 주지 않는다. 추론 생성만 실제 값을 넘긴다.
+
+        `subjects_*` 둘의 기본이 `None`인 것도 같은 이유다. 해설은 대상 개념이 달라
+        **0이 아니라 NULL이다** — 0으로 넣으면 "전부 실패한 생성"과 같아 보인다.
         """
         delivered_chars = sum(record.result_chars for record in records if record.delivered)
         with atomic(self._connection) as transaction, transaction.cursor() as cursor:
@@ -383,6 +388,8 @@ class ThesisStore:
                     len(records),
                     delivered_chars,
                     investigation_truncated,
+                    subjects_requested,
+                    subjects_answered,
                     llm_run_id,
                 ),
             )

@@ -106,7 +106,13 @@ logger = logging.getLogger(__name__)
 #    32,000 입력 토큰이었다(docs/analysis/market-thesis/TUNING.md 2026-08-27 항목).
 #    **YAML 해시는 7과 같다** — `tests/modules/test_prompt_versions.py`가 두 판에 같은
 #    해시를 걸고 있고 그게 정상이다.
-PROMPT_VERSION = "8"
+# 9: 대상이 모자란 답을 **한 번 다시 묻는다**(2026-08-27). 교정 문구가 하나 늘었고
+#    (`variants.repair_short_answer`), 그보다 결과가 달라진다 — 전에는 대상 넷을 요청하고
+#    하나만 답해도 그대로 저장했다. 실측이 그 판의 근거다: `intraday_midday`가 넷을
+#    조사해 놓고 하나만 답했고 태스크는 `written=1`로 성공이었다. 같은 실행이 이 판에서는
+#    넷을 채우거나, 못 채우면 그 사실이 원장(`subjects_requested`·`subjects_answered`)에
+#    남는다. **저장되는 추론 수가 달라지므로 판을 가른다.**
+PROMPT_VERSION = "9"
 
 # 채점 지평. KRX 영업일 수이고 달력일이 아니다. 0은 예측일 세션 하나다.
 HORIZON_DAYS: tuple[int, ...] = (0, 1, 3, 5)

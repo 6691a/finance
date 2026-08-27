@@ -174,6 +174,9 @@ class Investigation(BaseModel):
     drafts: tuple["ThesisDraft", ...]
     tool_rounds: int
     truncated: bool
+    # 요청한 대상 수. `len(drafts)`와 다르면 모델이 일부만 답한 것이다 — 원장이 그 둘을
+    # 함께 세야 "넷 중 하나만 저장됐다"가 SQL로 보인다.
+    subjects_requested: int
 
 
 class ThesisDraft(BaseModel):
@@ -298,6 +301,16 @@ def _json_section(rows: Mapping[str, Sequence[BaseModel]]) -> str:
 # ---------------------------------------------------------------------------
 
 
+def missing_subjects(subjects: Sequence[Subject], drafts: Sequence[ThesisDraft]) -> tuple[str, ...]:
+    """요청했는데 답이 안 온 대상 코드. 요청 순서를 지킨다.
+
+    **`parse`가 버린 것과 다른 수다.** 그쪽은 온 것 중 못 쓸 것을 세고, 이 함수는 아예
+    안 온 것을 센다. 둘을 합쳐야 "요청 넷 중 하나만 저장됐다"가 설명된다.
+    """
+    answered = {draft.subject.code for draft in drafts}
+    return tuple(subject.code for subject in subjects if subject.code not in answered)
+
+
 class ThesisState(TypedDict):
     """추론 한 번의 상태.
 
@@ -311,6 +324,10 @@ class ThesisState(TypedDict):
     # 요청한 대상. 답변을 거를 때 노드가 읽으므로 상태에 있어야 한다.
     subjects: tuple[Subject, ...]
     tool_rounds: int
+    # 첫 답에서 빠진 대상. 비어 있지 않으면 교정이 "형식"이 아니라 "개수"를 요구한다.
+    missing_subjects: tuple[str, ...]
+    # 첫 답에 담겨 온 것. 교정본이 더 나쁘거나 못 읽힐 때 이쪽으로 되돌아간다.
+    partial_drafts: tuple[ThesisDraft, ...]
     # 모델이 툴을 더 부르겠다고 했는데 왕복 상한에서 끊긴 실행이다. **조용히 답변으로
     # 넘어가는 자리라 이 칸이 없으면 DB에서 "3왕복에 스스로 끝낸 것"과 구분되지 않는다.**
     investigation_truncated: bool
@@ -384,7 +401,7 @@ class ThesisBuilder:
     ) -> "Investigation":
         """추론들과 조사 결과. 두 번째도 실패하면 `ThesisError`를 올린다."""
         if not subjects:
-            return Investigation(drafts=(), tool_rounds=0, truncated=False)
+            return Investigation(drafts=(), tool_rounds=0, truncated=False, subjects_requested=0)
         state: ThesisState = {
             "messages": self.build_messages(
                 run_slot=run_slot,
@@ -396,6 +413,8 @@ class ThesisBuilder:
             ),
             "subjects": tuple(subjects),
             "tool_rounds": 0,
+            "missing_subjects": (),
+            "partial_drafts": (),
             "investigation_truncated": False,
             "drafts": None,
             "error": None,
@@ -415,6 +434,7 @@ class ThesisBuilder:
             drafts=drafts,
             tool_rounds=final["tool_rounds"],
             truncated=bool(final.get("investigation_truncated")),
+            subjects_requested=len(subjects),
         )
 
     def parse(self, raw: str, subjects: Sequence[Subject]) -> tuple[ThesisDraft, ...]:
@@ -573,16 +593,59 @@ class ThesisBuilder:
             logger.warning("provider does not accept a response schema; falling back to validation: %s", error)
             reply = llm.invoke(self._model, messages)
 
+        previous = state["partial_drafts"]
         try:
             drafts = self.parse(_text(reply), state["subjects"])
         except ThesisError as error:
+            # 교정본을 못 읽었는데 첫 답이 있으면 그것을 쓴다. 하나라도 남기는 편이
+            # 태스크를 죽이는 것보다 낫다 — 첫 답은 이미 검증을 통과한 것이다.
+            if previous:
+                logger.warning("교정 답을 읽지 못해 첫 답 %s건을 그대로 쓴다: %s", len(previous), error)
+                return {"messages": [reply], "drafts": previous, "error": None}
             return {"messages": [reply], "drafts": None, "error": str(error)}
+
+        missing = missing_subjects(state["subjects"], drafts)
+        if missing:
+            # **요청한 대상이 안 온 것을 여기서 처음 센다.** `parse`는 온 것 중 버린 것만
+            # 세므로, 모델이 넷 중 하나만 답해도 지금까지는 아무 데도 남지 않았다
+            # (2026-08-27 `intraday_midday` 실측: 넷을 조사하고 하나만 답했다).
+            logger.warning(
+                "모델이 대상 %s개 중 %s개만 답했다. 빠진 것: %s",
+                len(state["subjects"]),
+                len(drafts),
+                list(missing),
+            )
+
+        # 모자란 첫 답은 형식 실패와 같게 다룬다 — 대상 넷을 요청했으면 넷이 와야 한다.
+        # 교정은 한 번뿐이고, 그 답이 더 적으면 첫 답으로 되돌아간다.
+        if missing and state["attempts"] == 0:
+            return {
+                "messages": [reply],
+                "drafts": None,
+                "error": f"대상 {len(missing)}개가 빠졌다: {', '.join(missing)}",
+                "missing_subjects": missing,
+                "partial_drafts": drafts,
+            }
+        if len(drafts) < len(previous):
+            logger.warning("교정 답이 %s건으로 더 적어 첫 답 %s건을 쓴다", len(drafts), len(previous))
+            return {"messages": [reply], "drafts": previous, "error": None}
         return {"messages": [reply], "drafts": drafts, "error": None}
 
     def _repair(self, state: ThesisState) -> dict[str, Any]:
+        """한 번만 다시 묻는다. **무엇이 잘못됐는지에 따라 문구가 다르다.**
+
+        형식이 깨진 것과 대상이 모자란 것은 모델이 고쳐야 할 것이 다르다. 같은 문구를
+        주면 "JSON 하나만 내라"는 말을 듣고 다시 하나만 낸다.
+        """
+        missing = state["missing_subjects"]
+        instruction = (
+            PROMPTS.render_variant("repair_short_answer", missing=", ".join(missing))
+            if missing
+            else REPAIR_INSTRUCTION
+        )
         logger.warning("retrying the theses once after %s", state["error"])
         return {
-            "messages": [HumanMessage(REPAIR_INSTRUCTION)],
+            "messages": [HumanMessage(instruction)],
             "attempts": state["attempts"] + 1,
         }
 

@@ -10,7 +10,7 @@
 - 산출물: `apps/models/market/fundamentals.py`에 `StockAnalystOpinion`, `apps/models/content.py`의
   `SourceKind.RESEARCH`, 수기 리비전 둘, `airflow/modules/collectors/analyst/kis_opinion.py`의
   `KisAnalystOpinionCollector`, `airflow/dags/kis_analyst_opinion_daily.py`,
-  `collectors/document/naver_research.py`의 `NaverResearchCollector`와 `ListingSource.enrich`, `documents.existing_external_ids`, `thesis_toolbox.py`에 `analyst_opinions` 툴,
+  `collectors/document/naver_research.py`의 `NaverResearchCollector`와 `ListingSource.enrich`, `documents.existing_external_ids`, `thesis/toolbox.py`에 `analyst_opinions` 툴,
   SQL 넷(`stock_analyst_opinion/upsert.sql`·`select_thesis_recent.sql`,
   `document/select_existing_external_ids.sql`), 테스트 일곱 파일
 
@@ -202,7 +202,7 @@
 - 반환: 영업일자, (증권사), 의견, 직전 의견, 목표가, 전일종가, 괴리율. 의견이 바뀐 행인지는
   모델이 `opinion != previous_opinion`으로 읽는다 — SQL이 따로 표시하지 않는다.
 - `created_at <= as_of_at`로 자르므로 08:20 DAG가 재시도 끝에 08:35를 넘기면 그날 장전에는
-  전날치까지만 보인다. 의도된 동작이다. `thesis_forecast.check_ready`는 문서 평가 진척만 보고
+  전날치까지만 보인다. 의도된 동작이다. `thesis.forecast.check_ready`는 문서 평가 진척만 보고
   이 테이블을 기다리지 않는다.
 - `TOOL_DESCRIPTIONS`에 항목을 더하고, `recent_documents` 설명에 한 줄을 보탠다:
   "`source_slug`가 `naver_research_*`면 증권사 리서치 리포트다(제목 끝에 증권사, 종목분석은

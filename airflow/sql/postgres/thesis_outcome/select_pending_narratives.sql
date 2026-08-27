@@ -5,7 +5,7 @@
 -- 검증할 값어치가 크다.
 --
 -- **post_nxt_close는 뺀다**(2026-08-22). NXT 애프터마켓 리뷰는 해설 루프에 아직 넣지
--- 않았다. 넣으려면 `thesis_state.NARRATED_SLOTS`에 더하면 된다 — 부르는 쪽은
+-- 않았다. 넣으려면 `thesis.state.NARRATED_SLOTS`에 더하면 된다 — 부르는 쪽은
 -- `run_slot` 컬럼으로 슬롯마다 호출을 나눈다(2026-08-23). 슬롯 목록이 리터럴이 아니라
 -- 파라미터인 것은 `select_pending_grades.sql`과 같은 형태다.
 --

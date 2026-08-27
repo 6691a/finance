@@ -1,6 +1,6 @@
 """확정 일봉에서 매매 신호를 검출해 `technical_signal`에 저장한다.
 
-계산은 `modules/technical.py`가 하고 여기는 조회·정렬·저장만 한다. 그래서 계산기는 계속
+계산은 `modules/technical/indicators.py`가 하고 여기는 조회·정렬·저장만 한다. 그래서 계산기는 계속
 DB를 모른다. 설계는 docs/analysis/market-technical-indicators.md 12.3절이다.
 
 조회는 추론 툴·브리핑과 **같은 SQL**을 쓴다(`technical/select_history.sql`). 지표와 신호가
@@ -15,10 +15,10 @@ from typing import Any
 
 from pydantic import BaseModel, ConfigDict
 
-from modules import technical
 from modules.db import Connection
 from modules.sql import read_sql
-from modules.technical import TECHNICAL_LOOKBACK_BARS
+from modules.technical import indicators
+from modules.technical.indicators import TECHNICAL_LOOKBACK_BARS
 from modules.upsert import execute_upserts
 
 logger = logging.getLogger(__name__)
@@ -92,9 +92,9 @@ def detect_and_store(
     for symbol, subject_rows in grouped.items():
         # 조회는 최신순이고 계산기는 오름차순을 받는다.
         ascending = list(reversed(subject_rows))
-        events = technical.detect_signals(
+        events = indicators.detect_signals(
             [
-                technical.DailyBar(
+                indicators.DailyBar(
                     business_date=row[5],
                     open=float(row[6]),
                     high=float(row[7]),
@@ -107,7 +107,7 @@ def detect_and_store(
             scan_bars=scan_bars,
             max_abs_daily_change_pct=DOMESTIC_MAX_DAILY_CHANGE_PCT,
         )
-        if len(ascending) < technical.TECHNICAL_MIN_BARS:
+        if len(ascending) < indicators.TECHNICAL_MIN_BARS:
             logger.info("%s has only %s bars; skipping", symbol, len(ascending))
             skipped.append(symbol)
             continue

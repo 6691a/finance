@@ -34,7 +34,7 @@ from pydantic import AwareDatetime, BaseModel, ConfigDict
 from modules.briefing import blocks, documents
 from modules.db import Connection, Cursor
 from modules.sql import read_sql
-from modules.thesis_state import FORECAST_SLOTS, NARRATED_SLOTS
+from modules.thesis.state import FORECAST_SLOTS, NARRATED_SLOTS
 from modules.utility import KST_TIMEZONE
 
 BRIEFING_WINDOW = read_sql("postgres", "source_record", "select_briefing_window.sql")
@@ -47,7 +47,7 @@ WINDOW_HOURS = 24
 # 추론 품질을 볼 구간. 프롬프트와 모델이 바뀌면 옛 점수와 섞여 추이가 흐려지므로 짧게 둔다.
 THESIS_WINDOW_DAYS = 28
 
-# 채점·해설 지평. `modules/thesis_domain.py`의 같은 목록과 값이 같아야 한다. 그쪽을 import하지 않는
+# 채점·해설 지평. `modules/thesis/domain.py`의 같은 목록과 값이 같아야 한다. 그쪽을 import하지 않는
 # 이유는 ops 브리핑이 LLM 층에 기대지 않기 위해서다 — 감시하는 쪽이 감시받는 쪽을 부르면
 # 그쪽이 죽은 날 이 리포트도 같이 흔들린다.
 THESIS_HORIZONS = (0, 1, 3, 5)

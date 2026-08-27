@@ -7,7 +7,7 @@
 import pytest
 
 from apps.models.analysis import TechnicalSignal, TechnicalSignalKind
-from modules.technical import SignalKind
+from modules.technical.indicators import SignalKind
 from tests.helpers import NO_REVISION_REASON, head_sql, revision_files
 
 pytestmark = pytest.mark.skipif(not revision_files(), reason=NO_REVISION_REASON)

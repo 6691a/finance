@@ -12,7 +12,7 @@
 
 ## 분류는 채점과 같은 함수로 한다
 
-`thesis_domain.classify_outcome`을 그대로 쓴다. 임계(`FLAT_THRESHOLD_PCT`)는 TUNING 문서가
+`thesis.domain.classify_outcome`을 그대로 쓴다. 임계(`FLAT_THRESHOLD_PCT`)는 TUNING 문서가
 당기라고 적어 둔 손잡이라, 기저율과 채점이 다른 임계를 쓰면 두 숫자가 다른 세계를 말한다.
 
 버킷팅이 SQL이 아니라 여기 있는 이유도 채점 수식과 같다 — 경계값을 DB 없이 테스트한다.
@@ -23,7 +23,7 @@
 재백필마다 그것도 무효화해야 하고, 그 무효화를 빠뜨리면 옛 기준의 기저율이 조용히 나간다.
 
 **연결과 기준 날짜를 받아 한 번 계산하고 끝난다.** 여러 호출에 걸쳐 들고 돌 상태가 없어
-클래스가 아니라 함수다(`technical_signals.py`·`market_session.py`와 같은 형태).
+클래스가 아니라 함수다(`technical/signals.py`·`market_session.py`와 같은 형태).
 """
 
 import logging
@@ -34,9 +34,9 @@ from decimal import Decimal
 
 from modules.db import Connection
 from modules.sql import read_sql
-from modules.technical import RULE_VERSION
-from modules.thesis_domain import ThesisDirection, classify_outcome
-from modules.thesis_state import HorizonBaseRate, SignalBaseRate
+from modules.technical.indicators import RULE_VERSION
+from modules.thesis.domain import ThesisDirection, classify_outcome
+from modules.thesis.state import HorizonBaseRate, SignalBaseRate
 
 logger = logging.getLogger(__name__)
 

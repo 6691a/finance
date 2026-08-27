@@ -1,7 +1,7 @@
 """장전 전망(`pre_open`)에만 쓰는 것. `market_thesis_forecast` DAG가 부른다.
 
 여기 있는 것은 전부 "장 열리기 전"이라서 그런 것이다. 장후와 공유하지 않는다 —
-공유하면 다시 `if slot ==`이 생긴다. 슬롯을 모르는 것은 `thesis_common.py`에 있다.
+공유하면 다시 `if slot ==`이 생긴다. 슬롯을 모르는 것은 `thesis/common.py`에 있다.
 """
 
 import logging
@@ -11,8 +11,8 @@ from typing import Any
 
 from airflow.sdk import get_current_context
 
-from modules import thesis_common
-from modules.thesis_state import RunSlot, ThesisRunResult
+from modules.thesis import common
+from modules.thesis.state import RunSlot, ThesisRunResult
 from modules.utility import KST_TIMEZONE
 
 logger = logging.getLogger(__name__)
@@ -36,8 +36,8 @@ def as_of(run_date: date) -> datetime:
 class PreOpenForecast:
     """장전 전망 한 번. 연결과 세션 날짜를 들고 돈다.
 
-    `thesis_nxt_review.NxtAfterHoursReview`와 같은 모양이다 — 슬롯을 아는 것은 이 클래스이고,
-    슬롯을 모르는 조회·저장은 `thesis_common.ThesisRun`이 갖는다. 세 슬롯 중 하나만 클래스인
+    `thesis.nxt_review.NxtAfterHoursReview`와 같은 모양이다 — 슬롯을 아는 것은 이 클래스이고,
+    슬롯을 모르는 조회·저장은 `common.ThesisRun`이 갖는다. 세 슬롯 중 하나만 클래스인
     상태를 없애는 것이 이 전환의 목적이다.
 
     **기준 시각 계산(`as_of`·`PRE_OPEN_TIME`)은 모듈 함수로 남는다.** 날짜 하나를 받아 시각
@@ -45,7 +45,7 @@ class PreOpenForecast:
     """
 
     def __init__(self, connection: Any, *, run_date: date) -> None:
-        self._run = thesis_common.ThesisRun(connection, run_date=run_date, as_of_at=as_of(run_date))
+        self._run = common.ThesisRun(connection, run_date=run_date, as_of_at=as_of(run_date))
 
     @property
     def connection(self) -> Any:
@@ -73,7 +73,7 @@ class PreOpenForecast:
         if last_hour == 0 and last_day > 0:
             logger.info("no documents arrived in the last hour; nothing was waiting for assessment")
             return
-        raise thesis_common.ThesisNotReady(f"document assessment has not caught up to {as_of_at}")
+        raise common.ThesisNotReady(f"document assessment has not caught up to {as_of_at}")
 
     def macro_window_start(self) -> datetime:
         """매크로 창의 시작 = 전 개장일 마감.
@@ -81,12 +81,12 @@ class PreOpenForecast:
         "밤사이 해외 시장이 얼마나 움직였나"가 이 창이다. 장후의 창(당일 09:00부터)과 다르다.
         """
         previous = self._run.previous_open_day()
-        return thesis_common.close_at(previous or self._run.run_date)
+        return common.close_at(previous or self._run.run_date)
 
     def run(self, *, dag_run_id: str, try_number: int) -> int:
         """휴장 판정 → readiness guard → 관측 상태 → LLM → 저장. 저장한 행 수를 준다."""
-        from modules.thesis_domain import PREFETCHED_PAST_THESES, LlmRunKind
-        from modules.thesis_store import ThesisStore
+        from modules.thesis.domain import PREFETCHED_PAST_THESES, LlmRunKind
+        from modules.thesis.store import ThesisStore
 
         self._run.skip_unless_open()
         self.check_ready()
@@ -121,11 +121,11 @@ class PreOpenForecast:
 def build() -> ThesisRunResult:
     """Airflow 태스크 진입점. 컨텍스트를 읽어 전망 하나를 돌린다."""
     context = get_current_context()
-    run_date = thesis_common.resolve_run_date(context)
+    run_date = common.resolve_run_date(context)
     dag_run_id = str(context["dag_run"].run_id)
     # 재시도는 새 대화다. dag_run_id는 재시도에도 같아 이 칸이 없으면 구분할 수 없다.
     try_number = int(context["ti"].try_number)
 
-    with closing(thesis_common.connection()) as conn:
+    with closing(common.connection()) as conn:
         written = PreOpenForecast(conn, run_date=run_date).run(dag_run_id=dag_run_id, try_number=try_number)
     return ThesisRunResult(run_date=run_date, slot=SLOT, written=written)

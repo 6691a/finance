@@ -1,6 +1,6 @@
 """시장 추론 — 추론 한 건, 지평별 채점·해설, 근거, 본 과거 추론.
 
-vocabulary는 Airflow의 `modules/thesis_domain.py`에 값이 한 벌 더 있다. Airflow는 `apps/`를
+vocabulary는 Airflow의 `modules/thesis/domain.py`에 값이 한 벌 더 있다. Airflow는 `apps/`를
 보지 못해 import하지 못하므로 중복을 허용하고 `tests/models/test_analysis_models.py`가 대조한다.
 """
 
@@ -242,7 +242,7 @@ class Thesis(EntityBase):
     prob_down: Mapped[Decimal] = mapped_column(Numeric(5, 4), nullable=False, comment="하락 확률 0~1. 셋의 합은 1이다")
     prob_flat: Mapped[Decimal] = mapped_column(Numeric(5, 4), nullable=False, comment="횡보 확률 0~1. 셋의 합은 1이다")
     # 방향별 **조건부** 크기다. 확률을 이미 곱한 기대값이 아니다. 단일 부호값 한 칸이 아닌
-    # 이유는 Slack 결론 줄이 방향을 둘 보일 수 있어서다(`thesis_render._verdicts`).
+    # 이유는 Slack 결론 줄이 방향을 둘 보일 수 있어서다(`thesis.render._verdicts`).
     # nullable인 것은 이 컬럼이 생기기 전 행을 채울 방법이 없어서다 — 이 테이블은 사후
     # 갱신하지 않는다. `flat`은 정의가 이미 "±임계 안"이라 크기 칸을 두지 않는다.
     up_return_pct: Mapped[Decimal | None] = mapped_column(

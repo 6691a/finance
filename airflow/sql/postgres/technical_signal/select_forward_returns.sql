@@ -16,7 +16,7 @@
 --
 -- `rule_version`을 건다. 검출 규칙이 바뀌면 옛 사건은 다른 정의의 사건이다.
 --
--- 분류(up/flat/down)는 여기서 하지 않는다. `thesis_domain.classify_outcome`이 채점과 같은
+-- 분류(up/flat/down)는 여기서 하지 않는다. `thesis.domain.classify_outcome`이 채점과 같은
 -- 임계로 파이썬에서 한다 — 임계를 당길 때 기저율과 채점이 함께 따라가야 하고, 경계값을
 -- DB 없이 테스트해야 한다.
 --

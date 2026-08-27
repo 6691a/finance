@@ -75,7 +75,7 @@ THESIS_TIMEOUT_SECONDS = 1800.0
 # 출력이라 그 표기가 유일한 단서다.
 #
 # **산문을 내는 프롬프트 넷이 이 한 벌을 함께 쓴다.** 같은 문장을 네 곳에 적으면 반드시 어긋난다.
-# `expectation_extraction`은 뺀다 — 그쪽 숫자는 산문이 아니라 JSON 숫자 칸으로 가고 쉼표가 파싱을 깬다.
+# `expectation/extraction`은 뺀다 — 그쪽 숫자는 산문이 아니라 JSON 숫자 칸으로 가고 쉼표가 파싱을 깬다.
 #
 # **중괄호를 넣지 않는다.** `assessment.SYSTEM_PROMPT_TEMPLATE`이 `.format()` 템플릿이라
 # 중괄호가 섞이면 `KeyError`로 죽는다. `tests/modules/test_llm.py`가 그 자리를 지킨다.
@@ -122,7 +122,7 @@ def document_model() -> BaseChatModel:
 
 
 def expectation_model() -> BaseChatModel:
-    """이벤트 기대치 추출(`modules/expectation_extraction.py`)이 쓰는 모델.
+    """이벤트 기대치 추출(`modules/expectation/extraction.py`)이 쓰는 모델.
 
     문서 하나를 읽고 구조화 JSON을 내는 일이라 문서 태깅과 같은 모델로 시작한다. 함수를
     나눠 두는 이유도 같다 — 추출만 다른 모델로 옮기고 싶어질 때 이 함수만 고친다.
@@ -151,7 +151,7 @@ def briefing_model() -> BaseChatModel:
 
 
 def thesis_model() -> BaseChatModel:
-    """시장 추론(`modules/thesis_generation.py`·`thesis_outcomes.py`)이 쓰는 모델.
+    """시장 추론(`modules/thesis/generation.py`·`thesis/outcomes.py`)이 쓰는 모델.
 
     툴 왕복이 많은 작업이라 툴 호출 품질로 고른다. 브리핑 선별과 같은 `grok-4.6`이지만 함수를
     나눠 둔다 — 선별은 목록을 읽고 고르는 일이고 추론은 툴을 여러 번 돌며 가설을 세우는

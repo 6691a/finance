@@ -1,4 +1,4 @@
-"""애프터마켓 리뷰 DAG와 `modules/thesis_nxt_review.py`.
+"""애프터마켓 리뷰 DAG와 `modules/thesis/nxt_review.py`.
 
 추론의 알맹이는 `modules/thesis_*.py` 여섯에 있고 `tests/modules/test_thesis_pipeline.py`가 덮는다.
 여기 남은 것은 태스크 그래프, 이 슬롯의 시각 계산, 그리고 `NxtAfterHoursReview`다.
@@ -13,8 +13,9 @@ import pytest
 from airflow.exceptions import AirflowSkipException
 
 from dags import market_thesis_nxt_review as dag_module
-from modules import base_rate, thesis_common, thesis_nxt_review
-from modules.thesis_nxt_review import AfterHoursBar, NxtAfterHoursReview
+from modules.technical import base_rate
+from modules.thesis import common, nxt_review
+from modules.thesis.nxt_review import AfterHoursBar, NxtAfterHoursReview
 
 DAG = dag_module.market_thesis_nxt_review
 
@@ -101,7 +102,7 @@ def test_the_dag_owns_one_slot_only():
     assert DAG.schedule == "0 21 * * 1-5"
     assert str(DAG.timetable.timezone) == "Asia/Seoul"
     assert DAG.max_active_runs == 1
-    assert thesis_nxt_review.SLOT == "post_nxt_close"
+    assert nxt_review.SLOT == "post_nxt_close"
 
 
 def test_the_tasks_run_in_one_line():
@@ -113,14 +114,14 @@ def test_the_tasks_run_in_one_line():
 def test_retries_give_the_readiness_guard_room_to_wait():
     assert DAG.default_args["retries"] == 3
     assert DAG.default_args["retry_delay"] == timedelta(minutes=10)
-    assert DAG.task_dict["build_thesis"].execution_timeout == thesis_common.BUILD_TIMEOUT
+    assert DAG.task_dict["build_thesis"].execution_timeout == common.BUILD_TIMEOUT
 
 
 def test_the_dag_carries_its_display_metadata():
     assert DAG.dag_display_name.startswith("🧠")
     assert DAG.description
     assert DAG.doc_md
-    param = DAG.params.get_param(thesis_common.RUN_DATE_PARAM)
+    param = DAG.params.get_param(common.RUN_DATE_PARAM)
     assert param.description
     assert param.schema["title"]
 
@@ -130,17 +131,17 @@ def test_the_dag_carries_its_display_metadata():
 
 def test_the_as_of_time_is_the_nxt_close_not_the_run_time():
     """21:00에 돌지만 모델이 보는 것은 20:00 마감까지다."""
-    assert thesis_nxt_review.as_of(RUN_DATE) == datetime(2026, 8, 21, 11, 0, tzinfo=UTC)
+    assert nxt_review.as_of(RUN_DATE) == datetime(2026, 8, 21, 11, 0, tzinfo=UTC)
 
 
 def test_the_macro_window_starts_at_the_krx_close():
     """창의 시작은 15:30이다. 장후 슬롯의 창(당일 09:00부터)과 다르다."""
-    assert thesis_nxt_review.macro_window_start(RUN_DATE) == datetime(2026, 8, 21, 6, 30, tzinfo=UTC)
+    assert nxt_review.macro_window_start(RUN_DATE) == datetime(2026, 8, 21, 6, 30, tzinfo=UTC)
 
 
 def test_the_after_hours_window_covers_the_evening_only():
     """프리·주간 봉이 섞이면 애프터 등락이 하루 등락이 된다."""
-    start, end = thesis_nxt_review.after_hours_window(RUN_DATE)
+    start, end = nxt_review.after_hours_window(RUN_DATE)
 
     assert start == datetime(2026, 8, 21, 6, 30, tzinfo=UTC)
     assert end == datetime(2026, 8, 21, 11, 0, tzinfo=UTC)
@@ -214,7 +215,7 @@ def test_provisional_only_bars_wait_for_the_rest_backfill():
     rows = [_row("005930", final=False), _row("000660", final=False)]
     review = NxtAfterHoursReview(FakeConnection([WATCHED_ROWS, rows]), run_date=RUN_DATE)
 
-    with pytest.raises(thesis_common.ThesisNotReady, match="all provisional"):
+    with pytest.raises(common.ThesisNotReady, match="all provisional"):
         review.check_ready()
 
 
@@ -222,7 +223,7 @@ def test_the_guard_waits_for_every_settled_close():
     """확정 종가는 애프터 등락률의 분모다. 하나라도 빠지면 값을 만들 수 없다."""
     review = NxtAfterHoursReview(FakeConnection([WATCHED_ROWS, [_row("005930")], (1,)]), run_date=RUN_DATE)
 
-    with pytest.raises(thesis_common.ThesisNotReady, match="settled closes"):
+    with pytest.raises(common.ThesisNotReady, match="settled closes"):
         review.check_ready()
 
 
@@ -299,18 +300,18 @@ def test_run_hands_build_and_store_every_argument_it_requires(monkeypatch):
     2026-08-23에 형제 브랜치 둘을 합치며 `past`가 필수 인자로 생겼는데 이 호출은 그것을
     모른 채 합쳐져 매 실행 `TypeError`였다. 충돌 없이 합쳐진 자리라 테스트만이 잡는다.
     """
-    signature = inspect.signature(thesis_common.ThesisRun.build_and_store)
+    signature = inspect.signature(common.ThesisRun.build_and_store)
     received: dict[str, Any] = {}
 
     def fake_build_and_store(self: Any, **kwargs: Any) -> int:
         received.update(kwargs)
         return 2
 
-    monkeypatch.setattr(thesis_common.ThesisRun, "skip_unless_open", lambda self: None)
+    monkeypatch.setattr(common.ThesisRun, "skip_unless_open", lambda self: None)
     monkeypatch.setattr(NxtAfterHoursReview, "check_ready", lambda self: None)
     monkeypatch.setattr(NxtAfterHoursReview, "observed_state", lambda self: {"session": "2026-08-21"})
     monkeypatch.setattr(NxtAfterHoursReview, "targets", property(lambda self: ()))
-    monkeypatch.setattr(thesis_common.ThesisRun, "build_and_store", fake_build_and_store)
+    monkeypatch.setattr(common.ThesisRun, "build_and_store", fake_build_and_store)
 
     review = NxtAfterHoursReview(FakeConnection([]), run_date=RUN_DATE)
     written = review.run(dag_run_id="manual__1", try_number=1)
@@ -320,6 +321,6 @@ def test_run_hands_build_and_store_every_argument_it_requires(monkeypatch):
     signature.bind(review, **received)
     assert received["run_slot"].value == "post_nxt_close"
     # 기준 시각은 이제 인자가 아니라 `ThesisRun`의 상태다.
-    assert review._run.as_of_at == thesis_nxt_review.as_of(RUN_DATE)
+    assert review._run.as_of_at == nxt_review.as_of(RUN_DATE)
     # 리뷰는 해석이라 과거 예측 성적을 싣지 않는다. 장후 리뷰와 같다.
     assert received["past"] == {}

@@ -21,8 +21,8 @@ from datetime import date, datetime
 from itertools import pairwise
 from typing import TYPE_CHECKING
 
-from modules import technical
 from modules.briefing import blocks
+from modules.technical import indicators
 from modules.utility import KST_TIMEZONE
 
 if TYPE_CHECKING:
@@ -168,7 +168,7 @@ def render_daily_png(series: "DailyChartSeries") -> bytes:
     줄이 없는 것과 같은 이유다. 봉이 모자라 한 점도 못 내는 기간(예: 120봉이 안 될 때의
     120일선)은 범례에서도 뺀다. 그리지 않은 선을 범례가 있다고 말하면 안 된다.
     """
-    if len(series.bars) < technical.TECHNICAL_MIN_BARS:
+    if len(series.bars) < indicators.TECHNICAL_MIN_BARS:
         raise ChartError(f"not enough bars to draw indicators: {series.subject_code}")
 
     import matplotlib
@@ -182,7 +182,7 @@ def render_daily_png(series: "DailyChartSeries") -> bytes:
     matplotlib.rcParams["axes.unicode_minus"] = False
 
     closes = [bar.close for bar in series.bars]
-    indicators = technical.compute_series(closes)
+    computed = indicators.compute_series(closes)
 
     # 여기서부터는 그릴 구간만 본다. 지표는 위에서 전 구간으로 이미 계산했다.
     shown = series.bars[-DISPLAY_BARS:]
@@ -235,7 +235,7 @@ def render_daily_png(series: "DailyChartSeries") -> bytes:
     for period, color in SMA_LINES:
         # 이동평균도 전 구간으로 계산하고 그릴 구간만 자른다. 잘라 놓고 계산하면 화면 왼쪽
         # 끝에서 선이 늦게 시작해, 그 구간에 값이 없는 것처럼 보인다.
-        line = technical.sma_series([bar.close for bar in series.bars], period)[window]
+        line = indicators.sma_series([bar.close for bar in series.bars], period)[window]
         if all(value is None for value in line):
             continue
         price.plot(spots, line, color=color, linewidth=0.9, label=f"{period}일선", zorder=2)
@@ -245,31 +245,31 @@ def render_daily_png(series: "DailyChartSeries") -> bytes:
     price.yaxis.set_major_formatter(StrMethodFormatter("{x:,.0f}"))
 
     if with_indicators:
-        momentum.plot(spots, indicators.rsi14[window], color=RSI_COLOR, linewidth=1.0)
+        momentum.plot(spots, computed.rsi14[window], color=RSI_COLOR, linewidth=1.0)
         momentum.axhline(RSI_UPPER, color=RISE_COLOR, linewidth=0.6, linestyle="--")
         momentum.axhline(RSI_LOWER, color=FALL_COLOR, linewidth=0.6, linestyle="--")
         momentum.set_ylim(0, 100)
-        momentum.set_ylabel(f"RSI({technical.RSI_BARS})", fontsize=8)
+        momentum.set_ylabel(f"RSI({indicators.RSI_BARS})", fontsize=8)
 
         histogram = [
             None if macd is None or signal is None else macd - signal
-            for macd, signal in zip(indicators.macd[window], indicators.macd_signal[window], strict=True)
+            for macd, signal in zip(computed.macd[window], computed.macd_signal[window], strict=True)
         ]
         bar_colors = [RISE_COLOR if (value or 0) >= 0 else FALL_COLOR for value in histogram]
         trend.bar(spots, [value or 0 for value in histogram], color=bar_colors, width=CANDLE_WIDTH, label="OSC")
         trend.plot(
             spots,
-            indicators.macd[window],
+            computed.macd[window],
             color=MACD_COLOR,
             linewidth=0.8,
-            label=f"MACD({technical.MACD_FAST_BARS},{technical.MACD_SLOW_BARS})",
+            label=f"MACD({indicators.MACD_FAST_BARS},{indicators.MACD_SLOW_BARS})",
         )
         trend.plot(
             spots,
-            indicators.macd_signal[window],
+            computed.macd_signal[window],
             color=MACD_SIGNAL_COLOR,
             linewidth=0.8,
-            label=f"시그널({technical.MACD_SIGNAL_BARS})",
+            label=f"시그널({indicators.MACD_SIGNAL_BARS})",
         )
         trend.legend(fontsize=7, loc="upper left", framealpha=0.6)
         trend.set_ylabel("MACD", fontsize=8)

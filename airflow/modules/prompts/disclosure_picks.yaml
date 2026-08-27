@@ -13,7 +13,7 @@
 # - `$number_style`은 산문 숫자 표기 규칙 한 벌(`llm.NUMBER_STYLE`)이다. 산문을 내는
 #   프롬프트 넷이 같은 것을 쓴다.
 # - 문장을 고쳐도 **버전 칸이 없다.** 이 알림은 채점하지 않아 판을 가를 이유가 없다.
-#   추론 프롬프트(`thesis_domain.PROMPT_VERSION`)와 다른 점이다.
+#   추론 프롬프트(`thesis.domain.PROMPT_VERSION`)와 다른 점이다.
 
 system: |
   너는 방금 올라온 기업 공시에서 사람이 먼저 볼 것을 짚어 주는 편집자다.

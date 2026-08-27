@@ -1,4 +1,4 @@
-"""장전 전망 DAG와 `modules/thesis_forecast.py`.
+"""장전 전망 DAG와 `modules/thesis/forecast.py`.
 
 추론의 알맹이는 `modules/thesis_*.py` 여섯에 있고 `tests/modules/test_thesis_pipeline.py`가 덮는다.
 여기 남은 것은 `@dag`가 만든 객체를 읽어야 알 수 있는 것(스케줄, 태스크 그래프),
@@ -13,7 +13,7 @@ import pytest
 from airflow.exceptions import AirflowFailException, AirflowSkipException
 
 from dags import market_thesis_forecast as dag_module
-from modules import thesis_common, thesis_forecast
+from modules.thesis import common, forecast
 
 DAG = dag_module.market_thesis_forecast
 KST_MORNING = datetime(2026, 8, 20, 23, 35, tzinfo=UTC)  # KST 08:35
@@ -21,9 +21,9 @@ AS_OF = KST_MORNING
 RUN_DATE = date(2026, 8, 21)  # AS_OF의 KST 날짜
 
 
-def _run(connection: Any, run_date: date) -> thesis_common.ThesisRun:
+def _run(connection: Any, run_date: date) -> common.ThesisRun:
     """슬롯을 모르는 guard를 부르는 최소 객체."""
-    return thesis_common.ThesisRun(connection, run_date=run_date, as_of_at=AS_OF)
+    return common.ThesisRun(connection, run_date=run_date, as_of_at=AS_OF)
 
 
 def test_the_dag_owns_one_slot_only():
@@ -35,7 +35,7 @@ def test_the_dag_owns_one_slot_only():
     assert DAG.schedule == "35 8 * * 1-5"
     assert str(DAG.timetable.timezone) == "Asia/Seoul"
     assert DAG.max_active_runs == 1
-    assert thesis_forecast.SLOT == "pre_open"
+    assert forecast.SLOT == "pre_open"
 
 
 def test_the_tasks_run_in_one_line():
@@ -64,14 +64,14 @@ def test_the_dag_carries_its_display_metadata():
     assert DAG.dag_display_name.startswith("🧠")
     assert DAG.description
     assert DAG.doc_md
-    param = DAG.params.get_param(thesis_common.RUN_DATE_PARAM)
+    param = DAG.params.get_param(common.RUN_DATE_PARAM)
     assert param.description
     assert param.schema.get("title")
 
 
 def test_the_run_date_follows_the_kst_calendar():
     # UTC로 08-20 23:35은 KST로 08-21이다.
-    assert thesis_common.resolve_run_date({"logical_date": KST_MORNING}) == date(2026, 8, 21)
+    assert common.resolve_run_date({"logical_date": KST_MORNING}) == date(2026, 8, 21)
 
 
 def test_a_week_shaped_run_date_is_refused():
@@ -80,12 +80,12 @@ def test_a_week_shaped_run_date_is_refused():
     모양을 먼저 보지 않으면 운영자가 넣은 값과 다른 날을 조용히 추론한다.
     """
     with pytest.raises(AirflowFailException, match="YYYY-MM-DD"):
-        thesis_common.resolve_run_date({"params": {thesis_common.RUN_DATE_PARAM: "2026-W32"}})
+        common.resolve_run_date({"params": {common.RUN_DATE_PARAM: "2026-W32"}})
 
 
 def test_the_as_of_time_is_the_slot_time_not_the_wall_clock():
     # 장전 08:35 KST. 오후에 clear해 다시 돌려도 이 값이다.
-    assert thesis_forecast.as_of(date(2026, 8, 21)) == datetime(2026, 8, 20, 23, 35, tzinfo=UTC)
+    assert forecast.as_of(date(2026, 8, 21)) == datetime(2026, 8, 20, 23, 35, tzinfo=UTC)
 
 
 class FakeCursor:
@@ -119,10 +119,10 @@ class FakeConnection:
 def test_the_guard_passes_when_assessment_kept_up():
     connection = FakeConnection([(AS_OF - timedelta(minutes=5),)])
 
-    thesis_forecast.PreOpenForecast(connection, run_date=RUN_DATE).check_ready()
+    forecast.PreOpenForecast(connection, run_date=RUN_DATE).check_ready()
 
 
-# --- 세 슬롯이 함께 쓰는 guard (`thesis_common`) ----------------------------------
+# --- 세 슬롯이 함께 쓰는 guard (`common`) ----------------------------------
 
 
 def test_a_closed_day_is_skipped_not_failed():
@@ -137,7 +137,7 @@ def test_an_open_or_unknown_day_runs(row):
 
 
 def test_missing_settled_closes_wait_instead_of_skipping():
-    with pytest.raises(thesis_common.ThesisNotReady, match="settled closes"):
+    with pytest.raises(common.ThesisNotReady, match="settled closes"):
         _run(FakeConnection([(1,)]), date(2026, 8, 21)).require_settled_closes(["005930", "000660"])
 
 
@@ -149,23 +149,23 @@ def test_a_quiet_hour_passes_only_when_collection_is_alive():
     """
     alive = FakeConnection([(AS_OF - timedelta(hours=6),), (0, 40)])
 
-    thesis_forecast.PreOpenForecast(alive, run_date=RUN_DATE).check_ready()
+    forecast.PreOpenForecast(alive, run_date=RUN_DATE).check_ready()
 
 
 def test_a_dead_collector_does_not_pass_the_guard():
     dead = FakeConnection([(AS_OF - timedelta(days=3),), (0, 0)])
 
     # 근거 없는 추론이 조용히 나가는 것을 막는다.
-    with pytest.raises(thesis_common.ThesisNotReady, match="has not caught up"):
-        thesis_forecast.PreOpenForecast(dead, run_date=RUN_DATE).check_ready()
+    with pytest.raises(common.ThesisNotReady, match="has not caught up"):
+        forecast.PreOpenForecast(dead, run_date=RUN_DATE).check_ready()
 
 
 def test_a_backlog_does_not_pass_either():
     # 문서가 계속 들어오는데 평가가 밀린 상태. 기다려야 한다.
     behind = FakeConnection([(AS_OF - timedelta(hours=6),), (12, 300)])
 
-    with pytest.raises(thesis_common.ThesisNotReady):
-        thesis_forecast.PreOpenForecast(behind, run_date=RUN_DATE).check_ready()
+    with pytest.raises(common.ThesisNotReady):
+        forecast.PreOpenForecast(behind, run_date=RUN_DATE).check_ready()
 
 
 # --- PreOpenForecast ----------------------------------------------------------
@@ -173,16 +173,16 @@ def test_a_backlog_does_not_pass_either():
 
 def test_the_macro_window_starts_at_the_previous_open_day_close():
     """창의 시작은 전 개장일 15:30이다. 장후의 창(당일 09:00부터)과 다르다."""
-    forecast = thesis_forecast.PreOpenForecast(FakeConnection([(date(2026, 8, 20),)]), run_date=RUN_DATE)
+    pre_open = forecast.PreOpenForecast(FakeConnection([(date(2026, 8, 20),)]), run_date=RUN_DATE)
 
-    assert forecast.macro_window_start() == datetime(2026, 8, 20, 6, 30, tzinfo=UTC)
+    assert pre_open.macro_window_start() == datetime(2026, 8, 20, 6, 30, tzinfo=UTC)
 
 
 def test_an_unfilled_calendar_falls_back_to_the_run_date():
     """달력이 아직 없으면 당일 마감으로 둔다. 창이 없어 추론이 멈추는 것보다 낫다."""
-    forecast = thesis_forecast.PreOpenForecast(FakeConnection([None]), run_date=RUN_DATE)
+    pre_open = forecast.PreOpenForecast(FakeConnection([None]), run_date=RUN_DATE)
 
-    assert forecast.macro_window_start() == datetime(2026, 8, 21, 6, 30, tzinfo=UTC)
+    assert pre_open.macro_window_start() == datetime(2026, 8, 21, 6, 30, tzinfo=UTC)
 
 
 class FakeSubject:
@@ -210,33 +210,33 @@ def test_run_hands_build_and_store_every_argument_it_requires(monkeypatch):
     2026-08-23에 형제 브랜치 둘을 합치며 `past`가 필수 인자로 생겼는데 한 호출이 그것을
     모른 채 합쳐져 매 실행 `TypeError`였다. 충돌 없이 합쳐진 자리라 테스트만이 잡는다.
     """
-    from modules import thesis_store
+    from modules.thesis import store
 
-    signature = inspect.signature(thesis_common.ThesisRun.build_and_store)
+    signature = inspect.signature(common.ThesisRun.build_and_store)
     received: dict[str, Any] = {}
 
     def fake_build_and_store(self: Any, **kwargs: Any) -> int:
         received.update(kwargs)
         return 3
 
-    monkeypatch.setattr(thesis_common.ThesisRun, "skip_unless_open", lambda self: None)
-    monkeypatch.setattr(thesis_common.ThesisRun, "previous_open_day", lambda self: date(2026, 8, 20))
+    monkeypatch.setattr(common.ThesisRun, "skip_unless_open", lambda self: None)
+    monkeypatch.setattr(common.ThesisRun, "previous_open_day", lambda self: date(2026, 8, 20))
     monkeypatch.setattr(
-        thesis_common.ThesisRun, "observed_state", lambda self, session, targets: {"session": str(session)}
+        common.ThesisRun, "observed_state", lambda self, session, targets: {"session": str(session)}
     )
-    monkeypatch.setattr(thesis_forecast.PreOpenForecast, "check_ready", lambda self: None)
-    monkeypatch.setattr(thesis_store, "ThesisStore", FakeStore)
-    monkeypatch.setattr(thesis_common.ThesisRun, "build_and_store", fake_build_and_store)
+    monkeypatch.setattr(forecast.PreOpenForecast, "check_ready", lambda self: None)
+    monkeypatch.setattr(store, "ThesisStore", FakeStore)
+    monkeypatch.setattr(common.ThesisRun, "build_and_store", fake_build_and_store)
 
-    forecast = thesis_forecast.PreOpenForecast(FakeConnection([]), run_date=RUN_DATE)
-    written = forecast.run(dag_run_id="manual__1", try_number=1)
+    pre_open = forecast.PreOpenForecast(FakeConnection([]), run_date=RUN_DATE)
+    written = pre_open.run(dag_run_id="manual__1", try_number=1)
 
     assert written == 3
     # 필수 인자가 빠지면 여기서 `TypeError`다.
-    signature.bind(forecast._run, **received)
+    signature.bind(pre_open._run, **received)
     assert received["run_slot"].value == "pre_open"
     # 창의 시작은 전 개장일 마감이다. 장전만의 값이라 여기서 묶는다.
-    assert received["macro_window_start"] == thesis_common.close_at(date(2026, 8, 20))
+    assert received["macro_window_start"] == common.close_at(date(2026, 8, 20))
     # **장전만 과거 성적을 싣는다.** 리뷰 두 슬롯은 `past={}`다.
     assert received["past"] == {"005930": ()}
-    assert forecast._run.as_of_at == thesis_forecast.as_of(RUN_DATE)
+    assert pre_open._run.as_of_at == forecast.as_of(RUN_DATE)

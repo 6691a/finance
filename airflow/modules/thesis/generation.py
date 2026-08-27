@@ -3,7 +3,7 @@
 관측 상태와 툴 결과를 놓고 오늘의 방향을 확률로 적는다. 흐름은 LangGraph `StateGraph`이고
 그래프는 생성자에서 한 번 compile한다.
 
-저장은 여기 없다. 만든 초안을 쓰는 것은 `thesis_store.ThesisStore`다 — 조회와 저장의
+저장은 여기 없다. 만든 초안을 쓰는 것은 `thesis.store.ThesisStore`다 — 조회와 저장의
 트랜잭션 경계를 DAG이 쥐어야 하기 때문이다.
 """
 
@@ -65,10 +65,10 @@ from langgraph.graph.message import add_messages
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from modules import llm
-from modules.base_rate import FLAT_BASE_RATE_BARS
 from modules.llm import UnsupportedResponseFormat
 from modules.schema import SchemaError, json_object, response_format
-from modules.thesis_domain import (
+from modules.technical.base_rate import FLAT_BASE_RATE_BARS
+from modules.thesis.domain import (
     FLAT_THRESHOLD_PCT,
     MAX_EXPECTED_RETURN_PCT,
     MAX_MECHANISM_CHARS,
@@ -88,7 +88,7 @@ from modules.thesis_domain import (
     _shorten_to,
     kst_label,
 )
-from modules.thesis_state import (
+from modules.thesis.state import (
     INTRADAY_SLOTS,
     NxtObservedState,
     ObservedState,
@@ -96,7 +96,7 @@ from modules.thesis_state import (
     RunSlot,
     SameDayThesis,
 )
-from modules.thesis_toolbox import (
+from modules.thesis.toolbox import (
     ThesisToolbox,
     tool_node,
 )
@@ -481,7 +481,7 @@ class ThesisBuilder:
         나머지는 비운다. 저장된 채점이 아니라 봉에서 계산한 중간 경과라 `past_theses`와
         절을 나눈다 — 섞으면 모델이 채점된 값으로 읽는다.
 
-        **모양은 모델이 정한다**(`thesis_state`). 여기서 하는 것은 JSON으로 바꾸는 것뿐이다.
+        **모양은 모델이 정한다**(`thesis.state`). 여기서 하는 것은 JSON으로 바꾸는 것뿐이다.
         """
         subject_lines = "\n".join(f"- {subject.code} ({subject.label}, {subject.kind.value})" for subject in subjects)
         return [

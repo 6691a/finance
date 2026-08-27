@@ -1,8 +1,8 @@
-# 2단계 — 추론 에이전트: `airflow/modules/thesis_toolbox.py`·`thesis_generation.py`
+# 2단계 — 추론 에이전트: `airflow/modules/thesis/toolbox.py`·`thesis/generation.py`
 
 - 상위: [README.md](README.md)
 - 의존: [1-storage.md](1-storage.md)(저장할 테이블·insert SQL·채점 함수)
-- 산출물: `ThesisToolbox`(지금 `airflow/modules/thesis_toolbox.py`)·`ThesisBuilder`(`thesis_generation.py`)·저장(`thesis_store.py`) 추가(1단계가 만든
+- 산출물: `ThesisToolbox`(지금 `airflow/modules/thesis/toolbox.py`)·`ThesisBuilder`(`thesis/generation.py`)·저장(`thesis/store.py`) 추가(1단계가 만든
   채점 함수 옆), 툴 SQL 3개, `modules/llm.py`의 `thesis_model()`과 `invoke` tools+schema 가드,
   `tests/modules/test_thesis_pipeline.py`
 - 이 단계엔 DAG가 없다. 모듈과 테스트까지다. 운영 호출은 [3-dag-slack.md](3-dag-slack.md).
@@ -158,7 +158,7 @@ investigate → (tool_calls 있으면) tools → investigate → … → answer 
 - `tools`: tool_call마다 Toolbox 실행, `ToolMessage`로 대화에 추가. 왕복 상한
   `MAX_TOOL_ROUNDS = 3` — 넘으면 조사를 끝내고 답변으로 넘어간다. 왕복 하나가 모델 호출
   하나라 이 값이 빌드 한 번의 길이를 정한다. 바깥 울타리는 태스크의 `execution_timeout`
-  (`thesis_common.BUILD_TIMEOUT` 30분)이다.
+  (`thesis.common.BUILD_TIMEOUT` 30분)이다.
 - `answer`: 툴을 빼고 `response_format` 강제. 스키마 미지원 제공처는 검증 폴백
   (`UnsupportedResponseFormat` → 스키마 없이 재호출 + Pydantic 검증).
 - `repair`: 1회. 목록 밖 subject·ref만 남았거나 JSON이 깨졌을 때. 두 번째 실패는

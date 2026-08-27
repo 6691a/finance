@@ -9,8 +9,8 @@
   [9-intraday.md](9-intraday.md)(장중 슬롯의 기준가). [12-api.md](12-api.md)가 이 두 칸을
   응답에 싣는다 — 순서는 11 → 12지만 12는 칸이 비어도 뜬다.
 - 산출물(예정): `thesis` 컬럼 둘 + `thesis_outcome` 컬럼 둘과 CHECK 둘, 수기 리비전 하나,
-  `thesis_generation`의 출력 스키마·프롬프트 절, 크기 채점 순수 함수 하나,
-  `thesis_render`의 결론 줄, ops 브리핑 한 칸, SQL 넷, 테스트
+  `thesis.generation`의 출력 스키마·프롬프트 절, 크기 채점 순수 함수 하나,
+  `thesis.render`의 결론 줄, ops 브리핑 한 칸, SQL 넷, 테스트
 
 ## 0. 왜 — 확률만으로는 "얼마나"를 못 읽는다
 
@@ -98,7 +98,7 @@ ATR·일봉 range·표준편차가 없다. 그래서 위 문장이 `daily_histor
 
 ## 3. 렌더
 
-`thesis_render._thesis_section`의 결론 줄 하나만 바뀐다.
+`thesis.render._thesis_section`의 결론 줄 하나만 바뀐다.
 
 ```
 현재: *📉 하락 40%*
@@ -180,7 +180,7 @@ AND (predicted_return_pct IS NULL OR evaluated_at IS NOT NULL)
 | 원래 예측 셋 전부 | `thesis.up_return_pct`·`down_return_pct`·확률 셋 |
 | 왜 그렇게 예측했나 | `thesis.up_reasoning`·`down_reasoning`·`thesis_evidence` |
 
-식의 원본은 순수 함수 하나(`thesis_domain.return_error`)와 그 docstring이다. SQL에 두지
+식의 원본은 순수 함수 하나(`thesis.domain.return_error`)와 그 docstring이다. SQL에 두지
 않는 이유는 Brier 수식을 SQL이 아니라 Python에 둔 것과 같다 — DB 없이 경계값을 테스트한다.
 
 ### 4.6 "왜 틀렸나"는 해설이 말한다
@@ -223,11 +223,11 @@ ops 브리핑의 "추론 품질" 표(`briefing/ops.py`의 `THESIS_CALIBRATION`)�
 | --- | --- |
 | `apps/models/analysis/thesis.py` | `Thesis` 컬럼 둘 + `ck_thesis_return_pct_range`, `ThesisOutcome` 컬럼 둘 + CHECK 둘 |
 | `migrations/versions/<신규>.py` | 수기 리비전 하나. `down_revision = "e3b7c14da902"`. 두 테이블 + `thesis_precedent.precedent_id` 인덱스 |
-| `airflow/modules/thesis_domain.py` | `MAX_EXPECTED_RETURN_PCT = 30`, `PROMPT_VERSION = "7"`, 순수 함수 `return_error` |
-| `airflow/modules/thesis_generation.py` | `ThesisAnswer`·`ThesisDraft` 필드 둘, `## 크기` 절, 출력 예시 |
-| `airflow/modules/thesis_store.py` | 저장·조회 모양(`StoredThesis`) |
-| `airflow/modules/thesis_outcomes.py` | 채점에서 `return_error` 호출, 해설 프롬프트에 예측 크기·오차 줄 |
-| `airflow/modules/thesis_render.py` | 결론 줄 |
+| `airflow/modules/thesis/domain.py` | `MAX_EXPECTED_RETURN_PCT = 30`, `PROMPT_VERSION = "7"`, 순수 함수 `return_error` |
+| `airflow/modules/thesis/generation.py` | `ThesisAnswer`·`ThesisDraft` 필드 둘, `## 크기` 절, 출력 예시 |
+| `airflow/modules/thesis/store.py` | 저장·조회 모양(`StoredThesis`) |
+| `airflow/modules/thesis/outcomes.py` | 채점에서 `return_error` 호출, 해설 프롬프트에 예측 크기·오차 줄 |
+| `airflow/modules/thesis/render.py` | 결론 줄 |
 | `airflow/modules/briefing/ops.py` | `THESIS_CALIBRATION` 지평 0 행의 크기 오차 칸 |
 | `airflow/sql/postgres/thesis/insert.sql`·`select_by_run.sql` | 컬럼 둘 |
 | `airflow/sql/postgres/thesis_outcome/*` | 채점 upsert에 컬럼 둘, `select_pending_narratives.sql`에 지평 0 조인 |

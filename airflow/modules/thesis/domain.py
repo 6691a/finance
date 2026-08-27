@@ -1,8 +1,8 @@
 """추론의 어휘와 셈 — enum, 근거, 임계값, 채점 수식.
 
-**이 모듈은 LangChain·LangGraph를 import하지 않는다.** 슬롯 모듈과 `thesis_common.py`가
+**이 모듈은 LangChain·LangGraph를 import하지 않는다.** 슬롯 모듈과 `thesis/common.py`가
 `ThesisSubjectKind` 하나 때문에 LangChain 전체를 끌고 오던 것을 여기서 끊는다. 무거운 것은
-`thesis_toolbox`·`thesis_generation`·`thesis_outcomes`에 있고 그쪽은 늦게 import한다.
+`thesis.toolbox`·`thesis.generation`·`thesis.outcomes`에 있고 그쪽은 늦게 import한다.
 
 값은 `apps/models/analysis/thesis.py`의 같은 이름 enum과 같아야 한다. Airflow는 `apps/`를 보지
 못해 import하지 못하므로 값을 한 벌 더 둔다(중복 허용 + 테스트 대조 규칙).
@@ -60,12 +60,12 @@ from typing import Any
 
 from pydantic import AwareDatetime, BaseModel, ConfigDict, Field
 
-from modules import technical
-from modules.thesis_state import (
+from modules.technical import indicators
+from modules.thesis.state import (
     INTRADAY_SLOT_TIMES,
     RunSlot,
 )
-from modules.thesis_tools import (
+from modules.thesis.tools import (
     EvidenceDetail,
 )
 from modules.utility import KST_TIMEZONE
@@ -127,7 +127,7 @@ FLAT_THRESHOLD_PCT: dict[int, Decimal] = {
 MAX_EXPECTED_RETURN_PCT = Decimal(30)
 
 # 조사 왕복 상한. 넘으면 조사를 끝내고 답변 단계로 넘어간다. 왕복 하나가 모델 호출 하나라
-# 이 값이 빌드 한 번의 길이를 정한다(`thesis_common.BUILD_TIMEOUT`이 그 바깥 울타리다).
+# 이 값이 빌드 한 번의 길이를 정한다(`thesis.common.BUILD_TIMEOUT`이 그 바깥 울타리다).
 MAX_TOOL_ROUNDS = 3
 
 # 실행당 tool call 총 상한. 모델이 같은 툴을 반복해 부르는 것을 막는다. 왕복을 줄여도 이
@@ -247,7 +247,7 @@ MIN_HISTORY_DAYS = 1
 MAX_HISTORY_DAYS = 30
 
 # 지표 계산에 받는 봉 수. 모델에게 보여 주는 봉(`days`)과 다르다.
-TECHNICAL_LOOKBACK_BARS = technical.TECHNICAL_LOOKBACK_BARS
+TECHNICAL_LOOKBACK_BARS = indicators.TECHNICAL_LOOKBACK_BARS
 
 # 국내 종목의 하루 가격제한폭보다 큰 인접 종가 단절은 분할·병합이나 원천 이상을 의심한다.
 # 그 구간의 이동평균을 그대로 보여 주느니 지표를 내지 않는 편이 안전하다.
@@ -259,8 +259,8 @@ SIGNAL_HISTORY_DAYS = 90
 
 # 프롬프트가 지표를 읽는 기준. 검출 규칙과 **같은 상수**를 쓴다 — 두 곳에 숫자를 적으면
 # 반드시 어긋난다. 거래량 기준만 여기에 있다(검출에 쓰지 않아서다).
-RSI_OVERBOUGHT = technical.RSI_OVERBOUGHT
-RSI_OVERSOLD = technical.RSI_OVERSOLD
+RSI_OVERBOUGHT = indicators.RSI_OVERBOUGHT
+RSI_OVERSOLD = indicators.RSI_OVERSOLD
 VOLUME_HEAVY_RATIO = 1.5
 VOLUME_LIGHT_RATIO = 0.7
 class ThesisError(RuntimeError):
@@ -352,9 +352,9 @@ class ToolCallErrorKind(StrEnum):
 class ToolCallRecord(BaseModel):
     """툴 호출 하나의 기록. 그대로 `thesis_tool_call` 행이 된다.
 
-    **여기 두는 이유는 소비자가 둘이라서다.** 만드는 쪽은 `thesis_toolbox`인데 저장하는
-    쪽은 `thesis_store`이고, 그 둘 사이에 LangChain·LangGraph를 끌어오지 않으려면 모양이
-    가벼운 모듈에 있어야 한다(`thesis_state`가 같은 이유로 갈라져 있다).
+    **여기 두는 이유는 소비자가 둘이라서다.** 만드는 쪽은 `thesis.toolbox`인데 저장하는
+    쪽은 `thesis.store`이고, 그 둘 사이에 LangChain·LangGraph를 끌어오지 않으려면 모양이
+    가벼운 모듈에 있어야 한다(`thesis.state`가 같은 이유로 갈라져 있다).
 
     **frozen이 아니다.** 요청 shell을 먼저 만들고 실제 실행·전달 결과를 나중에 채우는
     두 단계라 그렇다. 이 모듈의 다른 모델과 다른 유일한 자리이고, 그 이유가 이것이다.

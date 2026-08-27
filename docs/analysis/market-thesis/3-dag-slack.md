@@ -4,8 +4,8 @@
 - 의존: [1-storage.md](1-storage.md), [2-agent.md](2-agent.md), [5-followup.md](5-followup.md)
 - 상태: 구현 완료 (2026-08-21). 운영 배포는 선행 조건 둘이 남아 있다 — 7절
 - 산출물: `airflow/dags/market_thesis_forecast.py`·`market_thesis_review.py`,
-  `airflow/modules/thesis_common.py`·`thesis_forecast.py`·`thesis_review.py`,
-  렌더링 함수(지금 `airflow/modules/thesis_render.py`), 두 DAG 테스트, 렌더링 테스트
+  `airflow/modules/thesis/common.py`·`thesis/forecast.py`·`thesis/review.py`,
+  렌더링 함수(지금 `airflow/modules/thesis/render.py`), 두 DAG 테스트, 렌더링 테스트
 - **여기서 처음 운영에 발송된다.** 테스트 발송은 `slack_channel_test`로만 한다(프로젝트 규칙).
 - `sync_graph` 태스크는 이 단계에 없다. [4-graph.md](4-graph.md)가 `build_thesis` 뒤에 붙인다.
 
@@ -40,7 +40,7 @@ SCHEDULE = MultipleCronTriggerTimetable(
   돌려도 장중 정보로 아침 예측을 덮지 않는다(event-time cutoff까지, README 1절).
 - DAG 인자: `max_active_runs=1`, `default_args={"retries": 3, "retry_delay": timedelta(minutes=10)}`.
   재시도 셋은 readiness guard가 선행 DAG의 지연을 기다리는 수단이다.
-- `build_thesis`만 `execution_timeout=thesis_common.BUILD_TIMEOUT`(30분)이다. 요청 타임아웃은
+- `build_thesis`만 `execution_timeout=thesis.common.BUILD_TIMEOUT`(30분)이다. 요청 타임아웃은
   모델 호출 하나만 막고 한 빌드는 모델을 여러 번(왕복 3 + 답변 + 교정) 부르므로 태스크
   울타리가 따로 있어야 한다. 채점·해설은 밀린 날짜를 따라잡느라 길어질 수 있어 두지 않는다.
 
@@ -148,7 +148,7 @@ subject마다 `section()`(결론·이유)과 `context()`(근거) 둘:
 - 승인·보류 상태 머신을 두지 않는다는 원칙 그대로, 인터랙티브 버튼이나 스레드 피드백
   수집기를 만들지 않고, "이상하면 고치라"는 안내도 달지 않는다 — 틀린 판단은 틀린 채로
   남는 것이 기록이다.
-- 렌더링 함수(`render_blocks`/`render_text`)는 추론 모듈이 갖는다(지금 `airflow/modules/thesis_render.py`)
+- 렌더링 함수(`render_blocks`/`render_text`)는 추론 모듈이 갖는다(지금 `airflow/modules/thesis/render.py`)
   (`briefing/market.py`가 자기 도메인 렌더링을 갖는 것과 같다 — thesis는 정기 리포트
   3부작과 다른 도메인이라 `briefing/` 아래 두지 않는다).
 - **Slack 한도**: 메시지당 블록 50개, `section` 텍스트 3,000자. 지금은 subject 4개 ×

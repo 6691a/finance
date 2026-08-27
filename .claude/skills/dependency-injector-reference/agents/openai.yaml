@@ -1,0 +1,4 @@
+interface:
+  display_name: "Dependency Injector Reference"
+  short_description: "Official Python Dependency Injector guidance"
+  default_prompt: "Use $dependency-injector-reference to verify this Dependency Injector design against official sources."

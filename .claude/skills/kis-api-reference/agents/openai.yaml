@@ -1,0 +1,7 @@
+interface:
+  display_name: "KIS API Reference"
+  short_description: "KIS Open API의 정확한 TR_ID와 공식 예제 조회"
+  default_prompt: "Use $kis-api-reference to verify the correct KIS API endpoint, TR_ID, parameters, and response fields for my request."
+
+policy:
+  allow_implicit_invocation: true

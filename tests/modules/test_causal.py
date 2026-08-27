@@ -3,7 +3,7 @@
 계약은 docs/analysis/market-causal-graph.md다. 이 파일은 LLM도 DB도 부르지 않는다.
 """
 
-from datetime import UTC, date, datetime
+from datetime import UTC, date, datetime, timedelta
 from typing import Any, Self
 
 import pytest
@@ -352,3 +352,48 @@ class TestFetchCandidates:
         found = candidates.fetch_candidates(FakeConnection(), self._targets(), self.WINDOW)
 
         assert found.refs == ()
+
+
+class TestVocabularyOptions:
+    """다음 주 프롬프트에 실릴 어휘 후보. 이것이 주를 잇는다(설계 §4)."""
+
+    WINDOW = domain.window_for(date(2026, 8, 17))
+
+    def test_events_are_narrowed_by_date_and_channels_are_not(self) -> None:
+        """사건은 수렴하지 않아 날짜로 좁히고, 경로는 수렴하므로 전부 준다."""
+        connection = FakeConnection(
+            results={
+                "FROM market_event": [(812, "한은 기준금리 인상", date(2026, 8, 12))],
+                "FROM market_channel": [(1, "할인율"), (2, "위험선호")],
+            }
+        )
+
+        events, channels = candidates.fetch_vocabulary(connection, self.WINDOW)
+
+        assert [option.node_id for option in events] == ["e:812"]
+        assert [option.node_id for option in channels] == ["c:1", "c:2"]
+
+    def test_the_event_lookback_is_passed_to_the_query(self) -> None:
+        """몇 주를 거슬러 보는지는 코드 상수가 정한다. SQL에 숫자를 적으면 어긋난다."""
+        connection = FakeConnection(results={"FROM market_event": []})
+
+        candidates.fetch_vocabulary(connection, self.WINDOW)
+
+        call = next(c for c in connection.calls if "FROM market_event" in c[0])
+        assert call[1]["since"] == self.WINDOW.week_start - timedelta(
+            weeks=domain.EVENT_LOOKBACK_WEEKS
+        )
+
+    def test_node_ids_are_prefixed_so_the_model_can_tell_them_apart(self) -> None:
+        """`e:`와 `c:`가 없으면 모델이 사건 id를 경로 칸에 넣는다."""
+        connection = FakeConnection(
+            results={
+                "FROM market_event": [(1, "사건", date(2026, 8, 12))],
+                "FROM market_channel": [(1, "경로")],
+            }
+        )
+
+        events, channels = candidates.fetch_vocabulary(connection, self.WINDOW)
+
+        assert events[0].node_id == "e:1"
+        assert channels[0].node_id == "c:1"

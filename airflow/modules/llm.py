@@ -130,6 +130,21 @@ def document_model() -> BaseChatModel:
     )
 
 
+def causal_model() -> BaseChatModel:
+    """주간 사후 인과 그래프(`modules/causal/generation.py`)가 쓰는 모델.
+
+    8주 프로토타입을 이 모델로 돌려 어휘 수렴과 사슬 깊이를 확인했다. 문서 태깅과 같은
+    모델이지만 함수를 나눠 두는 이유는 같다 — 이쪽만 다른 모델로 옮기고 싶어질 때 이 함수만
+    고친다.
+    """
+    return ChatOpenAI(
+        model="gpt-5.6-luna",
+        timeout=REQUEST_TIMEOUT_SECONDS,
+        # 재시도는 Airflow가 한다. 위 모듈 docstring 참고.
+        max_retries=0,
+    )
+
+
 def expectation_model() -> BaseChatModel:
     """이벤트 기대치 추출(`modules/expectation/extraction.py`)이 쓰는 모델.
 

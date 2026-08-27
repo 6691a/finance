@@ -13,7 +13,7 @@ from typing import Literal
 
 from langchain_core.language_models import BaseChatModel
 from langchain_core.messages import HumanMessage, SystemMessage
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, Field
 
 from modules import llm
 from modules.causal.domain import (
@@ -26,7 +26,9 @@ from modules.causal.domain import (
     CausalWindow,
     ChannelOption,
     EventOption,
+    NodeChoice,
     TargetReturns,
+    VerifiedPath,
 )
 from modules.prompt import read_prompt
 from modules.schema import json_object, response_format
@@ -36,23 +38,6 @@ logger = logging.getLogger(__name__)
 # import 시점에 읽고 검증한다. 칸이 빠지면 이 모듈을 쓰는 DAG이 DagBag 단계에서 죽고,
 # 그것이 실행 중에 프롬프트가 비는 것보다 낫다.
 PROMPTS = read_prompt("causal_graph")
-
-
-class NodeChoice(BaseModel):
-    """사건이나 경로 한 칸. 기존 것을 고르거나 새로 만든다 — 이 한 칸이 §4 전체를 담는다."""
-
-    existing_id: str = Field(
-        default="",
-        description="후보 목록에 있는 id(e:12 또는 c:3). 새로 만들면 빈 문자열",
-    )
-    new_name: str = Field(
-        default="",
-        description="새로 만들 이름. 기존을 고르면 빈 문자열",
-    )
-
-    @property
-    def is_new(self) -> bool:
-        return not self.existing_id and bool(self.new_name)
 
 
 class CausalPathAnswer(BaseModel):
@@ -84,22 +69,6 @@ class CausalAnswer(BaseModel):
     """한 대화가 낸 경로 전부."""
 
     paths: list[CausalPathAnswer] = Field(description=f"최대 {MAX_PATHS}개")
-
-
-class VerifiedPath(BaseModel):
-    """검증을 마친 경로 하나. 저장 코드는 이것만 본다."""
-
-    model_config = ConfigDict(frozen=True)
-
-    event: NodeChoice
-    event_date: str
-    channels: tuple[NodeChoice, ...]
-    target_kind: str
-    target_code: str
-    sign: str
-    confidence: str
-    reasoning: str
-    evidence_refs: tuple[str, ...]
 
 
 def vocabulary_block(

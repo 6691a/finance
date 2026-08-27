@@ -11,7 +11,7 @@ from typing import Any, Self
 import pytest
 
 from modules.causal import domain, store
-from modules.causal.generation import NodeChoice, VerifiedPath
+from modules.causal.domain import NodeChoice, VerifiedPath
 
 
 class FakeCursor:
@@ -195,6 +195,20 @@ class TestStorePaths:
                 llm_run_id=None,
                 require_reuse=True,
             )
+
+
+class TestWeekHasPaths:
+    """재실행 판정. 그 주에 행이 있으면 LLM을 다시 부르지 않는다(설계 §5.4)."""
+
+    def test_an_existing_week_is_reported(self) -> None:
+        connection = FakeConnection(results={"SELECT EXISTS": [(True,)]})
+
+        assert store.week_has_paths(connection, WINDOW.week_start) is True
+
+    def test_a_fresh_week_is_not(self) -> None:
+        connection = FakeConnection(results={"SELECT EXISTS": [(False,)]})
+
+        assert store.week_has_paths(connection, WINDOW.week_start) is False
 
 
 class TestSqlMatchesTheModel:

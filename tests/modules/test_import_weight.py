@@ -39,6 +39,9 @@ EXPECTATION_LIGHT_MODULES = (
 CAUSAL_LIGHT_MODULES = (
     "modules.causal.domain",
     "modules.causal.candidates",
+    "modules.causal.store",
+    # DAG 파일이 모듈 수준에서 끌고 오는 것. LLM은 태스크 안에서 늦게 import한다.
+    "modules.causal.run",
 )
 
 # 공시 알림 DAG이 모듈 수준에서 import하는 것. 강조를 고르는 층은 따로 있고 태스크가

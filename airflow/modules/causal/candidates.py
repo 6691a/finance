@@ -10,6 +10,7 @@ from collections.abc import Iterable, Sequence
 from datetime import datetime, time, timedelta
 
 from modules.causal.domain import (
+    EVENT_LOOKBACK_WEEKS,
     INDEX_TARGETS,
     INDICATOR_TARGETS,
     MACRO_TARGETS,
@@ -18,8 +19,10 @@ from modules.causal.domain import (
     CausalTarget,
     CausalTargetKind,
     CausalWindow,
+    ChannelOption,
     DisclosureCandidate,
     DocumentCandidate,
+    EventOption,
     SignalCandidate,
     TargetReturns,
 )
@@ -47,6 +50,9 @@ RETURN_UNITS: dict[CausalTargetKind, CausalReturnUnit] = {
 
 # 실현 등락 조회의 끝. 반응 주 금요일이 아니라 넉넉히 잡아야 휴장이 겹쳐도 T+5가 잡힌다.
 RETURNS_SCAN_DAYS = 15
+
+RECENT_EVENTS = read_sql("postgres", "market_event", "select_recent.sql")
+ALL_CHANNELS = read_sql("postgres", "market_channel", "select_all.sql")
 
 DOCUMENTS = read_sql("postgres", "causal", "select_documents.sql")
 DISCLOSURES = read_sql("postgres", "causal", "select_disclosures.sql")
@@ -208,3 +214,33 @@ def fetch_candidates(
         )
 
     return CandidateSet(documents=documents, disclosures=disclosures, signals=signals)
+
+
+def fetch_vocabulary(
+    connection: Connection,
+    window: CausalWindow,
+) -> tuple[tuple[EventOption, ...], tuple[ChannelOption, ...]]:
+    """프롬프트에 후보로 실을 어휘. **이것이 서로 다른 주의 그래프를 잇는다**(설계 §4).
+
+    **사건과 경로에 다른 장치를 쓰지 않는다.** 둘 다 좁힐 방법이 있어서다 — 경로는 수렴해서
+    좁고, 사건은 날짜로 좁는다. 임베딩도 사후 병합도 두지 않는 근거가 그것이다.
+    """
+    with connection.cursor() as cursor:
+        cursor.execute(
+            RECENT_EVENTS,
+            {
+                "since": window.week_start - timedelta(weeks=EVENT_LOOKBACK_WEEKS),
+                "until": window.week_end,
+            },
+        )
+        events = tuple(
+            EventOption(node_id=f"e:{row[0]}", title=row[1], occurred_on=row[2])
+            for row in cursor.fetchall()
+        )
+
+    with connection.cursor() as cursor:
+        cursor.execute(ALL_CHANNELS)
+        channels = tuple(
+            ChannelOption(node_id=f"c:{row[0]}", name=row[1]) for row in cursor.fetchall()
+        )
+    return events, channels

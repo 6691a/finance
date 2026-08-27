@@ -12,8 +12,12 @@ import logging
 from collections.abc import Mapping, Sequence
 from datetime import date
 
-from modules.causal.domain import MAX_NEW_CHANNELS, CausalWindow, TargetReturns
-from modules.causal.generation import VerifiedPath
+from modules.causal.domain import (
+    MAX_NEW_CHANNELS,
+    CausalWindow,
+    TargetReturns,
+    VerifiedPath,
+)
 from modules.db import TransactionalConnection
 from modules.sql import read_sql
 
@@ -23,6 +27,7 @@ EVENT_UPSERT = read_sql("postgres", "market_event", "upsert.sql")
 CHANNEL_UPSERT = read_sql("postgres", "market_channel", "upsert.sql")
 PATH_INSERT = read_sql("postgres", "market_causal_path", "insert.sql")
 STEP_INSERT = read_sql("postgres", "market_causal_step", "insert.sql")
+WEEK_EXISTS = read_sql("postgres", "market_causal_path", "exists_by_week.sql")
 
 
 class VocabularyDriftError(RuntimeError):
@@ -30,6 +35,18 @@ class VocabularyDriftError(RuntimeError):
 
     정규화가 깨졌다는 뜻이고, 조용히 넘어가면 다음 주에 어휘가 두 배가 된다(설계 §6).
     """
+
+
+def week_has_paths(connection: TransactionalConnection, week_start: date) -> bool:
+    """그 주에 경로가 이미 있나. **재실행 판정이 이것이다**(설계 §5.4).
+
+    `input_hash`로 판정하지 않는다 — 그것은 감사 값이라, 후보가 조금 달라진 재실행이 같은
+    주에 행을 한 벌 더 만들면 안 된다.
+    """
+    with connection.cursor() as cursor:
+        cursor.execute(WEEK_EXISTS, {"week_start": week_start})
+        row = cursor.fetchone()
+    return bool(row and row[0])
 
 
 def chain_key(channel_ids: Sequence[int]) -> str:

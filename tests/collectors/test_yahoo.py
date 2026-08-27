@@ -812,6 +812,31 @@ def test_store_daily_writes_rows_in_the_upsert_column_order():
     assert source_record_id == SOURCE_RECORD_ID
 
 
+def test_store_daily_leaves_the_contract_code_null_for_continuous_futures():
+    """Yahoo 선물(ES=F)은 연속 심볼이라 실제 월물이 없다.
+
+    KIS 국내선물이 같은 테이블에 실제 월물을 남기므로, 여기서 빈 문자열이나 심볼 이름으로
+    메우면 "월물이 없다"와 "월물이 이것이다"가 같아진다.
+    """
+    connection = FakeConnection()
+
+    store_daily_bars(connection, [daily_response_for(QuoteSymbol.SP500_FUT)])
+
+    rows = [
+        parameters
+        for statement, parameters in connection.recorded_cursor.calls
+        if "index_future_daily (" in statement
+    ]
+    assert len(rows) == 2
+    provider, symbol, business_date, *_ohlcv, contract_code, source_record_id = rows[0]
+    assert (provider, symbol) == ("yahoo", "SP500_FUT")
+    # 칸이 열이라는 것 자체가 계약이다. 아홉이면 여기서 풀리지 않는다.
+    assert len(_ohlcv) == 5
+    assert business_date == date(2026, 1, 14)
+    assert contract_code is None
+    assert source_record_id == SOURCE_RECORD_ID
+
+
 def test_store_daily_keeps_a_source_record_when_a_symbol_fails():
     connection = FakeConnection()
     broken = daily_response_for(QuoteSymbol.SOX, body=daily_chart_payload(timezone_name=None))

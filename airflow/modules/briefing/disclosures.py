@@ -18,6 +18,15 @@
 실적 금액과 전년 대비는 `earnings_fact`에서 읽어 `year_over_year`가 계산한다. 모델은
 산문만 쓴다. 숫자 비교에 LLM을 쓰지 않는 것은 `stock_event_*` 계열과 같은 규칙이다.
 
+**기간 기준을 반드시 밝힌다.** 같은 공시가 3개월치와 누계를 함께 주고 그 둘은 값이 크게
+다르다(삼성전자 2026 반기보고서: 3개월 매출 171조, 누계 305조). 숫자만 그리면 읽는 사람도
+모델도 어느 쪽인지 못 가른다.
+
+**어느 기준에 전년 대비가 있는지는 공시 종류가 정한다.** 정기보고서는 OpenDART가
+`frmtrm_amount`(전년 3개월)를 주지 않아 누계에만 전년값이 있고, 잠정실적 공시는 원문 표에
+두 기준의 전년값이 다 있다(2026-08-27 실측). 그래서 **여기서 기준 하나를 고르지 않고**
+둘 다 싣고 전년 대비는 있는 줄에만 붙인다.
+
 ## 0건이면 아무 것도 하지 않는다
 
 문서 브리핑은 0건에도 보내 생존 신호를 겸하지만, 여기서 그러면 하루의 대부분이
@@ -57,6 +66,13 @@ METRIC_LABELS = {"revenue": "매출", "operating_profit": "영업이익", "net_i
 # 재무제표 범위 표기. 연결이 기본이라 별도일 때만 화면에 밝힌다.
 SCOPE_LABELS = {"CFS": "연결", "OFS": "별도"}
 
+# 기간 기준 표기. **비워 두지 않는다** — 숫자만 보면 3개월치와 누계가 같아 보인다.
+# 삼성전자 2026 반기보고서가 3개월 171조, 누계 305조였다(2026-08-27 실측).
+BASIS_LABELS = {"period": "3개월", "cumulative": "누계"}
+
+# 화면에 그리는 기준 순서. 3개월이 먼저다 — 그것이 이번에 새로 생긴 값이다.
+BASIS_ORDER = ("period", "cumulative")
+
 # 강조 실패 사유를 채널에 적는 길이. 원문은 로그에 그대로 남는다.
 # Pydantic·LangChain 예외는 수백 자에 URL까지 달고 오는데, 그걸 그대로 실으면 공시보다
 # 오류가 길어진다. 사람이 "강조가 왜 없나"를 알 만큼만 싣는다(2026-08-27 실측).
@@ -91,6 +107,7 @@ class EarningsLine(BaseModel):
 
     metric: str
     statement_scope: str
+    amount_basis: str
     current_amount: Decimal
     prior_year_amount: Decimal | None = None
 
@@ -165,8 +182,9 @@ def collect_batch(
                     EarningsLine(
                         metric=fact[1],
                         statement_scope=fact[2],
-                        current_amount=fact[4],
-                        prior_year_amount=fact[5],
+                        amount_basis=fact[3],
+                        current_amount=fact[5],
+                        prior_year_amount=fact[6],
                     )
                 )
 
@@ -238,6 +256,8 @@ def pick_input(batch: DisclosureBatch) -> str:
                     {
                         "metric": line.metric,
                         "statement_scope": line.statement_scope,
+                        # 기준을 빼면 모델이 3개월치를 누계로 읽고 산문에 그렇게 쓴다.
+                        "amount_basis": BASIS_LABELS.get(line.amount_basis, line.amount_basis),
                         "amount": format_amount(line.current_amount),
                         "year_over_year": _yoy_text(line),
                     }
@@ -299,8 +319,7 @@ def _disclosure_text(disclosure: NewDisclosure, reason: str | None) -> str:
         f"{mark}*{disclosure.company_name}* `{disclosure.stock_code}`",
         f"<{disclosure.viewer_url}|{disclosure.report_name}>",
     ]
-    if disclosure.earnings:
-        lines.append(" · ".join(_earnings_text(line) for line in disclosure.earnings))
+    lines += _earnings_lines(disclosure.earnings)
     if reason:
         lines.append(reason)
     if disclosure.remarks:
@@ -308,6 +327,26 @@ def _disclosure_text(disclosure: NewDisclosure, reason: str | None) -> str:
     local = disclosure.detected_at.astimezone(KST_TIMEZONE)
     lines.append(f"_최초 감지 {local:%m/%d %H:%M} KST · 접수 {disclosure.receipt_date}_")
     return "\n".join(lines)
+
+
+def _earnings_lines(earnings: Sequence[EarningsLine]) -> list[str]:
+    """기간 기준마다 한 줄. **기준을 안 적으면 3개월치가 누계로 읽힌다.**
+
+    한 줄에 지표 셋을 넣고 기준은 줄머리에 둔다. 지표마다 기준을 붙이면 같은 낱말이
+    세 번 나오고 줄이 두 배로 길어진다.
+    """
+    lines = []
+    for basis in BASIS_ORDER:
+        rows = [line for line in earnings if line.amount_basis == basis]
+        if not rows:
+            continue
+        label = BASIS_LABELS.get(basis, basis)
+        lines.append(f"`{label}` " + " · ".join(_earnings_text(line) for line in rows))
+    # 아는 기준 밖의 값이 생기면 조용히 빠지지 않게 그대로 그린다.
+    unknown = [line for line in earnings if line.amount_basis not in BASIS_ORDER]
+    if unknown:
+        lines.append(" · ".join(f"`{line.amount_basis}` {_earnings_text(line)}" for line in unknown))
+    return lines
 
 
 def _earnings_text(line: EarningsLine) -> str:
@@ -318,5 +357,6 @@ def _earnings_text(line: EarningsLine) -> str:
 
 
 def _yoy_text(line: EarningsLine) -> str | None:
+    """`+1,191.4%`. 네 자리 이상이면 천 단위 쉼표를 찍는다(`llm.NUMBER_STYLE`과 같은 규칙)."""
     change = year_over_year(line.current_amount, line.prior_year_amount)
-    return None if change is None else f"{change:+.1f}%"
+    return None if change is None else f"{change:+,.1f}%"

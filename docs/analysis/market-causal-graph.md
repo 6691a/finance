@@ -6,6 +6,12 @@
   선반영 표현(§9)은 [정책금리 수집](../collection/policy-rate-collection.md)이 선행 조건이다.
 - 목표: 한 주에 일어난 사건이 어떤 경로로 어떤 대상에 닿았는지를 LLM이 사후에 정리해
   **노드와 엣지로 누적**한다. 주가 쌓이면서 같은 노드를 공유해 다중 홉 탐색이 가능해진다.
+- 산출물: `apps/models/analysis/causal.py`, 수기 리비전 하나,
+  `airflow/modules/causal/`(`domain.py`·`candidates.py`·`generation.py`·`store.py`),
+  `airflow/modules/prompts/causal_graph.yaml`, `airflow/sql/postgres/market_causal_*/`와
+  `market_event/`·`market_channel/`의 SQL, `airflow/dags/market_causal_weekly.py`,
+  `tests/modules/test_causal.py`·`tests/dags/test_market_causal_weekly.py`·
+  `tests/migrations/test_causal_schema.py`. 자리와 이유는 §10
 - 관련 원본:
   [시장 추론](market-thesis/README.md),
   [그래프 projection](market-thesis/4-graph.md),
@@ -63,8 +69,10 @@ W+2      월                ← 여기서 분석한다. 반응이 확정돼 있�
 ```
 
 - `week_start`는 `W`의 월요일(KST)이다. 자연키의 축이다.
-- `as_of_at`은 `W+1` 금요일 KRX 종가 확정 시각이다. 기존 event-time cutoff 규칙을 그대로
-  쓴다 — 이 시각 이후에 감지·평가·갱신된 행은 보지 않는다.
+- `as_of_at`은 **`W+1` 금요일 KST 15:40**이다(KRX 정규장 종가 확정 뒤). 기존 event-time
+  cutoff 규칙을 그대로 쓴다 — 이 시각 이후에 감지·평가·갱신된 행은 보지 않는다. 실행은
+  `W+2` 월요일이지만 그 사이 주말에 들어온 문서를 보지 않는 것이 이 값의 목적이다.
+  `W+1` 금요일이 KRX 휴장이면 그 주의 마지막 거래일 15:40이다.
 - 스케줄은 `0 7 * * 1`(KST 월 07:00 = UTC 일 22:00)이다. 장과 무관하므로 시각 자체에
   의미는 없고, 주말 뒤 첫 실행이라는 것만 지킨다.
 - T+5는 `thesis_outcome`이 이미 쓰는 KRX 영업일 5일과 같은 값이다. 새 개념이 아니다.
@@ -165,7 +173,7 @@ W+2      월                ← 여기서 분석한다. 반응이 확정돼 있�
 | `market_causal_path` | 경로 하나의 헤더. 사건·대상·방향·실현값 |
 | `market_causal_step` | 그 경로의 단계 하나. `(path_id, position, channel_id)` |
 
-**`market_event`**
+**`market_event`** — 자연키 `(title, occurred_on)`
 
 | 컬럼 | 뜻 |
 | --- | --- |
@@ -176,12 +184,19 @@ W+2      월                ← 여기서 분석한다. 반응이 확정돼 있�
 `occurred_on`이 있어야 §4의 자라는 어휘가 성립한다. 날짜 없이 제목만으로 후보를 좁히면
 목록이 매주 커지고 결국 프롬프트에 못 싣는다.
 
-**`market_channel`**
+**자연키에 날짜가 들어가는 이유는 같은 제목이 다른 날에 다시 일어나기 때문이다** —
+`미국 반도체 지수 하락`은 8주 프로토타입에서 두 번 나왔고 다른 사건이다. 반대로 같은 날
+같은 제목이면 같은 사건이라 `ON CONFLICT DO NOTHING`으로 합친다.
+
+**`market_channel`** — 자연키 `(name)`
 
 | 컬럼 | 뜻 |
 | --- | --- |
-| `name` | 경로 이름. `할인율`, `원화 환산`, `재고 순환` |
+| `name` | 경로 이름. `할인율`, `위험선호`, `수급` |
 | `first_seen_week` | 처음 만든 주 |
+
+채널에는 날짜가 없다. `할인율`은 언제 나와도 같은 `할인율`이고, **그것이 주를 잇는 장치**다
+(§8.1). `first_seen_week`은 어휘가 언제 자랐는지를 보는 값이지 키가 아니다.
 
 **`market_causal_path`**
 
@@ -198,7 +213,16 @@ W+2      월                ← 여기서 분석한다. 반응이 확정돼 있�
 | `return_week_pct` | **그 주** 대상 등락. 경로가 작용했다고 주장하는 창이다 |
 | `return_t1_pct` | 주 종료 다음 KRX 거래일까지의 등락 |
 | `return_t5_pct` | 주 종료 +5 KRX 거래일까지의 등락 |
+| `input_hash` | 이 경로를 만든 실행의 입력 해시(§5.4). 경로마다 같은 값이 반복된다 |
 | `llm_run_id` | FK → `thesis_llm_run` |
+
+**`input_hash`는 자연키에 넣지 않는다.** 넣으면 후보가 조금 달라진 재실행이 같은 주에
+행을 한 벌 더 만든다. 재실행 판정은 §5.4대로 **"그 주에 행이 있나"**이고 `input_hash`는
+"어떤 입력으로 만들었나"를 남기는 감사 값이다. 경로마다 반복되는 것은 알고 두는 중복이며,
+실행 단위 테이블이 따로 필요해질 때 그리로 옮긴다.
+
+`llm_model`·`prompt_version`은 여기 두지 않는다. `thesis_llm_run`이 이미 갖고 있고
+`llm_run_id`로 이어진다.
 
 `confidence`는 `MarketEpisode` 0절의 "검증 없이 원인이라 단정하지 않는다"를 엣지 속성으로
 옮긴 것이다. `observed`는 같은 기간에 함께 관찰됐다는 뜻이고 `plausible`은 해석이다.
@@ -365,7 +389,7 @@ Channel은 수렴해서 좁고, Event는 날짜로 좁는다.
 - `target`이 `instrument`·`indicator_series` 마스터 밖이면 저장 전에 버린다.
   `document_instrument` 태깅과 같은 규칙이다.
 - `evidence_refs`는 툴 결과 레지스트리로 검증한다. 목록 밖 ref는 버리고 건수를 남긴다 —
-  `ThesisBuilder._verified_claims`가 이미 하는 그대로다. 레지스트리에는 후보 목록의 ref와
+  `ThesisBuilder._known_claims`(`thesis/generation.py`)가 이미 하는 그대로다. 레지스트리에는 후보 목록의 ref와
   툴이 돌려준 ref가 함께 들어간다.
 - 상한(`MAX_PATHS`·`MAX_REASONING_CHARS`)은 코드 상수가 원본이고 `Field(description=…)`에
   f-string으로 싣는다.
@@ -375,19 +399,45 @@ Channel은 수렴해서 좁고, Event는 날짜로 좁는다.
 
 ### 5.4 재현
 
-`input_hash` = `week_start` + 대상 목록 + **후보 ref 정렬 목록** + `prompt_version`.
-툴 호출은 들어가지 않는다 — 재현의 앵커는 후보이고, 툴은 원장이 추적한다.
+**재실행 판정은 `week_start`다.** 그 주에 `market_causal_path` 행이 이미 있으면 LLM을 다시
+부르지 않고 기존 행을 읽어 다음 태스크로 넘긴다. 첫 성공본 불변 그대로이고, 같은 규칙이
+`thesis`에 이미 있다.
 
-같은 `input_hash`면 LLM을 다시 부르지 않는다. 첫 성공본 불변 그대로다.
+`input_hash`는 판정이 아니라 **감사 값**이다. 무엇으로 만들었는지를 남긴다.
+
+```
+input_hash = sha256(
+    week_start.isoformat()
+  + "|" + ",".join(정렬된 대상 코드)
+  + "|" + ",".join(정렬된 후보 ref)
+  + "|" + PROMPT_VERSION
+)
+```
+
+- **정렬한다.** 후보 조립 SQL의 반환 순서가 바뀌어도 같은 입력이면 같은 해시여야 한다.
+- **툴 호출은 들어가지 않는다.** 재현의 앵커는 후보이고, 툴이 무엇을 더 봤는지는
+  `thesis_tool_call` 원장이 추적한다.
+- **실행 시각과 `dag_run_id`는 넣지 않는다.** 넣으면 매번 달라져 감사 값의 뜻이 사라진다.
+- 조립은 순수 함수(`causal/domain.py`)에 두고 DB 없이 테스트한다.
+
+**해시가 달라도 그 주에 행이 있으면 다시 돌지 않는다.** 입력이 달라졌다는 사실은 새 실행의
+`thesis_llm_run`이 아니라 로그로 남고, 다시 돌릴지는 사람이 정한다 — 자동으로 덮으면
+첫 판단이 사라진다.
 
 ## 6. 실패와 검증
 
 - **실패 판정은 단일 요청 형태다.** 대상 아홉이 대화 하나라 항목별로 나눌 것이 없다.
-  수집기 예외를 그대로 올리고 `LlmError` → `AirflowFailException`, `ConnectionError` →
-  재시도로 가른다. 그 판단은 DAG가 한다.
+  모듈은 예외 종류를 그대로 올리고 DAG가 `LlmError` → `AirflowFailException`,
+  `ConnectionError` → 재시도로 가른다. **중간 층이 예외를 문자열로 바꾸지 않는다** —
+  `document_assessment_hourly`가 그렇게 해서 DAG가 판단할 것을 잃은 적이 있다.
 - **`sign`과 실제 등락이 엇갈려도 버리지 않는다.** `return_*`는 SQL이 채우고, 모델이
   `down`이라 한 경로가 +5%로 끝났으면 그 사실이 그대로 남는다. 틀린 추론을 고치지 않는 것과
   같은 이유다 — 판을 비교할 재료가 그것이다.
+- **실현값은 저장할 때 함께 채운다. 나중에 채우는 태스크를 두지 않는다.** `W+2` 월요일이면
+  `return_week_pct`·`return_t1_pct`·`return_t5_pct`가 전부 확정돼 있다(§2). `thesis_outcome`이
+  지평마다 나중에 채우는 것과 다른 점이 이것이고, **그래서 채점 DAG가 필요 없다.**
+  값이 하나라도 없으면(휴장으로 T+5가 안 참 등) 그 대상의 경로를 저장하지 않고 건수를
+  실패 메시지에 싣는다 — NULL로 두면 나중에 "안 쟀다"와 "잴 수 없었다"가 구분되지 않는다.
 - **어휘 폭주 가드.** `MAX_NEW_CHANNELS = 3`(실행당). 초과분 경로는 저장하지 않고 건수를
   로그와 원장에 남긴다. 새 Channel이 **하나도 기존과 맞지 않으면**(전부 `new`) 태스크를
   실패시킨다 — 정규화가 깨졌다는 뜻이고, 조용히 넘어가면 다음 주에 어휘가 두 배가 된다.
@@ -421,6 +471,14 @@ API는 `apps/api/`의 기존 층 구조를 따른다(`routes/` → `service/` �
 **체인은 투영에서 펴진다.** 헤더 한 행과 단계 N행이 엣지 N+1개가 된다:
 `Event → step[1] → … → step[N] → Target`. 같은 두 노드를 잇는 엣지가 여러 경로에서 나오면
 응답에서 하나로 합치고, 그 연결을 쓴 경로 수를 엣지 속성으로 싣는다 — 굵기로 그릴 값이다.
+
+**깊이 상한 `MAX_QUERY_DEPTH = 6`은 조회 쪽 코드 상수다**(§3.1.1). 재귀 CTE에 그 값을 걸고
+**API 파라미터로 열어 주지 않는다** — 채널 그래프에 사이클이 있어서 호출자가 큰 값을 주면
+응답이 폭발한다. 값을 올려야 할 때는 §3.1.1대로 포화점을 다시 재고 상수를 고친다.
+
+**이 절은 §9.4의 3단계에서 만들지 않는다.** 12단계 API 배포가 14단계 화면과 묶여 있어
+(`market-thesis/README.md`) 부를 클라이언트가 아직 없다. 그래프가 몇 주 쌓인 뒤 화면과
+함께 낸다. 그때까지 조회는 `psql`이다.
 
 ## 8. 프로토타입 결과 (2026-08-27)
 
@@ -565,9 +623,115 @@ post_move = 대상 변화 [D,   D+5]
 
 1. [정책금리 수집](../collection/policy-rate-collection.md) — 별개 태스크
 2. 국내 금리 이력 백필 — 별개 태스크, 1과 함께 해야 값어치가 있다
-3. 이 문서 §1~§8 구현
+3. 이 문서 §1~§8 구현 — 자리와 파일은 §10
 4. §9.3의 ①~③
 
 **3과 4를 같은 배포에 넣지 않는다.** 시차 칸을 채우려면 정책금리와 국채 이력이 이미 쌓여
 있어야 하는데 그 둘은 이 저장소 밖의 수집 일정에 달려 있다. 기본 그래프가 먼저 돌고 있으면
 시차는 컬럼 둘과 순수 함수 하나를 더하는 일이다.
+
+## 10. 구현 산출물과 자리
+
+여기까지가 무엇을 만드는가이고, 이 절이 **어디에 만드는가**다. 저장소 규약과 어긋나는 자리를
+고르면 나중에 옮기는 비용이 코드보다 크다.
+
+### 10.1 모델과 마이그레이션
+
+**`apps/models/analysis/causal.py`** 하나에 넷을 둔다. `thesis.py`가 이미 그 크기이고
+(`Thesis`·`ThesisOutcome`·`ThesisEvidence`·`ThesisPrecedent`·원장 둘), 인과 그래프도 같은
+aggregate 하나다.
+
+| 클래스 | 테이블 |
+| --- | --- |
+| `MarketEvent` | `market_event` |
+| `MarketChannel` | `market_channel` |
+| `MarketCausalPath` | `market_causal_path` |
+| `MarketCausalStep` | `market_causal_step` |
+
+`StrEnum` 셋도 같은 파일이다: `CausalSign`(`up`·`down`), `CausalConfidence`
+(`observed`·`plausible`), `CausalTargetKind`(`instrument`·`index`·`quote`·`indicator`).
+컬럼은 `_columns._enum_column`으로 내리고 **허용 값 `CHECK`를 함께 건다** — 저장소 규칙이다.
+
+- `table_options(comment="…", database="default")`를 `__table_args__` 마지막에 둔다.
+  넷 다 `default` 별칭이다(`thesis`와 같은 곳을 본다).
+- **모든 컬럼에 `comment=`를 단다.** `id`·`created_at`·`updated_at`은 `EntityBase`가 이미 갖는다.
+- **등록은 두 곳이다.** `apps/models/analysis/__init__.py`와 `apps/models/__init__.py`의
+  `__all__`. 한 단계만 빠져도 `Base.metadata`에서 테이블이 사라지고 autogenerate가 `DROP`을
+  낸다. `tests/models/test_analysis_models.py`가 그 누락을 잡는다.
+
+**리비전은 손으로 쓴다.** `makemigrations`는 모든 별칭에 실제로 연결하는데 그 별칭이 운영
+DB다 — 워크트리에서 돌리지 않는다. 한 리비전에 셋이 들어간다.
+
+1. 테이블 넷 `CREATE`(모델과 같은 테이블·컬럼 주석 포함)
+2. `thesis_llm_run.kind` CHECK에 `causal` 추가
+3. `thesis_llm_run.run_slot`을 nullable로 풀고 조합 CHECK 추가(§3.5)
+
+`downgrade`는 테이블 넷을 `DROP`하고 CHECK 둘을 되돌린다. 검증은 오프라인 SQL이다
+(`alembic_command.upgrade(config, "head", sql=True)`) — 특정 리비전 ID에 고정하지 않고
+테이블 단위 사실만 본다.
+
+### 10.2 모듈은 `airflow/modules/causal/`
+
+파일이 넷이라 폴더다(규칙: 한 도메인의 파일이 셋 이상이면 폴더로 내리고 접두어를 뗀다).
+**`__init__.py`는 비운다** — 재수출하면 `causal.domain` 하나를 import해도 LangChain이 딸려
+와 DagBag이 그 무게를 문다.
+
+| 파일 | 무엇 | 무엇을 import하지 않나 |
+| --- | --- | --- |
+| `domain.py` | 상수(`MAX_CHAIN`·`MAX_PATHS`·`MAX_NEW_CHANNELS`·`MAX_REASONING_CHARS`·`PROMPT_VERSION`), `input_hash`, 주 경계 계산, Pydantic 값 객체 | LangChain·Airflow. **순수 함수만** |
+| `candidates.py` | 후보 조립(§5.1). 연결과 `as_of_at`을 생성자로 받는 클래스 | LangChain |
+| `generation.py` | LangChain·LangGraph. `CausalBuilder`, 답변 스키마, 어휘 후보 블록 조립 | Airflow |
+| `store.py` | 저장(§3.2). 어휘 upsert → 경로 → 단계를 한 트랜잭션에 | LangChain·Airflow |
+
+**`domain.py`가 무거운 것을 import하지 않는 것이 이 배치의 핵심이다.** DAG 테스트와 순수
+함수 테스트가 LangChain 없이 돌아야 하고, `thesis/state.py`를 따로 뺀 이유와 같다. 값 객체가
+늘어 `domain.py`가 커지면 그때 `state.py`로 가른다.
+
+### 10.3 SQL
+
+쿼리는 파이썬 문자열이 아니라 파일이다(`modules/sql.py`의 `read_sql`).
+
+```
+airflow/sql/postgres/
+  market_event/          upsert.sql          select_recent.sql
+  market_channel/        upsert.sql          select_all.sql
+  market_causal_path/    insert.sql          select_by_week.sql   exists_by_week.sql
+  market_causal_step/    insert.sql
+  causal/                select_documents.sql        select_disclosures.sql
+                         select_macro_changes.sql    select_returns.sql
+```
+
+- 테이블 이름 폴더는 그 테이블에 쓰는 것, `causal/` 폴더는 **여러 테이블을 읽는 후보 조립**이다.
+  `thesis/`가 이미 그 형태다.
+- **브리핑·thesis의 기존 조회를 재사용하지 않는다.** 그쪽은 지금까지를 보고 여기는 주 경계와
+  `as_of_at`까지만 본다. 기존 파일에 파라미터를 얹으면 한쪽을 고칠 때 다른 쪽이 조용히 따라
+  바뀐다.
+- **새 SQL은 운영 DB에 읽기 전용으로 한 번 돌려 보고 넣는다.** 테스트는 가짜 연결을 쓰므로
+  컬럼 이름과 조인 조건이 틀려도 통과한다.
+
+### 10.4 DAG — `airflow/dags/market_causal_weekly.py`
+
+- `dag_id="market_causal_weekly"`, `dag_display_name="🕸️ 주간 인과 그래프 (LLM)"`,
+  한 문장 `description`, `doc_md=__doc__`. 모듈 docstring에 설계 배경과 **"실패와 재시도" 절**을
+  둔다(§6의 어느 형태를 골랐고 왜인지).
+- `schedule="0 7 * * 1"  # KST 월 07:00 = UTC 일 22:00`, `start_date`는
+  `pendulum.datetime(..., tz=KST_TIMEZONE)`, `max_active_runs=1`.
+- **Param은 `week_start` 하나**다. 비면 `logical_date`에서 `W`를 계산한다. `title`과
+  `description`을 단다. 슬롯이 없으므로 `thesis.intraday.resolve_slot` 같은 장치는 필요 없다.
+- **태스크 하나**(`build_causal_graph`)다. 후보 조립부터 저장까지 한 흐름이고, 재시도가
+  후보 조립을 다시 해도 `as_of_at` cutoff가 같아 같은 결과다. 태스크를 나누면 XCom으로
+  후보 50건을 넘기게 되는데 얻는 것이 없다.
+- 그 주에 행이 이미 있으면 LLM을 부르지 않고 성공으로 끝난다(§5.4). **skip이 아니라 성공**이다 —
+  재실행이 정상 흐름이라 매번 노란 태스크를 만들 이유가 없다.
+
+### 10.5 테스트
+
+| 파일 | 무엇 |
+| --- | --- |
+| `tests/modules/test_causal.py` | `input_hash` 정렬 불변성, 주 경계 계산, ref 검증(목록 밖 버림), 어휘 정규화(`ref`를 고르면 새 행이 생기지 않음), `MAX_NEW_CHANNELS`·`MAX_CHAIN` 초과 처리, `chain_key`와 `position` 순서 일치, 저장 SQL 컬럼 vs 모델 metadata 대조 |
+| `tests/dags/test_market_causal_weekly.py` | cron과 `start_date` tz, Param 메타데이터, 그 주에 행이 있을 때 LLM을 안 부르는지, `LlmError`→fail·`ConnectionError`→재시도 |
+| `tests/migrations/test_causal_schema.py` | 오프라인 SQL에 테이블 넷과 CHECK, `run_slot` nullable 전환 |
+| `tests/modules/test_prompt_versions.py` | `causal_graph.yaml` 해시와 `PROMPT_VERSION` 잠금(표에 등록) |
+| `tests/modules/test_import_weight.py` | `causal.domain` import에 LangChain이 딸려 오지 않는지 |
+
+가짜 연결·가짜 모델을 쓴다. **실제 LLM과 운영 DB를 부르지 않는다.**

@@ -238,6 +238,17 @@ def test_the_ledger_records_a_truncated_investigation(capsys):
     assert "DEFAULT false" in sql
 
 
+def test_the_ledger_counts_requested_and_answered_subjects(capsys):
+    """모델이 넷 중 하나만 답해도 태스크는 성공이었다. 그 사실이 어디에도 안 남았다."""
+    sql = head_sql(capsys)
+
+    assert "ALTER TABLE thesis_llm_run ADD COLUMN subjects_requested INTEGER" in sql
+    assert "ALTER TABLE thesis_llm_run ADD COLUMN subjects_answered INTEGER" in sql
+    # NULL을 허용한다. 해설 대화는 대상 개념이 달라 0으로 메우면 "전부 실패"와 같아진다.
+    assert "subjects_requested INTEGER NOT NULL" not in sql
+    assert "subjects_answered INTEGER NOT NULL" not in sql
+
+
 def test_the_llm_run_status_shape_is_constrained(capsys):
     sql = head_sql(capsys)
 

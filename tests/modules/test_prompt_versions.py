@@ -35,6 +35,9 @@ PROMPT_HASHES: dict[tuple[str, str], str] = {
     # 가르지만 YAML은 그대로라 해시가 7과 같다. **같은 해시가 두 판에 걸린 것이 정상이다.**
     ("thesis_generation", "7"): "ba0a741a06869b16aa3a439ebe56c33cdfa8b4084366c3d6ec183e8d5c426154",
     ("thesis_generation", "8"): "ba0a741a06869b16aa3a439ebe56c33cdfa8b4084366c3d6ec183e8d5c426154",
+    # 판 9는 교정 문구 하나(`variants.repair_short_answer`)가 늘어 해시가 갈린다.
+    # 문장보다 결과가 달라진 판이다 — 대상이 모자란 답을 한 번 다시 묻는다.
+    ("thesis_generation", "9"): "09339dfae4c0ea0c32fe751b0b29d5b5becd9d431e5cefe158df59935879043f",
     ("thesis_narrative", "2"): "1baea1c554c90619576036db58ad42d2a1e24052fc8ab982978e605c6e696b8b",
 }
 

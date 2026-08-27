@@ -7,7 +7,7 @@ import pytest
 from langchain_core.messages import AIMessage
 from pydantic import BaseModel, ConfigDict, Field
 
-from modules.assessment import SYSTEM_PROMPT_TEMPLATE, Assessment
+from modules.assessment import DEFAULT_PERSPECTIVE, Assessment, system_prompt
 from modules.briefing import picks
 from modules.expectation.extraction import SYSTEM_PROMPT as EXTRACTION_PROMPT
 from modules.llm import (
@@ -222,21 +222,11 @@ def test_response_format_is_shaped_for_the_api(model):
 
 @pytest.mark.parametrize(
     "prompt",
-    [THESIS_PROMPT, NARRATIVE_SYSTEM_PROMPT, picks.SYSTEM_PROMPT, SYSTEM_PROMPT_TEMPLATE],
+    [THESIS_PROMPT, NARRATIVE_SYSTEM_PROMPT, picks.SYSTEM_PROMPT, system_prompt(DEFAULT_PERSPECTIVE)],
 )
 def test_every_prose_prompt_carries_the_number_style(prompt):
     """산문을 내는 프롬프트 넷이 같은 한 벌을 쓴다. 네 곳에 따로 적으면 반드시 어긋난다."""
     assert NUMBER_STYLE in prompt
-
-
-def test_the_number_style_has_no_braces():
-    """`assessment.SYSTEM_PROMPT_TEMPLATE`이 `.format()` 템플릿이다.
-
-    규칙 문장에 중괄호가 하나라도 섞이면 문서 평가가 통째로 `KeyError`로 죽는다.
-    """
-    assert "{" not in NUMBER_STYLE
-    assert "}" not in NUMBER_STYLE
-    SYSTEM_PROMPT_TEMPLATE.format(perspective="관점")
 
 
 def test_the_extraction_prompt_stays_out_of_it():

@@ -2,7 +2,8 @@
 
 - 상위: [collectors-class-migration.md](collectors-class-migration.md)와 같은 층의 전환 문서다.
 - 날짜: 2026-08-27
-- 상태: **설계만. 구현 전.** 1단계부터 사용자 재승인 뒤 착수한다.
+- 상태: **끝났다**(2026-08-27). 여섯 단계를 순서대로 옮겼고 남은 파이썬 프롬프트가 없다.
+  결과는 9절에 있다.
 - 의존: `airflow/modules/prompt.py`와 `modules/prompts/disclosure_picks.yaml`
   (2026-08-27에 만든 기준 구현). 규칙은 `.claude/CLAUDE.md`의 "프롬프트는 코드가 아니다".
 - 산출물(예정): `modules/prompts/*.yaml` 다섯, 각 모듈의 프롬프트 상수 교체, 그리고
@@ -172,3 +173,46 @@ DAG은 돌리지 않는다. 프롬프트가 실제로 모델에게 잘 가는지
 - 문장만 고친 PR이 코드 diff 0줄이 된다.
 - `llm.py`의 중괄호 제약이 사라진다.
 - 프롬프트 판과 문장이 해시로 묶여, **판을 안 올리고 문장을 고치는 사고**가 테스트에서 죽는다.
+
+## 9. 끝난 뒤 — 실제로 이렇게 됐다(2026-08-27)
+
+여섯 단계를 순서대로 옮겼다. **문장은 한 글자도 안 바뀌었다** — 단계마다 렌더 결과를 옛
+상수와 바이트 단위로 대조했고, 자리표시자를 넣은 것 말고 손댄 문장이 없다.
+
+| 파일 | 흐름 | 판 |
+| --- | --- | ---: |
+| `prompts/assessment.yaml` | 문서 평가·태깅 | `assessment.PROMPT_VERSION` 3 |
+| `prompts/disclosure_picks.yaml` | 공시 강조 | 없음 |
+| `prompts/document_picks.yaml` | 문서 브리핑 선별 | 없음 |
+| `prompts/expectation_extraction.yaml` | 이벤트 주장 추출 | `expectation.domain.PROMPT_VERSION` 1 |
+| `prompts/thesis_generation.yaml` | 추론 생성 | `thesis.domain.PROMPT_VERSION` 7 |
+| `prompts/thesis_narrative.yaml` | 사후 해설·판정 | `thesis.outcomes.NARRATIVE_PROMPT_VERSION` 2 |
+| `prompts/fragments/shared.yaml` | 조각(`number_style`) | — |
+
+설계와 달라진 것 넷이다.
+
+- **`$max_why_chars`를 안 넣었다**(1단계). `MAX_WHY_CHARS`는 응답을 받은 **뒤**
+  `_shorten()`이 자를 때만 쓰고 프롬프트에 실려 있지 않았다. 자리표시자를 넣으려면 새
+  문장을 써야 해서 5절과 부딪힌다. 상한을 모델에게 알릴지는 문장을 고치는 별도 결정이다.
+- **`PromptSet.variants`가 생겼다**(3단계). 평가의 관점 셋과 추론의 슬롯별 문장이 같은
+  모양이라 칸 하나로 받는다. `dict[str, str]`이고 기본은 비어 있다.
+- **`assessment.SYSTEM_PROMPT_TEMPLATE`이 `system_prompt(perspective)` 함수가 됐다**(3단계).
+  `$number_style`까지 채워야 해서 관점만 빠진 반쪽 템플릿을 만들 수 없다. 설계가 예고한
+  대로 `test_llm.py`가 이 전환에서 유일하게 바뀐 기존 테스트다.
+- **조각의 자리가 `prompts/shared.yaml`이 아니라 `prompts/fragments/shared.yaml`이다**(6단계).
+  `system`·`instruction`·`repair` 칸이 없어 `read_prompt`로 못 읽고, 흐름 파일을 훑는 테스트
+  둘(`test_prompt.py`·`test_prompt_versions.py`)이 그것을 흐름으로 세면 안 된다. 한 단
+  내리면 두 테스트를 안 고쳐도 된다. 읽는 것은 `read_fragments`다.
+
+해시 가드(`tests/modules/test_prompt_versions.py`)는 2단계에서 만들어 네 판을 잠갔다.
+표를 `(이름, 판)` 키로 두어 **문장만 고치면 해시가 어긋나고 판만 올리면 키를 못 찾는다.**
+판이 없는 파일은 `UNVERSIONED`에 적고, 새 파일이 어느 쪽인지 안 밝히면 두 번째 테스트가
+잡는다.
+
+**`fragments/shared.yaml`은 그 가드 밖이다.** 그 조각을 고치면 그것을 끼워 쓰는 흐름 셋의
+문장이 함께 바뀌는데 해시는 각 흐름의 **파일 내용**이라 자동으로 안 깨진다. 셋의 판을 함께
+올려야 한다는 것을 그 파일 주석이 알린다 — 지금 유일하게 손으로 챙기는 자리다.
+
+**중간에 main이 `modules/` 폴더 분리를 머지했다.** 4단계와 5단계 사이에서 합쳤고
+(`thesis_outcomes.py` → `thesis/outcomes.py` 등) 충돌은 둘(`llm.py` 주석,
+`thesis/outcomes.py` docstring)이었다. YAML 주석의 모듈 경로도 그때 함께 고쳤다.

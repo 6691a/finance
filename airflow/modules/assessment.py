@@ -20,6 +20,13 @@
 목록 밖의 값이 오면 **그 태그만 버리고 문서는 저장한다.** 태그 하나 때문에 문서를 잃지
 않는다. 버린 값은 로그에 남겨 마스터를 늘릴 근거로 쓴다.
 
+## 문장은 여기 없다
+
+프롬프트는 `modules/prompts/assessment.yaml`이 갖는다. 관점 셋도 그 파일의 `variants`다.
+문장을 고치는 일과 흐름을 고치는 일은 주기가 다르다. 읽는 방법은 `modules/prompt.py`에 있다.
+**여기 문장에는 판이 붙는다** — 고치면 `PROMPT_VERSION`을 올리고
+`tests/modules/test_prompt_versions.py`의 해시를 같은 커밋에서 바꾼다.
+
 ## 관점은 값이지 프롬프트가 아니다
 
 초판은 "한국 투자자를 위한 분석기"로 고정돼 있었다. 그런데 **켜져 있는 피드 아홉 중 여섯이
@@ -27,7 +34,7 @@
 한 번도 언급하지 않으면서 한국 자산 가격을 움직인다. "한국에 직접 관련되는가"로 물으면
 그 문서들이 전부 0점을 받는다.
 
-그래서 관점을 `PERSPECTIVES`의 문자열 하나로 빼고 기본을 `global`로 뒀다. `relevance`도
+그래서 관점을 조각 하나로 빼고 기본을 `global`로 뒀다. `relevance`도
 "직접 관련"이 아니라 **경로의 존재와 길이**를 묻는다. 미국 시장만 보는 리포트가 필요해지면
 프롬프트를 복사하는 대신 `LLM_PERSPECTIVE`를 바꾼다.
 
@@ -81,6 +88,7 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_valida
 from modules import llm
 from modules.db import Connection
 from modules.llm import UnsupportedResponseFormat
+from modules.prompt import read_prompt
 from modules.schema import SchemaError, json_object, response_format
 from modules.sql import read_sql
 from modules.upsert import execute_upserts
@@ -90,29 +98,12 @@ logger = logging.getLogger(__name__)
 # 프롬프트를 고치면 올린다. 이 값이 오른 문서는 재평가 대상이 된다.
 PROMPT_VERSION = "3"
 
-# 어느 시장의 눈으로 볼 것인가. **관점을 바꾸는 것이 프롬프트를 새로 쓰는 일이면 안 된다.**
-#
-# 초판은 "한국 투자자를 위한 분석기"로 고정돼 있었다. 그런데 켜져 있는 피드 아홉 중 여섯이
-# 비한국(Fed, BEA, BLS, BBC, CNBC, NPR)이고, 그것들을 모으는 이유가 바로 전이 효과다.
-# 한국을 언급하지 않는 연준 성명이 낮은 점수를 받으면 아카이브의 대부분이 잘못 채점된다.
-#
-# 그래서 관점을 문자열 하나로 빼고 기본을 `global`로 둔다. 나중에 미국 시장만 보는 리포트가
-# 필요해지면 프롬프트를 복사하는 대신 이 값을 바꾼다.
-PERSPECTIVES: dict[str, str] = {
-    "global": (
-        "세계 경제 문서를 읽고 **한국 시장에 어떤 경로로 전달되는지**를 함께 판단한다. "
-        "미국·유럽·중국·일본에서 일어난 일이 환율, 금리, 수요, 공급망, 투자심리를 타고 "
-        "한국 자산 가격에 닿는다. 한국을 언급하지 않는 문서라도 그 경로가 뚜렷하면 관련성이 높다."
-    ),
-    "korea": (
-        "한국 시장에서 직접 일어난 일만 본다. 국내 정책, 국내 기업, 국내 지표가 대상이며 "
-        "해외 소식은 한국을 명시적으로 다룰 때만 관련성이 있다."
-    ),
-    "us": (
-        "미국 시장의 눈으로 본다. 연준 정책, 미국 지표, 미국 상장 기업이 대상이며 "
-        "다른 지역 소식은 미국 자산 가격에 닿는 경로가 있을 때 관련성이 있다."
-    ),
-}
+PROMPTS = read_prompt("assessment")
+
+# 어느 시장의 눈으로 볼 것인가. 문장은 `modules/prompts/assessment.yaml`의 `variants`에 있고
+# 여기 남은 것은 **허용 값 판정**뿐이다 — `LlmSettings`가 이 키로 `LLM_PERSPECTIVE`를 막는데
+# 그 판정은 YAML이 할 수 없다.
+PERSPECTIVES: dict[str, str] = PROMPTS.variants
 
 DEFAULT_PERSPECTIVE = "global"
 
@@ -238,57 +229,18 @@ class Assessment(BaseModel):
     reason: str = ""
 
 
-# **`llm.NUMBER_STYLE`을 f-string으로 끼우지 않는다.** 이 상수는 `.format(perspective=...)`으로
-# 채우는 템플릿이라 규칙 문장에 중괄호가 하나라도 있으면 `KeyError`로 죽는다. 그래서 이어 붙인다.
-SYSTEM_PROMPT_TEMPLATE = (
-    "당신은 경제 문서 분석기다. {perspective} "
-    "주어진 문서를 읽고 어떤 종목과 지표에 관련되는지, 얼마나 값있는 정보인지 판단한다. "
-    "반드시 JSON 객체 하나만 출력한다. 설명이나 코드 펜스를 붙이지 않는다.\n\n" + llm.NUMBER_STYLE
-)
-
-# 사람이 읽는 지시. 후보 목록은 실행 시점에 마스터에서 채운다.
-#
-# **`relevance`를 "직접 관련"으로 묻지 않는다.** 그렇게 물으면 한국을 언급하지 않는 연준
-# 성명이 0점을 받는다. 우리가 Fed·BEA·BLS·BIS를 모으는 이유가 그 문서들이 경로를 타고
-# 도착하기 때문이므로, 경로의 존재와 길이를 묻는다.
-#
-# 반대 방향으로도 못을 박는다. 실측(grok-4, 2026-08-15)에서 용산 주택공급 기사에 태그를 하나도
-# 달지 않고 `reason`에 "직접 관련이 없다"고 쓰면서 relevance를 1로 줬다. **0을 안 쓰면 점수
-# 바닥이 1로 올라가 0~8이 아니라 4~8이 된다.** 상위 몇 건을 고르는 것이 이 점수의 유일한
-# 쓸모라 눌리면 못 쓴다. 그래서 "태그가 비면 0"이라는 검사 가능한 규칙을 함께 준다.
-INSTRUCTION = """\
-아래 문서를 읽고 JSON으로 답하라.
-
-규칙:
-- `instruments`와 `indicators`는 **후보 목록에 있는 값만** 쓴다. 없으면 빈 배열로 둔다.
-  문서가 다른 나라 이야기여도, 그 일이 후보의 가격에 닿는 경로가 뚜렷하면 태그한다.
-- `instruments`에는 **티커만** 쓴다. 이름을 붙이지 마라. 후보 `000660: SK하이닉스`는
-  `"000660"`이다. `indicators`는 provider와 series_id를 나눠 쓴다. 후보
-  `kis:000660 (SK하이닉스)`는 `{"provider": "kis", "series_id": "000660"}`이다.
-- 지수·환율·금리·원자재는 `instruments`가 아니라 `indicators`다. `provider`는 후보에
-  적힌 값을 그대로 쓴다. 후보 `kis:KOSPI (코스피)`를 yahoo로 바꿔 쓰지 마라.
-- `direction`은 태그한 종목·지표의 가격 관점에서 positive, negative, neutral 중 하나다.
-- `scores`의 네 항목은 각각 0~2 정수다.
-  - relevance: 관심 시장에 닿는 경로가 있는가. **직접 언급을 요구하지 않는다.**
-    경로가 뚜렷하고 짧으면 2, 있으나 멀면 1, 없으면 0이다.
-    **0을 쓰는 것을 주저하지 마라.** 관련이 없다고 판단했으면 예의로 1을 주지 않는다.
-    `instruments`와 `indicators`가 둘 다 비었다면 relevance는 0이다.
-  - novelty: 이미 알려진 사실의 반복이 아니라 새 정보인가
-  - specificity: 수치·일정·주체가 구체적인가
-  - impact: 가격에 미칠 영향이 큰가
-- `new_facts`는 이 문서가 새로 알려 준 사실을 짧은 문장으로 담는다.
-- `reason`은 두 문장 이내로 쓰되 **어떤 경로로 닿는지를 밝힌다**(환율, 금리, 수요,
-  공급망, 투자심리 등). 경로를 말할 수 없으면 relevance를 0으로 둔다.
-
-출력 형식:
-{"instruments": [], "indicators": [{"provider": "", "series_id": ""}], "topics": [],
- "direction": "neutral", "scores": {"relevance": 0, "novelty": 0, "specificity": 0, "impact": 0},
- "new_facts": [], "reason": ""}
-"""
-
+# 사람이 읽는 지시. 후보 목록은 실행 시점에 마스터에서 채워 뒤에 이어 붙인다.
+INSTRUCTION = PROMPTS.instruction
 
 # 형식이 깨졌을 때 붙이는 교정 지시. 한 번만 붙인다.
-REPAIR_INSTRUCTION = "이전 응답이 형식에 맞지 않았다. JSON 객체 하나만 다시 출력하라."
+REPAIR_INSTRUCTION = PROMPTS.repair
+
+
+def system_prompt(perspective: str) -> str:
+    """그 관점으로 채운 시스템 프롬프트. 모르는 관점이면 죽는다."""
+    if perspective not in PERSPECTIVES:
+        raise AssessmentError(f"Unknown perspective: {perspective!r}")
+    return PROMPTS.render("system", perspective=PERSPECTIVES[perspective], number_style=llm.NUMBER_STYLE)
 
 
 class AssessState(TypedDict):
@@ -348,8 +300,7 @@ class DocumentAssessor:
         perspective: str = DEFAULT_PERSPECTIVE,
     ) -> list[BaseMessage]:
         """모델에 보낼 메시지. 후보 목록을 프롬프트에 실어 자유 문자열을 막는다."""
-        if perspective not in PERSPECTIVES:
-            raise AssessmentError(f"Unknown perspective: {perspective!r}")
+        system = system_prompt(perspective)
         instrument_lines = "\n".join(f"- {ticker}: {name}" for ticker, name in candidates.instruments)
         indicator_lines = "\n".join(
             f"- {provider}:{series_id} ({label})" for provider, series_id, label in candidates.indicators
@@ -366,10 +317,7 @@ class DocumentAssessor:
             parts.append(f"요약: {document.summary}")
         if document.body:
             parts.append(f"본문: {document.body}")
-        return [
-            SystemMessage(SYSTEM_PROMPT_TEMPLATE.format(perspective=PERSPECTIVES[perspective])),
-            HumanMessage("\n".join(parts)),
-        ]
+        return [SystemMessage(system), HumanMessage("\n".join(parts))]
 
     @staticmethod
     def parse(raw: str) -> Assessment:

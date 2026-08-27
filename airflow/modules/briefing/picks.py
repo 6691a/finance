@@ -15,6 +15,12 @@
 `value_score`는 그대로 쓴다. 후보를 몇십 건으로 자르는 것이 점수의 몫이고, 그 안의 순위와
 분류만 여기서 정한다.
 
+## 문장은 여기 없다
+
+프롬프트는 `modules/prompts/document_picks.yaml`이 갖는다. 문장을 고치는 일과 흐름을
+고치는 일은 주기가 다르고, 섞어 두면 문장만 바꾼 변경도 코드 diff가 된다. 읽는 방법은
+`modules/prompt.py`에 있다.
+
 ## 두 종류를 고른다
 
 - **읽을 것**(`watch=false`): 오늘 알아 둘 값이 있는 문서.
@@ -46,6 +52,7 @@ from pydantic import BaseModel, ConfigDict, ValidationError
 
 from modules import llm
 from modules.llm import UnsupportedResponseFormat
+from modules.prompt import read_prompt
 from modules.schema import SchemaError, json_object, response_format
 
 logger = logging.getLogger(__name__)
@@ -57,44 +64,12 @@ MAX_WATCHES = 3
 # 고른 이유 한 문장의 상한. 넘으면 그 건만 잘라 낸다.
 MAX_WHY_CHARS = 200
 
-REPAIR_INSTRUCTION = "이전 응답을 쓸 수 없다. 주어진 목록의 document_id만 써서 JSON 객체 하나를 다시 출력하라."
+PROMPTS = read_prompt("document_picks")
 
-SYSTEM_PROMPT = f"""너는 하루치 문서 목록에서 사람이 읽을 것을 골라 주는 편집자다.
-
-목록의 `value_score`는 문서를 **한 건씩 따로** 매긴 점수라 서로 비교해서 나온 값이 아니다.
-이미 높은 쪽만 추려 온 목록이어서 동점이 많고, 동점 사이의 순서는 아무 뜻이 없다.
-**점수 순서를 그대로 따르지 마라.** 목록 전체를 한눈에 놓고 상대적으로 골라라.
-
-두 종류를 고른다.
-
-- **읽을 것**(`watch`: false) — 오늘 알아 둘 값이 있는 문서. {MAX_READS}건까지. 보통 3~5건.
-- **주의**(`watch`: true) — 손실이나 위험 쪽으로 움직일 수 있어 눈여겨봐야 하는 문서.
-  {MAX_WATCHES}건까지. 없으면 하나도 고르지 않는다.
-
-## 규칙
-
-- `document_id`는 **주어진 목록에 있는 값만** 쓴다. 목록에 없는 id는 버려진다.
-- **같은 사건을 여러 매체가 쓴 것은 하나만 고른다.** 나머지는 자리만 차지한다.
-- `why`는 한 문장이다. **제목을 다시 쓰지 마라.** 제목은 이미 옆에 그려진다. 왜 이것을
-  골랐는지, 무엇에 닿는지를 쓴다.
-- **고를 값이 없으면 빈 배열로 답한다.** 억지로 채우지 마라. 한산한 날은 한산하다고
-  말하는 것이 정답이다.
-- 목록에 없는 사실을 지어내지 마라. 너는 제목과 앞선 평가의 이유만 받았다.
-- 투자 조언, 매수·매도 권유, 목표가, 앞으로의 방향 예측을 쓰지 마라.
-
-{llm.NUMBER_STYLE}
-
-## 순서
-
-배열 순서가 채널에 그려지는 순서다. 가장 먼저 읽어야 할 것을 앞에 둔다.
-
-출력 형식:
-{{"picks": [{{"document_id": 0, "why": "", "watch": false}}]}}"""
-
-INSTRUCTION = (
-    "아래는 최근 {window_hours:g}시간에 평가한 문서 목록이다.\n"
-    "이 안에서 읽을 것과 주의할 것을 골라라.\n\n```json\n{candidates}\n```"
+SYSTEM_PROMPT = PROMPTS.render(
+    "system", max_reads=MAX_READS, max_watches=MAX_WATCHES, number_style=llm.NUMBER_STYLE
 )
+REPAIR_INSTRUCTION = PROMPTS.repair
 
 
 class PickError(RuntimeError):
@@ -148,7 +123,9 @@ class DocumentPicker:
     def build_messages(window_hours: float, candidates_json: str) -> list[BaseMessage]:
         return [
             SystemMessage(SYSTEM_PROMPT),
-            HumanMessage(INSTRUCTION.format(window_hours=window_hours, candidates=candidates_json)),
+            HumanMessage(
+                PROMPTS.render("instruction", window_hours=f"{window_hours:g}", candidates=candidates_json)
+            ),
         ]
 
     @staticmethod

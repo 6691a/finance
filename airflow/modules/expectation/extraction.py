@@ -1,4 +1,9 @@
-"""문서에서 기대·실제 주장을 뽑는다 — 프롬프트와 `ExpectationExtractor`.
+"""문서에서 기대·실제 주장을 뽑는다 — `ExpectationExtractor`.
+
+**문장은 여기 없다.** 프롬프트는 `modules/prompts/expectation_extraction.yaml`이 갖는다.
+문장을 고치는 일과 흐름을 고치는 일은 주기가 다르다. 읽는 방법은 `modules/prompt.py`에 있다.
+**여기 문장에는 판이 붙는다** — 고치면 `expectation_domain.PROMPT_VERSION`을 올리고
+`tests/modules/test_prompt_versions.py`의 해시를 같은 커밋에서 바꾼다.
 
 **검증이 추출의 절반이다.** 모델 응답을 그대로 믿지 않는다. 이벤트·지표는 Literal로 좁히고
 조합·기간 표기·단위 정규화·종목 태그 대조는 `filter_claims`가 한다. 목록 밖 값은 그 주장만
@@ -30,6 +35,7 @@ from modules.expectation.domain import (
     normalize_amount,
 )
 from modules.llm import UnsupportedResponseFormat
+from modules.prompt import read_prompt
 from modules.schema import SchemaError, json_object, response_format
 
 logger = logging.getLogger(__name__)
@@ -68,44 +74,14 @@ class ExtractionResponse(BaseModel):
     claims: tuple[ExtractedClaim, ...] = ()
 
 
-SYSTEM_PROMPT = (
-    "당신은 한국 주식 이벤트 분석기다. 경제 문서에서 종목 이벤트에 대한 **수치 주장**만 뽑는다. "
-    "기대(전망·추정·컨센서스)와 실제(발표·확정)를 가른다. "
-    "반드시 JSON 객체 하나만 출력한다. 설명이나 코드 펜스를 붙이지 않는다."
-)
+PROMPTS = read_prompt("expectation_extraction")
 
-# 사람이 읽는 지시. 종목 후보는 문서의 태그로 실행 시점에 채운다.
-INSTRUCTION = """\
-아래 문서에서 종목 이벤트에 대한 수치 주장을 뽑아 JSON으로 답하라. 없으면 빈 배열이 정답이다.
+SYSTEM_PROMPT = PROMPTS.system
 
-규칙:
-- `stock_code`는 **종목 후보에 있는 값만** 쓴다. 후보 밖 종목의 주장은 뽑지 않는다.
-- `event_type`은 shareholder_return(주주환원 정책·배당·자사주), earnings(실적),
-  guidance(회사가 직접 낸 전망) 중 하나다.
-- `metric`은 이벤트마다 정해져 있다.
-  - shareholder_return: total_return_amount(총 환원액), buyback_amount(자사주 매입),
-    dividend_total(배당 총액), dividend_per_share(주당 배당금)
-  - earnings: revenue(매출액), operating_profit(영업이익), net_income(당기순이익)
-  - guidance: revenue, operating_profit
-- `kind`는 expectation(전망·추정·컨센서스) 또는 actual(회사가 발표·확정한 값)이다.
-  - "~할 전망", "~로 추정", "목표", "컨센서스" → expectation
-  - "발표했다", "확정했다", "공시했다" → actual
-  - **earnings의 actual은 뽑지 않는다.** 실적 확정치는 공시 파서가 따로 받는다.
-- `period_key`는 대상 기간이다. 연간은 `2026`, 분기는 `2026Q2`, 반기는 `2026H1` 형식만 쓴다.
-  기간을 특정할 수 없는 주장은 뽑지 않는다.
-- `value`는 문서의 숫자 그대로, `unit`은 그 단위(원, 만원, 억, 억원, 조, 조원)다.
-  "9.5조원"이면 value "9.5", unit "조원"이다. 문서에 없는 숫자를 만들지 마라.
-- 범위 주장("9~10조")은 value에 중앙값, value_low/value_high에 하한·상한을 쓴다.
-  단일 값이면 value_low/value_high는 null이다.
-- `broker`는 주장 주체(증권사·기관 이름)다. 문서 제목 끝이나 본문에서 찾고, 모르면 null이다.
-  회사 자신의 발표(actual)는 null이다.
+# 사람이 읽는 지시. 종목 후보는 문서의 태그로 실행 시점에 뒤에 이어 붙인다.
+INSTRUCTION = PROMPTS.instruction
 
-출력 형식:
-{"claims": [{"stock_code": "", "event_type": "", "period_key": "", "metric": "",
- "kind": "", "value": "", "unit": "", "value_low": null, "value_high": null, "broker": null}]}
-"""
-
-REPAIR_INSTRUCTION = "이전 응답이 형식에 맞지 않았다. JSON 객체 하나만 다시 출력하라."
+REPAIR_INSTRUCTION = PROMPTS.repair
 
 
 class ExtractState(TypedDict):

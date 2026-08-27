@@ -27,13 +27,17 @@
 | --- | --- | --- |
 | `observation_start` | `null` | 조회 시작일. 주면 `lookback_days`를 무시한다 |
 | `observation_end` | `null` | 조회 종료일. 비우면 이 run 시각의 KST 날짜 |
-| `lookback_days` | `7` | 구간을 지정하지 않을 때 되돌아볼 일수 |
+| `lookback_days` | `30` | 구간을 지정하지 않을 때 되돌아볼 일수 |
 
     airflow dags trigger kis_analyst_opinion_daily \\
       --conf '{"observation_start": "2026-06-01", "observation_end": "2026-08-21"}'
 
-구간이 길면 KIS가 연속조회(`tr_cont`)로 자르고 수집기는 그것을 실패로 만든다. 백필은 한 달
-단위로 나눠 돌린다.
+**30일인 이유**는 의견이 리포트마다가 아니라 목표주가·의견이 바뀔 때만 찍혀 종목당 월
+5~10건이기 때문이다. 7일이던 때는 대부분의 날 0건을 받았고, 그 사이 나온 의견은 다음 날
+창 밖으로 밀려 테이블이 빈 채였다(2026-08-27 실측). 겹쳐 읽는 것은 upsert가 흡수한다.
+
+**구간을 넓게 주면 안 된다.** KIS는 100건에서 자르면서 `tr_cont`도 `rt_cd`도 정상으로
+답한다 — 수집기의 `MAX_ROWS` 검사가 그것을 실패로 만든다. 백필은 분기 단위로 나눠 돌린다.
 
 ## 필요한 환경
 
@@ -56,7 +60,11 @@ from airflow.providers.postgres.hooks.postgres import PostgresHook
 from airflow.sdk import Param, Variable, dag, get_current_context, task
 from pydantic import SecretStr
 
-from modules.collectors.analyst.kis_opinion import KisAnalystOpinionCollector, watched_stocks
+from modules.collectors.analyst.kis_opinion import (
+    OPINION_LOOKBACK_DAYS,
+    KisAnalystOpinionCollector,
+    watched_stocks,
+)
 from modules.collectors.kis import (
     KisHTTPError,
     KisPayloadError,
@@ -66,7 +74,6 @@ from modules.collectors.kis import (
 )
 from modules.market_session import krx_open_day
 from modules.period import (
-    LOOKBACK_DAYS,
     LOOKBACK_DAYS_PARAM,
     OBSERVATION_END_PARAM,
     OBSERVATION_START_PARAM,
@@ -122,11 +129,14 @@ def _skip_when_closed(connection: Any, today_kst) -> None:
             description="비우면 이 run 시각의 KST 날짜. 과거 구간을 넣을 때 직접 넘긴다.",
         ),
         LOOKBACK_DAYS_PARAM: Param(
-            LOOKBACK_DAYS,
+            OPINION_LOOKBACK_DAYS,
             type="integer",
             minimum=1,
             title="되돌아볼 일수",
-            description="구간을 지정하지 않을 때만 쓴다. 의견은 드문드문 나오므로 한 주를 다시 받아도 upsert라 무해하다.",
+            description=(
+                "구간을 지정하지 않을 때만 쓴다. 의견은 목표주가·의견이 바뀔 때만 찍혀 "
+                "종목당 월 5~10건이라 한 달을 다시 받는다. 겹쳐 읽어도 upsert라 무해하다."
+            ),
         ),
     },
     doc_md=__doc__,
@@ -137,7 +147,9 @@ def kis_analyst_opinion_daily():
     def collect_opinions() -> int:
         context = get_current_context()
         try:
-            observation_start, observation_end = resolve_observation_period(context)
+            observation_start, observation_end = resolve_observation_period(
+                context, default_lookback_days=OPINION_LOOKBACK_DAYS
+            )
         except PeriodError as error:
             raise AirflowFailException(str(error)) from error
 

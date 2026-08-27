@@ -6,6 +6,8 @@
 from datetime import timedelta
 
 from dags import kis_analyst_opinion_daily
+from modules.collectors.analyst.kis_opinion import OPINION_LOOKBACK_DAYS
+from modules.period import LOOKBACK_DAYS
 
 
 def test_the_dag_runs_on_weekday_mornings_before_the_forecast():
@@ -29,6 +31,18 @@ def test_the_dag_takes_the_shared_period_parameters():
     params = kis_analyst_opinion_daily.kis_analyst_opinion_daily.params
 
     assert set(params) == {"observation_start", "observation_end", "lookback_days"}
+
+
+def test_the_window_default_is_the_collectors_not_the_shared_one():
+    """공유 기본값(7일)은 의견 갱신 주기보다 짧다.
+
+    수집기가 자기 창을 갖고 DAG가 그것을 쓴다 — 두 곳에 숫자를 적으면 Param 표시값과
+    실제 조회 구간이 어긋난다.
+    """
+    params = kis_analyst_opinion_daily.kis_analyst_opinion_daily.params
+
+    assert params["lookback_days"] == OPINION_LOOKBACK_DAYS
+    assert OPINION_LOOKBACK_DAYS != LOOKBACK_DAYS
 
 
 def test_one_task_walks_every_watched_stock():

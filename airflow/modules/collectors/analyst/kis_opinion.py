@@ -39,6 +39,11 @@
   시점 값을 섞으면 upsert마다 과거 행이 조용히 바뀌므로 **전자만 저장한다.**
 - `invest-opbysec`(`FHKST663400C0`)도 종목코드를 받고 같은 행에 조회 시점 현재가를 더해
   줄 뿐이라 쓰지 않는다.
+- **응답은 100건에서 잘리고 그 사실을 알려 주지 않는다**(2026-08-27 실측). `tr_cont`는
+  비어 있고 `rt_cd`도 0이라, 넓은 구간을 한 번에 물으면 오래된 쪽이 조용히 사라진다.
+  `MAX_ROWS` 검사가 그것을 실패로 만든다 — 백필은 분기 단위로 나눠 돌린다.
+- **의견은 리포트마다 나오지 않는다.** 목표주가나 의견이 바뀔 때만 찍혀 종목당 월
+  5~10건이다. 그래서 조회 창이 `OPINION_LOOKBACK_DAYS`(30일)다.
 
 ## 종목 목록은 Enum이 아니라 DB다
 
@@ -81,6 +86,18 @@ DOMESTIC_STOCK_DIVISION = "J"
 
 # 응답 헤더 `tr_cont`가 이 값이면 다음 장이 있다. 잘린 응답을 조용히 저장하지 않는다.
 CONTINUATION_MARKERS = frozenset({"M", "F"})
+
+# 조회 창(일). **의견은 리포트마다 나오지 않는다** — 목표주가나 의견이 바뀔 때만 찍혀
+# 종목당 월 5~10건이다. 7일로 두면 대부분의 날 0건을 받고, 그 사이 나온 의견은 다음 날
+# 창 밖으로 밀려 영영 안 들어온다(2026-08-27 실측: 삼성전자·SK하이닉스 최신이 8/10이라
+# 8/18부터 매일 0건이었고 테이블이 빈 채였다). 겹쳐 읽는 것은 upsert가 흡수한다.
+OPINION_LOOKBACK_DAYS = 30
+
+# 한 응답의 최대 행 수. **넘치면 오래된 쪽이 조용히 잘린다.** 2026-08-27 실측 —
+# 삼성전자 1~4월 81건 + 5~8월 56건인데 올해 전체를 한 번에 물으면 100건이고 1월 2~29일이
+# 사라진다. 3년을 물어도 100건에 2023~2025년이 통째로 없다. `tr_cont`는 그때도 비어 있어
+# 연속조회로는 알 수 없다 — 건수로 잡는 수밖에 없다.
+MAX_ROWS = 100
 
 OPINION_UPSERT = read_sql("postgres", "stock_analyst_opinion", "upsert.sql")
 SOURCE_RECORD_INSERT = read_sql("postgres", "source_record", "insert.sql")
@@ -205,6 +222,7 @@ class KisAnalystOpinionCollector:
             raise KisPayloadError(f"KIS invest opinion row is malformed: {error}") from None
 
         self._reject_future_rows(rows, observation_end)
+        self._reject_capped_rows(rows, observation_start, observation_end)
         return Fetch(
             source_key=OPINION_SOURCE_KEY,
             stock_code=stock_code,
@@ -274,6 +292,19 @@ class KisAnalystOpinionCollector:
         if not isinstance(output, list):
             raise KisPayloadError(f"KIS returned a {key} that is neither a list nor an object")
         return output
+
+    @staticmethod
+    def _reject_capped_rows(rows: Sequence[OpinionRow], start: date, end: date) -> None:
+        """상한에 닿은 응답은 실패다. 잘렸다는 사실을 KIS가 알려 주지 않는다(모듈 상수 참고).
+
+        정확히 상한과 같은 건수가 진짜로 존재할 수도 있지만, 그때도 구간을 좁혀 다시 받는
+        것이 맞다 — 잘린 것을 저장해 구간에 구멍을 남기는 것보다 낫다.
+        """
+        if len(rows) >= MAX_ROWS:
+            raise KisPayloadError(
+                f"KIS invest opinion returned {len(rows)} rows for {start}..{end}; "
+                f"the response caps at {MAX_ROWS} and drops the oldest silently — narrow the window"
+            )
 
     @staticmethod
     def _reject_future_rows(rows: Sequence[OpinionRow], observation_end: date) -> None:

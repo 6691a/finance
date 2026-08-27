@@ -239,6 +239,36 @@ def test_rows_after_the_requested_end_are_rejected(monkeypatch):
         collector().fetch(SAMSUNG, START, END)
 
 
+def test_a_capped_response_is_a_failure_because_kis_never_says_it_truncated(monkeypatch):
+    """KIS는 100건에서 자르면서 `tr_cont`도 `rt_cd`도 정상으로 답한다(2026-08-27 실측).
+
+    삼성전자 1~4월 81건 + 5~8월 56건인데 올해 전체를 한 번에 물으면 100건이고 1월 앞이
+    사라진다. 헤더로는 알 수 없어 건수로 잡는다.
+    """
+    rows = [KIWOOM_ROW | {"mbcr_name": f"증권사{index}"} for index in range(kis_opinion.MAX_ROWS)]
+    monkeypatch.setattr(kis_opinion, "send_get", fake_send_get(body(output=rows)))
+
+    with pytest.raises(KisPayloadError, match="caps at 100"):
+        collector().fetch(SAMSUNG, START, END)
+
+
+def test_a_response_below_the_cap_is_kept(monkeypatch):
+    """상한 검사가 정상 응답을 막지 않는다."""
+    rows = [KIWOOM_ROW | {"mbcr_name": f"증권사{index}"} for index in range(kis_opinion.MAX_ROWS - 1)]
+    monkeypatch.setattr(kis_opinion, "send_get", fake_send_get(body(output=rows)))
+
+    assert len(collector().fetch(SAMSUNG, START, END).rows) == kis_opinion.MAX_ROWS - 1
+
+
+def test_the_window_is_wide_enough_for_how_rarely_opinions_change():
+    """의견은 목표주가·의견이 바뀔 때만 찍혀 종목당 월 5~10건이다.
+
+    7일이던 때는 대부분의 날 0건을 받았고, 그 사이 나온 의견이 다음 날 창 밖으로 밀려
+    테이블이 빈 채였다(2026-08-27 실측). 한 달보다 짧게 두면 그 결함이 돌아온다.
+    """
+    assert kis_opinion.OPINION_LOOKBACK_DAYS >= 30
+
+
 @pytest.mark.parametrize("marker", ["M", "F"])
 def test_a_truncated_response_is_a_failure_not_a_partial_save(monkeypatch, marker):
     monkeypatch.setattr(kis_opinion, "send_get", fake_send_get(body(output=[KIWOOM_ROW]), headers={"tr_cont": marker}))

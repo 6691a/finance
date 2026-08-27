@@ -4,10 +4,42 @@
 """
 
 from datetime import UTC, date, datetime
+from typing import Any, Self
 
 import pytest
 
-from modules.causal import domain
+from modules.causal import candidates, domain
+
+
+class FakeCursor:
+    """PEP 249 커서 흉내. 쿼리 종류를 안 가리고 준비된 행을 그대로 준다."""
+
+    def __init__(self, rows: list[tuple]) -> None:
+        self._rows = rows
+        self.calls: list[tuple[str, Any]] = []
+
+    def __enter__(self) -> Self:
+        return self
+
+    def __exit__(self, *args: object) -> None:
+        return None
+
+    def execute(self, statement: str, parameters: Any = ()) -> None:
+        self.calls.append((statement, parameters))
+
+    def fetchall(self) -> list[tuple]:
+        return self._rows
+
+
+class FakeConnection:
+    def __init__(self, rows: list[tuple] | None = None) -> None:
+        self._rows = rows or []
+        self.cursors: list[FakeCursor] = []
+
+    def cursor(self) -> FakeCursor:
+        cursor = FakeCursor(list(self._rows))
+        self.cursors.append(cursor)
+        return cursor
 
 
 class TestResolveWeek:
@@ -112,3 +144,43 @@ class TestInputHash:
         monkeypatch.setattr(domain, "PROMPT_VERSION", "999")
 
         assert domain.input_hash(**args) != before
+
+
+class TestResolveTargets:
+    """대상 아홉. 종목만 마스터에서 읽고 나머지는 코드 상수다(설계 §0)."""
+
+    def test_watched_stocks_join_the_fixed_targets(self) -> None:
+        connection = FakeConnection(rows=[("000660",), ("005930",)])  # SQL은 ticker 순이다
+
+        targets = candidates.resolve_targets(connection)
+
+        assert [target.code for target in targets] == [
+            "KOSPI",
+            "KOSDAQ",
+            "000660",
+            "005930",
+            "USDKRW",
+            "US10Y",
+            "SOX",
+            "VIX",
+            "NASDAQ100_FUT",
+        ]
+
+    def test_each_target_declares_which_master_validates_it(self) -> None:
+        """`target_kind`는 값의 성격이 아니라 저장소를 가른다(설계 §3.2.1)."""
+        connection = FakeConnection(rows=[("005930",)])
+
+        by_code = {target.code: target.kind for target in candidates.resolve_targets(connection)}
+
+        assert by_code["KOSPI"] == "index"
+        assert by_code["005930"] == "instrument"
+        assert by_code["US10Y"] == "quote"
+
+    def test_watched_stocks_grow_the_target_list(self) -> None:
+        """관심종목을 늘리면 대상이 따라 는다 — 종목 코드를 코드에 계속 더하지 않는다."""
+        connection = FakeConnection(rows=[("000660",), ("005930",), ("373220",)])
+
+        targets = candidates.resolve_targets(connection)
+
+        assert "373220" in [target.code for target in targets]
+        assert len(targets) == 10

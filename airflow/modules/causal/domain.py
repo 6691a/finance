@@ -185,3 +185,22 @@ INDICATOR_TARGETS: tuple[CausalTarget, ...] = (
     CausalTarget(kind=CausalTargetKind.INDICATOR, code="KRBASE", provider="ecos"),
     CausalTarget(kind=CausalTargetKind.INDICATOR, code="KTB10Y", provider="ecos"),
 )
+
+
+class TargetReturns(BaseModel):
+    """대상 하나의 실현 등락. **SQL이 계산한 값이고 모델이 만들지 않는다.**
+
+    셋이 모두 있어야 저장된다(설계 §6). 하나라도 없으면 그 대상이 통째로 빠진다 —
+    NULL로 저장하면 "안 쟀다"와 "잴 수 없었다"가 나중에 구분되지 않는다.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    week: float
+    """대상 주 안의 변화."""
+    t1: float
+    """주 종료 다음 KRX 거래일까지의 변화."""
+    t5: float
+    """주 종료 +5 KRX 거래일까지의 변화."""
+    unit: CausalReturnUnit
+    """가격·지수·환율은 percent, 금리는 basis_point다."""

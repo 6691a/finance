@@ -13,7 +13,7 @@
 -- 읽지 않고 `select_index_returns.sql`을 따로 두는 이유는 그 뷰가 KRX·NYSE만 태우고
 -- NXT를 빼는 자체 규칙을 갖기 때문이다 — 규칙이 바뀌면 이 계산이 조용히 따라 바뀐다.
 --
--- `US10Y`는 수익률(%)이지만 여기서는 **가격과 같은 변화율**로 낸다. bp가 필요한 금리는
+-- `US10Y`는 수익률(퍼센트 표기)이지만 여기서는 **가격과 같은 변화율**로 낸다. bp가 필요한 금리는
 -- `indicator_observation` 쪽이고 `select_indicator_returns.sql`이 담당한다.
 WITH bars AS (
     SELECT symbol AS code, business_date, close

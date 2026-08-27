@@ -12,11 +12,16 @@ from modules.causal import candidates, domain
 
 
 class FakeCursor:
-    """PEP 249 커서 흉내. 쿼리 종류를 안 가리고 준비된 행을 그대로 준다."""
+    """PEP 249 커서 흉내.
 
-    def __init__(self, rows: list[tuple]) -> None:
-        self._rows = rows
-        self.calls: list[tuple[str, Any]] = []
+    `results`가 있으면 SQL 안의 조각(`FROM index_daily` 등)으로 결과를 고른다. 실제 SQL을
+    돌리지 않으므로 컬럼 이름과 조인은 검증하지 못한다 — 그것은 운영 DB에 읽기 전용으로
+    한 번 돌려 보는 것이 맡는다(설계 §10.3).
+    """
+
+    def __init__(self, connection: "FakeConnection") -> None:
+        self._connection = connection
+        self._rows: list[tuple] = []
 
     def __enter__(self) -> Self:
         return self
@@ -25,21 +30,31 @@ class FakeCursor:
         return None
 
     def execute(self, statement: str, parameters: Any = ()) -> None:
-        self.calls.append((statement, parameters))
+        self._connection.calls.append((statement, parameters))
+        if self._connection.results:
+            self._rows = next(
+                (rows for key, rows in self._connection.results.items() if key in statement),
+                [],
+            )
+        else:
+            self._rows = list(self._connection.rows)
 
     def fetchall(self) -> list[tuple]:
-        return self._rows
+        return list(self._rows)
 
 
 class FakeConnection:
-    def __init__(self, rows: list[tuple] | None = None) -> None:
-        self._rows = rows or []
-        self.cursors: list[FakeCursor] = []
+    def __init__(
+        self,
+        rows: list[tuple] | None = None,
+        results: dict[str, list[tuple]] | None = None,
+    ) -> None:
+        self.rows = rows or []
+        self.results = results or {}
+        self.calls: list[tuple[str, Any]] = []
 
     def cursor(self) -> FakeCursor:
-        cursor = FakeCursor(list(self._rows))
-        self.cursors.append(cursor)
-        return cursor
+        return FakeCursor(self)
 
 
 class TestResolveWeek:
@@ -199,3 +214,73 @@ class TestResolveTargets:
         assert by_code["KRBASE"].provider == "ecos"
         # 나머지 종류는 제공처를 자기 마스터가 안다.
         assert by_code["KOSPI"].provider is None
+
+
+class TestFetchReturns:
+    """실현 등락. SQL이 계산하고 모델은 만들지 않는다(설계 §0·§6)."""
+
+    WINDOW = domain.window_for(date(2026, 8, 10))
+
+    def _targets(self) -> tuple[domain.CausalTarget, ...]:
+        return candidates.resolve_targets(
+            FakeConnection(results={"FROM instrument": [("005930",)]})
+        )
+
+    def test_each_target_kind_reads_its_own_table(self) -> None:
+        connection = FakeConnection(
+            results={
+                "FROM index_daily": [("KOSPI", 10.7669, -1.5493, -4.0267)],
+                "FROM stock_investor_trade_daily": [("005930", 19.3478, -2.1858, -6.3752)],
+                "FROM quote_daily": [("USDKRW", 0.7001, -0.0261, -1.9374)],
+                "FROM indicator_observation": [("KTB10Y", 7.4, 6.9, 2.2)],
+            }
+        )
+
+        returns = candidates.fetch_returns(connection, self._targets(), self.WINDOW)
+
+        assert returns["KOSPI"].week == 10.7669
+        assert returns["005930"].week == 19.3478
+        assert returns["USDKRW"].week == 0.7001
+        assert returns["KTB10Y"].week == 7.4
+
+    def test_interest_rates_are_measured_in_basis_points(self) -> None:
+        """가격 %와 금리 bp를 한 칸에 담을 수 없다. 단위를 값과 함께 들고 간다."""
+        connection = FakeConnection(
+            results={
+                "FROM index_daily": [("KOSPI", 10.7669, -1.5493, -4.0267)],
+                "FROM indicator_observation": [("KTB10Y", 7.4, 6.9, 2.2)],
+            }
+        )
+
+        returns = candidates.fetch_returns(connection, self._targets(), self.WINDOW)
+
+        assert returns["KOSPI"].unit == "percent"
+        assert returns["KTB10Y"].unit == "basis_point"
+
+    def test_a_target_with_a_missing_horizon_is_dropped(self) -> None:
+        """값이 하나라도 없으면 그 대상을 저장하지 않는다 — NULL로 두면 "안 쟀다"와
+        "잴 수 없었다"가 구분되지 않는다(설계 §6).
+
+        반응 주가 아직 안 끝났거나 그 계열의 수집이 늦게 시작된 주가 그렇다.
+        """
+        connection = FakeConnection(
+            results={
+                "FROM index_daily": [
+                    ("KOSPI", 1.66, None, None),  # T+1·T+5가 아직 없다
+                    ("KOSDAQ", 1.19, -3.52, -5.93),
+                ],
+            }
+        )
+
+        returns = candidates.fetch_returns(connection, self._targets(), self.WINDOW)
+
+        assert "KOSPI" not in returns
+        assert "KOSDAQ" in returns
+
+    def test_targets_with_no_row_at_all_are_absent(self) -> None:
+        """수집이 시작되기 전 주는 행 자체가 없다. 그것도 조용히 빠진다."""
+        connection = FakeConnection(results={"FROM index_daily": [("KOSPI", 1.0, 1.0, 1.0)]})
+
+        returns = candidates.fetch_returns(connection, self._targets(), self.WINDOW)
+
+        assert set(returns) == {"KOSPI"}

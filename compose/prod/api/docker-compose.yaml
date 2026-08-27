@@ -17,7 +17,11 @@ networks:
 
 services:
   api:
-    build: .
+    # 컨텍스트가 저장소 루트인 이유는 이미지가 루트의 pyproject.toml·uv.lock으로
+    # 의존성을 깔기 때문이다. 루트 .dockerignore가 그 둘만 남긴다.
+    build:
+      context: ${CODE_DIR:-../../..}
+      dockerfile: compose/prod/api/Dockerfile
     image: finance-api
     restart: unless-stopped
     networks:

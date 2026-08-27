@@ -2344,6 +2344,19 @@ dependencies = [
 ]
 
 [package.dev-dependencies]
+api = [
+    { name = "asyncpg" },
+    { name = "dependency-injector" },
+    { name = "fastapi" },
+    { name = "pydantic" },
+    { name = "pydantic-settings" },
+    { name = "pyyaml" },
+    { name = "redis" },
+    { name = "sentry-sdk" },
+    { name = "sqlalchemy", extra = ["asyncio"] },
+    { name = "tzdata" },
+    { name = "uvicorn" },
+]
 dev = [
     { name = "apache-airflow" },
     { name = "apache-airflow-providers-postgres" },
@@ -2377,6 +2390,19 @@ requires-dist = [
 ]
 
 [package.metadata.requires-dev]
+api = [
+    { name = "asyncpg" },
+    { name = "dependency-injector" },
+    { name = "fastapi" },
+    { name = "pydantic" },
+    { name = "pydantic-settings" },
+    { name = "pyyaml" },
+    { name = "redis" },
+    { name = "sentry-sdk" },
+    { name = "sqlalchemy", extras = ["asyncio"] },
+    { name = "tzdata" },
+    { name = "uvicorn" },
+]
 dev = [
     { name = "apache-airflow", specifier = "==3.3.0" },
     { name = "apache-airflow-providers-postgres", specifier = ">=7.0.0" },

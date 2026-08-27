@@ -963,6 +963,12 @@ def _daily_upserts(
                     SOURCE, symbol.value, STOCK_EXCHANGES[symbol.value], bar.business_date,
                     bar.open, bar.high, bar.low, bar.close, bar.volume, source_record_id,
                 )
+            elif symbol.kind == "index_future":
+                # 연속 심볼(ES=F)이라 실제 월물이 없다. 분봉(`_bar_upserts`)과 같은 자리에 NULL이다.
+                row = (
+                    SOURCE, symbol.value, bar.business_date,
+                    bar.open, bar.high, bar.low, bar.close, bar.volume, None, source_record_id,
+                )
             else:
                 row = (
                     SOURCE, symbol.value, bar.business_date,

@@ -446,3 +446,18 @@ def test_stock_bar_tracks_ingest_method_and_finality():
     assert "ck_stock_bar_ingest_method" in {
         constraint.name for constraint in table.constraints if isinstance(constraint, CheckConstraint)
     }
+
+
+def test_the_future_daily_table_keeps_the_real_contract():
+    """논리 심볼(KOSPI200_FUT)과 실제 월물(A01609)을 함께 보존한다.
+
+    분봉 `index_future_bar`가 이미 같은 칸을 갖고 있다. 이게 없으면 월물이 바뀐 날의 갭이
+    시장 급변인지 롤오버인지 구분되지 않는다. Yahoo 연속 심볼(`ES=F`)은 실제 월물이 없어 NULL이다.
+    """
+    from apps.models.market import IndexDaily, IndexFutureDaily
+
+    column = IndexFutureDaily.__table__.c.contract_code
+    assert column.nullable is True
+    assert column.comment
+
+    assert "contract_code" not in IndexDaily.__table__.c

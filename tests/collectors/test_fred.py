@@ -14,6 +14,7 @@ from apps.models.raw import SourceRecord
 from modules.collectors.indicator.fred import (
     MACRO_SERIES,
     OBSERVATION_UPSERT,
+    POLICY_RATE_SERIES,
     SOURCE_RECORD_INSERT,
     TREASURY_SERIES,
     FredCollector,
@@ -140,10 +141,26 @@ def test_treasury_series_cover_short_and_long_maturities():
     assert len(set(TREASURY_SERIES)) == len(TREASURY_SERIES)
 
 
-def test_the_two_series_groups_do_not_overlap():
-    # DAG이 둘로 나뉘어 각각 매핑한다. 겹치면 같은 계열을 하루에 두 번 받는다.
-    assert set(TREASURY_SERIES) & set(MACRO_SERIES) == set()
-    assert set(TREASURY_SERIES) | set(MACRO_SERIES) == {series.value for series in FredSeries}
+def test_the_three_series_groups_do_not_overlap():
+    """DAG이 셋으로 나뉘어 각각 목록을 돈다. 겹치면 같은 계열을 하루에 두 번 받는다.
+
+    **덮는지도 함께 본다.** 국채는 `kind`로, 거시는 `is_monthly`로 걸러서 어느 쪽에도 안 맞는
+    계열(일별 정책금리가 그렇다)이 조용히 어느 DAG에도 안 실릴 수 있다.
+    """
+    groups = (set(TREASURY_SERIES), set(MACRO_SERIES), set(POLICY_RATE_SERIES))
+
+    assert set.intersection(*groups) == set()
+    assert sum(len(group) for group in groups) == len(set.union(*groups))
+    assert set.union(*groups) == {series.value for series in FredSeries}
+
+
+def test_policy_rate_series_are_daily_and_marked_as_such():
+    # 정책금리는 중앙은행이 정하는 값이다. 시장이 만드는 값과 한 `kind`에 두면 시장금리 패널이
+    # 정책금리 계단을 함께 그린다.
+    assert set(POLICY_RATE_SERIES) == {"DFEDTARU", "EADFR"}
+    assert all(not FredSeries(series).is_monthly for series in POLICY_RATE_SERIES)
+    assert FredSeries.EADFR.fred_id == "ECBDFR"
+    assert FredSeries.DFEDTARU.unit == "Percent"
 
 
 def test_each_series_declares_its_own_unit():

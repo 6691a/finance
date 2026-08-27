@@ -3856,7 +3856,7 @@ def test_finishing_a_run_writes_the_token_counts():
         status=LlmRunStatus.SUCCEEDED,
         records=(),
         tool_rounds=4,
-        usage=TokenUsage(prompt=224970, completion=17593, reasoning=13975),
+        usage=TokenUsage(prompt=224970, cached=52992, completion=17593, reasoning=13975),
     )
 
     (statement, params) = next(call for call in connection.calls if "UPDATE thesis_llm_run" in body(call[0]))
@@ -3864,6 +3864,8 @@ def test_finishing_a_run_writes_the_token_counts():
     values = dict(zip((name for name in columns if name != "updated_at"), params, strict=False))
 
     assert values["prompt_tokens"] == 224970
+    # 캐시 몫은 prompt_tokens 안에 든 값이다. 청구 단가가 달라 따로 센다.
+    assert values["cached_prompt_tokens"] == 52992
     assert values["completion_tokens"] == 17593
     assert values["reasoning_tokens"] == 13975
     # 마지막 자리표시자는 WHERE의 id다.
@@ -3887,6 +3889,7 @@ def test_finishing_a_run_without_a_measurement_leaves_the_tokens_null():
     values = dict(zip((name for name in columns if name != "updated_at"), params, strict=False))
 
     assert values["prompt_tokens"] is None
+    assert values["cached_prompt_tokens"] is None
     assert values["completion_tokens"] is None
     assert values["reasoning_tokens"] is None
 

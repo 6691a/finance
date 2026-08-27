@@ -831,6 +831,15 @@ class ThesisLlmRun(EntityBase):
             "왕복 수가 아니라 이 값이 비용이다.** 이 칸이 생기기 전 행은 NULL이다"
         ),
     )
+    cached_prompt_tokens: Mapped[int | None] = mapped_column(
+        Integer,
+        nullable=True,
+        comment=(
+            "그중 프롬프트 캐시에서 읽은 입력 토큰. **prompt_tokens에 포함된다** — 제공처가 "
+            "이 부분을 훨씬 싸게 청구하므로 이 칸이 없으면 prompt_tokens만으로는 실제 비용을 "
+            "알 수 없다. 제공처가 안 알려 주면 0이다. 이 칸이 생기기 전 행은 NULL이다"
+        ),
+    )
     completion_tokens: Mapped[int | None] = mapped_column(
         Integer,
         nullable=True,

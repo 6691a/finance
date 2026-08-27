@@ -249,6 +249,15 @@ def test_the_ledger_counts_requested_and_answered_subjects(capsys):
     assert "subjects_answered INTEGER NOT NULL" not in sql
 
 
+def test_the_ledger_splits_out_the_cached_prompt_tokens(capsys):
+    """캐시 몫이 없으면 prompt_tokens만으로는 실제 비용을 모른다. 단가가 다르다."""
+    sql = head_sql(capsys)
+
+    assert "ALTER TABLE thesis_llm_run ADD COLUMN cached_prompt_tokens INTEGER" in sql
+    assert "cached_prompt_tokens INTEGER NOT NULL" not in sql
+    assert "cached_prompt_tokens INTEGER DEFAULT" not in sql
+
+
 def test_the_ledger_counts_tokens(capsys):
     """비용은 그 전까지 LangSmith 트레이스에만 있었다. 슬롯별 추이를 SQL로 못 봤다."""
     sql = head_sql(capsys)

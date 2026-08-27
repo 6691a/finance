@@ -12,7 +12,7 @@
 - **주석도 해시에 들어간다.** 주석만 고쳐도 깨지는데 그건 받아들인다 — 프롬프트 파일의
   주석은 모델에게 안 가지만 문장을 고치는 사람이 읽는 것이라 같은 무게로 다룬다.
 
-설계는 `docs/convention/prompt-file-migration.md` 4절이다.
+규칙은 `.claude/CLAUDE.md`의 "프롬프트는 코드가 아니다"에 있다.
 """
 
 import hashlib

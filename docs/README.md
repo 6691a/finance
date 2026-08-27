@@ -39,7 +39,6 @@
 | 문서 | 무엇 | 상태 |
 | --- | --- | --- |
 | [collectors-class-migration.md](convention/collectors-class-migration.md) | 무엇을 클래스로 묶고 어디서 파일로 가르는가 | 전환 완료. 새 코드가 따르는 형태 |
-| [prompt-file-migration.md](convention/prompt-file-migration.md) | 프롬프트를 파이썬 밖 YAML로 옮기는 순서 | **설계만** — 1단계부터 재승인 뒤 |
 
 ## 루트
 

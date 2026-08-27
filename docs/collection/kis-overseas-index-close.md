@@ -47,7 +47,9 @@ FID_PW_DATA_INCU_YN=Y
 - **시각은 America/New_York 벽시계다.** 2026-08-21 응답이 14:40~16:41 봉을 줬다. 16:00 봉이 현물 마감에
   해당하고(`7674.30`), 16:01~16:41은 값이 거의 고정된 **정산 구간** 봉이며 마지막 봉 `7674.37`이 일봉
   API가 주는 공식 종가와 같다.
-- 일봉 API(`inquire-daily-chartprice`, `FHKST03030100`)도 되지만 브리핑이 안 읽는 경로라 쓰지 않는다.
+- 일봉 API(`inquire-daily-chartprice`, `FHKST03030100`)는 `kis_overseas_index_daily`가 따로 쓴다.
+  같은 공식 종가를 `index_daily`에 이력으로 쌓는 경로이고, 브리핑이 읽는 마감값의 원천은 여전히
+  여기(분봉 → `index_bar`)다. 설계는 [kis-index-daily-collection.md](kis-index-daily-collection.md) 6절이다.
 - 안 되는 것: `.DJI`(다우) 분봉 0건(일봉은 옴), `RUT`(러셀2000) 일봉·분봉 모두 0건.
 
 프로브 스크립트는 저장소 밖(스크래치패드)에 있고 키는 `config.yaml`에서 읽었다.

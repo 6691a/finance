@@ -3,9 +3,9 @@
 - 상위: [collectors-class-migration.md](collectors-class-migration.md)와 같은 층의 전환 문서다.
   그 문서가 **한 파일을 어디서 가르나**를 정한다면, 이 문서는 **가른 파일들을 어떻게 묶나**다.
 - 날짜: 2026-08-27
-- 상태: **설계만. 구현 전.** 1단계부터 사용자 재승인 뒤 착수한다.
+- 상태: **구현 완료(2026-08-27).** 세 단계를 커밋 셋으로 옮겼다. 기록은 문서 끝에 있다.
 - 의존: 없다. 동작을 바꾸지 않는 이동이다.
-- 산출물(예정): `modules/expectation/`·`technical/`·`thesis/` 세 패키지, import 경로 수정,
+- 산출물: `modules/expectation/`·`technical/`·`thesis/` 세 패키지, import 경로 수정,
   `tests/modules/test_import_weight.py`의 경로 갱신.
 
 ## 0. 왜 — 최상위에 31개가 평평하게 있다
@@ -163,3 +163,42 @@ airflow/modules/
 - `modules/`가 `collectors/`·`briefing/`와 같은 모양이 된다.
 - **`thesis_toolbox.py` 분리**가 다음 후보로 남는다. 1,440줄이고 이 이동 뒤에는
   `thesis/toolbox.py`라 나누기도 쉬워진다.
+
+## 9. 구현 기록 (2026-08-27)
+
+세 단계를 순서대로 옮겼다. 각 단계 뒤에 `pytest`(2,186건, 전후 동수)·`ruff`·`pyrefly`를 돌렸고
+`test_import_weight.py`는 경로만 바꾼 채 그대로 통과했다.
+
+| 단계 | 커밋 | 옮긴 파일 | 함께 고친 파일 |
+| --- | --- | ---: | ---: |
+| 1 `expectation/` | `d0f07ca` | 3 | 15 |
+| 2 `technical/` | `e9b12b9` | 3 | 33 |
+| 3 `thesis/` | `26b081a` | 13 | 68 |
+
+### 설계에 없었던 것 — 짧아진 바인딩이 지역 변수와 겹친다
+
+`from modules import technical`이 `from modules.technical import indicators`가 되면
+**바인딩 이름이 바뀐다.** 6절이 "import 문 말고 손대지 않는다"라고 했지만 그 이름이 이미
+지역 변수로 쓰이던 자리가 셋 있었고, 거기서는 지역 변수를 바꾸는 것 말고 방법이 없었다.
+
+- `briefing/chart.py` — `indicators = technical.compute_series(...)` → `computed`
+- `tests/dags/test_market_thesis_forecast.py` — `forecast = ...PreOpenForecast(...)` → `pre_open`
+- `tests/dags/test_market_thesis_review.py` — `review = ...PostCloseReview(...)` → `post_close`
+
+셋 다 `ruff`의 `F823`(할당 전 참조)이 잡았다. 잡히지 않는 형태(할당이 사용보다 앞서는
+그림자)는 없었지만, **접두어를 떼는 이동에서는 이 검사가 유일한 안전망이다** — 다음에
+같은 일을 할 때 `ruff`를 기계적 치환 직후에 먼저 돌린다.
+
+### 산문도 함께 고쳤다
+
+5절이 예고한 대로 마이그레이션 리비전과 DAG·SQL 주석이 `modules/thesis_*.py`를 문장으로
+가리키고 있었다. 코드와 같은 치환으로 함께 고쳤고, **파일 이름이 안 바뀌는 것**
+(`tests/modules/test_technical_signals.py`, `market_thesis_forecast.py`, DAG의 `dag_id`)은
+치환 규칙에서 앞뒤 문자로 막았다.
+
+### 남은 것
+
+- `thesis/toolbox.py` 1,440줄 분리. 7절대로 이 이동과 같은 커밋에 두지 않았다.
+- `dags/`는 폴더로 나누지 않는다. Airflow 3.3의 DagBag이 재귀로 훑으므로 기술적으로는
+  되지만 `dag_id`가 경로와 무관해 UI에 그룹이 생기지 않고, DAG 36개가 접두어로 이미
+  정렬된다. 얻는 것이 파일 탐색기에서만이라 하지 않는다.

@@ -85,6 +85,11 @@ MAX_ITEMS_PER_FEED = 500
 # 확인하는 것이 인수 조건이고, 다르면 여기에 규칙을 더한다.
 NOISE_PATTERNS: tuple[re.Pattern[str], ...] = (
     re.compile(r"<[^>]+>"),  # 피드 요약에 섞여 오는 HTML 조각
+    # 두 번 escape된 피드에 남는 공백 엔티티. 한국은행 보도자료는 `&amp;nbsp;`로 실어서
+    # `html.unescape` 한 번으로는 `&nbsp;` 글자가 본문에 그대로 남는다(통방 결정문 한 건에
+    # 15개). 엔티티를 한 번 더 푸는 대신 공백 하나만 좁혀 잡는다 — 두 번 풀면 본문에 적힌
+    # `&lt;script&gt;` 같은 문자열이 태그로 되살아난다.
+    re.compile(r"&nbsp;|&#160;"),
     re.compile(r"\d+\s*(?:초|분|시간|일)\s*전"),  # 3분 전
     re.compile(r"\b\d+\s+(?:seconds?|minutes?|hours?|days?)\s+ago\b", re.IGNORECASE),
     re.compile(r"조회수?\s*[\d,]+"),

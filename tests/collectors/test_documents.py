@@ -187,6 +187,11 @@ def test_normalize_unescapes_entities_then_strips_tags():
     assert normalize_text("&lt;p&gt;본문&lt;/p&gt;") == "본문"
 
 
+def test_normalize_drops_the_space_entity_a_double_escaped_feed_leaves_behind():
+    # 한국은행 보도자료는 `&amp;nbsp;`로 실어서 unescape 한 번 뒤에 `&nbsp;` 글자가 남는다.
+    assert normalize_text("&lt;p&gt;기준금리를&amp;nbsp;3.00%로&lt;/p&gt;") == "기준금리를 3.00%로"
+
+
 def test_normalize_survives_an_unescaped_angle_bracket():
     # BEA 요약의 escape되지 않은 `<` 하나가 XML 파서를 태워 수집 태스크를 통째로 죽였다.
     assert normalize_text("GDP < 2% growth &amp; slowing") is not None

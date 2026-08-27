@@ -76,9 +76,6 @@ THESIS_TIMEOUT_SECONDS = 1800.0
 #
 # **산문을 내는 프롬프트 넷이 이 한 벌을 함께 쓴다.** 같은 문장을 네 곳에 적으면 반드시 어긋난다.
 # `expectation_extraction`은 뺀다 — 그쪽 숫자는 산문이 아니라 JSON 숫자 칸으로 가고 쉼표가 파싱을 깬다.
-#
-# **중괄호를 넣지 않는다.** `assessment.SYSTEM_PROMPT_TEMPLATE`이 `.format()` 템플릿이라
-# 중괄호가 섞이면 `KeyError`로 죽는다. `tests/modules/test_llm.py`가 그 자리를 지킨다.
 NUMBER_STYLE = """## 숫자 표기
 
 **문장 안의 숫자에만 적용한다.** JSON의 숫자 칸에는 쉼표를 넣지 마라.

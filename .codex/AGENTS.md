@@ -460,7 +460,7 @@ LLM을 부르는 코드는 **Pydantic, LangChain, LangGraph 위에서만 쓴다.
 
 - **왜 나누나.** 문장은 흐름보다 훨씬 자주 바뀐다. 한 파일에 두면 문장만 고친 변경도 코드 diff가 되고, 리뷰하는 사람이 로직 변경과 표현 변경을 눈으로 갈라야 한다. `sql/`을 파이썬 문자열로 두지 않는 것과 같은 이유다.
 - **자리는 `modules/prompts/`다.** 컨테이너는 `airflow/`의 `dags`·`modules`·`utility`·`sql`·`plugins`·`config`만 마운트하고 compose는 건드리지 않는다. `config/`는 `.gitignore` 대상이라(`airflow.cfg`가 생기는 자리) 커밋되지 않는다. 남는 곳이 `modules/`이고, 프롬프트를 쓰는 코드가 거기 있으므로 자리도 맞다.
-- **치환은 `string.Template`(`$이름`)이다. `str.format`을 쓰지 않는다.** 프롬프트에는 출력 예시로 `{"picks": [...]}` 같은 JSON이 들어가는데 `format`은 그 중괄호를 자리표시자로 읽고 죽는다. `assessment.SYSTEM_PROMPT_TEMPLATE`이 "중괄호를 넣지 마라"라는 규칙으로 그것을 막고 있는데, 그건 문장을 쓰는 사람이 지켜야 하는 제약이라 언젠가 깨진다.
+- **치환은 `string.Template`(`$이름`)이다. `str.format`을 쓰지 않는다.** 프롬프트에는 출력 예시로 `{"picks": [...]}` 같은 JSON이 들어가는데 `format`은 그 중괄호를 자리표시자로 읽고 죽는다. 전에는 `assessment.SYSTEM_PROMPT_TEMPLATE`이 "`NUMBER_STYLE`에 중괄호를 넣지 마라"라는 규칙으로 그것을 막고 있었다 — 문장을 쓰는 사람이 지켜야 하는 제약이라 언젠가 깨진다. 그 프롬프트가 YAML로 간 2026-08-27에 제약이 사라졌다.
 - **빠진 값은 실패다.** `safe_substitute`를 쓰지 않는다. 자리표시자가 그대로 모델에게 나가는 것보다 태스크가 죽는 편이 낫다.
 - **숫자 상한은 YAML에 적지 않는다.** `MAX_TOOL_CALLS`·`MAX_REASON_CHARS` 같은 값은 코드 상수가 원본이고 자리표시자로 들어간다. 두 곳에 적으면 반드시 어긋난다.
 - **파일은 import 시점에 읽고 검증한다.** 칸이 빠지거나 오타가 나면 그 모듈을 쓰는 DAG이 DagBag 단계에서 죽는다. 실행 중에 프롬프트가 비는 것보다 낫다.

@@ -19,9 +19,9 @@ compose는 건드리지 않는 것이 저장소 규칙이다. `config/`는 `.git
 ## 치환은 `string.Template`이다
 
 `str.format`을 쓰지 않는다. 프롬프트에는 출력 예시로 `{"highlights": [...]}` 같은 JSON이
-들어가는데 `format`은 그 중괄호를 자리표시자로 읽고 죽는다. `assessment.py`가 그 문제를
-"중괄호를 넣지 마라"라는 규칙으로 막고 있는데, 그건 프롬프트를 쓰는 사람이 지켜야 하는
-제약이라 언젠가 깨진다. `$name`은 JSON과 부딪히지 않는다.
+들어가는데 `format`은 그 중괄호를 자리표시자로 읽고 죽는다. 전에는 `assessment.py`가 그
+문제를 "`NUMBER_STYLE`에 중괄호를 넣지 마라"라는 규칙으로 막고 있었다 — 프롬프트를 쓰는
+사람이 지켜야 하는 제약이라 언젠가 깨진다. `$name`은 JSON과 부딪히지 않는다.
 
 **`substitute`는 빠진 값에 `KeyError`를 낸다.** `safe_substitute`를 쓰지 않는다 —
 자리표시자가 그대로 모델에게 나가는 것보다 태스크가 죽는 편이 낫다.
@@ -41,13 +41,22 @@ class PromptError(RuntimeError):
 
 
 class PromptSet(BaseModel):
-    """프롬프트 파일 하나. 한 흐름이 쓰는 문장 전부를 담는다."""
+    """프롬프트 파일 하나. 한 흐름이 쓰는 문장 전부를 담는다.
+
+    `variants`는 **한 흐름 안에서 갈리는 문장 조각**이다. 평가의 관점 셋(`global`·`korea`·
+    `us`)처럼 값이지 코드가 아닌 것들이라, 하나를 늘리는 일이 파이썬을 여는 일일 이유가
+    없다. 조각은 `render(...)`에 값으로 넘어가거나 그대로 쓰인다.
+
+    **허용 값 검증은 코드에 남는다.** `assessment.LlmSettings`가 관점 키로 환경변수를
+    막는데 그 판정은 YAML이 할 수 없다.
+    """
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     system: str
     instruction: str
     repair: str
+    variants: dict[str, str] = {}
 
     def render(self, field: str, /, **values: object) -> str:
         """`$name` 자리표시자를 채운 문장. 빠진 값이 있으면 죽는다."""

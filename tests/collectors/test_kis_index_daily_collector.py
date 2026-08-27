@@ -166,6 +166,16 @@ class TestFetchIndexDaily:
 
         assert requests[0][2]["FID_INPUT_ISCD"] == "1001"
 
+    def test_kospi200_uses_its_own_index_code(self, monkeypatch):
+        requests, send = daily_send([(index_daily_payload(("20260821",)), "")])
+        monkeypatch.setattr(kis_index_daily, "send_get", send)
+
+        fetch = daily_collector().fetch(DomesticIndex.KOSPI200, DAILY_SPAN_START, DAILY_SPAN_END, sleep=0)
+
+        assert requests[0][2]["FID_INPUT_ISCD"] == "2001"
+        # 저장 심볼은 업종코드가 아니라 Enum 값이다. 선물과 빼서 베이시스를 낼 때 짝이 된다.
+        assert fetch.symbol == "KOSPI200"
+
     def test_a_continuation_header_asks_for_the_next_page(self, monkeypatch):
         requests, send = daily_send(
             [

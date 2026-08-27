@@ -52,6 +52,8 @@ from langchain_core.tools import BaseTool
 from langchain_openai import ChatOpenAI
 from langchain_xai import ChatXAI
 
+from modules.prompt import read_fragments
+
 logger = logging.getLogger(__name__)
 
 # 한 번의 호출을 기다리는 시간. 스트리밍을 쓰지 않으므로 모델이 추론을 끝내야 응답 헤더가
@@ -70,22 +72,10 @@ REQUEST_TIMEOUT_SECONDS = 300.0
 # 손잡이 하나만 당긴다(`docs/analysis/market-thesis/TUNING.md` 1절).
 THESIS_TIMEOUT_SECONDS = 1800.0
 
-# 산문에 숫자를 쓰는 규칙. 모델은 툴 JSON의 raw 숫자를 그대로 문장에 베끼기 때문에 "상승 1174",
-# "외국인이 140762백만원" 같은 문장이 나온다(2026-08-25 실측). Slack·브리핑은 프론트엔드가 없는
-# 출력이라 그 표기가 유일한 단서다.
-#
-# **산문을 내는 프롬프트 넷이 이 한 벌을 함께 쓴다.** 같은 문장을 네 곳에 적으면 반드시 어긋난다.
-# `expectation/extraction`은 뺀다 — 그쪽 숫자는 산문이 아니라 JSON 숫자 칸으로 가고 쉼표가 파싱을 깬다.
-NUMBER_STYLE = """## 숫자 표기
-
-**문장 안의 숫자에만 적용한다.** JSON의 숫자 칸에는 쉼표를 넣지 마라.
-
-- 네 자리 이상이면 천 단위 쉼표를 찍는다 — `1174`가 아니라 `1,174`다.
-  연도·종목코드·`ref` 같은 식별자는 예외다(`2026`, `005930`).
-- 수에는 단위를 붙인다. 등락 종목 수는 `1,174종목`, 등락률은 `%`,
-  금리 변화는 `bp`, 금액은 툴이 준 `amount_unit` 그대로 `140,762백만원`이다.
-- **단위를 바꾸지 마라.** 백만원을 억원으로 고쳐 쓰지 마라.
-  단위를 모르는 값에는 단위를 지어 붙이지 마라."""
+# 산문에 숫자를 쓰는 규칙. 문장은 `modules/prompts/fragments/shared.yaml`이 갖는다 —
+# 산문을 내는 프롬프트 넷이 `$number_style`로 받아 쓰는 조각이라 흐름 하나에 속하지 않는다.
+# 이름은 그대로 남긴다. 네 소비자와 테스트가 이 상수로 쓰고 있다.
+NUMBER_STYLE = read_fragments("shared")["number_style"]
 
 
 class LlmError(RuntimeError):

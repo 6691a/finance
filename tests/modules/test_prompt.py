@@ -7,7 +7,7 @@
 import pytest
 import yaml
 
-from modules.prompt import PROMPT_ROOT, PromptError, PromptSet, read_prompt
+from modules.prompt import PROMPT_ROOT, PromptError, PromptSet, read_fragments, read_prompt
 
 VALID = {"system": "너는 $role 이다.", "instruction": "$payload 를 읽어라.", "repair": "다시 하라."}
 
@@ -82,9 +82,26 @@ def test_an_unknown_section_fails_loudly(tmp_path, monkeypatch):
 
 
 def test_every_prompt_file_in_the_repository_loads():
-    """파일을 늘릴 때마다 테스트를 늘리지 않아도 되게 훑는다."""
+    """파일을 늘릴 때마다 테스트를 늘리지 않아도 되게 훑는다.
+
+    `fragments/`는 훑지 않는다. 거기 있는 것은 흐름 하나가 아니라 조각이라 `system` 칸이 없다.
+    """
     files = sorted(PROMPT_ROOT.glob("*.yaml"))
 
     assert files, "modules/prompts/에 프롬프트 파일이 하나도 없다"
     for path in files:
         assert read_prompt(path.stem).system
+
+
+def test_shared_fragments_are_read_from_their_own_folder():
+    """여러 흐름이 함께 쓰는 조각. 흐름 파일과 자리가 다르다."""
+    assert read_fragments("shared")["number_style"].startswith("## 숫자 표기")
+
+
+def test_a_fragment_that_is_not_a_string_fails_loudly(tmp_path, monkeypatch):
+    """조각은 프롬프트에 그대로 끼워진다. 목록이나 숫자가 섞이면 문장이 깨진 채로 나간다."""
+    monkeypatch.setattr("modules.prompt.FRAGMENT_ROOT", tmp_path)
+    (tmp_path / "sample.yaml").write_text("number_style: [not, a, string]\n", encoding="utf-8")
+
+    with pytest.raises(PromptError):
+        read_fragments("sample")

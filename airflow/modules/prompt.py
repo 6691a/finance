@@ -29,11 +29,16 @@ compose는 건드리지 않는 것이 저장소 규칙이다. `config/`는 `.git
 
 from pathlib import Path
 from string import Template
+from typing import Any
 
 import yaml
 from pydantic import BaseModel, ConfigDict
 
 PROMPT_ROOT = Path(__file__).resolve().parent / "prompts"
+
+# 흐름 하나에 속하지 않는 조각. `PROMPT_ROOT` 바로 아래가 아니라 한 단 아래에 두어
+# 흐름 파일을 훑는 테스트와 섞이지 않게 한다.
+FRAGMENT_ROOT = PROMPT_ROOT / "fragments"
 
 
 class PromptError(RuntimeError):
@@ -73,7 +78,23 @@ def read_prompt(name: str) -> PromptSet:
     import 시점에 부르는 것을 전제로 한다. 파일이 없거나 칸이 어긋나면 그 모듈을 쓰는
     DAG이 DagBag 단계에서 죽고, 그것이 실행 중에 프롬프트가 비는 것보다 낫다.
     """
-    path = PROMPT_ROOT / f"{name}.yaml"
+    return PromptSet.model_validate(_load(PROMPT_ROOT / f"{name}.yaml"))
+
+
+def read_fragments(name: str) -> dict[str, str]:
+    """`modules/prompts/fragments/<name>.yaml`의 문장 조각들.
+
+    **흐름 하나에 속하지 않는 문장이다.** 산문 숫자 표기 규칙처럼 여러 흐름이 같은 답을
+    내야 하는 조각을 담는다. `prompts/` 바로 아래가 흐름 하나이므로 자리를 나눈다 —
+    파일을 훑는 테스트가 이 폴더를 보지 않는 것도 그래서다.
+    """
+    raw = _load(FRAGMENT_ROOT / f"{name}.yaml")
+    if not all(isinstance(value, str) for value in raw.values()):
+        raise PromptError(f"every fragment must be a string: {name}")
+    return raw
+
+
+def _load(path: Path) -> dict[str, Any]:
     try:
         raw = yaml.safe_load(path.read_text(encoding="utf-8"))
     except OSError as error:
@@ -83,4 +104,4 @@ def read_prompt(name: str) -> PromptSet:
 
     if not isinstance(raw, dict):
         raise PromptError(f"prompt file must be a mapping: {path}")
-    return PromptSet.model_validate(raw)
+    return raw

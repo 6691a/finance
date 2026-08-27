@@ -785,6 +785,22 @@ class ThesisLlmRun(EntityBase):
             "다른 수다** — 그쪽은 버려진 결과도 센다. MAX_TOOL_RESULT_CHARS와 직접 비교하지 않는다"
         ),
     )
+    subjects_requested: Mapped[int | None] = mapped_column(
+        Integer,
+        nullable=True,
+        comment=(
+            "이 대화에 요청한 추론 대상 수. answered와 다르면 모델이 일부만 답한 것이다. "
+            "해설(narration) 대화는 대상 개념이 달라 NULL이다 — 0으로 메우면 '전부 실패'와 같아진다"
+        ),
+    )
+    subjects_answered: Mapped[int | None] = mapped_column(
+        Integer,
+        nullable=True,
+        comment=(
+            "그중 실제로 저장된 추론 수. 요청보다 적으면 모델이 대상을 빠뜨린 것이고, "
+            "교정을 한 번 돌린 뒤의 최종값이다. 해설 대화는 NULL이다"
+        ),
+    )
     investigation_truncated: Mapped[bool] = mapped_column(
         Boolean,
         nullable=False,

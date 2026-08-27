@@ -66,11 +66,26 @@ class PromptSet(BaseModel):
 
     def render(self, field: str, /, **values: object) -> str:
         """`$name` 자리표시자를 채운 문장. 빠진 값이 있으면 죽는다."""
-        template = Template(getattr(self, field))
+        return self._fill(getattr(self, field), f"prompt '{field}'", values)
+
+    def render_variant(self, name: str, /, **values: object) -> str:
+        """`variants`의 조각 하나를 채운다. 조각에도 자리표시자가 들어갈 수 있다.
+
+        조각을 코드에서 f-string으로 이어 붙이지 않기 위한 자리다 — 그러면 문장 절반이
+        YAML, 절반이 파이썬이 되어 프롬프트를 파일로 뺀 뜻이 없어진다.
+        """
         try:
-            return template.substitute(**values)
+            fragment = self.variants[name]
         except KeyError as error:
-            raise PromptError(f"prompt '{field}' needs a value for {error}") from error
+            raise PromptError(f"prompt has no variant {name!r}") from error
+        return self._fill(fragment, f"variant {name!r}", values)
+
+    @staticmethod
+    def _fill(body: str, label: str, values: dict[str, object]) -> str:
+        try:
+            return Template(body).substitute(**values)
+        except KeyError as error:
+            raise PromptError(f"{label} needs a value for {error}") from error
 
 
 def read_prompt(name: str) -> PromptSet:

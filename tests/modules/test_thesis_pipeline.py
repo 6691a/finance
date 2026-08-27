@@ -10,6 +10,7 @@
 
 import json
 import re
+from collections.abc import Sequence
 from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 from typing import Any, Self
@@ -1127,11 +1128,17 @@ def build(model: ScriptedModel, connection: FakeConnection) -> ThesisBuilder:
     return ThesisBuilder(model, toolbox(connection))
 
 
-def run_builder(builder: ThesisBuilder) -> Investigation:
+# 대상 하나만 요청한다. 답이 모자라면 교정이 한 번 도는 것이 정상 동작이라
+# (`test_a_missing_subject_is_re_requested_once`), 그것을 재지 않는 테스트는 요청과 답의
+# 개수를 맞춰 두어야 스크립트한 응답이 어긋나지 않는다.
+ONE_SUBJECT = SUBJECTS[:1]
+
+
+def run_builder(builder: ThesisBuilder, subjects: Sequence[Subject] = ONE_SUBJECT) -> Investigation:
     return builder.run(
         run_slot=RunSlot.PRE_OPEN,
         as_of_at=AS_OF,
-        subjects=SUBJECTS,
+        subjects=subjects,
         observed_state=OBSERVED,
         past_theses={},
     )
@@ -1816,35 +1823,107 @@ def test_a_subject_answered_twice_is_refused_entirely():
     )
     builder = build(model, connection)
 
-    drafts = run_builder(builder).drafts
+    drafts = run_builder(builder, SUBJECTS).drafts
 
     # 어느 쪽이 진짜인지 알 수 없다. 먼저 넣은 것도 함께 뺀다.
     assert [draft.subject.code for draft in drafts] == ["000660"]
 
 
-def test_a_missing_subject_is_left_out_and_never_re_requested():
+def test_a_missing_subject_is_re_requested_once():
+    """**대상 넷을 요청했으면 넷이 와야 한다.** 모자란 답을 형식 실패와 같게 다룬다.
+
+    2026-08-27 `intraday_midday`가 대상 넷을 조사해 놓고 하나만 답했고, 그때는 그것이
+    `written=1`로 성공이었다. 전에는 "빠진 subject를 다시 묻지 않는다"가 계약이었다.
+    """
     connection = FakeConnection()
-    model = scripted(answer_message(thesis_payload("KOSPI")))
+    model = ScriptedModel(
+        AIMessage(DONE_INVESTIGATING),
+        answer_message(thesis_payload("KOSPI")),
+        answer_message(thesis_payload("KOSPI"), thesis_payload("000660")),
+    )
     builder = build(model, connection)
 
-    drafts = run_builder(builder).drafts
+    drafts = run_builder(builder, SUBJECTS).drafts
+
+    assert [draft.subject.code for draft in drafts] == ["KOSPI", "000660"]
+    # 조사 한 번, 첫 답, 교정 뒤 답. 교정은 한 번뿐이다.
+    assert len(model.calls) == 3
+
+
+def test_the_short_answer_repair_asks_for_the_missing_subjects_by_name():
+    """형식 교정 문구를 그대로 주면 모델이 "JSON 하나만 내라"를 듣고 또 하나만 낸다."""
+    connection = FakeConnection()
+    model = ScriptedModel(
+        AIMessage(DONE_INVESTIGATING),
+        answer_message(thesis_payload("KOSPI")),
+        answer_message(thesis_payload("KOSPI"), thesis_payload("000660")),
+    )
+    builder = build(model, connection)
+
+    run_builder(builder, SUBJECTS)
+
+    repair = model.calls[-1][-1].content
+    assert "000660" in repair
+    assert "KOSPI" not in repair
+
+
+def test_a_repair_that_answers_fewer_falls_back_to_the_first_answer():
+    """교정본이 더 나쁘면 첫 답을 쓴다. 다시 물어서 잃는 일은 없어야 한다."""
+    connection = FakeConnection()
+    model = ScriptedModel(
+        AIMessage(DONE_INVESTIGATING),
+        answer_message(thesis_payload("KOSPI")),
+        answer_message(),
+    )
+    builder = build(model, connection)
+
+    drafts = run_builder(builder, SUBJECTS).drafts
 
     assert [draft.subject.code for draft in drafts] == ["KOSPI"]
-    # 조사 한 번, 답변 한 번. 빠진 subject를 다시 묻지 않는다.
-    assert len(model.calls) == 2
+
+
+def test_an_unreadable_repair_falls_back_to_the_first_answer():
+    """교정 답을 못 읽어도 첫 답은 이미 검증을 통과한 것이다. 태스크를 죽이지 않는다."""
+    connection = FakeConnection()
+    model = ScriptedModel(
+        AIMessage(DONE_INVESTIGATING),
+        answer_message(thesis_payload("KOSPI")),
+        AIMessage("이건 JSON이 아니다"),
+    )
+    builder = build(model, connection)
+
+    drafts = run_builder(builder, SUBJECTS).drafts
+
+    assert [draft.subject.code for draft in drafts] == ["KOSPI"]
+
+
+def test_the_requested_subject_count_reaches_the_ledger():
+    """요청과 응답의 수가 원장에 남아야 "넷 중 하나만"이 SQL로 보인다."""
+    connection = FakeConnection()
+    model = ScriptedModel(
+        AIMessage(DONE_INVESTIGATING),
+        answer_message(thesis_payload("KOSPI")),
+        answer_message(thesis_payload("KOSPI")),
+    )
+    builder = build(model, connection)
+
+    investigation = run_builder(builder, SUBJECTS)
+
+    assert investigation.subjects_requested == 2
+    assert len(investigation.drafts) == 1
 
 
 def test_a_subject_whose_probabilities_do_not_sum_to_one_is_dropped():
     connection = FakeConnection()
-    model = scripted(
-        answer_message(
-            thesis_payload("KOSPI", prob_up=0.3, prob_down=0.3, prob_flat=0.3),
-            thesis_payload("000660"),
-        )
+    bad_kospi = answer_message(
+        thesis_payload("KOSPI", prob_up=0.3, prob_down=0.3, prob_flat=0.3),
+        thesis_payload("000660"),
     )
+    # KOSPI가 빠져 교정이 한 번 돈다. 모델이 같은 답을 다시 내면 그대로 받는다.
+    model = scripted(bad_kospi, bad_kospi)
     builder = build(model, connection)
 
-    drafts = run_builder(builder).drafts
+    drafts = run_builder(builder, SUBJECTS).drafts
 
     assert [draft.subject.code for draft in drafts] == ["000660"]
 
@@ -1947,7 +2026,7 @@ def draft_for(builder_connection: FakeConnection) -> Any:
     drafts = builder.run(
         run_slot=RunSlot.PRE_OPEN,
         as_of_at=AS_OF,
-        subjects=SUBJECTS,
+        subjects=ONE_SUBJECT,
         observed_state=OBSERVED,
         past_theses={},
     ).drafts
@@ -2060,7 +2139,7 @@ def test_evidence_ranks_follow_the_citation_order():
     model = scripted(answer_message(thesis_payload(refs=["macro_change:SP500_FUT", "document:9"])))
     builder = ThesisBuilder(model, box)
     drafts = builder.run(
-        run_slot=RunSlot.PRE_OPEN, as_of_at=AS_OF, subjects=SUBJECTS, observed_state=OBSERVED, past_theses={}
+        run_slot=RunSlot.PRE_OPEN, as_of_at=AS_OF, subjects=ONE_SUBJECT, observed_state=OBSERVED, past_theses={}
     ).drafts
 
     writer = FakeConnection({"thesis_insert": [(11,)], "select_by_run": [stored_row(11)]})

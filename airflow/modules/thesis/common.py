@@ -468,6 +468,8 @@ class ThesisRun:
             records=closed_records(toolbox),
             tool_rounds=toolbox.round_count,
             investigation_truncated=investigation.truncated,
+            subjects_requested=investigation.subjects_requested,
+            subjects_answered=len(investigation.drafts),
         )
 
         rows = store.store_theses(

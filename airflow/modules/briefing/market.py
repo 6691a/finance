@@ -110,6 +110,7 @@ class MarketScope(StrEnum):
 
     KOREA = "korea"
     KOREA_PREOPEN = "korea_preopen"
+    KRX_CLOSE = "krx_close"
     US = "us"
 
 
@@ -133,9 +134,14 @@ def render_blocks(
             *_short_position_section(summary),
             *_movement_section(summary),
         ]
-    elif scope is MarketScope.KOREA:
+    elif scope in (MarketScope.KOREA, MarketScope.KRX_CLOSE):
+        header = (
+            f"📈 KRX 장 마감 브리핑 · {blocks.timestamp(local)}"
+            if scope is MarketScope.KRX_CLOSE
+            else f"📈 한국장 브리핑 · {blocks.timestamp(local)} · {session_state(summary.generated_at)}"
+        )
         rendered = [
-            blocks.header(f"📈 한국장 브리핑 · {blocks.timestamp(local)} · {session_state(summary.generated_at)}"),
+            blocks.header(header),
             *_quote_section("국내 지수·선물", _korea_quotes(summary), show_open=True),
             *_chart_section(chart_files, chart_error),
             *_technical_section(summary),
@@ -172,6 +178,7 @@ def render_text(summary: MarketSummary, scope: MarketScope) -> str:
     titles = {
         MarketScope.KOREA: "한국장 브리핑",
         MarketScope.KOREA_PREOPEN: "한국장 프리마켓 브리핑",
+        MarketScope.KRX_CLOSE: "KRX 장 마감 브리핑",
         MarketScope.US: "미국장 마감",
     }
     title = titles[scope]

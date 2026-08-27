@@ -32,12 +32,15 @@
 | 문서 | 무엇 | 상태 |
 | --- | --- | --- |
 | [slack-report-design.md](briefing/slack-report-design.md) | Slack 정기 브리핑 넷 | 구현 완료 |
+| [disclosure-briefing.md](briefing/disclosure-briefing.md) | 새 공시가 들어오면 알린다 | 구현 완료 — 마이그레이션 없음, 코드 배포만 |
 
 ## `convention/` — 저장소 규약
 
 | 문서 | 무엇 | 상태 |
 | --- | --- | --- |
 | [collectors-class-migration.md](convention/collectors-class-migration.md) | 무엇을 클래스로 묶고 어디서 파일로 가르는가 | 전환 완료. 새 코드가 따르는 형태 |
+| [prompt-file-migration.md](convention/prompt-file-migration.md) | 프롬프트를 파이썬 밖 YAML로 옮기는 순서 | **설계만** — 1단계부터 재승인 뒤 |
+| [modules-folder-split.md](convention/modules-folder-split.md) | airflow/modules/ 최상위 31개를 도메인 폴더로 | **설계만** — 1단계부터 재승인 뒤 |
 
 ## 루트
 

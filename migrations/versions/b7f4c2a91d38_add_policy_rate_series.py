@@ -1,7 +1,7 @@
 """add policy rate series
 
 Revision ID: b7f4c2a91d38
-Revises: e7d3b1f094ac
+Revises: b6d02f5a91c7
 Create Date: 2026-08-27 21:10:00.000000
 
 """
@@ -13,7 +13,7 @@ from alembic import op
 
 # revision identifiers, used by Alembic.
 revision: str = "b7f4c2a91d38"
-down_revision: str | Sequence[str] | None = "e7d3b1f094ac"
+down_revision: str | Sequence[str] | None = "b6d02f5a91c7"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 

@@ -563,6 +563,136 @@ airflow dags trigger kis_equity_backfill \
 31일보다 넓은 범위는 여러 run으로 명시적으로 나눈다. 백필 DAG 자체는 `max_active_runs=1`로
 두어 동일 테이블에 여러 장기 run이 동시에 쓰지 않게 한다.
 
+### 검토 (2026-08-27) — 이 절의 절반은 이미 다른 DAG에 있다
+
+이 절을 착수하려고 코드와 운영 DB를 다시 읽었더니 **`kis_equity_backfill`이라는 이름의 DAG는
+없지만 그 일의 대부분을 `kis_stock_minute_bars_daily`가 이미 한다.** 새 DAG를 짓기 전에
+무엇이 진짜로 없는지부터 가른다.
+
+**이미 있는 것**
+
+| 이 절이 말한 것 | 어디에 있나 |
+| --- | --- |
+| 페이지 커서 일곱 단계 | `KisQuoteCollector.fetch_stock_bars` — 커서는 그 거래일에 속한 가장 이른 봉의 1분 전, 날짜·세션 밖 봉 폐기, 중복 시각 제거, 거래소별 호출 상한 |
+| 첫 기준 시각 KRX 15:30 · NXT 20:00 | `StockExchange.last_bar` |
+| 날짜 역방향 순회 | `kis_stock_minute_bars_daily`의 `business_date` + `days` (`target = business_date - offset`) |
+| 한 run 31일 상한 | 같은 DAG의 `MAX_DAYS = 31`. `Param.maximum`과 `requested_days()` 둘 다 막는다 |
+| 종목·거래소·날짜 단위 트랜잭션 | 같은 DAG의 저장 루프. 날짜 하나가 커밋 하나다 |
+| REST 확정 upsert의 중복 흡수 | `stock_bar/upsert.sql`, `is_final` 규칙(5.2절) |
+| 실패한 날짜만 재실행 | 실패를 모아 판정하고 upsert가 멱등이라 같은 파라미터로 다시 돌린다 |
+
+**운영 실측 (2026-08-27, 읽기 전용)**
+
+```
+stock_bar   005930/000660 × KRX·NXT   2026-08-18 ~ 08-27  (8거래일, KRX 381봉/일)
+stock_investor_trade_daily            2018-12-10 ~ 08-26  (1,892행)
+```
+
+봉은 여드레치뿐이지만 **전일종가는 막히지 않는다.** `last_settled_close`가 읽는
+`stock_investor_trade_daily`가 2018년까지 있어, 과거 어느 날짜를 백필해도 분모가 있다.
+"확정 일별 수급이 먼저 돌아야 한다"는 제약은 과거 구간에서는 이미 충족돼 있다.
+
+**그래서 남은 값어치는 셋뿐이다**
+
+1. **정규 확정 run 점유.** 지금은 백필과 그날 확정이 같은 DAG이고 `max_active_runs=1`이라,
+   31일 run 하나가 20:05 확정을 밀어낸다. 그 DAG의 docstring도 그것을 인정하고 있다.
+   별도 DAG(또는 별도 pool)로 나누면 사라진다.
+2. **보존 한계 거부.** 이 절은 "실행일 기준 1년보다 오래된 시작일 거부"를 말하지만 코드에
+   없다. **그 1년이라는 값 자체가 미측정이다** — 아래 열린 질문.
+3. **backoff와 jitter.** `EGW00201`·429·일시적 5xx에 지수 backoff를 적용하자고 했는데
+   지금은 재시도가 Airflow 태스크 단위뿐이다. 31일 run은 종목 2 × 거래소 2 × 하루 약 4콜
+   = 하루 16콜, 31일이면 500콜에 가까워 정규 수집보다 호출 밀도가 훨씬 높다.
+
+**보존 한계 실측 (2026-08-27, 005930 KRX, 조회 전용)**
+
+```
+2026-08-26 (어제)      120봉      2025-08-27 (정확히 1년 전)  120봉
+2026-07-28 (1개월)     120봉      2025-08-12 (12.5개월)         0봉
+2026-05-28 (3개월)     120봉      2025-07-28 (13개월)           0봉
+2026-02-26 (6개월)     120봉      2025-05-27 (15개월)           0봉
+                                  2024-08-27 (2년)              0봉
+```
+
+**롤링 1년이다.** 이 절이 추측으로 적어 둔 값이 맞았다. 경계 밖도 `rt_cd=0 정상처리`에
+빈 `output2`로 답한다 — 애널리스트 의견의 100건 잘림과 같은 모양이라, **조회 실패와 휴장일과
+보존 밖이 응답만으로는 구분되지 않는다.** 그래서 시작일 거부를 코드가 해야 한다.
+
+그러면 백필은 실제로 큰 일이다. 약 250거래일 × (종목 2 × 거래소 2 × 하루 4콜) ≈ **4,000콜**,
+31일 상한을 지키면 **run 열두 번**이다. 위 세 항목 중 ①과 ②는 값어치가 있다.
+
+### 그래서 무엇을 만드나 (2026-08-27 결정) — 코드는 안 만들고, 데이터는 지금 받는다
+
+두 사실이 반대 방향을 가리킨다.
+
+**① 지금은 아무도 과거 분봉을 안 읽는다.**
+
+| `stock_bar`를 읽는 곳 | 무엇을 보나 |
+| --- | --- |
+| `briefing/market_data.py` | 오늘 브리핑의 최신 봉과 당일 분봉 차트 |
+| `thesis/intraday.py` | 기준 시각 **직전** 봉 하나 (당일) |
+| `thesis/nxt_review.py` | 그날 NXT 애프터마켓 구간 |
+
+채점의 호라이즌 등락률(`select_horizon_return.sql`·`select_intraday_horizon_return.sql`·
+`select_session_return.sql`)은 전부 `stock_investor_trade_daily`, 즉 **일봉**에서 온다.
+기술적 신호와 기저율도 일봉이다.
+
+**② 그런데 분봉은 상한다.** 보존이 롤링 1년이라 오늘 안 받은 날짜는 내일 영영 사라진다.
+일봉은 이 문제가 없다 — `index_daily`가 2016-08부터 있고 제공처가 계속 준다.
+
+앞으로 만들 것이 **차트 서사**다(2026-08-27 사용자). "여기서 아래로 꺾였고 이 값을 지지선
+삼아 횡보했다"를 시장·경제 사건과 잇고, 매물대로 "왜 저 값이 지지가 되는지 / 왜 저 값을
+못 뚫는지"를 설명하는 것이다. 그 기능에서 해상도는 두 층으로 갈린다.
+
+- **다년치 구조**(코로나 하락 같은 몇 년짜리 이야기) → **일봉이면 된다.** 이미 10년치가 있다.
+- **정밀 매물대와 분 단위 지지·저항** → **분봉이 필요하고 최근 1년만 구할 수 있다.**
+
+그래서 결론은 "만들지 않는다"가 아니라 **"코드는 안 만들고 데이터만 지금 확보한다"**이다.
+
+**지금 하는 것 — 코드 0줄**
+
+`kis_stock_minute_bars_daily`에 `business_date`와 `days`(≤31)가 이미 있다. 31일씩 **열두 번**
+트리거하면 `2025-08-10 ~ 2026-08-16`이 찬다. 그 뒤 구간은 정규 수집이 이미 채웠다.
+
+**오래된 구간부터 돌린다.** 보존 경계가 하루에 하루씩 앞으로 밀리므로 가장 먼저 사라질
+것을 먼저 잡는다.
+
+```bash
+airflow dags trigger kis_stock_minute_bars_daily --conf '{"business_date": "2025-09-09", "days": 31}'
+airflow dags trigger kis_stock_minute_bars_daily --conf '{"business_date": "2025-10-10", "days": 31}'
+airflow dags trigger kis_stock_minute_bars_daily --conf '{"business_date": "2025-11-10", "days": 31}'
+airflow dags trigger kis_stock_minute_bars_daily --conf '{"business_date": "2025-12-11", "days": 31}'
+airflow dags trigger kis_stock_minute_bars_daily --conf '{"business_date": "2026-01-11", "days": 31}'
+airflow dags trigger kis_stock_minute_bars_daily --conf '{"business_date": "2026-02-11", "days": 31}'
+airflow dags trigger kis_stock_minute_bars_daily --conf '{"business_date": "2026-03-14", "days": 31}'
+airflow dags trigger kis_stock_minute_bars_daily --conf '{"business_date": "2026-04-14", "days": 31}'
+airflow dags trigger kis_stock_minute_bars_daily --conf '{"business_date": "2026-05-15", "days": 31}'
+airflow dags trigger kis_stock_minute_bars_daily --conf '{"business_date": "2026-06-15", "days": 31}'
+airflow dags trigger kis_stock_minute_bars_daily --conf '{"business_date": "2026-07-16", "days": 31}'
+airflow dags trigger kis_stock_minute_bars_daily --conf '{"business_date": "2026-08-16", "days": 31}'
+```
+
+`max_active_runs=1`이라 열둘이 순서대로 돈다. 한 run이 약 500콜에 3~5분이니 전체가 한 시간
+안쪽이고, **그날 20:05 확정 run과 겹치지 않게 마감·확정 수집이 끝난 뒤에 건다.** 실패한
+구간은 같은 파라미터로 다시 돌리면 된다 — upsert가 멱등이다. 저장량은 250거래일 × 약
+380봉 × 종목 2 × 거래소 2로 100만 행 안쪽이다.
+
+**첫 run(2025-09-09)의 앞부분은 0봉으로 온다.** 보존 경계(약 2025-08-28) 밖이라 그렇고,
+휴장일과 같은 모양이라 DAG가 건너뛴다. 정상이다. **NXT도 상장 시점 앞은 0봉이고** 그 구간은
+KRX만 채워진다.
+
+**안 만드는 것 — 백필 전용 DAG**
+
+위에서 "만들 것"으로 적었던 셋(별도 DAG, 보존 거부, 루프 추출)은 백필을 **자주** 돌 때
+값어치가 생긴다. 1년치를 한 번 채우고 나면 그 뒤로는 정규 수집이 매일 이어 붙이므로 다시
+돌 일이 없다. 그때가 오면(예: 종목이 늘어 다시 1년을 채워야 할 때) 이 절의 실측값
+—롤링 1년, 하루 16콜, 31일 run에 약 500콜—이 그대로 쓰인다.
+
+**같은 논리가 다른 분봉에도 걸린다.** `index_bar`·`index_future_bar`·`fx_bar`·
+`commodity_bar`도 8월 중순부터뿐이고, 제공처마다 보존이 다르다. 특히 Yahoo 1분봉은
+공개적으로 최근 30일만 준다 — 국내 종목보다 창이 훨씬 좁다. 그쪽까지 확보할지는 차트
+서사가 어느 심볼을 다루는지가 정해진 뒤에 판단한다. **분봉 백필 설계 문서가 따로 생기면
+그 문서가 이 절을 대체한다.**
+
 ## 10. `source_record` 생명주기
 
 ### 10.1 WebSocket

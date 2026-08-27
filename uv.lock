@@ -2330,6 +2330,7 @@ dependencies = [
     { name = "alembic" },
     { name = "asyncpg" },
     { name = "dependency-injector" },
+    { name = "fastapi" },
     { name = "httpx" },
     { name = "ipykernel" },
     { name = "pydantic-settings" },
@@ -2338,6 +2339,7 @@ dependencies = [
     { name = "scrapling", extra = ["fetchers"] },
     { name = "sentry-sdk" },
     { name = "sqlalchemy", extra = ["asyncio"] },
+    { name = "uvicorn" },
     { name = "websockets" },
 ]
 
@@ -2361,6 +2363,7 @@ requires-dist = [
     { name = "alembic", specifier = ">=1.18.5" },
     { name = "asyncpg", specifier = ">=0.31.0" },
     { name = "dependency-injector", specifier = ">=4.49.1" },
+    { name = "fastapi", specifier = ">=0.136.3" },
     { name = "httpx", specifier = ">=0.28.1" },
     { name = "ipykernel", specifier = ">=7.3.0" },
     { name = "pydantic-settings", specifier = ">=2.14.2" },
@@ -2369,6 +2372,7 @@ requires-dist = [
     { name = "scrapling", extras = ["fetchers"], specifier = ">=0.4.12" },
     { name = "sentry-sdk", specifier = ">=2.66.1" },
     { name = "sqlalchemy", extras = ["asyncio"], specifier = ">=2.0.51" },
+    { name = "uvicorn", specifier = ">=0.52.1" },
     { name = "websockets", specifier = ">=17.0.1" },
 ]
 

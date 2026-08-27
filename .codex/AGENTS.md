@@ -42,9 +42,11 @@
 | `apps/core/config.py` | `config.yaml`을 읽는 Pydantic 설정. `settings` 싱글턴 제공 |
 | `apps/core/database.py` | `Base`, `EntityBase`, 다중 DB 별칭을 관리하는 `Database` |
 | `apps/core/redis.py` | Redis 연결 관리 |
-| `apps/core/container.py` | dependency-injector 컨테이너 |
+| `apps/core/container.py` | dependency-injector 컨테이너(상주 서비스는 안 쓴다 — 아래 규칙) |
+| `apps/core/utility.py` | 상태 없는 공통 변환(`utc_text`·`kst_today`). `airflow/modules/utility.py`의 대칭 |
 | `apps/models/` | SQLAlchemy 모델. 파일은 도메인 단위로만 나눈다(스키마와 무관) |
 | `apps/realtime/` | KIS 실시간 WebSocket 수집 서비스. `python -m apps.realtime.main`, `compose/prod/` 배포 |
+| `apps/api/` | 읽기 전용 조회 API(FastAPI). 리소스는 늘어난다 — 지금은 시장 추론. `python -m apps.api.main`, `compose/prod/api/` 배포 |
 | `migrations/` | Alembic. 리비전 파일은 `migrations/versions` 하나를 모든 별칭이 공유한다 |
 | `migrations/routing.py` | 어떤 테이블이 어떤 DB 별칭에 속하는지 판단하는 순수 함수 |
 | `airflow/dags/` | Airflow DAG |
@@ -61,6 +63,96 @@
 그 패키지의 `__init__.py`에도 넣어야 한다. 등록은 클래스를 import하는 부수효과라, 한 단계라도
 빠지면 `Base.metadata`에서 그 테이블이 사라지고 autogenerate가 `DROP TABLE`을 낸다.
 `tests/models/test_market_models.py`가 하위 모듈을 훑어 그 누락을 잡는다.
+
+## `apps/` 상주 서비스의 파일 구조
+
+Airflow가 실행하지 않는 상주 서비스는 `apps/` 아래 **패키지 하나**다. 그 안의 파일 이름이
+곧 역할이고, 아래 이름이 이미 둘(`realtime`·`api`)에서 같은 뜻으로 쓰인다.
+
+**`web`은 나중에 올 프론트엔드의 이름이다.** 조회 API는 `apps/api/`이고 화면이 생기면
+`apps/web/`이 그 자리를 받는다 — 지금 API를 `web`으로 부르면 그때 둘을 가를 이름이 없다.
+
+| 파일 | 무엇 |
+| --- | --- |
+| `__init__.py` | 이 서비스가 무엇이고 왜 이렇게 배포되는지. 코드는 안 둔다 |
+| `main.py` | **진입점 하나.** `python -m apps.<name>.main`. 설정을 읽고 Sentry를 붙이고 조립한다 |
+| `container.py` | dependency-injector 컨테이너. 있으면 여기가 **composition root**다 |
+| `app.py` | 조립된 것을 받아 앱을 만든다. 설정을 스스로 읽지 않는다 |
+| `routes/` | **HTTP만** 안다. 컨테이너가 보이는 유일한 자리(`@inject`) |
+| `service/` | **계약만** 안다. 행을 응답 모양으로 바꾼다 |
+| `repository/` | **store만** 안다. **세션 팩토리를 생성자로 받고** 행을 준다 |
+| `schemas/` | 밖으로 나가는 데이터 모양(API 응답 등) |
+
+**뒤의 넷은 리소스마다 파일이 느는 층이라 패키지다.** 파일 하나로 두면 리소스가 둘만
+돼도 서로 관계없는 것이 한 파일에 쌓이고, 고칠 때 diff가 남의 리소스까지 건드린다.
+
+### 층 셋은 아는 것으로 가른다
+
+`routes` → `service` → `repository`. **리포지토리가 응답 모양을 알면 store를 갈아끼울 때
+계약까지 함께 흔들린다.** 서비스가 얇아 보여도 그 경계가 값어치다 — 통과 층이 되지 않게
+매핑은 모듈 수준 순수 함수로 두고 클래스는 순서만 엮는다.
+
+응답 하나가 세션 하나다. 리포지토리 메서드마다 세션을 열면 한 응답이 커넥션을 여러 번
+빌린다 — 그래서 리포지토리가 "그 응답에 필요한 행 묶음"을 한 번에 준다.
+
+### `main.py`만 설정을 읽는다
+
+`apps/core/config.py`는 모듈 본문에서 `settings = Settings()`를 불러 **import만으로
+`config.yaml`을 요구한다.** 그래서 `settings` import는 `main()` 함수 안에서 한다 —
+테스트와 도구가 설정 파일 없이 그 모듈을 import할 수 있어야 한다.
+
+같은 이유로 **컨테이너도 설정을 스스로 읽지 않는다.** `providers.Dependency()`로 선언하고
+`main.py`가 채운다. `apps/core/container.py`가 그 규칙 밖에 있는데(본문에서 settings를
+읽는다), 그래서 상주 서비스가 그것을 쓰지 않는다.
+
+### 의존성은 생성자로 주입한다
+
+컨테이너에 선언한 것을 **파라미터로** 받는다. 업무 코드가 `container.thing()`을 직접
+부르면 그건 Service Locator이지 의존성 주입이 아니다. 컨테이너 이름이 보이는 자리는
+`WiringConfiguration`이 지정한 패키지 하나(라우터)로 좁힌다.
+
+provider 수명은 뜻을 갖는다 — 엔진 풀처럼 프로세스에 한 벌인 것만 `Singleton`이고,
+조회마다 새로 만드는 것은 `Factory`다. `Singleton`으로 두면 나중에 요청 상태를 담게 될 때
+조용히 새어 나간다.
+
+테스트는 **provider override**로 가짜를 끼운다(`container.x.override(...)`). 그것이 먹는다는
+사실 자체가 wiring이 풀렸다는 증거이기도 하다 — 마커가 안 풀리면 주입 자리에 `Provide`
+객체가 그대로 들어와 조용히 틀린다.
+
+### 층 넷은 패키지로, 리소스마다 파일 하나
+
+`routes/`·`service/`·`repository/`·`schemas/` 넷에 같은 규칙을 쓴다. `apps/models/`가
+도메인 단위로 나뉜 것과 같다.
+
+- `<리소스>.py` — 그 리소스 하나의 것. 파일 이름이 리소스 이름이고 네 폴더에서 같다
+  (`thesis.py`가 넷에 하나씩). **한 리소스를 고칠 때 열 파일이 넷으로 정해진다.**
+- `common.py` — **그 층의 리소스들이 공유하는 것만.** 리포지토리는 행 묶음 베이스와
+  목록 상한, 서비스는 `Decimal` → JSON number 같은 변환, 스키마는 공통 베이스와 시각
+  표기 애노테이션이다. 리소스 하나에만 쓰이는 것을 여기 두지 않는다 — 쓰는 쪽이 하나면
+  그건 그 리소스의 파일에 있어야 한다.
+- `__init__.py` — **재수출만.** 부르는 쪽은 `from apps.api.schemas import X` 하나로 끝내고
+  어느 파일에 있는지 몰라도 된다. 층의 경계 설명(무엇을 알고 무엇을 모르는지)은 여기
+  docstring에 둔다. 이름을 빠뜨려도 `ruff`가 잡지 못하므로 더할 때 함께 넣는다.
+
+`routes/`만 둘이 더 붙는다.
+
+- **`router`는 파일마다 하나**이고 경로 접두와 `tags`도 그 파일이 정한다
+  (`APIRouter(prefix="/api/theses", tags=["thesis"])`). 그래야 리소스를 더할 때 `app.py`가
+  아니라 새 파일 하나만 는다. `__init__.py`는 그것들을 `routers` 튜플로 재수출하고
+  `app.py`가 순회한다.
+- **wiring은 패키지를 통째로 건다**(`WiringConfiguration(packages=["apps.api.routes"])`).
+  모듈을 하나씩 적으면 새 리소스를 더할 때 `container.py`도 함께 고쳐야 하고, 빠뜨리면
+  `Provide` 객체가 그대로 주입되어 조용히 틀린다.
+
+### 상태 없는 변환은 `apps/core/utility.py`에 한 벌
+
+시각 표기(`utc_text`), 날짜 경계(`kst_today`)처럼 **여러 서비스가 같은 답을 내야 하는 변환**은
+거기 둔다. 같은 로직을 두 모듈이 각자 갖고 있으면 한쪽만 고친 날 한 응답 안에서 표기가
+갈린다. 이 모듈은 `config`·`database`·`redis`를 import하지 않아 어디서 불러도 `config.yaml`을
+요구하지 않는다.
+
+`airflow/modules/utility.py`가 Airflow 쪽의 같은 자리다. 두 트리는 서로를 import하지 않으므로
+같은 규칙이 양쪽에 한 벌씩 있고, 어긋나면 테스트가 잡는다.
 
 ## 명령어
 

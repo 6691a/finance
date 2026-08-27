@@ -1,0 +1,33 @@
+# 조회 API — 개발.
+#
+# `just dev`의 DB(호스트 15432)를 보는 config.yaml이 필요하다. 운영은 compose/prod/api/이다.
+# 서비스 전용 환경변수는 없다 — 읽을 DB 별칭은 `apps/api/main.py`의 상수다.
+#
+# 로컬은 앞자리 1을 붙이는 관례다(db 15432, redis 16379, grafana 13000). 컨테이너 안
+# 바인드는 운영과 같은 8000이고 밖으로 보이는 포트만 다르다.
+services:
+  api:
+    build: .
+    image: news-api
+    restart: unless-stopped
+    ports:
+      - "18000:8000"
+    # 읽기 요청이라 길 필요가 없다.
+    stop_grace_period: 10s
+    volumes:
+      # CODE_DIR = 저장소 루트. 체크아웃 안에서는 기본값이면 된다.
+      - ${CODE_DIR:-../../..}/apps:/app/apps:ro
+      - ${CONFIG_FILE:-../../../config.yaml}:/app/config.yaml:ro
+    extra_hosts:
+      # Linux 호환. mac/Windows Docker Desktop에서는 이미 있는 이름이라 무해하다.
+      - "host.docker.internal:host-gateway"
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/healthz', timeout=5)
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 20s

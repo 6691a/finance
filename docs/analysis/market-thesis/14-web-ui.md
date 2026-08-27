@@ -481,19 +481,19 @@ fetch는 페이지 이동 시 `AbortController`로 취소한다. retry library�
 
 **Files:**
 
-- Modify: `apps/web/schemas.py`
-- Modify: `apps/web/repository.py`
-- Modify: `apps/web/routes.py`
-- Test: `tests/web/test_routes.py`
-- Test: `tests/web/test_repository.py`
-- Create: `tests/web/test_quality.py`
+- Modify: `apps/api/schemas.py`
+- Modify: `apps/api/repository/`
+- Modify: `apps/api/routes/`
+- Test: `tests/api/test_routes.py`
+- Test: `tests/api/test_repository.py`
+- Create: `tests/api/test_quality.py`
 
 - [ ] 실행 목록·상세, 툴 단건, 품질 API의 실패 테스트를 쓴다.
 - [ ] thesis 상세는 `llm_run` 요약·URL만 내고 tool call은 실행 API에서만 내린다.
 - [ ] 툴 결과 전문을 단건 API로 분리한다.
 - [ ] raw·validated 인자, round, `delivered`, error kind와 running 종료시각 계약을 구현한다.
 - [ ] 주·지평·slot·model·prompt_version 집계를 구현한다.
-- [ ] `uv run pytest tests/web -q`를 통과시킨다.
+- [ ] `uv run pytest tests/api -q`를 통과시킨다.
 
 ### Task 2: React shell과 FastAPI 정적 제공을 붙인다
 
@@ -505,14 +505,14 @@ fetch는 페이지 이동 시 `AbortController`로 취소한다. retry library�
 - Create: `frontend/src/api.ts`, `frontend/src/types.ts`, `frontend/src/styles.css`
 - Create: `frontend/src/components/AsyncState.tsx`
 - Test: `frontend/src/App.test.tsx`, `frontend/src/api.test.ts`
-- Modify: `apps/web/app.py`
-- Test: `tests/web/test_spa.py`
+- Modify: `apps/api/app.py`
+- Test: `tests/api/test_spa.py`
 
 - [ ] client route와 API 오류 상태의 component 테스트를 먼저 쓴다.
 - [ ] Vite·React Router shell과 공통 fetch를 최소 구현한다.
 - [ ] FastAPI의 asset mount와 API를 침범하지 않는 SPA fallback을 구현한다.
 - [ ] `npm --prefix frontend test -- --run`, `npm --prefix frontend run build`,
-  `uv run pytest tests/web/test_spa.py -q`를 통과시킨다.
+  `uv run pytest tests/api/test_spa.py -q`를 통과시킨다.
 
 ### Task 3: 실행·툴·판단 화면을 만든다
 
@@ -564,10 +564,10 @@ fetch는 페이지 이동 시 `AbortController`로 취소한다. retry library�
 
 **Files:**
 
-- Modify: `compose/local/web/Dockerfile`, `compose/prod/web/Dockerfile`
+- Modify: `compose/local/api/Dockerfile`, `compose/prod/api/Dockerfile`
 - Modify: `compose/local/docker-compose.yaml`, `justfile`
 - Create: `.dockerignore`
-- Modify: `tests/config/test_web_stack.py`
+- Modify: `tests/config/test_api_stack.py`
 - Delete: `compose/local/grafana/`, `tests/dashboards/`
 - Modify: 7절 "수정" 표의 문서
 
@@ -584,8 +584,8 @@ fetch는 페이지 이동 시 `AbortController`로 취소한다. retry library�
 
 - [ ] `npm --prefix frontend test -- --run`
 - [ ] `npm --prefix frontend run build`
-- [ ] `uv run ruff check apps/web tests/web tests/config/test_web_stack.py`
-- [ ] `uv run pytest tests/web tests/config/test_web_stack.py -q`
+- [ ] `uv run ruff check apps/api tests/api tests/config/test_api_stack.py`
+- [ ] `uv run pytest tests/api tests/config/test_api_stack.py -q`
 - [ ] `uv run pytest tests -q`
 - [ ] 브라우저에서 `/runs`, 실패 run, 툴 결과, thesis 상세, 실제 관계 그래프, `/quality`,
   404와 새로고침 SPA fallback을 확인한다.

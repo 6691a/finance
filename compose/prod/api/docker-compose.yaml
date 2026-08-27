@@ -1,0 +1,53 @@
+# 조회 API — 운영.
+#
+# 개발용은 compose/local/api/이고 이 스택은 운영 DB를 **읽기 전용으로** 본다.
+# 설정은 realtime과 같은 config.yaml 하나다(DB·Sentry).
+# config.yaml을 CONFIG_FILE 위치에 둔다. 서비스 전용 환경변수는 없다 — 읽을 DB 별칭은
+# `apps/api/main.py`의 상수이고 `read_only` 별칭이 하나뿐이라 손잡이가 아니다.
+#
+# **realtime 스택과 파일을 나눈 이유**는 `just deploy-realtime`이 그 스택을 통째로
+# restart하기 때문이다. 한 파일에 두면 realtime 재배포마다 API가 끊기고 반대도 같다.
+# compose/prod/airflow/가 이미 같은 형태다.
+#
+# config.yaml의 DB 주소가 database 스택의 컨테이너 이름(database-postgres-1)이라
+# 같은 external 네트워크에 붙어야 이름이 풀린다. airflow·realtime 스택과 같다.
+networks:
+  database:
+    external: true
+
+services:
+  api:
+    build: .
+    image: finance-api
+    restart: unless-stopped
+    networks:
+      - database
+    # 내부는 LAN, 외부는 Tailscale로 닿는다(2026-08-26 결정). 둘 다 NAS 호스트 밖에서
+    # 들어오므로 **127.0.0.1로 묶으면 안 된다** — 그러면 NAS 자기 자신에서만 보인다.
+    # 경계를 지키는 것은 앱이 아니라 tailnet과 NAS 방화벽이고, 같은 망의 Airflow UI도
+    # 같은 조건이다. 저장소에 reverse proxy가 없어 직접 매핑이다.
+    ports:
+      - "8000:8000"
+    # 읽기 요청이라 길 필요가 없다.
+    stop_grace_period: 10s
+    volumes:
+      # CODE_DIR = 저장소 루트. compose/prod/api/은 한 칸 더 깊어 ../../..이다.
+      - ${CODE_DIR:-../../..}/apps:/app/apps:ro
+      - ${CONFIG_FILE:-../../../config.yaml}:/app/config.yaml:ro
+    # slim 이미지에 curl이 없다. /healthz는 DB를 치지 않는다 — API 재시작으로 DB 장애가
+    # 안 고쳐지는데 healthcheck가 DB를 보면 깜빡임이 재시작 루프가 된다.
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/healthz', timeout=5)
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 20s
+    logging:
+      driver: json-file
+      options:
+        max-size: "50m"
+        max-file: "5"

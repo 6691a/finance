@@ -249,6 +249,18 @@ def test_the_ledger_counts_requested_and_answered_subjects(capsys):
     assert "subjects_answered INTEGER NOT NULL" not in sql
 
 
+def test_the_ledger_counts_tokens(capsys):
+    """비용은 그 전까지 LangSmith 트레이스에만 있었다. 슬롯별 추이를 SQL로 못 봤다."""
+    sql = head_sql(capsys)
+
+    for column in ("prompt_tokens", "completion_tokens", "reasoning_tokens"):
+        assert f"ALTER TABLE thesis_llm_run ADD COLUMN {column} INTEGER" in sql
+        # NULL을 허용하고 server_default를 두지 않는다. 기존 행은 잰 적이 없어 NULL이고,
+        # 앞으로는 모델을 못 부르고 죽은 대화도 0이 들어간다. 0으로 메우면 둘이 같아진다.
+        assert f"{column} INTEGER NOT NULL" not in sql
+        assert f"{column} INTEGER DEFAULT" not in sql
+
+
 def test_the_llm_run_status_shape_is_constrained(capsys):
     sql = head_sql(capsys)
 

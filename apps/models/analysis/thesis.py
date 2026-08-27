@@ -812,6 +812,31 @@ class ThesisLlmRun(EntityBase):
             "tool_rounds 하나로는 구분되지 않는다. 상한을 올릴지 판단하는 근거다"
         ),
     )
+    prompt_tokens: Mapped[int | None] = mapped_column(
+        Integer,
+        nullable=True,
+        comment=(
+            "이 대화가 청구된 입력 토큰의 합(왕복 전부). **왕복마다 대화 전체를 다시 내므로 "
+            "왕복 수가 아니라 이 값이 비용이다.** 이 칸이 생기기 전 행은 NULL이다"
+        ),
+    )
+    completion_tokens: Mapped[int | None] = mapped_column(
+        Integer,
+        nullable=True,
+        comment=(
+            "출력 토큰의 합. **reasoning_tokens를 포함한다** — 제공처가 사고 토큰도 출력 "
+            "단가로 청구한다. 이 칸이 생기기 전 행은 NULL이다"
+        ),
+    )
+    reasoning_tokens: Mapped[int | None] = mapped_column(
+        Integer,
+        nullable=True,
+        comment=(
+            "그중 모델이 속으로 생각한 토큰. 대화에 남지 않아 다음 왕복에 재전송되지 않고 "
+            "프롬프트 캐시와도 무관하다. 제공처가 안 알려 주면 0이다. "
+            "이 칸이 생기기 전 행은 NULL이다"
+        ),
+    )
 
 
 class ThesisToolCall(EntityBase):

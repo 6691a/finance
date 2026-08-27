@@ -61,6 +61,7 @@ from pydantic import BaseModel, ConfigDict
 
 from modules.db import Cursor
 from modules.db import TransactionalConnection as Connection
+from modules.llm import TokenUsage
 from modules.sql import read_sql
 from modules.thesis.domain import (
     HORIZON_DAYS,
@@ -361,6 +362,7 @@ class ThesisStore:
         investigation_truncated: bool = False,
         subjects_requested: int | None = None,
         subjects_answered: int | None = None,
+        usage: TokenUsage | None = None,
         error: str | None = None,
     ) -> None:
         """대화를 닫고 그 안의 툴 호출을 한 트랜잭션에 쓴다.
@@ -375,6 +377,10 @@ class ThesisStore:
 
         `subjects_*` 둘의 기본이 `None`인 것도 같은 이유다. 해설은 대상 개념이 달라
         **0이 아니라 NULL이다** — 0으로 넣으면 "전부 실패한 생성"과 같아 보인다.
+
+        `usage`는 그래프 밖 콜백이 누적한 토큰이라 **실패한 대화에도 값이 있다**
+        (`ThesisBuilder.usage`·`FollowupNarrator.usage`). 안 주면 셋 다 NULL이고 그건
+        "안 쟀다"는 뜻이다 — 모델을 못 부르고 죽은 대화는 NULL이 아니라 0이다.
         """
         delivered_chars = sum(record.result_chars for record in records if record.delivered)
         with atomic(self._connection) as transaction, transaction.cursor() as cursor:
@@ -390,6 +396,9 @@ class ThesisStore:
                     investigation_truncated,
                     subjects_requested,
                     subjects_answered,
+                    usage.prompt if usage else None,
+                    usage.completion if usage else None,
+                    usage.reasoning if usage else None,
                     llm_run_id,
                 ),
             )

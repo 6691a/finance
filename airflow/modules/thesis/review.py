@@ -227,6 +227,7 @@ def narrate_followups(built: dict[str, Any]) -> int:
                         status=LlmRunStatus.FAILED,
                         records=common.closed_records(toolbox),
                         tool_rounds=toolbox.round_count,
+                        usage=narrator.usage,
                         error=f"{type(error).__name__}: {error}",
                     )
                     if isinstance(error, ThesisError):
@@ -246,6 +247,7 @@ def narrate_followups(built: dict[str, Any]) -> int:
                     status=LlmRunStatus.SUCCEEDED,
                     records=common.closed_records(toolbox),
                     tool_rounds=toolbox.round_count,
+                    usage=narrator.usage,
                 )
 
                 written += store.store_narratives(

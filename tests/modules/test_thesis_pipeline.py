@@ -20,6 +20,7 @@ from langchain_core.messages import AIMessage, ToolMessage
 from sqlalchemy import Table
 
 from apps.models.analysis import Thesis, ThesisEvidence, ThesisOutcome, ThesisPrecedent
+from modules.llm import TokenUsage
 from modules.sql import read_sql
 from modules.technical import base_rate
 from modules.technical.indicators import TECHNICAL_LOOKBACK_BARS
@@ -40,6 +41,7 @@ from modules.thesis.domain import (
     PREFETCHED_PAST_THESES,
     PROMPT_VERSION,
     Evidence,
+    LlmRunStatus,
     Subject,
     ThesisDirection,
     ThesisError,
@@ -3771,6 +3773,68 @@ def test_finishing_a_run_never_reopens_a_closed_one():
     # 같은 대화를 두 번 닫는 경로는 없어야 하고, 생기면 조용히 덮는 것보다 0행이 낫다.
     assert "WHERE id = %s" in LLM_RUN_FINISH
     assert "AND status = 'running'" in LLM_RUN_FINISH
+
+
+def _updated_columns(statement: str) -> tuple[str, ...]:
+    """`SET a = %s, b = %s`의 컬럼 이름들. `updated_at = now()`처럼 리터럴인 칸도 센다."""
+    assignments = re.search(r"SET (.+?)\nWHERE", body(statement), re.DOTALL)
+    assert assignments is not None
+    return tuple(part.strip().split("=")[0].strip() for part in assignments.group(1).split(","))
+
+
+def test_the_ledger_finish_matches_its_model():
+    """UPDATE 컬럼과 모델 metadata를 대조한다. 가짜 연결은 컬럼 이름이 틀려도 통과한다."""
+    from apps.models.analysis import ThesisLlmRun
+
+    columns = _updated_columns(LLM_RUN_FINISH)
+
+    assert set(columns) <= {column.name for column in ThesisLlmRun.__table__.columns}
+    # `updated_at`만 리터럴이고 나머지는 자리표시자다. 마지막 하나는 WHERE의 id다.
+    assert body(LLM_RUN_FINISH).count("%s") == len(columns) - 1 + 1
+
+
+def test_finishing_a_run_writes_the_token_counts():
+    """토큰 셋이 원장에 실린다. 이게 없으면 비용 추이를 트레이스로만 볼 수 있다."""
+    connection = FakeConnection()
+
+    ThesisStore(connection).finish_llm_run(
+        7,
+        status=LlmRunStatus.SUCCEEDED,
+        records=(),
+        tool_rounds=4,
+        usage=TokenUsage(prompt=224970, completion=17593, reasoning=13975),
+    )
+
+    (statement, params) = next(call for call in connection.calls if "UPDATE thesis_llm_run" in body(call[0]))
+    columns = _updated_columns(statement)
+    values = dict(zip((name for name in columns if name != "updated_at"), params, strict=False))
+
+    assert values["prompt_tokens"] == 224970
+    assert values["completion_tokens"] == 17593
+    assert values["reasoning_tokens"] == 13975
+    # 마지막 자리표시자는 WHERE의 id다.
+    assert params[-1] == 7
+
+
+def test_finishing_a_run_without_a_measurement_leaves_the_tokens_null():
+    """안 준 것은 NULL이다. 0으로 메우면 "안 쟀다"와 "안 썼다"가 같아진다."""
+    connection = FakeConnection()
+
+    ThesisStore(connection).finish_llm_run(
+        7,
+        status=LlmRunStatus.FAILED,
+        records=(),
+        tool_rounds=0,
+        error="ThesisError: boom",
+    )
+
+    (statement, params) = next(call for call in connection.calls if "UPDATE thesis_llm_run" in body(call[0]))
+    columns = _updated_columns(statement)
+    values = dict(zip((name for name in columns if name != "updated_at"), params, strict=False))
+
+    assert values["prompt_tokens"] is None
+    assert values["completion_tokens"] is None
+    assert values["reasoning_tokens"] is None
 
 
 def test_a_tool_call_insert_refuses_to_swallow_a_duplicate():

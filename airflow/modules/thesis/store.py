@@ -358,6 +358,7 @@ class ThesisStore:
         status: LlmRunStatus,
         records: Sequence[ToolCallRecord],
         tool_rounds: int,
+        investigation_truncated: bool = False,
         error: str | None = None,
     ) -> None:
         """대화를 닫고 그 안의 툴 호출을 한 트랜잭션에 쓴다.
@@ -366,6 +367,9 @@ class ThesisStore:
         툴과 인자 검증 실패도 세지만 툴박스의 예산 카운터는 함수에 진입한 것만 센다.
         `tool_result_chars`는 모델에게 실제로 돌아간 것만(`delivered`) 센다 — 예산 카운터는
         버려진 결과도 센다. 둘 다 `MAX_TOOL_*`와 직접 비교하지 않는다.
+
+        `investigation_truncated`의 기본이 `False`인 것은 **해설 경로에는 왕복 상한이 없기
+        때문이다.** 그쪽은 이 인자를 주지 않는다. 추론 생성만 실제 값을 넘긴다.
         """
         delivered_chars = sum(record.result_chars for record in records if record.delivered)
         with atomic(self._connection) as transaction, transaction.cursor() as cursor:
@@ -378,6 +382,7 @@ class ThesisStore:
                     tool_rounds,
                     len(records),
                     delivered_chars,
+                    investigation_truncated,
                     llm_run_id,
                 ),
             )

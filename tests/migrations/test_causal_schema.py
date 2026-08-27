@@ -49,6 +49,8 @@ def test_causal_enum_values_are_constrained(capsys):
     assert "sign IN ('up', 'down')" in sql
     assert "confidence IN ('observed', 'plausible')" in sql
     assert "target_kind IN ('instrument', 'index', 'quote', 'indicator')" in sql
+    # 가격은 %, 금리는 bp다. 한 칸에 섞으면 크기 비교가 조용히 무의미해진다.
+    assert "return_unit IN ('percent', 'basis_point')" in sql
 
 
 def test_step_position_is_bounded_and_ordered(capsys):

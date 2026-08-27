@@ -136,6 +136,17 @@ class CausalConfidence(StrEnum):
     PLAUSIBLE = "plausible"
 
 
+class CausalReturnUnit(StrEnum):
+    """실현 등락의 단위. 가격은 percent, 금리는 basis_point다.
+
+    `KTB10Y` 4.239 → 4.313은 +1.75%가 아니라 +7.4bp다. 한 칸에 섞으면 KOSPI의 +10.77%와
+    크기를 비교할 수 없게 된다.
+    """
+
+    PERCENT = "percent"
+    BASIS_POINT = "basis_point"
+
+
 class CausalTarget(BaseModel):
     """경로가 닿는 대상 하나."""
 
@@ -143,6 +154,10 @@ class CausalTarget(BaseModel):
 
     kind: CausalTargetKind
     code: str
+    provider: str | None = None
+    """`indicator` 종류만 채운다. `indicator_observation`은 `(provider, series_id)`가 키라
+    `series_id` 하나로 거는 쿼리는 제공처가 늘어나면 조용히 틀린다(저장소 규칙). 나머지
+    종류는 제공처를 자기 마스터가 알아서 여기 안 담는다."""
 
 
 # 국내 지수. 종목과 달리 마스터를 훑지 않는다 — 늘어나는 목록이 아니다.
@@ -159,4 +174,14 @@ MACRO_TARGETS: tuple[CausalTarget, ...] = (
     CausalTarget(kind=CausalTargetKind.QUOTE, code="SOX"),
     CausalTarget(kind=CausalTargetKind.QUOTE, code="VIX"),
     CausalTarget(kind=CausalTargetKind.QUOTE, code="NASDAQ100_FUT"),
+)
+
+# 금리 둘. **정책금리는 사건이자 대상이다** — 한은 인상이 사건이면 KTB10Y가 대상이고,
+# 국채 급등이 사건이면 KOSPI가 대상이다. 그 겹침이 그래프를 깊게 만든다(설계 §9.3 ①).
+#
+# 값이 있는 구간이 아직 짧다(정책금리 2026-07-14~, 국채 2026-08-10~). 값이 없는 주는 그
+# 대상만 저장되지 않고 나머지는 그대로 돈다(설계 §6).
+INDICATOR_TARGETS: tuple[CausalTarget, ...] = (
+    CausalTarget(kind=CausalTargetKind.INDICATOR, code="KRBASE", provider="ecos"),
+    CausalTarget(kind=CausalTargetKind.INDICATOR, code="KTB10Y", provider="ecos"),
 )

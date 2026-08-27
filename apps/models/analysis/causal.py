@@ -52,6 +52,20 @@ class CausalConfidence(StrEnum):
     """해석이다. 관찰로 뒷받침되지 않는다."""
 
 
+class CausalReturnUnit(StrEnum):
+    """실현 등락의 단위. **가격과 금리를 한 단위로 못 담는다.**
+
+    `KTB10Y`가 4.239에서 4.313으로 가는 것은 +1.75%가 아니라 +7.4bp다. 퍼센트로 저장하면
+    KOSPI의 +10.77%와 한 칸에 들어가 크기 비교가 조용히 무의미해지고, 퍼센트에서 bp를
+    역산할 수도 없어(원값이 없으면) 표시 층에 미룰 수도 없다. 그래서 저장할 때 정한다.
+    """
+
+    PERCENT = "percent"
+    """가격·지수·환율. 종가 대비 변화율."""
+    BASIS_POINT = "basis_point"
+    """금리. 값의 차이에 100을 곱한 bp다."""
+
+
 class CausalTargetKind(StrEnum):
     """대상이 어느 마스터에서 오는지. **값의 성격이 아니라 저장소를 가른다.**
 
@@ -174,6 +188,10 @@ class MarketCausalPath(EntityBase):
             "target_kind IN ('instrument', 'index', 'quote', 'indicator')",
             name="ck_market_causal_path_target_kind",
         ),
+        CheckConstraint(
+            "return_unit IN ('percent', 'basis_point')",
+            name="ck_market_causal_path_return_unit",
+        ),
         table_options(
             comment="주간 인과 그래프의 경로 하나. 사건에서 대상까지의 주장과 실현 등락이다",
             database="default",
@@ -226,20 +244,31 @@ class MarketCausalPath(EntityBase):
         nullable=False,
         comment="이 경로를 설명하는 한 문장. 모델이 만든다",
     )
-    return_week_pct: Mapped[Decimal] = mapped_column(
+    return_week_change: Mapped[Decimal] = mapped_column(
         Numeric(10, 4),
         nullable=False,
-        comment="그 주 대상 등락률(%). SQL이 계산한다. 경로가 작용했다고 주장하는 창이다",
+        comment=(
+            "그 주 대상 변화(단위는 return_unit). SQL이 계산한다. "
+            "경로가 작용했다고 주장하는 창이다"
+        ),
     )
-    return_t1_pct: Mapped[Decimal] = mapped_column(
+    return_t1_change: Mapped[Decimal] = mapped_column(
         Numeric(10, 4),
         nullable=False,
-        comment="주 종료 다음 KRX 거래일까지의 등락률(%). SQL이 계산한다",
+        comment="주 종료 다음 KRX 거래일까지의 변화(단위는 return_unit). SQL이 계산한다",
     )
-    return_t5_pct: Mapped[Decimal] = mapped_column(
+    return_t5_change: Mapped[Decimal] = mapped_column(
         Numeric(10, 4),
         nullable=False,
-        comment="주 종료 +5 KRX 거래일까지의 등락률(%). SQL이 계산한다",
+        comment="주 종료 +5 KRX 거래일까지의 변화(단위는 return_unit). SQL이 계산한다",
+    )
+    return_unit: Mapped[CausalReturnUnit] = mapped_column(
+        _enum_column(CausalReturnUnit),
+        nullable=False,
+        comment=(
+            "실현 등락 셋의 단위. 가격·지수·환율은 percent, 금리는 basis_point다. "
+            "조회하는 쪽은 이 칸을 반드시 걸어야 한다 — 안 걸면 7bp와 10%가 한 축에 섞인다"
+        ),
     )
     input_hash: Mapped[str] = mapped_column(
         Text,

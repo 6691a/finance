@@ -164,6 +164,8 @@ class TestResolveTargets:
             "SOX",
             "VIX",
             "NASDAQ100_FUT",
+            "KRBASE",
+            "KTB10Y",
         ]
 
     def test_each_target_declares_which_master_validates_it(self) -> None:
@@ -175,6 +177,7 @@ class TestResolveTargets:
         assert by_code["KOSPI"] == "index"
         assert by_code["005930"] == "instrument"
         assert by_code["US10Y"] == "quote"
+        assert by_code["KTB10Y"] == "indicator"
 
     def test_watched_stocks_grow_the_target_list(self) -> None:
         """관심종목을 늘리면 대상이 따라 는다 — 종목 코드를 코드에 계속 더하지 않는다."""
@@ -183,4 +186,16 @@ class TestResolveTargets:
         targets = candidates.resolve_targets(connection)
 
         assert "373220" in [target.code for target in targets]
-        assert len(targets) == 10
+        assert len(targets) == 12
+
+    def test_indicator_targets_carry_their_provider(self) -> None:
+        """`indicator_observation`은 (provider, series_id)가 키다. series_id 하나로 걸면
+        제공처가 늘어날 때 조용히 틀린다(저장소 규칙)."""
+        connection = FakeConnection(rows=[("005930",)])
+
+        by_code = {target.code: target for target in candidates.resolve_targets(connection)}
+
+        assert by_code["KTB10Y"].provider == "ecos"
+        assert by_code["KRBASE"].provider == "ecos"
+        # 나머지 종류는 제공처를 자기 마스터가 안다.
+        assert by_code["KOSPI"].provider is None

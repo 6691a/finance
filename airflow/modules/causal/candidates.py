@@ -8,6 +8,7 @@
 
 from modules.causal.domain import (
     INDEX_TARGETS,
+    INDICATOR_TARGETS,
     MACRO_TARGETS,
     CausalTarget,
     CausalTargetKind,
@@ -19,7 +20,7 @@ WATCHED_STOCKS = read_sql("postgres", "causal", "select_watched_stocks.sql")
 
 
 def resolve_targets(connection: Connection) -> tuple[CausalTarget, ...]:
-    """이 실행이 다룰 대상. 지수 둘 → 관심종목 → 매크로 다섯 순서다.
+    """이 실행이 다룰 대상. 지수 둘 → 관심종목 → 매크로 다섯 → 금리 둘 순서다.
 
     **종목만 마스터에서 읽는다.** 관심종목을 늘리면 대상이 따라 늘고, 그만큼 후보와 비용도
     는다. 지수·매크로는 늘어나는 목록이 아니라 상수다(설계 §0).
@@ -30,4 +31,4 @@ def resolve_targets(connection: Connection) -> tuple[CausalTarget, ...]:
             CausalTarget(kind=CausalTargetKind.INSTRUMENT, code=row[0])
             for row in cursor.fetchall()
         )
-    return INDEX_TARGETS + stocks + MACRO_TARGETS
+    return INDEX_TARGETS + stocks + MACRO_TARGETS + INDICATOR_TARGETS

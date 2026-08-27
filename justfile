@@ -2,6 +2,8 @@ airflow_compose := "compose/local/airflow/docker-compose.yaml"
 dev_compose := "compose/local/docker-compose.yaml"
 realtime_compose := "compose/local/realtime/docker-compose.yaml"
 realtime_prod_compose := "compose/prod/docker-compose.yaml"
+api_compose := "compose/local/api/docker-compose.yaml"
+api_prod_compose := "compose/prod/api/docker-compose.yaml"
 
 # Application PostgreSQL, Redis and Grafana.
 dev:
@@ -35,10 +37,26 @@ realtime-prod:
 realtime-prod-down:
     docker compose -f {{realtime_prod_compose}} down
 
+# 조회 API(개발). 호스트 18000으로 열린다. read_only alias만 붙는다.
+api:
+    docker compose -f {{api_compose}} build
+    docker compose -f {{api_compose}} up -d
+
+api-down:
+    docker compose -f {{api_compose}} down
+
+# 조회 API(운영). 호스트 8000. 내부는 LAN, 외부는 Tailscale로 닿는다.
+api-prod:
+    docker compose -f {{api_prod_compose}} build
+    docker compose -f {{api_prod_compose}} up -d
+
+api-prod-down:
+    docker compose -f {{api_prod_compose}} down
+
 # 운영 배포. NAS clone(/volume1/docker/finance)에서 git pull 후 그 안에서 실행한다.
 # `just deploy`는 전부, `just deploy-airflow`/`just deploy-realtime`은 그 스택만.
 # 이미지 재빌드는 여기서 하지 않는다 — Dockerfile·requirements 변경 시 `just build`.
-deploy: deploy-airflow deploy-realtime
+deploy: deploy-airflow deploy-realtime deploy-api
 
 # airflow는 up만 한다. dags/modules는 bind-mount라 dag-processor가 재파싱하고,
 # airflow/config/airflow.cfg 변경만 수동 스택 재시작이 필요하다(README 배포 절).
@@ -51,6 +69,12 @@ deploy-realtime:
     docker compose -f compose/prod/docker-compose.yaml up -d
     docker compose -f compose/prod/docker-compose.yaml restart
 
+# realtime과 같은 이유로 무조건 재시작한다 — apps/가 bind-mount라 up이 코드 변경을
+# 감지하지 못한다. 읽기 전용이라 끊겨도 잃는 것이 없다.
+deploy-api:
+    docker compose -f compose/prod/api/docker-compose.yaml up -d
+    docker compose -f compose/prod/api/docker-compose.yaml restart
+
 # 운영 이미지 재빌드. Dockerfile·requirements가 바뀐 스택만 돌리고 이어서 deploy 한다.
 # NAS buildkit이 타임아웃 나면 DOCKER_BUILDKIT=0을 앞에 붙여 legacy builder로 돌린다.
 build-airflow:
@@ -58,6 +82,9 @@ build-airflow:
 
 build-realtime:
     docker compose -f compose/prod/docker-compose.yaml build
+
+build-api:
+    docker compose -f compose/prod/api/docker-compose.yaml build
 
 # Run an Alembic command across every migration-enabled database alias.
 # Example: `just migrate upgrade head`.

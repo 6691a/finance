@@ -5,8 +5,8 @@
 - 상태: 1·2·3·5·6·7·8·9단계 구현 완료(6·7단계는 2026-08-22, 8단계는 2026-08-24,
   9단계는 2026-08-26, 리비전 다섯 운영 반영 전), 4단계(그래프) 미착수,
   10단계(기저율)는 구현 완료·백필 트리거 전,
-  11·13단계 구현 완료(2026-08-26, 리비전 `f4b19c6ea283`·`a8c5f207d1e6` 운영 반영 전),
-  12·14단계는 **설계만**(2026-08-26). 운영 배포 전 선행 조건은 5절
+  11·13단계 구현 완료(2026-08-26, 리비전 둘 운영 반영 완료), 12단계 구현 완료(2026-08-27,
+  마이그레이션 없음), 14단계는 **설계만**. 운영 배포 전 선행 조건은 5절
 
 한 문서로 쓰기엔 범위가 커서(모델·리비전, 모듈 둘, DAG, SQL 열 개, 테스트 넷, compose·
 requirements) **배포 단위(worktree/PR 하나)마다 문서를 나눴다.** 이 파일은 공통 원칙과
@@ -81,7 +81,7 @@ requirements) **배포 단위(worktree/PR 하나)마다 문서를 나눴다.** �
 | 9 | [9-intraday.md](9-intraday.md) | 장중 슬롯 넷과 수기 리비전, `thesis_intraday.py`, `market_thesis_intraday` DAG, 장중 봉·되짚기·채점 SQL 다섯, 채점·해설 슬롯 목록 파라미터화 | 1, 2, 3, 5 | 있음 |
 | 10 | [10-base-rate.md](10-base-rate.md) | 일봉 백필(`kis_index_daily`의 `start_date`), 수정주가 소급 조정 가드와 자동 재백필, `detect_and_store`의 `lookback_bars`, `modules/base_rate.py`, 조회 SQL 둘, `SignalObservation` 확장과 프롬프트 교체 | 1, 2, 5, 9 | 없음(계산은 전부 SQL·파이썬) |
 | 11 | [11-expected-return.md](11-expected-return.md) | `thesis`에 방향별 기대 등락률 두 칸, `thesis_outcome`에 크기 채점 두 칸, 수기 리비전(+`thesis_precedent` 인덱스), `return_error` 순수 함수, 프롬프트 `## 크기` 절과 `PROMPT_VERSION` 7, Slack 결론 줄, ops 브리핑 한 칸 | 1, 2, 3, 5 | 있음(크기 추정만 — 채점은 순수 함수) |
-| 12 | [12-api.md](12-api.md) | `apps/web/`(FastAPI 읽기 전용 조회 API 넷), `compose/prod/web`·`compose/local/web`, `justfile` 태스크 여섯, `tests/web/`·`tests/config/test_web_stack.py`, 프로젝트 가이드 문서의 구조 표 | 1, 5 (11은 선택 — 없으면 응답 칸이 빈다) | 없음 |
+| 12 | [12-api.md](12-api.md) | `apps/api/`(FastAPI 읽기 전용 조회 API 넷), `compose/prod/api`·`compose/local/api`, `justfile` 태스크 여섯, `tests/api/`·`tests/config/test_api_stack.py`, 프로젝트 가이드 문서의 구조 표 | 1, 5 (11은 선택 — 없으면 응답 칸이 빈다) | 없음 |
 | 13 | [13-llm-ledger.md](13-llm-ledger.md) | `thesis_llm_run`·`thesis_tool_call` 테이블과 수기 리비전(+`thesis`·`thesis_outcome`에 연결 칸), `thesis_toolbox.py`의 기록 래퍼, 생성·해설 흐름의 대화 열고 닫기, SQL 넷, 테스트 | 2, 5, 7 | 없음(기록만) |
 | 14 | [14-web-ui.md](14-web-ui.md) | React·TypeScript 실행 추적·추론 상세·주간 품질 화면, Cytoscape.js 관계 그래프, FastAPI 정적 자산 제공, Grafana 로컬 서비스·대시보드·테스트·문서 제거 | 11, 12, 13 | 없음(조회만) |
 

@@ -2,16 +2,17 @@
 
 - 상위: [README.md](README.md)
 - 날짜: 2026-08-26
-- 상태: **설계만. 구현 전.** 사용자 재승인 뒤 착수한다.
+- 상태: **구현 완료**(2026-08-27). 마이그레이션이 없어 코드 배포만으로 뜬다.
+  검증은 `uv run pytest tests -q`와 `uv run ruff check`.
 - 의존: [1-storage.md](1-storage.md)(테이블 넷), [5-followup.md](5-followup.md)(채점·해설),
   [11-expected-return.md](11-expected-return.md)(기대 등락률 두 칸 — 없어도 뜨지만 응답에
   칸이 빈다), [4-graph.md](4-graph.md)(그래프 응답이 그 노드·엣지 이름을 그대로 쓴다),
   [13-llm-ledger.md](13-llm-ledger.md)(툴 호출 원장 — **13을 먼저 하는 것이 낫다.** 나중에
   하면 상세 응답 모델을 다시 고친다)
-- 산출물(예정): 새 패키지 `apps/web/`(파일 여섯), `compose/prod/web/`·`compose/local/web/`(각 넷),
-  `justfile` 태스크 여섯, `pyproject.toml`에 fastapi·uvicorn, `tests/web/`와
-  `tests/config/test_web_stack.py`, **`.claude/CLAUDE.md`·`.codex/AGENTS.md` 구조 표의
-  `apps/web/` 행**(두 문서는 함께 갱신한다)과 루트 `README.md` 배포 절의 스택 행.
+- 산출물: 새 패키지 `apps/api/`(모듈 여섯 + `schemas/` 패키지), `compose/prod/api/`·`compose/local/api/`(각 넷),
+  `justfile` 태스크 여섯, `pyproject.toml`에 fastapi·uvicorn, `tests/api/`와
+  `tests/config/test_api_stack.py`, **`.claude/CLAUDE.md`·`.codex/AGENTS.md` 구조 표의
+  `apps/api/` 행**(두 문서는 함께 갱신한다)과 루트 `README.md` 배포 절의 스택 행.
   **마이그레이션은 없다**(6절 "확인 끝")
 - **화면은 이번 범위가 아니다.** JSON API까지다(사용자 결정 2026-08-26). 프론트는 다음
   배포 단위다.
@@ -166,47 +167,75 @@ DB 깜빡임이 컨테이너 재시작 루프가 된다. DB가 죽었는지는 �
 
 ## 2. 서비스 자리와 모양
 
-`apps/` 아래 새 패키지 `apps/web/`. `apps/realtime/`의 관례를 그대로 따른다.
+`apps/` 아래 새 패키지 `apps/api/`. `apps/realtime/`의 관례를 그대로 따른다.
 
-| 파일 | 무엇 |
-| --- | --- |
-| `apps/web/__init__.py` | 무엇인지 한 문단 |
-| `apps/web/main.py` | 진입점. Sentry init → `uvicorn.run(create_app())`. `python -m apps.web.main` |
-| `apps/web/app.py` | `create_app(database, *, db_alias)`. lifespan이 세션 팩토리를 잡고 `dispose` |
-| `apps/web/routes.py` | `APIRouter` 하나. 리소스가 thesis 하나뿐이라 패키지로 나누지 않는다 |
-| `apps/web/schemas.py` | 응답 Pydantic 모델 전부. **응답 계약이 곧 store 독립성의 경계다** |
-| `apps/web/repository.py` | `ThesisReadRepository`와 순수 변환 `project_graph`. Neo4j로 갈아끼울 때 **이 파일만** 갈린다 |
+| 파일 | 무엇 | 무엇을 아나 |
+| --- | --- | --- |
+| `apps/api/__init__.py` | 무엇이고 왜 이렇게 배포되는지 | |
+| `apps/api/main.py` | 진입점. 설정을 읽고 Sentry를 붙이고 컨테이너를 채운다 | 설정 |
+| `apps/api/container.py` | dependency-injector 컨테이너. **composition root** | 조립 |
+| `apps/api/app.py` | `create_app(container)`. lifespan이 엔진을 정리한다 | 조립 |
+| `apps/api/routes/` | 리소스마다 `APIRouter` 하나. `@inject`로 서비스를 받는다 | **HTTP만** |
+| `apps/api/service/` | 행을 응답 계약으로. `build_detail`·`project_graph` | **계약만** |
+| `apps/api/repository/` | 세션을 열고 행 묶음을 준다 | **store만** |
+| `apps/api/schemas/` | 응답 계약 | |
+
+**뒤의 넷은 패키지이고 리소스마다 파일 하나다** — 네 폴더에 `thesis.py`가 하나씩,
+그 층의 리소스들이 공유하는 것만 `common.py`, `__init__.py`는 재수출만. 지금 리소스가
+하나뿐이라도 파일 하나로 두면 둘째 리소스가 남의 코드 위에 쌓인다.
+
+**층을 셋으로 가른 이유**는 리포지토리가 응답 모양을 알면 store를 갈아끼울 때 계약까지
+함께 흔들려서다 — 이 기능의 전제(4-graph.md의 "Neo4j로 갈아끼워도 응답은 그대로")가
+그 경계 위에 선다. 지금 서비스는 "조회 하나 → 매핑 하나"라 얇지만, 통과 층이 되지 않게
+매핑을 모듈 수준 순수 함수로 두고 클래스는 순서만 엮는다.
+
+**서비스 이름은 `api`다**(compose 서비스·이미지·컨테이너). 리소스는 늘어날 예정이라
+`thesis`는 라우트(`/api/theses`)와 파일 이름(`<층>/thesis.py`), 컨테이너 provider
+(`thesis_repository`·`thesis_service`)에만 둔다.
+
+**리소스를 더할 때 손대는 곳은 네 폴더의 새 파일과 `routes/__init__.py`의 `routers`뿐이다.**
+wiring이 `packages=["apps.api.routes"]`라 `container.py`는 provider만 늘고, `app.py`는
+`routers`를 순회하므로 안 갈린다.
 
 - **`settings` import는 함수 안에서** 한다. `apps/realtime/main.py`가 그렇게 하는 이유와
   같다 — 테스트가 `config.yaml` 없이 이 모듈을 import한다. `settings`는 모듈 싱글턴이라
   import 순간 파일을 읽고 검증한다.
-- **`create_app()`이 `Database`를 인자로 받는다.** `apps.core.database`는 import 부수효과가
-  없어서(`config.py`와 다르다) 테스트가 접속 없이 `Database({...})`를 만들어 앱을 통째로
-  세울 수 있다 — `create_async_engine`은 연결하지 않는다. `main()`만 `settings`를 본다.
-- **요청 하나가 세션 하나다.** `Depends`가 `async with session_factory()`를 열고 닫는다.
-  리포지토리는 팩토리가 아니라 **세션**을 받는다 — `RealtimeRepository`가 팩토리를 받는
-  것은 스스로 트랜잭션 경계를 정하기 때문이고, 여기서는 요청이 그 경계다. 커밋은 없다.
-- `Database(databases=settings.databases)`를 **직접** 만든다.
-  `apps/core/container.py`의 DI 컨테이너는 지금 아무도 안 쓰고 realtime도 안 쓴다.
-  게다가 그 모듈은 본문에서 `settings`를 import해 파일 없이는 import조차 안 되고,
-  `default_session_factory`가 별칭을 `default`로 못 박아 뒀다 — 이 서비스가 쓸 별칭이 아니다.
+- **`create_app()`이 컨테이너를 인자로 받는다.** 컨테이너는 `settings`·`db_alias`를
+  `providers.Dependency()`로 밖에서 받아 import만으로 `config.yaml`을 요구하지 않는다.
+  그래서 테스트가 접속 없이 앱을 통째로 세운다 — `create_async_engine`은 연결하지 않는다.
+- **의존성은 생성자로 주입한다.** 컨테이너가 `Factory(ThesisReadRepository,
+  session_factory=...)`와 `Factory(ThesisReadService, repository=...)`를 선언하고 라우터가
+  `@inject`로 서비스를 받는다. 업무 코드가 `container.thesis_service()`를 직접 부르면 그건
+  Service Locator이지 주입이 아니다 — 컨테이너 이름이 보이는 자리는 `WiringConfiguration`이
+  지정한 `routes.py` 하나다.
+- **provider 수명이 뜻을 갖는다.** 엔진 풀만 `Singleton`(프로세스에 한 벌)이고 리포지토리·
+  서비스는 `Factory`다. `Singleton`으로 두면 나중에 요청 상태를 담게 될 때 조용히 새어 나간다.
+- **리포지토리는 세션 팩토리를 받는다**(세션이 아니다). 조회 단위로 열고 닫으며,
+  응답 하나는 **한 세션 안**이다 — 상세가 여섯 번 묻지만 커넥션은 한 번 빌린다.
+  `apps/realtime/repository.py`가 같은 모양이다. 커밋은 없다.
+- `apps/core/container.py`는 **쓰지 않는다.** 본문에서 `settings`를 import해 파일 없이는
+  import조차 안 되고, `default_session_factory`가 별칭을 `default`로 못 박아 뒀다 —
+  이 서비스가 쓸 별칭이 아니다.
 - `sentry_sdk.init(settings.sentry_*)`을 조립 직전에 부른다. 값 세트는 realtime과 같다
   (`.claude/CLAUDE.md`: "새 상주 서비스(FastAPI 등)도 같은 `settings.sentry_*`로 init한다").
 - **조회는 클래스가 쥔다.** 세션 팩토리와 별칭이 여러 호출에 걸쳐 안 변한다 — 저장소의
   "클래스와 함수를 가르는 기준" 그대로다. `apps/realtime/repository.py`의
   `RealtimeRepository`가 같은 모양이다.
 - **읽기 전용을 연결 층에서 강제한다.** 쓰기 라우트를 안 만드는 것으로 그치지 않는다.
-  `config.yaml`에 `read_only: true`인 `prod` 별칭이 **이미 있다.** `WEB_DB_ALIAS`(기본 `prod`)가
-  가리키는 별칭이 `read_only`가 아니면 **시작을 거부한다** — realtime이 대상 별칭에
-  `read_only: false`를 요구하는 가드의 정확한 반대다. `apps/core/database.py`의
+  `config.yaml`에 `read_only: true`인 `prod` 별칭이 **이미 있고**, `main.py`의 상수
+  `DB_ALIAS`가 그것을 가리킨다. `read_only`가 아니면 **시작을 거부한다** — realtime이
+  대상 별칭에 `read_only: false`를 요구하는 가드의 정확한 반대다. `apps/core/database.py`의
   `_connect_args_for`가 그 연결에 `default_transaction_read_only = on`을 걸어, 실수로
   쓰기가 들어가도 Postgres가 거절한다.
-- **포트·바인드는 `os.environ`이다.** `WEB_HOST`(기본 `0.0.0.0`), `WEB_PORT`(기본 `8000`).
+- **별칭은 환경변수가 아니다.** `read_only` 별칭이 하나뿐이라 개발·운영 어디서나 값이
+  같다 — 손잡이가 아닌 것을 환경변수로 두면 `.env` 파일 둘과 그 정합성 검사가 딸려 온다.
+  로컬 DB를 가리키는 read_only 별칭이 생기면 그때 상수를 고치거나 환경변수를 다시 넣는다.
+- **포트·바인드만 `os.environ`이다.** `API_HOST`(기본 `0.0.0.0`), `API_PORT`(기본 `8000`).
   `Settings`는 yaml만 읽고 그 파일은 컨테이너 여럿이 공유하는 접속 정보라, "이 컨테이너가
-  어디에 바인드하나"는 거기 속하지 않는다. `REALTIME_DB_ALIAS`가 같은 선례다.
-  **둘은 `.env.sample`에 넣지 않는다** — 컨테이너 안 바인드는 늘 `0.0.0.0:8000`이고 밖으로
-  보이는 포트는 compose의 `ports:`가 정한다. 손잡이를 두 곳에 두면 어긋난다.
-- **`uvicorn`을 코드에서 띄운다**(`uvicorn.run(create_app(...))`). `uvicorn apps.web.app:app`
+  어디에 바인드하나"는 거기 속하지 않는다. **둘도 `.env.sample`에 넣지 않는다** —
+  컨테이너 안 바인드는 늘 `0.0.0.0:8000`이고 밖으로 보이는 포트는 compose의 `ports:`가
+  정한다. 손잡이를 두 곳에 두면 어긋난다. **어느 스택도 `.env`를 갖지 않는다.**
+- **`uvicorn`을 코드에서 띄운다**(`uvicorn.run(create_app(...))`). `uvicorn apps.api.app:app`
   형태는 모듈 수준 `app = create_app()`을 요구하고, 그러면 import만으로 `config.yaml`이
   필요해져 위의 지연 import 규칙이 그 자리에서 깨진다. `log_config=None`을 준다 — uvicorn
   기본 dictConfig가 root 핸들러를 갈아치워 realtime과 로그 형식이 갈린다.
@@ -249,13 +278,13 @@ DB 깜빡임이 컨테이너 재시작 루프가 된다. DB가 죽었는지는 �
 ## 3. 배포
 
 `compose/prod/`는 지금 `kis-realtime` 하나이고 **포트를 하나도 열지 않는다.** 웹은 열어야
-하므로 스택을 따로 둔다 — `compose/prod/web/`와 `compose/local/web/` 한 쌍이다.
+하므로 스택을 따로 둔다 — `compose/prod/api/`와 `compose/local/api/` 한 쌍이다.
 `compose/prod/airflow/`가 이미 그 형태다.
 
 - 코드는 이미지에 굽지 않는다. `${CODE_DIR}/apps:/app/apps:ro`와 `config.yaml:ro` 바인드
   마운트. **경로 깊이가 `compose/prod/`와 다르다** — 한 칸 더 내려가므로 `../../..`이고,
   `compose/local/realtime/`이 이미 그 깊이라 그쪽을 베낀다. `apps/`가 바인드 마운트라
-  `just deploy-web`은 `up -d` 뒤 `restart`를 불러야 새 코드가 뜬다(realtime과 같다).
+  `just deploy-api`은 `up -d` 뒤 `restart`를 불러야 새 코드가 뜬다(realtime과 같다).
 - 네트워크는 external `database`. `config.yaml`의 DB 주소가 그 스택의 컨테이너 이름이다.
 - 포트는 직접 매핑이다. 저장소에 reverse proxy가 없고 Airflow(8080)도 그렇게 뜬다. 운영 `8000:8000`, 로컬 `18000:8000`(로컬은 앞자리 1을 붙이는 관례).
   **`127.0.0.1:8000:8000`으로 묶지 않는다** — NAS 자기 자신에서만 보이게 되어 같은 망의
@@ -265,14 +294,14 @@ DB 깜빡임이 컨테이너 재시작 루프가 된다. DB가 죽었는지는 �
 - **인증을 붙이지 않는다.** 내부는 LAN, 외부는 **Tailscale**로만 닿는다는 결정
   (2026-08-26)이다. 경계를 지키는 것은 앱이 아니라 tailnet과 NAS 방화벽이고, 같은 망의
   Airflow UI도 같은 조건이다.
-- `.env`에는 `WEB_DB_ALIAS`만 둔다. 나머지는 `config.yaml`이다. 값 옆에 "`read_only: true`인
-  별칭이어야 한다 — 아니면 시작 시 거부된다"를 realtime의 반대 문구로 적는다.
-- `justfile`에 태스크 여섯(`web`·`web-down`·`web-prod`·`web-prod-down`·`build-web`·`deploy-web`)과
-  `deploy` 의존에 `deploy-web`을 더한다. 이름과 모양은 realtime 짝을 그대로 따른다.
+- **`.env` 파일이 없다.** 읽을 별칭은 `main.py`의 상수이고 나머지는 `config.yaml`이다.
+  `test_api_stack.py`가 어느 스택도 서비스 전용 환경변수를 안 갖는 것을 확인한다.
+- `justfile`에 태스크 여섯(`web`·`web-down`·`web-prod`·`web-prod-down`·`build-api`·`deploy-api`)과
+  `deploy` 의존에 `deploy-api`을 더한다. 이름과 모양은 realtime 짝을 그대로 따른다.
 - `tests/config/test_realtime_stack.py`가 local·prod의 `requirements.txt`·`Dockerfile`·
-  `.env.sample`이 주석 빼고 같을 것을 강제한다. **`test_web_stack.py`를 같은 모양으로 둔다.**
+  `.env.sample`이 주석 빼고 같을 것을 강제한다. **`test_api_stack.py`를 같은 모양으로 둔다.**
   거기에 둘을 더한다 — 운영 compose가 포트를 열고 있는지, Dockerfile `CMD`가
-  `python -m apps.web.main`인지.
+  `python -m apps.api.main`인지.
 
 ### 3.1 의존성
 
@@ -292,7 +321,7 @@ import해서 없으면 설정 로딩이 죽는다. 연결은 하지 않는다.
 
 실 DB 없이, DAG 실행 없이 도는 것만 만든다(저장소 규칙).
 
-- `tests/web/test_routes.py` — `httpx.ASGITransport`로 앱을 두드린다. 라우트가 있는지,
+- `tests/api/test_routes.py` — `httpx.ASGITransport`로 앱을 두드린다. 라우트가 있는지,
   응답 모델이 맞는지, 없는 id가 404인지, `limit` 상한이 걸리는지. 라우트 목록 자체
   (`{(r.path, r.methods)}`)도 리터럴과 대조한다 — 라우터를 등록 안 한 실수를 잡는 것이
   DAG 구조 테스트와 같은 성격이다.
@@ -300,14 +329,14 @@ import해서 없으면 설정 로딩이 죽는다. 연결은 하지 않는다.
   `Result`를 흉내 내려면 `.scalars().all()` 체인을 다 구현해야 하는데 그건 SQLAlchemy를
   테스트하는 것이다. 버그가 사는 자리는 라우팅·매핑·직렬화이고 `dependency_overrides`로
   리포지토리를 갈아끼우면 셋을 다 지나간다.
-- `tests/web/test_graph_schema.py` — 그래프 응답이 4-graph.md의 라벨·관계 이름과 속성
+- `tests/api/test_graph_schema.py` — 그래프 응답이 4-graph.md의 라벨·관계 이름과 속성
   집합을 그대로 쓰고, 원 추론 근거만 포함하며, `(type, start, end)`가 응답 안에서
   유일한지. **라벨·관계 이름을 상수로 못 박고 테스트가 그 문서 값과 대조한다.**
-- `tests/config/test_web_stack.py` — local·prod 스택 정합성.
-- `tests/web/test_repository.py` — 쿼리는 `stmt.compile(dialect=postgresql.dialect())`를
+- `tests/config/test_api_stack.py` — local·prod 스택 정합성.
+- `tests/api/test_repository.py` — 쿼리는 `stmt.compile(dialect=postgresql.dialect())`를
   문자열로 만들어 WHERE·ORDER BY·`= ANY`·LIMIT이 들어갔는지 본다. **"목록 쿼리에 LIMIT이
   있다"를 따로 건다** — 빠졌을 때의 사고 크기가 다르다.
-- `tests/web/test_main.py` — `config.yaml` 없이 `apps.web.main`을 import할 수 있는지,
+- `tests/api/test_main.py` — `config.yaml` 없이 `apps.api.main`을 import할 수 있는지,
   `read_only`가 아닌 별칭에서 시작이 거부되는지. 별칭 가드를 작은 순수 함수로 빼면
   그대로 부를 수 있다.
 - 실제 결과는 운영 DB **읽기 전용** 확인으로 대신한다(사용자가 돌린다).
@@ -355,7 +384,11 @@ import해서 없으면 설정 로딩이 죽는다. 연결은 하지 않는다.
   값이라는 것을 그 문서가 직접 말한다 — 4단계를 구현할 사람이 이 API를 안 읽어도 어긋나지
   않는다.
 - **`config.yaml`에 `read_only: true`인 `prod` 별칭이 이미 있다.** 별칭을 새로 만들 필요가
-  없고 `WEB_DB_ALIAS` 기본값이 그것이다.
+  없고 `main.py`의 상수 `DB_ALIAS`가 그것을 가리킨다.
+- **로컬도 그 별칭을 본다.** `just dev`의 DB를 보는 `default`는 쓰기가 열려 있어 이 서비스가
+  거부한다. 로컬에서 로컬 DB를 보려면 `config.yaml`에 read_only 별칭을 더하고 `DB_ALIAS`를
+  고친다 — 그때 `migrations/env.py`가 마이그레이션 설정이 없는 별칭을 어떻게 보는지 먼저
+  확인한다.
 - **`thesis` 계열에 새 인덱스가 필요 없다**(2번의 `precedent_id` 하나를 빼면).
   목록은 `uq_thesis_natural_key`의 `run_date` 선두를 타고, 나머지 조회는 전부
   `thesis_id` 선두 UNIQUE를 탄다. **이 단계는 마이그레이션이 없다.**

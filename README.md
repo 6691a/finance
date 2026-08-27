@@ -590,6 +590,7 @@ ORDER BY ts
 | --- | --- | --- |
 | Airflow | `compose/prod/airflow/docker-compose.yaml` | `airflow/{dags,logs,config,plugins,modules,utility,sql}` (`config/airflow.cfg`는 추적하지 않는 호스트 파일) |
 | KIS 실시간 수집기 | `compose/prod/docker-compose.yaml` | `apps/`, clone 루트의 `config.yaml` |
+| 조회 API | `compose/prod/api/docker-compose.yaml` | `apps/`, clone 루트의 `config.yaml` |
 
 배포 순서: `main`에 push → NAS clone에서:
 
@@ -598,6 +599,7 @@ git pull
 just deploy            # 두 스택 전부
 just deploy-airflow    # airflow만
 just deploy-realtime   # realtime만
+just deploy-api        # 조회 API만
 just build-airflow     # Dockerfile·requirements 변경 시에만, 이어서 deploy
 just build-realtime
 ```
@@ -622,7 +624,8 @@ just가 없으면 레시피 안의 docker compose 명령을 그대로 실행합�
 
 NAS에만 두는 파일은 넷이고 전부 gitignore 대상입니다: `compose/prod/airflow/.env`(Airflow
 환경변수·API 키, Sentry DSN 포함), `compose/prod/.env`(realtime 노브), clone 루트의
-`config.yaml`(KIS 키·DB·Sentry — FastAPI와 같은 파일), 그리고 `airflow/config/airflow.cfg`입니다.
+`config.yaml`(KIS 키·DB·Sentry — 조회 API와 같은 파일), 그리고 `airflow/config/airflow.cfg`입니다.
+조회 API 스택은 `.env`를 갖지 않습니다 — 읽을 별칭은 `apps/api/main.py`의 상수입니다.
 키 구성은 각 디렉터리의 `.env.sample`이 기준입니다. Sentry는 `airflow.cfg`가 아니라 `.env`의
 `AIRFLOW__SENTRY__*`로 켭니다 — cfg는 Airflow가 실행 중에 덮어쓰는 파일이라 값을 넣어도
 호스트 밖으로 나가지 않고, 다음 재생성에 지워질 수 있습니다.

@@ -1,0 +1,33 @@
+"""행을 읽는 층. **store만 안다.**
+
+응답 계약(`apps/api/schemas/`)을 모르고 행 묶음만 돌려준다 — 모양을 바꾸는 것은
+`apps/api/service/`다. 그래야 Neo4j를 조회 원본으로 채택할 때 이 패키지만 갈리고
+매핑과 계약은 그대로다.
+
+**파일은 리소스 단위로 나눈다**(`apps/api/schemas/`와 같은 규칙). `common.py`는 그
+리포지토리들이 공유하는 것이고, `__init__.py`는 **재수출만** 한다.
+"""
+
+from apps.api.repository.common import (
+    DEFAULT_LIMIT,
+    DEFAULT_WINDOW_DAYS,
+    MAX_LIMIT,
+    RowBundle,
+)
+from apps.api.repository.thesis import (
+    ThesisDetailRows,
+    ThesisGraphRows,
+    ThesisListRows,
+    ThesisReadRepository,
+)
+
+__all__ = [
+    "DEFAULT_LIMIT",
+    "DEFAULT_WINDOW_DAYS",
+    "MAX_LIMIT",
+    "RowBundle",
+    "ThesisDetailRows",
+    "ThesisGraphRows",
+    "ThesisListRows",
+    "ThesisReadRepository",
+]

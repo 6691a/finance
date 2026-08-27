@@ -24,6 +24,26 @@ PROMPT_VERSION = "1"
 # 대상 주 `W`와 실행 주 `W+2`의 거리. 설계 §2.
 RUN_LAG_WEEKS = 2
 
+# 한 경로가 거치는 전달 단계의 상한. `apps/models/analysis/causal.py`의 같은 이름 상수와
+# 값이 같다. **도메인에서 온 값이다** — 통화정책 전달경로 서술이 대체로
+# `정책금리 → 시장금리 → 자산가격·신용 → 실물·물가` 3~4단이다. 이 값을 올려 그래프를 깊게
+# 만들려 하지 않는다. 깊이는 주가 쌓이며 노드를 공유하는 데서 오고, 상한을 올리면 한 응답
+# 안에서 모델이 단계를 지어내기 시작한다.
+MAX_CHAIN = 3
+
+# 한 실행이 낼 수 있는 경로 수. 8주 프로토타입은 주당 8~28개를 냈다.
+MAX_PATHS = 40
+
+# 경로 설명 한 문장의 길이 상한.
+MAX_REASONING_CHARS = 200
+
+# 실행 하나가 새로 만들 수 있는 경로 이름 수. 어휘 폭주 가드다(설계 §6).
+# 8주 프로토타입에서 둘째 주 이후 새 이름이 주당 0~2개였다.
+MAX_NEW_CHANNELS = 3
+
+# 사건 후보를 몇 주까지 거슬러 보여 주는가. 사건은 수렴하지 않으므로 날짜로 좁힌다(설계 §4).
+EVENT_LOOKBACK_WEEKS = 4
+
 # event-time cutoff의 시각(KST). KRX 정규장 종가가 확정된 뒤다.
 #
 # **`W+1` 금요일이 KRX 휴장이어도 앞으로 당기지 않는다.** cutoff는 "이 시각 이후 감지된
@@ -269,3 +289,24 @@ class CandidateSet(BaseModel):
                 + [item.ref for item in self.signals]
             )
         )
+
+
+class EventOption(BaseModel):
+    """프롬프트에 후보로 실리는 기존 사건 하나."""
+
+    model_config = ConfigDict(frozen=True)
+
+    node_id: str
+    """`e:<id>` 꼴. 모델은 이 값으로 고른다 — 이름만 주면 같은 것을 다시 만든다."""
+    title: str
+    occurred_on: date
+
+
+class ChannelOption(BaseModel):
+    """프롬프트에 후보로 실리는 기존 경로 하나."""
+
+    model_config = ConfigDict(frozen=True)
+
+    node_id: str
+    """`c:<id>` 꼴."""
+    name: str

@@ -256,10 +256,20 @@ class IndexDaily(MacroDailyColumns, EntityBase):
 
 
 class IndexFutureDaily(MacroDailyColumns, EntityBase):
-    """지수선물 일봉. Yahoo 연속 심볼이라 월물 코드가 없다."""
+    """지수선물 일봉. 논리 심볼과 실제 월물을 함께 갖는다."""
 
     __tablename__ = "index_future_daily"
     __table_args__ = _daily_table_args("index_future_daily", "지수선물의 일봉을 상관 분석용으로 누적하는 테이블")
+
+    contract_code: Mapped[str | None] = mapped_column(
+        Text,
+        nullable=True,
+        comment=(
+            "선물의 실제 월물 코드(예: A01609). Yahoo 연속 심볼(ES=F)은 NULL이다. "
+            "월물이 바뀌면 가격에 갭이 생기는데, 이 값이 없으면 그 갭이 시장 급변인지 "
+            "롤오버인지 구분할 수 없다"
+        ),
+    )
 
 
 class FxDaily(MacroDailyColumns, EntityBase):

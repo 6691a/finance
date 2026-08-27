@@ -1,31 +1,33 @@
-"""KOSPI·KOSPI200·KOSDAQ 확정 일봉 수집 DAG.
+"""국내 지수선물 확정 일봉 수집 DAG.
 
-분봉(`kis_quote_intraday`)은 당일 흐름용이고, 이 DAG는 기술적 보조지표(SMA·RSI·MACD)의
-원천이 되는 **확정 일봉**을 받는다. 설계는 docs/analysis/market-technical-indicators.md 4절이다.
+분봉(`kis_quote_intraday`)은 당일 흐름용이고, 이 DAG는 상관 분석의 원천이 되는 **확정 일봉**을
+받는다. 설계는 docs/collection/kis-index-daily-collection.md 4절이다.
 
-## 수집 대상
-
-`DomesticIndex` 전체(KOSPI·KOSPI200·KOSDAQ)다. 부분집합 상수를 두지 않는다 — 전에 시장 등락
-분포용 `MOVEMENT_INDEXES`를 재사용하는 바람에 KOSPI200이 빠져 있었다.
-
-**KOSPI200 일봉이 곧 기술 신호가 되지는 않는다.** `technical_signal_daily`가 보는 대상은
-`modules/technical/signals.py`의 `SIGNAL_INDEXES`이고 거기에는 KOSPI·KOSDAQ만 있다. 여기서
-받은 KOSPI200 봉을 읽는 곳은 `quote_daily` 조회와 추론 툴 `daily_history`다. KOSPI200을 신호
-대상으로 삼을지는 그 목록을 늘리는 별도 결정이다.
+현물 지수 일봉(`kis_index_daily`)과 한 DAG으로 합치지 않는다. 같은 KRX 거래일을 보지만 조회
+엔드포인트와 실패 원인이 다르고, 무엇보다 **선물에는 월물 축이 하나 더 있다.** 파생 조회가
+막혔을 때 현물 일봉까지 세우면 기술지표가 함께 멈춘다.
 
 ## 왜 200달력일인가
 
-SMA60과 EMA 안정화에 120거래일이 필요하다. 연휴가 포함된 구간에서도 그만큼을 확보하는
-고정 수집 창이 200달력일이다. 매일 같은 창을 다시 받으므로 실패한 날이 저절로 메워지고,
-`index_daily/upsert.sql`이 (provider, symbol, business_date)로 멱등 갱신한다.
+현물 일봉과 같은 창이다. 매일 같은 창을 다시 받으므로 실패한 날이 저절로 메워지고,
+`index_future_daily/upsert.sql`이 (provider, symbol, business_date)로 멱등 갱신한다.
+계산은 `modules/period.py`에 한 벌 있다.
+
+## 월물과 롤오버
+
+저장 심볼은 `KOSPI200_FUT`·`KOSDAQ150_FUT`이고 월물과 무관하다. 실제로 조회한 계약은
+행마다 `contract_code`에 남는다. 이 값이 없으면 월물이 바뀐 날의 갭이 시장 급변인지
+롤오버인지 구분되지 않는다.
+
+조회 구간은 먼저 월물 창으로 갈린다(`contract_windows`). 만기일 봉까지 그 월물이고 다음
+거래일부터 차기월물이다. **가격 차이를 소급 조정하지 않는다** — 롤오버 수익률이 실제
+기초자산 수익률이 아니라는 사실은 조회·분석 계층이 `contract_code` 변경일로 판단한다.
 
 ## 페이지 이어받기
 
-응답 헤더 `tr_cont`가 오면 연속조회로, 헤더 없이 요청 구간의 시작에 못 닿은 응답이 오면
-(확정 수급 API의 행태) 날짜 창을 뒤로 옮겨 받는다. 판단은 `KisIndexDailyCollector.fetch`가 한다.
-한 장의 봉 수로 잘림을 재지 않는다 — 그 상한은 문서에 없고 제공처가 바꿔도 알려 주지 않는다.
-마지막 장까지 받고도 남았으면 그 심볼은 저장하지 않고 실패한다 — 잘린 구간은 지표 계산
-창에 구멍을 남긴다.
+응답 헤더 `tr_cont`는 오지 않는다(2026-08-27 실측). 한 응답이 100행이라 200달력일 창은
+두 장이고, 가장 오래된 날짜의 전날로 종료일을 옮겨 걷는다. 판단은
+`KisFutureDailyCollector.fetch`가 한다.
 
 ## params
 
@@ -36,25 +38,26 @@ SMA60과 EMA 안정화에 120거래일이 필요하다. 연휴가 포함된 구�
 
 ## 이력 백필
 
-`start_date`를 주면 그 날짜까지 거슬러 올라간다. 조회는 200달력일씩 창을 끊어 반복한다 —
-`KisIndexDailyCollector.fetch`가 한 심볼에 허용하는 `INDEX_DAILY_MAX_PAGES`(10)를 넘지
-않기 위해서다. 한 장이 50봉이라 200달력일(약 135거래일)은 3장 안쪽이다.
-
-상한 상수를 올려 한 번에 다 받게 만들지 않는다. 그 값은 "200달력일 구간이 이 안에 들어오지
-않으면 계약이 깨진 것"이라는 검사라, 백필 편의로 올리면 일상 실행의 검사가 함께 약해진다.
+`start_date`를 주면 그 날짜까지 거슬러 올라간다. **만기된 계약도 과거 날짜로 조회된다**
+(실측: `A01606`이 만기일 20260611까지 69행). 그래서 백필에 하한이 없다.
 
 ```bash
-airflow dags trigger kis_index_daily \
-  --conf '{"start_date": "2016-08-15", "end_date": "2026-08-25"}'
+airflow dags trigger kis_future_daily \
+  --conf '{"start_date": "2025-01-01", "end_date": "2026-08-27"}'
 ```
 
-`stock_investor_trade_daily`와 달리 지수에는 수정주가가 없다. 소급 조정으로 과거 값이
-바뀌는 일이 없으므로 이 DAG에는 대조 가드가 없다.
+**사용자가 계약 코드를 직접 넣는 파라미터는 두지 않는다.** 논리 시계열의 롤 규칙을 우회할
+통로가 되고, 그렇게 들어간 봉은 나중에 어느 규칙으로 모였는지 알 수 없다.
+
+월물 코드는 연도를 한 자리로 담는다(`A01609`). 10년을 넘는 백필은 `A01609`가 2016년 9월물과
+겹치므로 그 전에 `contract_code()`의 형식을 넓혀야 한다.
 
 ## 실패와 재시도
 
-- **한 지수가 실패해도 다른 지수는 저장한다.** 심볼 하나가 트랜잭션 하나다. 마지막에
+- **한 심볼이 실패해도 다른 심볼은 저장한다.** 심볼 하나가 트랜잭션 하나다. 마지막에
   실패 목록이 있으면 태스크를 죽인다.
+- **하루 한 번 도는 확정 수집이라 하나만 실패해도 죽인다.** 그날 값을 다시 집는 실행이
+  없다. `kis_index_daily`와 같은 판단이다.
 - HTTP 400/403/404: 설정 오류라 즉시 실패한다.
 - 응답 계약 위반(`KisPayloadError`)·본문 오류(`KisResultError`): 재시도해도 같아 그 심볼만
   실패로 모은다.
@@ -80,14 +83,14 @@ from airflow.sdk.exceptions import AirflowFailException, AirflowSkipException
 from pydantic import SecretStr
 
 from modules.collectors.kis import (
-    DomesticIndex,
+    DomesticFuture,
     KisHTTPError,
     KisPayloadError,
     KisResultError,
     KisTimeWindowError,
     access_token,
 )
-from modules.collectors.market.kis_index_daily import KisIndexDailyCollector
+from modules.collectors.market.kis_future_daily import KisFutureDailyCollector
 from modules.market_session import krx_open_day
 from modules.period import (
     END_DATE_PARAM,
@@ -118,8 +121,7 @@ def _connection() -> Any:
 def _calendar_day(given: Any, name: str) -> date:
     """`YYYY-MM-DD` 하나를 읽는다. 규칙은 `modules/period.py`에 한 벌 있다.
 
-    여기 남는 것은 그 실패를 어떤 Airflow 예외로 올릴지뿐이다. 파라미터가 틀린 것은
-    되돌릴 수 없어 재시도해도 같은 답이다.
+    여기 남는 것은 그 실패를 어떤 Airflow 예외로 올릴지뿐이다.
     """
     try:
         return calendar_day(given, name)
@@ -149,14 +151,12 @@ def requested_start_date(end_date: date, params: dict[str, Any]) -> date:
     return start_date
 
 
-
-
 @dag(
-    dag_id="kis_index_daily",
-    dag_display_name="📅 국내 지수 확정 일봉 (KIS)",
-    description="KOSPI·KOSPI200·KOSDAQ 확정 일봉을 최근 200달력일 창으로 받아 기술지표의 원천으로 저장한다.",
-    schedule="20 18 * * 1-5",  # KST 월~금 18:20 = UTC 월~금 09:20
-    start_date=pendulum.datetime(2026, 8, 24, tz=KST_TIMEZONE),  # KST 2026-08-24 00:00 = UTC 2026-08-23 15:00
+    dag_id="kis_future_daily",
+    dag_display_name="📅 국내 지수선물 확정 일봉 (KIS)",
+    description="코스피200·코스닥150 선물 확정 일봉을 최근 200달력일 창으로 받아 실제 월물과 함께 저장한다.",
+    schedule="30 18 * * 1-5",  # KST 월~금 18:30 = UTC 월~금 09:30
+    start_date=pendulum.datetime(2026, 8, 28, tz=KST_TIMEZONE),  # KST 2026-08-28 00:00 = UTC 2026-08-27 15:00
     catchup=False,
     max_active_runs=1,
     default_args={"retries": 2, "retry_delay": timedelta(minutes=10)},
@@ -173,15 +173,15 @@ def requested_start_date(end_date: date, params: dict[str, Any]) -> date:
             title="구간의 시작",
             description=(
                 f"YYYY-MM-DD. 비우면 구간의 끝에서 {SPAN_CALENDAR_DAYS}달력일 앞. "
-                f"이력 백필에 쓴다 — 구간을 {SPAN_CALENDAR_DAYS}달력일씩 끊어 반복 조회한다."
+                f"이력 백필에 쓴다 — 구간을 {SPAN_CALENDAR_DAYS}달력일씩 끊고, 그 안에서 다시 월물 창으로 나눈다."
             ),
         ),
     },
     doc_md=__doc__,
-    tags=["kis", "market", "daily", "korea", "index"],
+    tags=["kis", "market", "daily", "korea", "future"],
 )
-def kis_index_daily():
-    @task(task_display_name="지수 일봉 수집·저장")
+def kis_future_daily():
+    @task(task_display_name="지수선물 일봉 수집·저장")
     def collect() -> int:
         context = get_current_context()
         params = dict(context.get("params") or {})
@@ -203,55 +203,56 @@ def kis_index_daily():
                 raise AirflowSkipException(f"KRX is closed on {end_date}")
 
         app_key, app_secret = _credentials()
-        collector = KisIndexDailyCollector(access_token(Variable, app_key, app_secret), app_key, app_secret)
+        collector = KisFutureDailyCollector(access_token(Variable, app_key, app_secret), app_key, app_secret)
 
         stored = 0
         failures: list[str] = []
         with closing(_connection()) as connection:
-            # 수집 대상은 `DomesticIndex` 전체다. 부분집합을 따로 두지 않는다 — 전에는 시장
-            # 등락 분포용 `MOVEMENT_INDEXES`를 재사용해서 KOSPI200이 조용히 빠져 있었다.
-            for index in DomesticIndex:
+            for future in DomesticFuture:
                 # 창 하나가 실패하면 그 심볼의 남은 창은 건너뛴다. 구멍 난 구간 위에 나머지를
-                # 얹어 봐야 지표 계산이 그 구멍에서 멈춘다.
+                # 얹어 봐야 수익률 계산이 그 구멍에서 멈춘다.
                 for window_start, window_end in windows:
                     try:
-                        fetch = collector.fetch(index, window_start, window_end)
+                        fetch = collector.fetch(future, window_start, window_end)
                     except KisHTTPError as error:
                         if error.status in KIS_UNRECOVERABLE_STATUSES:
-                            raise AirflowFailException(f"{index.value}: {error}") from error
-                        logger.warning("%s failed with HTTP %s", index.value, error.status)
-                        failures.append(f"{index.value} {window_start}~{window_end}({error})")
+                            raise AirflowFailException(f"{future.value}: {error}") from error
+                        logger.warning("%s failed with HTTP %s", future.value, error.status)
+                        failures.append(f"{future.value} {window_start}~{window_end}({error})")
                         break
                     except KisTimeWindowError as error:
                         # 제공처가 지금은 이 조회를 받지 않는다(응답 본문이 창을 말해 준다). 재시도는 같은
                         # 답을 받으며 예산만 태우므로 즉시 죽인다. 사람이 시각을 맞춰 다시 트리거한다.
-                        raise AirflowFailException(f"{index.value}: {error}. 제한 시각 뒤에 다시 트리거한다.") from error
+                        raise AirflowFailException(
+                            f"{future.value}: {error}. 제한 시각 뒤에 다시 트리거한다."
+                        ) from error
                     except (KisResultError, KisPayloadError) as error:
-                        logger.warning("%s %s~%s failed: %s", index.value, window_start, window_end, error)
-                        failures.append(f"{index.value} {window_start}~{window_end}({error})")
+                        logger.warning("%s %s~%s failed: %s", future.value, window_start, window_end, error)
+                        failures.append(f"{future.value} {window_start}~{window_end}({error})")
                         break
                     except ConnectionError as error:
-                        logger.warning("%s %s~%s failed to connect: %s", index.value, window_start, window_end, error)
-                        failures.append(f"{index.value} {window_start}~{window_end}({error})")
+                        logger.warning("%s %s~%s failed to connect: %s", future.value, window_start, window_end, error)
+                        failures.append(f"{future.value} {window_start}~{window_end}({error})")
                         break
 
                     with atomic(connection):
                         rows = collector.store(connection, fetch)
                     stored += rows
                     logger.info(
-                        "Stored %s daily bars for %s %s~%s in %s pages",
+                        "Stored %s daily bars for %s %s~%s from %s in %s pages",
                         rows,
-                        index.value,
+                        future.value,
                         window_start,
                         window_end,
+                        ",".join(fetch.contracts),
                         fetch.page_count,
                     )
 
         if failures:
-            raise AirflowFailException(f"Index daily collection failed for: {'; '.join(failures)}")
+            raise AirflowFailException(f"Future daily collection failed for: {'; '.join(failures)}")
         return stored
 
     collect()
 
 
-kis_index_daily = kis_index_daily()
+kis_future_daily = kis_future_daily()

@@ -1,9 +1,18 @@
-from datetime import UTC, date, datetime
+from datetime import UTC, date, datetime, timedelta
+from itertools import pairwise
 from types import SimpleNamespace
 
 import pytest
 
-from modules.period import LOOKBACK_DAYS, PeriodError, resolve_observation_period
+from modules.period import (
+    LOOKBACK_DAYS,
+    SPAN_CALENDAR_DAYS,
+    PeriodError,
+    calendar_day,
+    fetch_windows,
+    resolve_observation_period,
+    span_start,
+)
 
 # KST 2026-08-07 08:20. UTC로는 하루 앞이라 날짜 경계가 어긋나는지 여기서 갈린다.
 RUN_TIME = datetime(2026, 8, 6, 23, 20, tzinfo=UTC)
@@ -68,3 +77,53 @@ def test_a_reversed_period_fails():
 def test_a_date_that_is_not_iso_fails(value):
     with pytest.raises(PeriodError, match="ISO date"):
         resolve_observation_period(context({"observation_end": value}))
+
+
+# ---------------------------------------------------------------------------
+# 고정 창 구간
+# ---------------------------------------------------------------------------
+
+
+def test_a_calendar_day_is_read_as_given():
+    assert calendar_day("2026-08-21", "end_date") == date(2026, 8, 21)
+
+
+@pytest.mark.parametrize("given", ["20260821", "2026-W34", "yesterday", "2026-8-21"])
+def test_a_day_that_is_not_a_calendar_day_fails(given):
+    """`date.fromisoformat`은 ISO 기본형과 주 표기도 받는다. 모양을 먼저 봐야 그것들이 걸린다."""
+    with pytest.raises(PeriodError, match="must be YYYY-MM-DD"):
+        calendar_day(given, "end_date")
+
+
+def test_the_fixed_span_is_two_hundred_calendar_days():
+    # 연휴가 끼어도 SMA60·EMA 안정화 120거래일을 확보하는 창이다.
+    assert SPAN_CALENDAR_DAYS == 200
+    assert span_start(date(2026, 8, 27)) == date(2026, 2, 8)
+
+
+def test_a_span_of_exactly_the_window_is_one_window():
+    """일상 실행의 동작이다. 여기가 둘로 갈리면 매일 요청이 하나 더 나간다."""
+    end_date = date(2026, 8, 25)
+    start_date = span_start(end_date)
+
+    assert fetch_windows(start_date, end_date) == [(start_date, end_date)]
+
+
+def test_a_backfill_span_is_cut_without_gaps_or_overlaps():
+    start_date, end_date = date(2016, 8, 15), date(2026, 8, 25)
+
+    windows = fetch_windows(start_date, end_date)
+
+    assert windows[0][0] == start_date
+    assert windows[-1][1] == end_date
+    # 창의 끝이 포함이라 한 창이 201달력일을 덮는다. "최대 200"이 아니라 "200일 간격"이다.
+    assert all(window_end - window_start <= timedelta(days=SPAN_CALENDAR_DAYS) for window_start, window_end in windows)
+    # 창끼리 겹치거나 벌어지지 않는다. 벌어지면 지표 계산 창에 구멍이 남는다.
+    for earlier, later in pairwise(windows):
+        assert later[0] == earlier[1] + timedelta(days=1)
+
+
+def test_a_single_day_span_is_one_window():
+    day = date(2026, 8, 25)
+
+    assert fetch_windows(day, day) == [(day, day)]

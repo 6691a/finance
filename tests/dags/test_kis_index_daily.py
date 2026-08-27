@@ -25,6 +25,14 @@ def test_the_dag_runs_after_the_daily_bars_are_final():
     assert set(dag.task_dict) == {"collect"}
 
 
+def test_the_daily_dag_does_not_reuse_the_market_movement_subset():
+    """`MOVEMENT_INDEXES`는 상승·보합·하락 분포용 부분집합이다.
+
+    일봉 순회에 그걸 쓰면 KOSPI200이 조용히 빠진다. 실제로 그렇게 빠져 있었다.
+    """
+    assert not hasattr(kis_index_daily, "MOVEMENT_INDEXES")
+
+
 def test_the_display_metadata_is_filled():
     dag = kis_index_daily.kis_index_daily
 

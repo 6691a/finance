@@ -284,3 +284,71 @@ class TestFetchReturns:
         returns = candidates.fetch_returns(connection, self._targets(), self.WINDOW)
 
         assert set(returns) == {"KOSPI"}
+
+
+class TestFetchCandidates:
+    """후보 조립. 코드가 먼저 좁히고 모델이 툴로 더 판다(설계 §5.1)."""
+
+    WINDOW = domain.window_for(date(2026, 8, 10))
+
+    def _targets(self) -> tuple[domain.CausalTarget, ...]:
+        return candidates.resolve_targets(
+            FakeConnection(results={"FROM instrument": [("005930",)]})
+        )
+
+    def _connection(self) -> FakeConnection:
+        return FakeConnection(
+            results={
+                "document_instrument": [
+                    (
+                        "005930",
+                        84026,
+                        "삼성전자 반도체 수출 급증",
+                        "요약",
+                        "yonhap",
+                        datetime(2026, 8, 14, 1, 0, tzinfo=UTC),
+                        8,
+                        "up",
+                    )
+                ],
+                "FROM disclosure_event": [
+                    (
+                        "005930",
+                        "20260819000123",
+                        "삼성전자",
+                        "자기주식취득결정",
+                        date(2026, 8, 19),
+                    )
+                ],
+                "FROM technical_signal": [(12, "KOSPI", date(2026, 8, 12), "golden_cross", "up")],
+            }
+        )
+
+    def test_every_candidate_carries_a_ref(self) -> None:
+        """모델이 인용한 근거만 저장하고 목록 밖 ref는 버린다. 그 목록이 여기서 만들어진다."""
+        found = candidates.fetch_candidates(self._connection(), self._targets(), self.WINDOW)
+
+        assert found.refs == (
+            "disclosure:20260819000123",
+            "document:84026",
+            "technical_signal:12",
+        )
+
+    def test_documents_keep_the_target_they_were_tagged_to(self) -> None:
+        found = candidates.fetch_candidates(self._connection(), self._targets(), self.WINDOW)
+
+        assert found.documents[0].target_code == "005930"
+        assert found.documents[0].value_score == 8
+
+    def test_refs_are_sorted_so_the_input_hash_is_stable(self) -> None:
+        """`input_hash`가 후보 ref를 접는다. 조회 순서가 흔들려도 같은 입력이면 같은 해시여야
+        한다 — 여기서 이미 정렬해 두면 그 성질이 조립 단계에서 깨지지 않는다."""
+        found = candidates.fetch_candidates(self._connection(), self._targets(), self.WINDOW)
+
+        assert list(found.refs) == sorted(found.refs)
+
+    def test_an_empty_week_yields_no_refs(self) -> None:
+        """후보가 0건인 주도 정상이다. 7/06 주가 실제로 평가된 문서 0건이었다."""
+        found = candidates.fetch_candidates(FakeConnection(), self._targets(), self.WINDOW)
+
+        assert found.refs == ()

@@ -17,8 +17,8 @@ Codex용 규칙 원본은 [.codex/AGENTS.md](../.codex/AGENTS.md)이며 두 문�
 | `apps/api/` | 읽기 전용 조회 API(FastAPI). 리소스는 늘어난다 — 지금은 시장 추론. `python -m apps.api.main`, `compose/prod/api/` 배포 |
 | `migrations/` | Alembic. 리비전 파일은 `migrations/versions` 하나를 모든 별칭이 공유한다 |
 | `migrations/routing.py` | 어떤 테이블이 어떤 DB 별칭에 속하는지 판단하는 순수 함수 |
-| `../airflow/dags/` | Airflow DAG. 폴더로 나누지 않는다 — 스케줄·재시도·실패 판정만 갖는 얇은 파일이다 |
-| `../airflow/modules/` | DAG이 쓰는 공유 코드. 도메인 폴더(`collectors/`·`briefing/`·`expectation/`·`technical/`·`thesis/`)로 나누고 최상위에는 공용 잎만 둔다. 하위 패키지 `__init__.py`는 비운다 — 재수출하면 가벼운 모듈 하나를 import해도 LangChain이 딸려 온다. 판단 근거는 [docs/convention/modules-folder-split.md](../docs/convention/modules-folder-split.md) |
+| `../airflow/dags/` | Airflow DAG. 폴더로 나누지 않는다 — 스케줄·재시도·실패 판정만 갖는 얇은 파일이다 (아래 규칙) |
+| `../airflow/modules/` | DAG이 쓰는 공유 코드. 도메인 폴더(`collectors/`·`briefing/`·`expectation/`·`technical/`·`thesis/`)로 나누고 최상위에는 공용 잎만 둔다. 하위 패키지 `__init__.py`는 비운다 — 재수출하면 가벼운 모듈 하나를 import해도 LangChain이 딸려 온다. (아래 규칙) |
 | `../airflow/modules/collectors/` | 수집기. 도메인 폴더(`market/`·`document/`·`indicator/`·`calendar/`·`analyst/`)로 나눈다. 전환 진행 상황은 [docs/convention/collectors-class-migration.md](../docs/convention/collectors-class-migration.md) |
 | `tests/` | pytest |
 
@@ -269,6 +269,39 @@ DAG가 쓰는 코드는 **위치는 Airflow를, 규칙은 백엔드를** 따른�
 - 테이블 정의의 원본은 백엔드의 `apps/models`다. 수집기는 문자열 SQL을 쓰므로
   `tests/collectors/`의 `test_fred.py`, `test_ecos.py`, `test_mof.py`, `test_boe.py`,
   `test_ecb.py`가 INSERT 컬럼과 `ON CONFLICT` 키를 모델 metadata와 대조한다.
+
+## `airflow/modules/`의 폴더
+
+**한 도메인의 파일이 셋 이상이면 폴더로 내리고 접두어를 뗀다.** `collectors/`·`briefing/`·
+`expectation/`·`technical/`·`thesis/`가 그 형태다(뒤의 셋은 2026-08-27에 내렸다 — 최상위
+`.py`가 31개에서 12개로 줄었다). `modules.thesis.thesis_domain`은 말을 더듬으므로
+`modules.thesis.domain`이다. `collectors/`가 파일 이름에 제공처를 남긴 것
+(`market/kis_positioning.py`)과 다른 판단인데, 저기는 접두어가 **제공처**라 뜻이 있고
+`thesis_`는 **폴더가 될 것**이 이름에 붙어 있던 것이다.
+
+- **하위 패키지 `__init__.py`는 빈 파일이다.** 재수출하면 `modules.thesis.domain` 하나를
+  import해도 LangChain이 딸려 와 DagBag이 그 무게를 문다. `tests/modules/test_import_weight.py`가
+  그 경계를 재고 있어 재수출은 그 테스트를 즉시 깬다. 한 수집기의 의존성이 없는 환경에서
+  관계없는 DAG이 import 오류로 죽는 것도 같은 이유다.
+- **최상위에 남는 것은 공용 잎이다.** `db`·`sql`·`upsert`·`utility`·`period`·`schema`·
+  `slack`·`llm`·`prompt`·`market_session`·`assessment`·`dedup` 열둘이고 전부 300줄 미만이다.
+  **이것들을 `core/` 같은 폴더로 모으지 않는다** — 114개 파일 226줄을 고치고 얻는 것이 목록
+  열 줄이다(2026-08-27 실측). 폴더는 파일이 많아서 만드는 것이지 정리해 보이려고 만드는
+  것이 아니다.
+- **접두어를 떼면 바인딩 이름이 짧아져 지역 변수와 겹칠 수 있다.**
+  `from modules import technical`이 `from modules.technical import indicators`가 되는 식이다.
+  `ruff`의 `F823`(할당 전 참조)이 그것을 잡는 유일한 장치이므로 **기계적 치환 직후에 `ruff`를
+  먼저 돌린다.** 2026-08-27 이동에서 셋이 걸렸다(`briefing/chart.py`의 `indicators`, 테스트
+  둘의 `forecast`·`review`).
+- **이동과 파일 분리를 같은 커밋에 두지 않는다.** 어느 쪽이 회귀를 만들었는지 못 가른다.
+  `thesis/toolbox.py`가 1,440줄로 저장소 최대이고 다음 분리 후보인데, 기준은
+  [collectors-class-migration.md](../docs/convention/collectors-class-migration.md)의
+  "파일을 나누는 기준"에 있다.
+
+**`dags/`는 폴더로 나누지 않는다.** Airflow의 DagBag은 하위 폴더를 재귀로 훑으므로
+기술적으로는 되지만, `dag_id`가 파일 경로와 무관해 **UI에는 그룹이 생기지 않는다**(그 일은
+`tags`가 한다). 얻는 것이 파일 탐색기에서뿐이고, DAG은 파일당 얇은 데다 접두어
+(`kis_`·`fred_`·`slack_`·`market_thesis_`)가 이미 정렬을 해 준다.
 
 ## 클래스와 함수를 가르는 기준
 

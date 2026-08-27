@@ -50,7 +50,7 @@
 | `migrations/` | Alembic. 리비전 파일은 `migrations/versions` 하나를 모든 별칭이 공유한다 |
 | `migrations/routing.py` | 어떤 테이블이 어떤 DB 별칭에 속하는지 판단하는 순수 함수 |
 | `airflow/dags/` | Airflow DAG |
-| `airflow/modules/` | DAG이 쓰는 공유 코드. 도메인 폴더(`collectors/`·`briefing/`·`expectation/`·`technical/`·`thesis/`)로 나누고 최상위에는 공용 잎만 둔다. 하위 패키지 `__init__.py`는 비운다 — 재수출하면 가벼운 모듈 하나를 import해도 LangChain이 딸려 온다. 판단 근거는 `docs/convention/modules-folder-split.md` |
+| `airflow/modules/` | DAG이 쓰는 공유 코드. 도메인 폴더(`collectors/`·`briefing/`·`expectation/`·`technical/`·`thesis/`)로 나누고 최상위에는 공용 잎만 둔다. 하위 패키지 `__init__.py`는 비운다 — 재수출하면 가벼운 모듈 하나를 import해도 LangChain이 딸려 온다. (아래 규칙) |
 | `tests/` | pytest |
 
 `apps/models/`의 모듈은 도메인 단위로 나눈다(`raw.py`, `reference.py`, `content.py`).
@@ -184,11 +184,20 @@ uv run ruff check apps airflow migrations tests
 - 의존성은 Airflow 환경에 있는 것만 쓴다. 표준 라이브러리, Pydantic, PEP 249 연결, HTML 수집용 `scrapling[fetchers]`, 브리핑 차트용 matplotlib(+한글 폰트 `fonts-nanum`)이다. SQLAlchemy 모델과 `core.config`는 import하지 않는다. matplotlib은 없어도 브리핑이 죽지 않도록 함수 안에서 import한다(`modules/briefing/chart.py`).
 - 테이블 정의의 원본은 백엔드의 `apps/models`다. 수집기는 문자열 SQL을 쓰므로 `tests/collectors/test_fred.py`, `test_ecos.py`, `test_mof.py`, `test_boe.py`, `test_ecb.py`가 INSERT 컬럼과 `ON CONFLICT` 키를 모델 metadata와 대조한다.
 
+## `airflow/modules/`의 폴더
+
+- **한 도메인의 파일이 셋 이상이면 폴더로 내리고 접두어를 뗀다.** `collectors/`·`briefing/`·`expectation/`·`technical/`·`thesis/`가 그 형태다(뒤의 셋은 2026-08-27). `modules.thesis.thesis_domain`이 아니라 `modules.thesis.domain`이다 — `collectors/`가 파일 이름에 남긴 접두어는 **제공처**라 뜻이 있고, `thesis_`는 **폴더가 될 것**이 이름에 붙어 있던 것이다.
+- **하위 패키지 `__init__.py`는 빈 파일이다.** 재수출하면 `modules.thesis.domain` 하나를 import해도 LangChain이 딸려 와 DagBag이 그 무게를 문다. `tests/modules/test_import_weight.py`가 그 경계를 재고 있어 재수출은 그 테스트를 즉시 깬다.
+- **최상위에 남는 것은 공용 잎 열둘이다**(`db`·`sql`·`upsert`·`utility`·`period`·`schema`·`slack`·`llm`·`prompt`·`market_session`·`assessment`·`dedup`, 전부 300줄 미만). **`core/` 같은 폴더로 모으지 않는다** — 114개 파일 226줄을 고치고 얻는 것이 목록 열 줄이다(2026-08-27 실측).
+- **접두어를 떼면 바인딩 이름이 짧아져 지역 변수와 겹칠 수 있다**(`from modules import technical` → `from modules.technical import indicators`). `ruff`의 `F823`이 그것을 잡는 유일한 장치이므로 기계적 치환 직후에 `ruff`를 먼저 돌린다. 2026-08-27 이동에서 셋이 걸렸다.
+- **이동과 파일 분리를 같은 커밋에 두지 않는다.** 어느 쪽이 회귀를 만들었는지 못 가른다. `thesis/toolbox.py`가 1,440줄로 저장소 최대이고 다음 분리 후보다.
+- **`dags/`는 폴더로 나누지 않는다.** DagBag은 하위 폴더를 재귀로 훑지만 `dag_id`가 경로와 무관해 UI에 그룹이 생기지 않는다(그 일은 `tags`가 한다). DAG은 파일당 얇고 접두어가 이미 정렬을 해 준다.
+
 ## 클래스와 함수를 가르는 기준
 
 **상태를 쥔 동작은 클래스로 묶고, 상태 없는 변환은 함수로 둔다.** 저장소 전체 규칙이다.
 
-- 클래스로 묶는 것: 자격 증명·토큰·DB 연결·기준 시각·출처 행처럼 여러 호출에 걸쳐 안 변하는 값을 들고 도는 동작. 그 값이 함수마다 인자로 다시 들어가고 있으면 그게 신호다. 기준 구현은 `collectors/analyst/kis_opinion.py`의 `KisAnalystOpinionCollector`, `collectors/document/naver_research.py`의 `NaverResearchCollector`, `assessment.py`의 `DocumentAssessor`, `thesis.py`의 `ThesisToolbox`·`ThesisBuilder`·`FollowupNarrator`. 연결을 쥐는 흐름 코드는 `thesis/nxt_review.py`의 `NxtAfterHoursReview`, `thesis/common.py`의 `ThesisRun`, `thesis.py`의 `ThesisStore`가 기준이다.
+- 클래스로 묶는 것: 자격 증명·토큰·DB 연결·기준 시각·출처 행처럼 여러 호출에 걸쳐 안 변하는 값을 들고 도는 동작. 그 값이 함수마다 인자로 다시 들어가고 있으면 그게 신호다. 기준 구현은 `collectors/analyst/kis_opinion.py`의 `KisAnalystOpinionCollector`, `collectors/document/naver_research.py`의 `NaverResearchCollector`, `assessment.py`의 `DocumentAssessor`, `thesis/toolbox.py`의 `ThesisToolbox`·`ThesisBuilder`·`FollowupNarrator`. 연결을 쥐는 흐름 코드는 `thesis/nxt_review.py`의 `NxtAfterHoursReview`, `thesis/common.py`의 `ThesisRun`, `thesis/store.py`의 `ThesisStore`가 기준이다.
 - 생성자는 그 실행 동안 안 변하는 것만 받는다. 종목·구간처럼 호출마다 바뀌는 것은 메서드 인자다.
 - 함수로 두는 것: 파싱·정규화·계산처럼 감쌀 상태가 없는 것, 그 클래스의 관심사가 아닌 조회(`watched_stocks`). 클래스 안이 읽기 좋으면 `@staticmethod`.
 - 데이터 모양은 언제나 Pydantic 모델이다. 수집기 클래스 안에 중첩하지 않는다.

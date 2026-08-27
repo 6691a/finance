@@ -48,9 +48,9 @@ from datetime import timedelta
 from typing import Any
 
 import pendulum
-from airflow.exceptions import AirflowFailException
 from airflow.providers.postgres.hooks.postgres import PostgresHook
 from airflow.sdk import Param, dag, get_current_context, task
+from airflow.sdk.exceptions import AirflowFailException
 
 from modules.collectors.market.yahoo import (
     DAILY_RANGE,

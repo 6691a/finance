@@ -1,7 +1,7 @@
 from datetime import UTC, datetime, timedelta
 
 import pytest
-from airflow.exceptions import AirflowFailException
+from airflow.sdk.exceptions import AirflowFailException
 
 from dags import document_assessment_hourly as module
 from modules.assessment import Assessment, AssessmentResult, Candidates, PendingDocument

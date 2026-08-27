@@ -43,8 +43,8 @@ from datetime import UTC, date, datetime, time
 from decimal import Decimal
 from typing import TYPE_CHECKING, Any
 
-from airflow.exceptions import AirflowSkipException
 from airflow.sdk import get_current_context
+from airflow.sdk.exceptions import AirflowSkipException
 from pydantic import AwareDatetime, BaseModel, ConfigDict
 
 from modules.sql import read_sql

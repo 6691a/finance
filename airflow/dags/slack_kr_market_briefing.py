@@ -53,9 +53,9 @@ from datetime import UTC, datetime, timedelta
 from typing import Any
 
 import pendulum
-from airflow.exceptions import AirflowFailException, AirflowSkipException
 from airflow.providers.postgres.hooks.postgres import PostgresHook
 from airflow.sdk import dag, get_current_context, task
+from airflow.sdk.exceptions import AirflowFailException, AirflowSkipException
 from airflow.timetables.trigger import MultipleCronTriggerTimetable
 from pydantic import SecretStr
 

@@ -54,9 +54,9 @@ from datetime import date, timedelta
 from typing import Any
 
 import pendulum
-from airflow.exceptions import AirflowFailException, AirflowSkipException
 from airflow.providers.postgres.hooks.postgres import PostgresHook
 from airflow.sdk import Variable, dag, get_current_context, task
+from airflow.sdk.exceptions import AirflowFailException, AirflowSkipException
 from pydantic import SecretStr
 
 from modules.collectors.kis import KisHTTPError, KisPayloadError, KisResultError, access_token

@@ -29,9 +29,9 @@ from datetime import UTC, datetime, timedelta
 from typing import Any
 
 import pendulum
-from airflow.exceptions import AirflowFailException
 from airflow.providers.postgres.hooks.postgres import PostgresHook
 from airflow.sdk import dag, task
+from airflow.sdk.exceptions import AirflowFailException
 from pydantic import SecretStr
 
 from modules.briefing import ops

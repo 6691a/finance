@@ -11,7 +11,7 @@ from datetime import UTC, date, datetime
 from typing import Any, ClassVar
 
 import pytest
-from airflow.exceptions import AirflowFailException
+from airflow.sdk.exceptions import AirflowFailException
 
 from dags import slack_disclosure_briefing
 from modules.briefing.disclosures import DisclosureBatch, Highlight, HighlightError, NewDisclosure

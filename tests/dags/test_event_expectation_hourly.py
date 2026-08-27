@@ -6,7 +6,7 @@
 from datetime import UTC, datetime, timedelta
 
 import pytest
-from airflow.exceptions import AirflowFailException
+from airflow.sdk.exceptions import AirflowFailException
 
 from dags import event_expectation_hourly as module
 from modules.expectation.domain import ExtractionError, PendingExtractionDocument

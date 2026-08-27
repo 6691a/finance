@@ -69,9 +69,9 @@ from datetime import date, timedelta
 from typing import Any
 
 import pendulum
-from airflow.exceptions import AirflowFailException
 from airflow.providers.postgres.hooks.postgres import PostgresHook
 from airflow.sdk import Param, Variable, dag, get_current_context, task
+from airflow.sdk.exceptions import AirflowFailException
 from pydantic import SecretStr
 
 from modules.collectors.calendar.kis_market_calendar import (

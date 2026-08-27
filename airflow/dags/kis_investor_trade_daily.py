@@ -91,9 +91,9 @@ from time import sleep as wait_seconds
 from typing import Any
 
 import pendulum
-from airflow.exceptions import AirflowFailException, AirflowSkipException
 from airflow.providers.postgres.hooks.postgres import PostgresHook
 from airflow.sdk import Param, Variable, dag, get_current_context, task
+from airflow.sdk.exceptions import AirflowFailException, AirflowSkipException
 from pydantic import BaseModel, ConfigDict, SecretStr
 
 from modules.collectors.kis import (

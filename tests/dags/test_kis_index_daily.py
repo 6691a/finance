@@ -8,7 +8,7 @@ from datetime import UTC, date, datetime, timedelta
 from itertools import pairwise
 
 import pytest
-from airflow.exceptions import AirflowFailException
+from airflow.sdk.exceptions import AirflowFailException
 
 from dags import kis_index_daily
 from modules.utility import KST_TIMEZONE

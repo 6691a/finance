@@ -21,6 +21,10 @@
 루프가 끝난 뒤 실패가 하나라도 있으면 태스크를 실패시켜 재시도한다. 자연키 upsert라 재시도가
 중복 행을 만들지 않는다. 설정·권한 문제(HTTP 4xx)는 재시도해도 같으므로 즉시 실패다.
 
+**저장이 0건이어도 실패다.** 창이 한 달이고 의견은 종목당 월 5~10건이라 정상적인 날은 겹쳐
+읽은 행이 다시 들어온다. 0건은 "의견이 없다"가 아니라 조회가 깨졌다는 뜻이다 — 하루 한 번
+도는 확정 수집이라 그날 값을 다시 집는 실행이 없다.
+
 ## params
 
 | 이름 | 기본값 | 뜻 |
@@ -55,9 +59,9 @@ from datetime import UTC, datetime, timedelta
 from typing import Any
 
 import pendulum
-from airflow.exceptions import AirflowFailException, AirflowSkipException
 from airflow.providers.postgres.hooks.postgres import PostgresHook
 from airflow.sdk import Param, Variable, dag, get_current_context, task
+from airflow.sdk.exceptions import AirflowFailException, AirflowSkipException
 from pydantic import SecretStr
 
 from modules.collectors.analyst.kis_opinion import (
@@ -196,6 +200,17 @@ def kis_analyst_opinion_daily():
 
         if failures:
             raise AirflowFailException(f"{len(failures)} of {len(stocks)} KIS calls failed: {'; '.join(failures)}")
+
+        # **0건은 성공이 아니다.** 창이 한 달이고 의견은 종목당 월 5~10건이라 정상적인 날은
+        # 겹쳐 읽은 행이 다시 들어온다. 0건이면 의견이 없는 것이 아니라 조회가 깨진 것이다 —
+        # 7일 창이던 때 이 판정이 없어서 아홉 날 동안 매일 "성공, 0건"으로 끝났다(2026-08-27).
+        # 백필로 아주 오래된 구간을 물어 진짜 0건일 때도 실패로 뜨는 편이 맞다. 사람이 구간을
+        # 골라 돌리는 자리라 결과를 본다.
+        if not stored:
+            raise AirflowFailException(
+                f"KIS returned no analyst opinions for {observation_start}..{observation_end}; "
+                f"창이 {OPINION_LOOKBACK_DAYS}일인데 0건이면 조회가 깨진 것이다"
+            )
 
         logger.info("Stored %s analyst opinion rows for %s..%s", stored, observation_start, observation_end)
         return stored

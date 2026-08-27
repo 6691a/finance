@@ -10,7 +10,7 @@ from datetime import UTC, date, datetime, timedelta
 from typing import Any, Self
 
 import pytest
-from airflow.exceptions import AirflowFailException, AirflowSkipException
+from airflow.sdk.exceptions import AirflowFailException, AirflowSkipException
 
 from dags import market_thesis_forecast as dag_module
 from modules.thesis import common, forecast

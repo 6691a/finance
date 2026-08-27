@@ -18,8 +18,8 @@ from datetime import UTC, date, datetime
 from decimal import Decimal
 from typing import TYPE_CHECKING, Any
 
-from airflow.exceptions import AirflowFailException
 from airflow.sdk import get_current_context
+from airflow.sdk.exceptions import AirflowFailException
 
 from modules.thesis import common
 from modules.thesis.domain import LlmRunKind, ThesisSubjectKind

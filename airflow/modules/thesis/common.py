@@ -25,9 +25,9 @@ from datetime import UTC, date, datetime, time, timedelta
 from types import MappingProxyType
 from typing import Any
 
-from airflow.exceptions import AirflowFailException, AirflowSkipException
 from airflow.providers.postgres.hooks.postgres import PostgresHook
 from airflow.sdk import Param
+from airflow.sdk.exceptions import AirflowFailException, AirflowSkipException
 from pydantic import SecretStr
 
 from modules.market_session import krx_open_day

@@ -7,20 +7,25 @@
 """
 
 from collections.abc import Iterable, Sequence
-from datetime import timedelta
+from datetime import datetime, time, timedelta
 
 from modules.causal.domain import (
     INDEX_TARGETS,
     INDICATOR_TARGETS,
     MACRO_TARGETS,
+    CandidateSet,
     CausalReturnUnit,
     CausalTarget,
     CausalTargetKind,
     CausalWindow,
+    DisclosureCandidate,
+    DocumentCandidate,
+    SignalCandidate,
     TargetReturns,
 )
 from modules.db import Connection
 from modules.sql import read_sql
+from modules.utility import KST_TIMEZONE
 
 WATCHED_STOCKS = read_sql("postgres", "causal", "select_watched_stocks.sql")
 
@@ -42,6 +47,14 @@ RETURN_UNITS: dict[CausalTargetKind, CausalReturnUnit] = {
 
 # 실현 등락 조회의 끝. 반응 주 금요일이 아니라 넉넉히 잡아야 휴장이 겹쳐도 T+5가 잡힌다.
 RETURNS_SCAN_DAYS = 15
+
+DOCUMENTS = read_sql("postgres", "causal", "select_documents.sql")
+DISCLOSURES = read_sql("postgres", "causal", "select_disclosures.sql")
+SIGNALS = read_sql("postgres", "causal", "select_signals.sql")
+
+# 대상당 문서 몇 건까지 프롬프트에 싣는가. 대상 열한 개면 최대 88건이고, 8주 프로토타입은
+# 대상당 8건으로 32~50건이 실려 잘 돌았다.
+DOCUMENTS_PER_TARGET = 8
 
 
 def resolve_targets(connection: Connection) -> tuple[CausalTarget, ...]:
@@ -108,3 +121,90 @@ def _fetch_kind(
         for row in rows
         if row[1] is not None and row[2] is not None and row[3] is not None
     }
+
+
+def fetch_candidates(
+    connection: Connection,
+    targets: Iterable[CausalTarget],
+    window: CausalWindow,
+) -> CandidateSet:
+    """프롬프트에 실을 근거 후보. **매크로 변화는 여기 없다** — 이제 대상이라
+    `fetch_returns`가 실현 등락으로 준다.
+
+    셋 다 `as_of_at` cutoff를 건다. 근거는 "그 시점에 알 수 있었던 것"이어야 한다 —
+    실현 등락과 반대다.
+    """
+    codes = [target.code for target in targets]
+    week_start_at = datetime.combine(window.week_start, time.min, tzinfo=KST_TIMEZONE)
+    week_after_at = datetime.combine(
+        window.week_end + timedelta(days=3), time.min, tzinfo=KST_TIMEZONE
+    )
+
+    with connection.cursor() as cursor:
+        cursor.execute(
+            DOCUMENTS,
+            {
+                "codes": codes,
+                "week_start_at": week_start_at,
+                "week_after_at": week_after_at,
+                "as_of_at": window.as_of_at,
+                "per_target": DOCUMENTS_PER_TARGET,
+            },
+        )
+        documents = tuple(
+            DocumentCandidate(
+                ref=f"document:{row[1]}",
+                target_code=row[0],
+                title=row[2],
+                summary=row[3] or "",
+                source_slug=row[4],
+                published_at=row[5],
+                value_score=row[6],
+                assessed_direction=row[7],
+            )
+            for row in cursor.fetchall()
+        )
+
+    with connection.cursor() as cursor:
+        cursor.execute(
+            DISCLOSURES,
+            {
+                "codes": codes,
+                "week_start": window.week_start,
+                "week_end": window.week_end,
+                "as_of_at": window.as_of_at,
+            },
+        )
+        disclosures = tuple(
+            DisclosureCandidate(
+                ref=f"disclosure:{row[1]}",
+                target_code=row[0],
+                company_name=row[2],
+                report_name=row[3],
+                receipt_date=row[4],
+            )
+            for row in cursor.fetchall()
+        )
+
+    with connection.cursor() as cursor:
+        cursor.execute(
+            SIGNALS,
+            {
+                "codes": codes,
+                "week_start": window.week_start,
+                "week_end": window.week_end,
+                "as_of_at": window.as_of_at,
+            },
+        )
+        signals = tuple(
+            SignalCandidate(
+                ref=f"technical_signal:{row[0]}",
+                target_code=row[1],
+                signal_date=row[2],
+                kind=row[3],
+                direction=row[4],
+            )
+            for row in cursor.fetchall()
+        )
+
+    return CandidateSet(documents=documents, disclosures=disclosures, signals=signals)

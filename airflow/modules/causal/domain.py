@@ -204,3 +204,68 @@ class TargetReturns(BaseModel):
     """주 종료 +5 KRX 거래일까지의 변화."""
     unit: CausalReturnUnit
     """가격·지수·환율은 percent, 금리는 basis_point다."""
+
+
+class DocumentCandidate(BaseModel):
+    """프롬프트에 실리는 문서 하나."""
+
+    model_config = ConfigDict(frozen=True)
+
+    ref: str
+    target_code: str
+    title: str
+    summary: str
+    source_slug: str
+    published_at: datetime
+    value_score: int
+    assessed_direction: str | None
+
+
+class DisclosureCandidate(BaseModel):
+    """프롬프트에 실리는 공시 하나."""
+
+    model_config = ConfigDict(frozen=True)
+
+    ref: str
+    target_code: str
+    company_name: str
+    report_name: str
+    receipt_date: date
+
+
+class SignalCandidate(BaseModel):
+    """프롬프트에 실리는 기술적 신호 하나. 지표값이 아니라 사건이라 인용할 수 있다."""
+
+    model_config = ConfigDict(frozen=True)
+
+    ref: str
+    target_code: str
+    signal_date: date
+    kind: str
+    direction: str
+
+
+class CandidateSet(BaseModel):
+    """한 실행이 프롬프트에 싣는 근거 후보 전부.
+
+    **`refs`가 레지스트리다.** 모델이 인용한 `evidence_refs`를 이 목록으로 검증하고 목록 밖
+    값은 버린다. 그것이 모델이 근거를 지어내지 못하게 막는 유일한 장치다.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    documents: tuple[DocumentCandidate, ...] = ()
+    disclosures: tuple[DisclosureCandidate, ...] = ()
+    signals: tuple[SignalCandidate, ...] = ()
+
+    @property
+    def refs(self) -> tuple[str, ...]:
+        """후보 ref 전부. **정렬한다** — `input_hash`가 이것을 접으므로 조회 순서가 흔들려도
+        같은 입력이면 같은 해시여야 한다."""
+        return tuple(
+            sorted(
+                [item.ref for item in self.documents]
+                + [item.ref for item in self.disclosures]
+                + [item.ref for item in self.signals]
+            )
+        )

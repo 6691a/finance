@@ -26,7 +26,7 @@ AST로 최상위 프롬프트 상수만 센 값이다(2026-08-27).
 | `assessment.py` | 50 | `INSTRUCTION`(29)·`PERSPECTIVES`(15)·`SYSTEM_PROMPT_TEMPLATE`(5)·`REPAIR_INSTRUCTION`(1) | `assessment.PROMPT_VERSION` | 유일하게 `.format()`을 실제로 쓴다 |
 | `thesis_outcomes.py` | 49 | `NARRATIVE_SYSTEM_PROMPT`(33)·`NARRATIVE_INSTRUCTION`(12)·`NARRATIVE_REPAIR_INSTRUCTION`(4) | `NARRATIVE_PROMPT_VERSION` | |
 | `briefing/picks.py` | 36 | `SYSTEM_PROMPT`(31)·`INSTRUCTION`(4)·`REPAIR_INSTRUCTION`(1) | **없음** | 채점하지 않는다 |
-| `expectation_extraction.py` | 35 | `INSTRUCTION`(29)·`SYSTEM_PROMPT`(5)·`REPAIR_INSTRUCTION`(1) | `expectation_domain.PROMPT_VERSION` | |
+| `expectation/extraction.py` | 35 | `INSTRUCTION`(29)·`SYSTEM_PROMPT`(5)·`REPAIR_INSTRUCTION`(1) | `expectation.domain.PROMPT_VERSION` | |
 | `llm.py` | 10 | `NUMBER_STYLE`(10) | — | **조각이다.** 위 넷 중 셋이 끼워 쓴다 |
 
 `briefing/disclosure_picks.py`는 이미 옮겼다(3줄만 남았다).
@@ -56,9 +56,9 @@ AST로 최상위 프롬프트 상수만 센 값이다(2026-08-27).
 자리표시자: `$max_reads`·`$max_watches`·`$max_why_chars`·`$number_style`(system),
 `$window_hours`·`$candidates`(instruction).
 
-### 2단계 — `expectation_extraction.py`
+### 2단계 — `expectation/extraction.py`
 
-버전(`expectation_domain.PROMPT_VERSION`)이 붙지만 **`INSTRUCTION`이 29줄로 단순하고
+버전(`expectation.domain.PROMPT_VERSION`)이 붙지만 **`INSTRUCTION`이 29줄로 단순하고
 자리표시자가 적다.** 여기서 4절의 해시 가드를 처음 만든다.
 
 **`NUMBER_STYLE`을 안 쓰는 유일한 프롬프트다**(`test_llm.py`가 그 사실을 지킨다 — 그쪽

@@ -30,8 +30,8 @@ THESIS_DAG_MODULES = (
 
 # 기대 대비 발표에서 LLM이 없는 쪽. 판정 태스크만 쓰는 코드다.
 EXPECTATION_LIGHT_MODULES = (
-    "modules.expectation_domain",
-    "modules.expectation_judgment",
+    "modules.expectation.domain",
+    "modules.expectation.judgment",
 )
 
 # 공시 알림 DAG이 모듈 수준에서 import하는 것. 강조를 고르는 층은 따로 있고 태스크가
@@ -78,5 +78,5 @@ def test_the_disclosure_briefing_query_side_does_not_import_langchain():
 def test_the_llm_modules_are_where_the_weight_lives():
     """반대 방향도 잰다. 무거운 것이 아예 없으면 위 테스트들은 아무 것도 지키지 않는다."""
     assert _heavy_modules_after_importing(("modules.thesis_generation",))
-    assert _heavy_modules_after_importing(("modules.expectation_extraction",))
+    assert _heavy_modules_after_importing(("modules.expectation.extraction",))
     assert _heavy_modules_after_importing(("modules.briefing.disclosure_picks",))

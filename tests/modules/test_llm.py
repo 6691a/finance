@@ -9,7 +9,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from modules.assessment import SYSTEM_PROMPT_TEMPLATE, Assessment
 from modules.briefing import picks
-from modules.expectation_extraction import SYSTEM_PROMPT as EXTRACTION_PROMPT
+from modules.expectation.extraction import SYSTEM_PROMPT as EXTRACTION_PROMPT
 from modules.llm import (
     NUMBER_STYLE,
     REQUEST_TIMEOUT_SECONDS,

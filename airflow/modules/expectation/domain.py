@@ -1,8 +1,8 @@
 """기대·실제 판정의 어휘와 셈 — 상수, 저장 모양, 순수 함수.
 
 **이 모듈은 LangChain을 import하지 않는다.** 판정은 LLM이 없고(모듈 나누기 전 docstring),
-추출만 있다. 그 경계를 파일로 만든 것이 이 분리다 — `expectation_judgment`는 여기만 보고
-`expectation_extraction`이 무거운 쪽을 갖는다.
+추출만 있다. 그 경계를 파일로 만든 것이 이 분리다 — `expectation/judgment`는 여기만 보고
+`expectation/extraction`이 무거운 쪽을 갖는다.
 
 기간 표기·단위 정규화·대표 기대치 집계·beat/meet/miss 분류가 전부 여기 순수 함수다.
 thesis 채점 수식이 SQL이 아니라 Python에 있는 것과 같은 이유로, DB 없이 경계값을 테스트한다.

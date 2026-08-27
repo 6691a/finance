@@ -464,7 +464,7 @@ LLM을 부르는 코드는 **Pydantic, LangChain, LangGraph 위에서만 쓴다.
 - **빠진 값은 실패다.** `safe_substitute`를 쓰지 않는다. 자리표시자가 그대로 모델에게 나가는 것보다 태스크가 죽는 편이 낫다.
 - **숫자 상한은 YAML에 적지 않는다.** `MAX_TOOL_CALLS`·`MAX_REASON_CHARS` 같은 값은 코드 상수가 원본이고 자리표시자로 들어간다. 두 곳에 적으면 반드시 어긋난다.
 - **파일은 import 시점에 읽고 검증한다.** 칸이 빠지거나 오타가 나면 그 모듈을 쓰는 DAG이 DagBag 단계에서 죽는다. 실행 중에 프롬프트가 비는 것보다 낫다.
-- **기존 프롬프트를 한꺼번에 옮기지 않는다.** `assessment.py`·`picks.py`·`thesis_generation.py`·`expectation_extraction.py`는 아직 파이썬 안에 있다. **새로 쓰거나 크게 고치는 프롬프트만** 이 형태로 만든다. 옮길 때는 그 흐름의 테스트가 문장을 대조하는지 함께 본다.
+- **기존 프롬프트를 한꺼번에 옮기지 않는다.** `assessment.py`·`picks.py`·`thesis_generation.py`·`expectation/extraction.py`는 아직 파이썬 안에 있다. **새로 쓰거나 크게 고치는 프롬프트만** 이 형태로 만든다. 옮길 때는 그 흐름의 테스트가 문장을 대조하는지 함께 본다.
 - 프롬프트 판을 세는 흐름(`thesis_domain.PROMPT_VERSION`)은 그 상수를 그대로 둔다. YAML로 옮긴다고 버전 칸이 파일로 가지 않는다 — 채점과 이어져 있어 코드가 원본이다.
 
 ## 수집 계보 테이블 규칙

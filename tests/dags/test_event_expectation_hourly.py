@@ -9,9 +9,9 @@ import pytest
 from airflow.exceptions import AirflowFailException
 
 from dags import event_expectation_hourly as module
-from modules.expectation_domain import ExtractionError, PendingExtractionDocument
-from modules.expectation_extraction import ExtractionResponse
-from modules.expectation_judgment import JudgedOutcome
+from modules.expectation.domain import ExtractionError, PendingExtractionDocument
+from modules.expectation.extraction import ExtractionResponse
+from modules.expectation.judgment import JudgedOutcome
 from modules.llm import LlmError, RetryableLlmError
 
 DOCUMENT = PendingExtractionDocument(

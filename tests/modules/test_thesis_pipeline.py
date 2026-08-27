@@ -3449,6 +3449,24 @@ def test_a_bad_size_drops_only_that_column_and_keeps_the_thesis():
     assert drafts[0].prob_up > 0
 
 
+def test_a_thesis_whose_three_reasonings_are_placeholders_is_dropped():
+    """확률·스키마가 멀쩡해도 문장이 자리표시자면 Slack에 근거 없는 결론만 나간다.
+
+    2026-08-27 `intraday_midday`에서 실제로 이유 셋이 전부 `dummy`인 행이 저장됐다.
+    """
+    payload = thesis_payload(refs=[], up_reasoning="dummy", down_reasoning="dummy", flat_reasoning="dummy")
+    box = toolbox(FakeConnection({}))
+    builder = ThesisBuilder(scripted(answer_message(payload)), box)
+
+    with pytest.raises(ThesisError):
+        builder.parse(json.dumps({"theses": [payload]}), SUBJECTS[:1])
+
+    # 한 방향이라도 문장이 있으면 남긴다 — 결론 방향만 길게 쓰는 것은 정상이다.
+    kept = thesis_payload(refs=[], down_reasoning="dummy", flat_reasoning="")
+    drafts = builder.parse(json.dumps({"theses": [kept]}), SUBJECTS[:1])
+    assert drafts[0].down_reasoning == "dummy"
+
+
 def _stored_for_render(up=Decimal("0.80"), down=Decimal("1.20")) -> StoredThesis:
     return StoredThesis(
         id=1,

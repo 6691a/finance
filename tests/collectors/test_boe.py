@@ -14,18 +14,20 @@ from modules.collectors.indicator.boe import (
     ENCODING,
     EXPECTED_HEADER,
     FETCH_PADDING_DAYS,
+    GILT_DATASET,
     GILT_SERIES,
     OBSERVATION_UPSERT,
-    SERIES_CODES,
+    POLICY_DATASET,
     SERIES_UNIT,
     SOURCE_KEY,
     SOURCE_RECORD_INSERT,
     SOURCE_UNIT_NAME,
+    BoeDataset,
     BoeNotCsvError,
     BoePayloadError,
     BoeRequest,
     BoeResponse,
-    GiltSeries,
+    BoeSeries,
     build_url,
     format_query_date,
     parse_curve,
@@ -39,21 +41,21 @@ HEADER_LINE = ",".join(EXPECTED_HEADER)
 # 실제 응답의 값. 만기마다 한 행씩 오고 값이 없는 날은 행 자체가 없다.
 VALUES = {
     date(2026, 8, 3): {
-        GiltSeries.GILT_5Y: "4.4656",
-        GiltSeries.GILT_10Y: "4.9382",
-        GiltSeries.GILT_20Y: "5.4495",
+        BoeSeries.GILT_5Y: "4.4656",
+        BoeSeries.GILT_10Y: "4.9382",
+        BoeSeries.GILT_20Y: "5.4495",
     },
     date(2026, 8, 4): {
-        GiltSeries.GILT_5Y: "4.4217",
-        GiltSeries.GILT_10Y: "4.9031",
-        GiltSeries.GILT_20Y: "5.4259",
+        BoeSeries.GILT_5Y: "4.4217",
+        BoeSeries.GILT_10Y: "4.9031",
+        BoeSeries.GILT_20Y: "5.4259",
     },
 }
 
 MONTH_LABELS = {7: "Jul", 8: "Aug"}
 
 
-def data_row(observation_date: date, series: GiltSeries, value: str) -> str:
+def data_row(observation_date: date, series: BoeSeries, value: str) -> str:
     label = f"{observation_date.day:02d} {MONTH_LABELS[observation_date.month]} {observation_date.year}"
     return f"{label},{series.boe_code},{value}"
 
@@ -62,7 +64,7 @@ def csv_bytes(*rows: str, header: str = HEADER_LINE, encoding: str = ENCODING) -
     return "\r\n".join((header, *rows)).encode(encoding)
 
 
-def rows_for(values: dict[date, dict[GiltSeries, str]] = VALUES) -> tuple[str, ...]:
+def rows_for(values: dict[date, dict[BoeSeries, str]] = VALUES) -> tuple[str, ...]:
     return tuple(
         data_row(observation_date, series, value)
         for observation_date, by_series in values.items()
@@ -80,8 +82,8 @@ STARTED_AT = datetime(2026, 8, 6, 23, 40, tzinfo=UTC)
 COMPLETED_AT = datetime(2026, 8, 6, 23, 40, 1, tzinfo=UTC)
 
 
-def request_for(start: date = date(2026, 8, 3), end: date = date(2026, 8, 6)) -> BoeRequest:
-    return BoeRequest(observation_start=start, observation_end=end)
+def request_for(start: date = date(2026, 8, 3), end: date = date(2026, 8, 6), dataset=GILT_DATASET) -> BoeRequest:
+    return BoeRequest(dataset=dataset, observation_start=start, observation_end=end)
 
 
 def response_for(body: bytes = BODY, request: BoeRequest | None = None) -> BoeResponse:
@@ -172,18 +174,56 @@ def test_observation_upsert_matches_the_model_and_its_natural_key():
 
 def test_each_series_maps_onto_one_iadb_code_and_maturity():
     # 코드를 잘못 적으면 그 시계열만 조용히 사라진다. 만기가 겹치면 비교 패널이 같은 줄을 두 번 그린다.
-    assert len(set(SERIES_CODES)) == len(SERIES_CODES)
+    assert len(set(GILT_DATASET.codes)) == len(GILT_DATASET.codes)
     assert len(set(GILT_SERIES)) == len(GILT_SERIES)
-    assert len({series.maturity_months for series in GiltSeries}) == len(GiltSeries)
-    assert all(series.maturity_months > 0 for series in GiltSeries)
+    assert len({series.boe_code for series in BoeSeries}) == len(BoeSeries)
+    assert len({series.maturity_months for series in GILT_DATASET.series}) == len(GILT_DATASET.series)
+    assert all(series.maturity_months > 0 for series in GILT_DATASET.series)
+
+
+def test_the_bank_rate_has_no_maturity_and_its_own_source_key():
+    # 정책금리에는 만기가 없다. 0으로 채우면 만기별 비교 쿼리가 "0개월물"로 그린다.
+    assert BoeSeries.BANK_RATE.maturity_months is None
+    assert BoeSeries.BANK_RATE.value == "GBBASE"
+    assert BoeSeries.BANK_RATE.boe_code == "IUDBEDR"
+    # 같은 IADB를 두 주기로 부른다. source_key가 같으면 어느 묶음을 받았는지 되짚을 수 없다.
+    assert POLICY_DATASET.source_key != GILT_DATASET.source_key
+    assert POLICY_DATASET.codes == ("IUDBEDR",)
+
+
+def test_a_dataset_must_name_at_least_one_series():
+    # 빈 묶음은 SeriesCodes가 빈 요청이 된다. IADB는 그것에도 HTML 오류 페이지로 답한다.
+    with pytest.raises(ValidationError):
+        BoeDataset(source_key="empty", series=())
+
+
+def test_the_policy_dataset_stores_the_bank_rate_under_its_own_source_key():
+    body = csv_bytes(data_row(date(2026, 8, 3), BoeSeries.BANK_RATE, "3.75"))
+    request = request_for(dataset=POLICY_DATASET)
+    connection = FakeConnection()
+
+    assert store_observations(connection, response_for(body=body, request=request)) == 1
+
+    source_record_parameters = connection.recorded_cursor.calls[0][1]
+    assert source_record_parameters[2] == POLICY_DATASET.source_key
+    observation_parameters = connection.recorded_cursor.calls[1][1]
+    assert observation_parameters[1] == "GBBASE"
+
+
+def test_the_policy_dataset_rejects_a_gilt_row():
+    # 묶음 밖의 코드가 섞여 오면 우리가 물어보지 않은 노드를 IADB가 준 것이다.
+    body = csv_bytes(data_row(date(2026, 8, 3), BoeSeries.GILT_10Y, "4.90"))
+
+    with pytest.raises(BoePayloadError, match="unrequested"):
+        parse_curve(body, request_for(dataset=POLICY_DATASET))
 
 
 def test_series_ids_are_readable():
     # DB와 대시보드에 남는 값만 보고 무슨 시계열인지 알 수 있어야 한다. IADB 코드는 만기를 담지 않는다.
-    assert GiltSeries.GILT_10Y.value == "GILT10Y"
-    assert GiltSeries.GILT_10Y.boe_code == "IUDMNPY"
-    assert GiltSeries.GILT_10Y.label == "영국 10년물"
-    assert GiltSeries.GILT_10Y.maturity_months == 120
+    assert BoeSeries.GILT_10Y.value == "GILT10Y"
+    assert BoeSeries.GILT_10Y.boe_code == "IUDMNPY"
+    assert BoeSeries.GILT_10Y.label == "영국 10년물"
+    assert BoeSeries.GILT_10Y.maturity_months == 120
 
 
 @pytest.mark.parametrize(
@@ -196,14 +236,14 @@ def test_format_query_date_uses_the_english_month_name(day, expected):
 
 
 def test_build_url_asks_for_every_series_over_the_padded_period():
-    url = build_url(date(2026, 7, 20), date(2026, 8, 6))
+    url = build_url(date(2026, 7, 20), date(2026, 8, 6), GILT_DATASET.codes)
 
     assert url.startswith("https://www.bankofengland.co.uk/boeapps/iadb/fromshowcolumns.asp?")
     assert "Datefrom=20%2FJul%2F2026" in url
     assert "Dateto=06%2FAug%2F2026" in url
     # 세로 형식이라야 시계열을 늘려도 헤더 대조가 시계열 목록에 묶이지 않는다.
     assert "CSVF=CN" in url
-    for code in SERIES_CODES:
+    for code in GILT_DATASET.codes:
         assert code in url
 
 
@@ -233,7 +273,7 @@ def test_request_pads_the_fetch_window_but_not_the_storage_window():
 def test_parse_curve_reads_every_maturity():
     curve = parse_curve(BODY, request_for())
 
-    assert len(curve.observations) == len(VALUES) * len(GiltSeries)
+    assert len(curve.observations) == len(VALUES) * len(GILT_DATASET.series)
     first_day = [observation for observation in curve.observations if observation.observation_date == date(2026, 8, 3)]
     assert {observation.series: observation.value for observation in first_day} == {
         series: Decimal(value) for series, value in VALUES[date(2026, 8, 3)].items()
@@ -244,12 +284,12 @@ def test_parse_curve_reports_the_range_the_response_covers():
     curve = parse_curve(BODY, request_for())
 
     assert (curve.response_first_date, curve.response_last_date) == (date(2026, 8, 3), date(2026, 8, 4))
-    assert curve.response_row_count == len(VALUES) * len(GiltSeries)
+    assert curve.response_row_count == len(VALUES) * len(GILT_DATASET.series)
 
 
 def test_parse_curve_drops_the_padding_rows_before_the_period():
     # 요청은 구간보다 앞에서부터 하므로 응답에는 항상 구간 밖의 행이 들어 있다.
-    body = csv_bytes(data_row(date(2026, 7, 31), GiltSeries.GILT_10Y, "4.90"), *rows_for())
+    body = csv_bytes(data_row(date(2026, 7, 31), BoeSeries.GILT_10Y, "4.90"), *rows_for())
 
     curve = parse_curve(body, request_for(start=date(2026, 8, 1)))
 
@@ -262,11 +302,11 @@ def test_parse_curve_drops_the_padding_rows_before_the_period():
 
 
 def test_parse_curve_skips_a_cell_without_a_quote():
-    body = csv_bytes(data_row(date(2026, 8, 3), GiltSeries.GILT_20Y, "ND"), *rows_for())
+    body = csv_bytes(data_row(date(2026, 8, 3), BoeSeries.GILT_20Y, "ND"), *rows_for())
 
     observations = parse_observations(body, request_for())
 
-    assert len(observations) == len(VALUES) * len(GiltSeries)
+    assert len(observations) == len(VALUES) * len(GILT_DATASET.series)
 
 
 def test_parse_curve_rejects_a_changed_header():
@@ -300,7 +340,7 @@ def test_parse_curve_rejects_a_series_code_we_did_not_ask_for():
 
 @pytest.mark.parametrize("value", ["NaN", "Infinity", "abc", "1.2.3"])
 def test_parse_curve_rejects_values_that_are_not_finite_numbers(value):
-    body = csv_bytes(data_row(date(2026, 8, 3), GiltSeries.GILT_10Y, value))
+    body = csv_bytes(data_row(date(2026, 8, 3), BoeSeries.GILT_10Y, value))
 
     with pytest.raises(BoePayloadError):
         parse_curve(body, request_for())
@@ -313,7 +353,7 @@ def test_parse_curve_rejects_a_body_without_data_rows():
 
 def test_request_rejects_a_reversed_period():
     with pytest.raises(ValidationError, match="observation_start"):
-        BoeRequest(observation_start=date(2026, 8, 6), observation_end=date(2026, 8, 3))
+        BoeRequest(dataset=GILT_DATASET, observation_start=date(2026, 8, 6), observation_end=date(2026, 8, 3))
 
 
 def test_request_and_response_are_frozen_so_a_retry_cannot_mutate_them():
@@ -352,10 +392,10 @@ def test_response_rejects_naive_timestamps():
 def test_store_writes_the_query_once_and_upserts_every_observation():
     connection = FakeConnection()
 
-    assert store_observations(connection, response_for()) == len(VALUES) * len(GiltSeries)
+    assert store_observations(connection, response_for()) == len(VALUES) * len(GILT_DATASET.series)
 
     statements = [statement for statement, _ in connection.recorded_cursor.calls]
-    assert len(statements) == 1 + len(VALUES) * len(GiltSeries)
+    assert len(statements) == 1 + len(VALUES) * len(GILT_DATASET.series)
     assert "INSERT INTO source_record" in statements[0]
     assert "INSERT INTO indicator_observation" in statements[1]
     assert "ON CONFLICT (provider, series_id, observation_date) DO UPDATE" in statements[1]
@@ -374,12 +414,12 @@ def test_store_records_the_query_as_the_collection_unit():
     assert (source_type, source, source_key, status) == ("api", "boe", SOURCE_KEY, "succeeded")
     assert (started_at, completed_at) == (STARTED_AT, COMPLETED_AT)
     assert started_at.tzinfo is not None
-    assert record_count == len(VALUES) * len(GiltSeries)
+    assert record_count == len(VALUES) * len(GILT_DATASET.series)
     # 원본이 CSV라 jsonb 컬럼에 넣지 않는다. 대신 어느 구간을 물어 어느 구간이 왔는지를 metadata가 남긴다.
     assert payload is None
     assert json.loads(metadata) == {
         "http_status": 200,
-        "url": build_url(date(2026, 7, 20), date(2026, 8, 6)),
+        "url": build_url(date(2026, 7, 20), date(2026, 8, 6), GILT_DATASET.codes),
         "source_unit_name": SOURCE_UNIT_NAME,
         "observation_start": "2026-08-03",
         "observation_end": "2026-08-06",
@@ -387,8 +427,8 @@ def test_store_records_the_query_as_the_collection_unit():
         "fetch_end": "2026-08-06",
         "response_first_date": "2026-08-03",
         "response_last_date": "2026-08-04",
-        "response_row_count": len(VALUES) * len(GiltSeries),
-        "series_codes": list(SERIES_CODES),
+        "response_row_count": len(VALUES) * len(GILT_DATASET.series),
+        "series_codes": list(GILT_DATASET.codes),
         "series_ids": list(GILT_SERIES),
     }
 

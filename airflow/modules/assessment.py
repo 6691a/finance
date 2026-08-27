@@ -14,7 +14,7 @@
 
 `document_instrument`와 `document_indicator`가 이 모듈의 산출물이다. 리포트는 "지난 7일
 005930 관련 기사"로 시작하는데 자유 문자열로는 그 조인이 안 된다. 그래서 **허용 값을
-프롬프트에 후보 목록으로 제시한다.** 수집기들이 `MarketRateSeries`나 `DomesticStock` Enum으로
+프롬프트에 후보 목록으로 제시한다.** 수집기들이 `EcosSeries`나 `DomesticStock` Enum으로
 식별자를 좁히는 것과 같은 이유다.
 
 목록 밖의 값이 오면 **그 태그만 버리고 문서는 저장한다.** 태그 하나 때문에 문서를 잃지

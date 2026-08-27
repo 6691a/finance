@@ -92,10 +92,21 @@
 7년 백필은 문제가 되지 않는다. 중요한 규칙은 **매일 7년을 다시 받지 않는 것**이다. 최초 백필
 뒤 일상 실행은 대상당 최근 한 페이지만 겹쳐 받는다.
 
-새 관심종목도 해당 종목만 최신일부터 과거로 한 번 백필한다. 최신 3년이 채워지면 분석 가능한
-것으로 보고, 나머지 4년은 같은 멱등 upsert로 이어서 채운다. 별도 readiness 컬럼은 두지 않고
+**백필은 새 설계가 아니라 기존 DAG의 운영 절차다.** `kis_investor_trade_daily`가 이미
+`end_date`·`pages` Param과 `walk_back`으로 30거래일씩 뒤로 걷고, 페이지마다 기존 종가와
+대조해 어긋나면 그 페이지를 저장하지 않고 멈춘다(`airflow/dags/kis_investor_trade_daily.py`의
+`walk_back`). 이 기능에서 새로 만들 수집 코드는 없다.
+
+새 관심종목도 해당 종목만 최신일부터 과거로 한 번 백필한다 — `end_date`를 비우고
+`pages≈59`로 수동 트리거하는 것이 전부다. 최신 3년이 채워지면 분석 가능한 것으로 보고,
+나머지 4년은 같은 멱등 upsert로 이어서 채운다. 별도 readiness 컬럼은 두지 않고
 최소일·최대일·KRX 개장일 결측 조회로 판단한다. 두 번으로 나눌 때는 최신일부터 약 25페이지로
 3년을 먼저 채우고, 두 번째 실행은 저장된 최저일의 전날을 `end_date`로 주어 이전 구간만 걷는다.
+
+**수집 하한은 2018-12-10이다.** `BACKFILL_START_DATE = IDENTITY_EPOCH`이고 그 앞은 KIS 투자자
+항등식이 깨져 아예 받지 않는다(`modules/collectors/market/kis_investor_flow.py`의
+`IDENTITY_EPOCH` 주석). `pages`를 크게 줘도 거기서 멈춘다. 7년 목표는 항상 그 하한보다 뒤라
+지금 제약이 되지 않지만, 하한이 있다는 사실이 여기 없으면 "왜 더 안 내려가나"를 코드에서 찾게 된다.
 
 ### 3.2 한 episode의 시각
 
@@ -192,7 +203,7 @@ flowchart LR
 
 | 필요 값 | 재사용 원본 |
 | --- | --- |
-| 정규화 일봉 | `airflow/sql/postgres/technical/select_history.sql` |
+| 정규화 일봉 | `airflow/sql/postgres/technical/select_history.sql`의 **모양만** 새 파일에 복사 (아래) |
 | 일봉 값 객체 | `airflow/modules/technical/indicators.py`의 `DailyBar` |
 | 기술 신호 | `technical_signal`과 `technical_signal_daily` |
 | 차트 | `airflow/modules/briefing/chart.py`의 Matplotlib 설정·색·한글 폰트 규칙 |
@@ -200,6 +211,13 @@ flowchart LR
 | LLM 호출 | `airflow/modules/llm.py`의 구조화 응답 호출 |
 | 실행 감사 | `thesis_llm_run`·`thesis_tool_call` |
 | API 구조 | 기존 repository → service → route와 dependency-injector 패턴 |
+
+**`select_history.sql`을 그대로 쓸 수 없다.** 그 파일은 `limit`(최근 N봉)만 받고
+`window_start..window_end` 구간을 못 받는다. 재사용하는 것은 **모양**이다 — `quote_daily` 뷰와
+`stock_investor_trade_daily`를 한 컬럼 이름으로 UNION하는 방식, `created_at <= as_of_at` cutoff,
+`include_watched` 확장. 그것을 episode 전용 SQL 파일에 복사하고 `WHERE business_date BETWEEN ...`로
+바꾼다. 기존 파일에 파라미터를 더하면 브리핑과 신호 DAG가 쓰지 않는 값을 매번 넘겨야 하고,
+한쪽을 고칠 때 다른 쪽이 조용히 따라 바뀐다(저장소 규칙: 툴을 늘릴 때 조회 SQL은 새 파일로 만든다).
 
 현재 `ThesisToolbox`의 `recent_documents(hours)`와 다른 최근값 툴은 슬롯 직전 몇 시간용이라
 과거 구간 조회에 그대로 쓸 수 없다. 그 툴의 공개 인자를 3년으로 넓혀 기존 thesis의 프롬프트
@@ -231,6 +249,11 @@ LLM 호출 전에 이 절의 값이 모두 확정돼야 한다. 같은 입력과
 
 수동 구간에서 LLM에 750개 일봉을 그대로 주지 않는다.
 
+**조회는 `window_start`의 20거래일 전부터 한다.** `close[t] / close[t-20]`은 구간 시작 뒤 20봉이
+지나야 첫 값이 나오므로, 표시 구간만 읽으면 구간 앞머리의 큰 움직임이 조용히 사라진다.
+lead-in 봉은 수익률 계산에만 쓰고 **선택 대상은 `window_start..window_end` 안에서 끝나는 구간뿐**이다.
+lead-in이 모자라면(상장 초기 등) 있는 만큼만 쓰고 그 사실을 제한사항에 남긴다.
+
 1. 각 거래일의 20거래일 수익률 `close[t] / close[t-20] - 1`을 계산한다.
 2. 절댓값이 큰 순서로 고르되 이미 선택한 끝 날짜와 20거래일 안이고 **방향도 같으면** 같은
    움직임으로 보고 건너뛴다. 같은 20거래일 안의 급락과 반등은 둘 다 남긴다.
@@ -247,6 +270,9 @@ LLM 호출 전에 이 절의 값이 모두 확정돼야 한다. 같은 입력과
 
 1. 전체 `min(low)..max(high)`를 같은 폭의 **24개 가격 bin**으로 나눈다.
    모든 가격이 같아 폭이 0이면 bin 하나에 전체 거래량을 넣고 POC만 낸다.
+   **거래량이 양수인 bin이 5개 미만이면 매물대를 `unavailable`로 내린다.** 3년 창에서
+   이상치 한 봉이 `min`·`max`를 늘리면 실제 거래가 소수 bin에 뭉쳐 POC와 지지·저항이
+   가격대가 아니라 그 한 봉을 가리킨다. 값이 없다고 말하는 편이 낫다.
 2. 일봉의 `low..high`가 걸치는 bin 수를 센다. 고가와 저가가 같으면 해당 bin 하나다.
 3. 그날 거래량을 걸친 bin에 균등 배분한다. 일봉 안 실제 체결 분포를 안다고 가정하지 않는다.
 4. 누적 거래량이 가장 큰 bin을 POC로 정한다. 동률이면 `window_end` 종가에 가까운 bin,
@@ -321,6 +347,10 @@ LLM 호출 전에 이 절의 값이 모두 확정돼야 한다. 같은 입력과
 문서는 기존 가치 점수, 대상 일치, 변화 구간과의 시간 거리를 순서대로 사용해 고른다. 후보의
 제목·URL·발행시각·계산 상세는 `input_state`에 스냅샷으로 남긴다. 최종 응답이 실제로 인용한
 항목만 `market_episode_evidence`에 저장한다.
+
+**`input_state`에 문서 본문을 넣지 않는다.** 제목·URL·발행시각·계산 상세만 넣고 문자열 칸마다
+상한을 둔다. 본문은 `document.body`에 이미 있고, 여기 복사하면 같은 원문이 episode 수만큼
+jsonb로 늘어난다. `LANGSMITH_*`를 켜면 프롬프트가 외부로 나간다는 기존 규칙과도 짝이다.
 
 ### 7.2 LLM 입력과 출력
 
@@ -415,7 +445,7 @@ LLM에는 원시 일봉 전체 대신 다음만 준다.
 | `evidence_coverage` | text CHECK | `sufficient` / `partial` / `insufficient` |
 | `narrative` | jsonb nullable | 7.2절의 검증된 구조화 출력 |
 | `limitations` | jsonb | 데이터 부족·가격 갭·LLM 생략 사유 |
-| `chart_png` | bytea | 생성 시점의 재현 가능한 PNG |
+| `chart_png` | bytea | 생성 시점의 재현 가능한 PNG. **지연 로드 컬럼이다** |
 | `chart_alt_text` | text | 대상·구간·핵심 변화·가격대를 담은 대체 텍스트 |
 | `llm_run_id` | bigint nullable FK | `thesis_llm_run.id`, 삭제 시 NULL |
 | `dag_run_id` | text | 작성 실행 |
@@ -427,9 +457,27 @@ prompt_version, input_hash)`다. `INSERT ... ON CONFLICT DO NOTHING`으로 **같
 규칙 자체가 바뀌면 판을 올린다. `trigger_kind`를 키에 넣지 않아 같은 입력·구간의 수동·자동
 중복을 막는다. hash에는 실행 시각 자체를 넣지 않는다.
 
+**`input_hash`의 정규화 규칙을 여기서 정한다.** 규칙이 없으면 같은 입력이 실행마다 다른 해시를
+내고, 그 순간 §12.3의 "자연키 재실행은 LLM을 다시 부르지 않는다"와 §12 완료 시나리오 2번이
+거짓이 된다. 재실행 비용을 정하는 값이라 구현자 재량으로 두지 않는다.
+
+1. 해시 대상은 `input_state`와 같은 Pydantic 모델이다.
+2. `model_dump(mode="json")`으로 편다. `Decimal`이 문자열로 나가 부동소수 표기가 흔들리지 않는다.
+3. `json.dumps(..., sort_keys=True, separators=(",", ":"), ensure_ascii=False)`로 직렬화한다.
+4. utf-8로 인코딩해 SHA-256을 낸다.
+
+`analysis_version`·`prompt_version`은 자연키에 이미 있으므로 해시 본문에 넣지 않는다.
+
 `chart_png`는 API 앱이 Airflow 모듈과 Matplotlib을 import하지 않고 그대로 응답하기 위해 DB에
 둔다. 목록·상세 JSON에는 싣지 않고 PNG endpoint만 읽는다. 별도 object storage는 만들지 않는다.
-DB 백업 크기나 PNG 조회 지연이 실제 운영 문제가 될 때 이 컬럼만 object storage key로 바꾼다.
+
+**모델에서 이 컬럼을 지연 로드로 선언한다**(`mapped_column(LargeBinary, deferred=True)`).
+"목록에 PNG를 싣지 않는다"는 **응답 모양** 이야기라, 리포지토리가 엔티티를 불러오면 bytea는
+그대로 메모리에 올라온다 — `MAX_LIMIT=200` × 150KB이면 응답에 안 실리는 30MB를 매 요청 읽는다.
+
+용량 임계는 숫자로 둔다. 120봉 2단 PNG가 약 150KB이므로 대상 3개면 연 약 110MB,
+watched 20개로 늘리면 연 약 750MB다. DB 백업 시간이나 PNG 조회 지연이 실제로 문제가 될 때
+이 컬럼만 object storage key로 바꾼다.
 
 필수 제약과 인덱스:
 
@@ -457,6 +505,9 @@ UNIQUE는 `(episode_id, movement_key, evidence_kind, evidence_ref)`와
 `(episode_id, movement_key, rank)` 두 개다. 원본 테이블로 FK를 걸지 않는다. 원문이 없어져도
 당시 무엇을 근거로 썼는지가 남아야 한다.
 
+**`url`은 저장 시 `http`·`https` 스킴만 허용하고 아니면 `NULL`로 둔다.** 값의 출처가 크롤링한
+피드라 우리가 만든 문자열이 아니고, 화면은 이 스냅샷을 그대로 링크로 그린다.
+
 가격 구간과 레벨은 행별 조회·갱신 대상이 아니므로 별도 테이블을 만들지 않고 `input_state`에
 둔다. 실제 조회 요구가 생기기 전에 정규화하지 않는다.
 
@@ -481,8 +532,13 @@ UNIQUE는 `(episode_id, movement_key, evidence_kind, evidence_ref)`와
 
 1. 대상과 일봉 커버리지 확인
 2. 대상별 결정적 계산과 근거 후보 생성
-3. 근거가 있는 후보를 최대 10개씩 LLM 구조화 호출
-4. 대상별 PNG 렌더링과 episode·evidence 저장
+3. **`input_hash`를 내고 자연키로 기존 행을 조회한다.** 있으면 그 대상은 LLM도 PNG도
+   건너뛰고 기존 `id`를 결과로 낸다
+4. 남은 후보를 최대 10개씩 LLM 구조화 호출
+5. 대상별 PNG 렌더링과 episode·evidence 저장
+
+**3단계가 재실행 비용을 정한다.** `ON CONFLICT DO NOTHING`은 저장 자리의 방어일 뿐이라,
+그 앞에서 확인하지 않으면 이미 있는 결과를 만드느라 LLM과 Matplotlib을 매번 다시 돌린다.
 
 대상별 저장은 독립 트랜잭션이다. 한 대상의 데이터·LLM·차트 오류를 기록하고 나머지를 처리한
 뒤, 하나라도 실패했다면 DAG를 실패로 끝내 재실행 가능하게 한다. 이미 성공한 자연키는 재실행
@@ -529,7 +585,8 @@ GET /api/market-episodes/{episode_id}
 GET /api/market-episodes/{episode_id}/chart.png
 ```
 
-- `Content-Type: image/png`
+- `Content-Type: image/png`, `X-Content-Type-Options: nosniff`,
+  `Content-Disposition: inline; filename="episode-<id>.png"`
 - 저장된 `chart_png`를 그대로 응답
 - 없는 ID는 404, 이미지가 없는 불완전 행은 저장되지 않으므로 정상 행에서 404가 나올 수 없음
 - 화면은 `chart_alt_text`를 이미지의 `alt`로 사용
@@ -538,23 +595,45 @@ GET /api/market-episodes/{episode_id}/chart.png
 마커를 표시한다. RSI·MACD 세 단을 그대로 복제하면 핵심 가격대가 작아지므로 episode 차트는
 가격·거래량 두 단만 쓴다. 기존 Matplotlib과 한글 폰트만 재사용한다.
 
+**제목과 대체 텍스트에 시장과 구간을 싣는다**(저장소 규칙 "차트와 표 표기": 제목은
+`대상 값 · 시장 · 날짜`). 국내 종목 일봉의 원천이 `stock_investor_trade_daily`(KIS)라
+**KRX 정규장 기준**이고 NXT와 시간외가 들어 있지 않다 — 증권사 앱의 통합 차트와 고가·저가가
+다르게 보일 수 있어 표기가 유일한 단서다. 예: `삼성전자 일봉 · KRX · 2025-08-27~2026-08-27`.
+`chart_alt_text`도 같은 값으로 시작한다.
+
 ## 11. 구현 위치와 최소 변경
 
 | 영역 | 변경 |
 | --- | --- |
 | 모델 | `apps/models/analysis/market_episode.py` 추가, `analysis/__init__.py` 등록 |
-| 마이그레이션 | 두 테이블 생성, `thesis_llm_run.kind` CHECK 확장과 `run_slot` nullable 조건 변경 |
+| 마이그레이션 | 두 테이블 생성, `thesis_llm_run.kind` CHECK 확장과 `run_slot` nullable 조건 변경(아래) |
 | 순수 계산 | `airflow/modules/market_episode.py` 하나에서 변화·매물대·상관·입력 검증 구현 |
 | SQL | episode 일봉 구간 조회, 문서·공시·수급 후보 조회, episode upsert/select |
 | LLM | 구조화 출력 builder와 기존 원장 start/finish 재사용 |
 | DAG | `airflow/dags/market_episode_analysis.py` |
 | API | 기존 패턴대로 `repository/market_episode.py`, `service/market_episode.py`, `schemas/market_episode.py`, `routes/market_episode.py`와 container/router 등록 |
 | 차트 | 기존 `briefing/chart.py`에 episode renderer 추가. 새 의존성 없음 |
-| 수집 확대 | 기능 검증 뒤 `kis_investor_trade_daily`의 고정 enum 순회를 국내 watched 조회로 변경하고 선택적 `stock_codes` 추가 |
+| 수집 확대 | **별도 커밋.** 기능 검증 뒤 `kis_investor_trade_daily`의 고정 enum 순회를 국내 watched 조회로 바꾸고 선택적 `stock_codes` 추가 |
 | 회귀 테스트 | 모델 enum 대조, Alembic head SQL, API container·router 등록 테스트 추가 |
 
 공통화하려고 기존 thesis 모델·repository·toolbox 계층을 먼저 재편하지 않는다. 정확히 같은 코드가
 두 소비자에서 생긴 뒤에만 작은 공통 함수로 옮긴다.
+
+**수집 확대를 이 기능과 같은 커밋에 넣지 않는다.** `InvestorFlowStock` enum은 다른 수집기 enum과
+대조되는 테스트, close-conflict 복구 걷기, 결측 개장일 조회가 함께 도는 자리다. 새 기능과 섞으면
+회귀가 났을 때 어느 쪽이 원인인지 못 가른다(저장소 규칙: 이동과 파일 분리를 같은 커밋에 두지
+않는다). §13의 6단계가 그 커밋이다.
+
+**`thesis_llm_run` 변경은 두 단계로 쓴다.** 운영 원장 테이블이라 새 CHECK가 전체 스캔을 잠금
+안에서 하지 않게 한다.
+
+```sql
+ALTER TABLE thesis_llm_run ALTER COLUMN run_slot DROP NOT NULL;
+ALTER TABLE thesis_llm_run ADD CONSTRAINT ck_thesis_llm_run_slot_shape CHECK (...) NOT VALID;
+ALTER TABLE thesis_llm_run VALIDATE CONSTRAINT ck_thesis_llm_run_slot_shape;
+```
+
+`DROP NOT NULL`은 테이블을 다시 쓰지 않는다. 리비전은 손으로 쓰고 오프라인 SQL로 검증한다.
 
 ## 12. 테스트와 완료 조건
 
@@ -562,9 +641,12 @@ GET /api/market-episodes/{episode_id}/chart.png
 
 - 24개 bin 경계, POC 동률 규칙, 인접 고거래 bin 병합
 - 고가=저가, 양수 거래량 bin 하나, 0거래량 bin 제외
+- 양수 bin이 5개 미만이면 매물대가 `unavailable`
 - 아래/위 최근접 가격대가 지지·저항 후보로 갈림
 - 최근 60봉 반응 0·1·2회와 2일 연속 이탈 판정
 - 같은 방향의 20거래일 변화가 중복 제거되고 반대 방향의 급락·반등은 둘 다 남으며 최대 6개임
+- lead-in 20봉으로 `window_start` 직후에 끝나는 변화가 잡히고, 그 봉들이 선택 대상에는 없음
+- 같은 입력·같은 판이면 `input_hash`가 같고, 값 하나만 달라도 달라짐
 - 60개 미만 표본, NULL/0 거래량, 35% 초과 갭 처리
 - `analysis_as_of_at` 이후 생성된 봉이 입력에서 빠짐
 - 상관계수에 관측 수·구간이 함께 나오고 60개 미만이면 값이 없음
@@ -593,9 +675,9 @@ GET /api/market-episodes/{episode_id}/chart.png
 
 - 목록 기본 90일, 필터·페이지 상한·정렬
 - 상세가 계산값·근거·원장 요약을 한 응답에 제공
-- PNG endpoint의 MIME·404·바이트 일치
-- 차트에 일봉 추정 매물대 표기와 대체 텍스트가 있음
-- 목록·상세 JSON에 `chart_png`가 섞이지 않음
+- PNG endpoint의 MIME·`nosniff` 헤더·404·바이트 일치
+- 차트 제목과 `chart_alt_text`에 일봉 추정 매물대 표기, 시장(`KRX`), 구간이 있음
+- 목록·상세 JSON에 `chart_png`가 섞이지 않고, 목록 조회 SQL이 그 컬럼을 읽지도 않음
 
 완료 기준은 다음 사용자 시나리오다.
 
@@ -627,3 +709,35 @@ GET /api/market-episodes/{episode_id}/chart.png
   Finance* (1997), <https://EconPapers.repec.org/RePEc:aea:jeclit:v:35:y:1997:i:1:p:13-39>
 - 대조군 기반 인과효과 추정은 별도 모델이 필요하다는 참고: Brodersen et al., *Inferring causal
   impact using Bayesian structural time-series models*, <https://arxiv.org/abs/1506.00356>
+
+## 15. 검토 기록
+
+2026-08-27 검토. 문서를 저장소 코드·상수와 대조해 고친 것과 그 이유다.
+
+| 절 | 고친 것 | 이유 |
+| --- | --- | --- |
+| 3.1 | 7년 백필을 "새 설계"에서 **기존 DAG 운영 절차**로 다시 씀 | `kis_investor_trade_daily`의 `end_date`·`pages` Param과 `walk_back`이 이미 30거래일씩 걷고 종가 충돌을 검사한다. 새로 만들 수집 코드가 없다 |
+| 3.1 | 수집 하한 `2018-12-10`을 명시 | `kis_investor_flow.IDENTITY_EPOCH`. 그 앞은 KIS 투자자 항등식이 깨져 안 받는다. 하한이 문서에 없으면 다음 사람이 코드에서 찾는다 |
+| 5 | `select_history.sql`을 "재사용"에서 **"모양만 새 파일에 복사"**로 정정 | 그 파일은 `limit`(최근 N봉)만 받고 날짜 구간을 못 받는다. 파라미터를 더하면 브리핑·신호 DAG까지 흔들린다 |
+| 6.2 | lead-in 20봉 규칙 추가 | `close[t]/close[t-20]`은 구간 시작 뒤 20봉이 지나야 첫 값이 난다. 표시 구간만 읽으면 앞머리 움직임이 조용히 사라진다 |
+| 6.3 | 양수 bin 5개 미만이면 `unavailable` | 3년 창의 이상치 한 봉이 `min`·`max`를 늘리면 POC가 가격대가 아니라 그 한 봉을 가리킨다 |
+| 7.1 | `input_state`에 문서 본문을 넣지 않음 + 문자 상한 | 원문은 `document.body`에 이미 있다. 복사하면 같은 본문이 episode 수만큼 jsonb로 는다 |
+| 8.1 | `input_hash` 정규화 규칙 4단계를 확정 | 규칙이 없으면 같은 입력이 실행마다 다른 해시를 내고 §12.3과 완료 시나리오 2번이 거짓이 된다. 재실행 LLM 비용을 정하는 값이라 구현자 재량으로 두지 않는다 |
+| 8.1 | `chart_png` 지연 로드 + 용량 임계 숫자 | "목록에 안 싣는다"는 응답 모양 이야기라, 엔티티를 불러오면 `MAX_LIMIT=200`×150KB를 매 요청 읽는다. 연 용량은 대상 3개면 약 110MB, watched 20개면 약 750MB |
+| 8.2 | `url`은 `http`·`https` 스킴만 저장 | 값의 출처가 크롤링 피드고 화면이 그대로 링크로 그린다 |
+| 9.1 | 태스크 사이에 **자연키 존재 확인** 단계 추가 | `ON CONFLICT DO NOTHING`은 저장 자리 방어일 뿐이다. 앞에서 확인하지 않으면 이미 있는 결과를 만드느라 LLM과 Matplotlib을 매번 다시 돈다 |
+| 10.3 | `nosniff`·`Content-Disposition` 헤더, 제목·대체 텍스트에 `KRX`와 구간 | 저장소 규칙 "차트와 표 표기". 원천이 KIS라 KRX 정규장 기준이고 NXT·시간외가 없다 |
+| 11 | 수집 확대를 **별도 커밋**으로 못 박음 | `InvestorFlowStock` enum은 대조 테스트·복구 걷기·결측 조회가 함께 도는 자리다. 섞으면 회귀 원인을 못 가른다 |
+| 11 | `thesis_llm_run` 리비전을 `NOT VALID` → `VALIDATE` 두 단계로 | 운영 원장 테이블의 전체 스캔을 잠금 밖으로 뺀다. `DROP NOT NULL`은 테이블을 다시 쓰지 않는다 |
+| 12.1·12.4 | 위 규칙에 대응하는 테스트 항목 추가 | 규칙만 적고 테스트를 안 늘리면 다음 사람이 없는 것으로 읽는다 |
+
+### 범위 밖으로 둔 것
+
+- **LLM 프롬프트 인젝션 방어.** 근거 후보의 제목·요약은 RSS·크롤링 출처의 미신뢰 텍스트이고,
+  저장소에는 지금 그 방어 문장이 한 줄도 없다(`airflow/modules/assessment.py`가 `title`·`body`를
+  구분자 없이 메시지에 붙인다). **이 서비스를 본인만 쓰고 외부에 노출하지 않는다는 사용자
+  결정으로 이번 범위에서 뺐다**(2026-08-27). 외부 사용자가 생기거나 이 API를 공개하면
+  `prompts/fragments/`에 공용 조각 한 벌을 두고 이 흐름과 `assessment`·`expectation_extraction`이
+  함께 끼우는 것이 그때의 최소 작업이다. §7.2의 ref 화이트리스트·숫자 거절 검증이 그동안의
+  2차 방어로 남는다.
+- **API 인증.** 조회 API는 지금도 인증이 없고 이 기능이 그 계약을 바꾸지 않는다.

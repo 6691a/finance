@@ -69,7 +69,6 @@ airflow dags trigger kis_index_daily \
 
 import logging
 import os
-import re
 from contextlib import closing
 from datetime import UTC, date, datetime, timedelta
 from typing import Any
@@ -90,20 +89,18 @@ from modules.collectors.kis import (
 )
 from modules.collectors.market.kis_index_daily import KisIndexDailyCollector
 from modules.market_session import krx_open_day
+from modules.period import (
+    END_DATE_PARAM,
+    SPAN_CALENDAR_DAYS,
+    START_DATE_PARAM,
+    PeriodError,
+    calendar_day,
+    fetch_windows,
+    span_start,
+)
 from modules.utility import CONNECTION_ID, KIS_UNRECOVERABLE_STATUSES, KST_TIMEZONE, atomic
 
 logger = logging.getLogger(__name__)
-
-# 달력 하루만 받는다. ISO 주 표기(2026-W34)와 기본형(20260821)을 걸러 내는 그물이다.
-CALENDAR_DAY_PATTERN = re.compile(r"\d{4}-\d{2}-\d{2}")
-
-END_DATE_PARAM = "end_date"
-START_DATE_PARAM = "start_date"
-
-# SMA60과 EMA 안정화에 필요한 120거래일을 연휴 포함 구간에서도 확보하는 고정 창(4.4절).
-# 백필의 창 크기이기도 하다 — 200달력일이 `INDEX_DAILY_MAX_PAGES` 안에 들어오는 것이
-# 일상 실행에서 이미 보장되므로 백필용 크기를 따로 정할 이유가 없다.
-SPAN_CALENDAR_DAYS = 200
 
 
 def _credentials() -> tuple[SecretStr, SecretStr]:
@@ -119,14 +116,15 @@ def _connection() -> Any:
 
 
 def _calendar_day(given: Any, name: str) -> date:
-    """`YYYY-MM-DD` 하나를 읽는다. 모양을 먼저 본다(`kis_investor_trade_daily`와 같은 이유)."""
-    text = str(given).strip()
-    if not CALENDAR_DAY_PATTERN.fullmatch(text):
-        raise AirflowFailException(f"{name} must be YYYY-MM-DD, got {given!r}")
+    """`YYYY-MM-DD` 하나를 읽는다. 규칙은 `modules/period.py`에 한 벌 있다.
+
+    여기 남는 것은 그 실패를 어떤 Airflow 예외로 올릴지뿐이다. 파라미터가 틀린 것은
+    되돌릴 수 없어 재시도해도 같은 답이다.
+    """
     try:
-        return date.fromisoformat(text)
-    except ValueError:
-        raise AirflowFailException(f"{name} must be YYYY-MM-DD, got {given!r}") from None
+        return calendar_day(given, name)
+    except PeriodError as error:
+        raise AirflowFailException(str(error)) from None
 
 
 def requested_end_date(now_kst: datetime, params: dict[str, Any]) -> date:
@@ -151,23 +149,6 @@ def requested_start_date(end_date: date, params: dict[str, Any]) -> date:
     return start_date
 
 
-def span_start(end_date: date) -> date:
-    return end_date - timedelta(days=SPAN_CALENDAR_DAYS)
-
-
-def fetch_windows(start_date: date, end_date: date) -> list[tuple[date, date]]:
-    """조회 구간을 `SPAN_CALENDAR_DAYS`씩 끊는다. 오래된 창이 먼저다.
-
-    한 심볼의 페이지 상한(`INDEX_DAILY_MAX_PAGES`)을 넘지 않으려고 나눈다. 일상 실행은
-    구간이 정확히 200달력일이라 창 하나가 나오고 동작이 바뀌지 않는다.
-    """
-    windows: list[tuple[date, date]] = []
-    cursor = start_date
-    while cursor <= end_date:
-        window_end = min(cursor + timedelta(days=SPAN_CALENDAR_DAYS), end_date)
-        windows.append((cursor, window_end))
-        cursor = window_end + timedelta(days=1)
-    return windows
 
 
 @dag(

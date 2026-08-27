@@ -5,7 +5,7 @@ import httpx
 import openai
 import pytest
 from langchain_core.messages import AIMessage
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from modules.assessment import DEFAULT_PERSPECTIVE, Assessment, system_prompt
 from modules.briefing import picks
@@ -23,6 +23,7 @@ from modules.llm import (
     invoke,
     model_name,
     thesis_model,
+    token_usage,
 )
 from modules.schema import response_format, strict_json_schema
 from modules.thesis.generation import SYSTEM_PROMPT as THESIS_PROMPT
@@ -237,3 +238,60 @@ def test_every_prose_prompt_carries_the_number_style(prompt):
 def test_the_extraction_prompt_stays_out_of_it():
     """추출 프롬프트의 숫자는 산문이 아니라 JSON 숫자 칸으로 간다. 쉼표가 파싱을 깬다."""
     assert NUMBER_STYLE not in EXTRACTION_PROMPT
+
+
+# --- 토큰 계량 -----------------------------------------------------------------
+
+
+def _handler(usage: dict[str, Any]) -> Any:
+    from langchain_core.callbacks import UsageMetadataCallbackHandler
+
+    handler = UsageMetadataCallbackHandler()
+    handler.usage_metadata = usage
+    return handler
+
+
+def test_token_usage_folds_every_model_the_conversation_touched():
+    """핸들러는 모델 이름마다 칸을 갖는다. 원장은 대화 하나의 합을 받는다."""
+    usage = token_usage(
+        _handler(
+            {
+                "grok-4.6": {
+                    "input_tokens": 224970,
+                    "output_tokens": 17593,
+                    "output_token_details": {"reasoning": 13975},
+                },
+                "grok-4.6-mini": {
+                    "input_tokens": 30,
+                    "output_tokens": 7,
+                    "output_token_details": {"reasoning": 2},
+                },
+            }
+        )
+    )
+
+    assert usage.prompt == 225000
+    assert usage.completion == 17600
+    assert usage.reasoning == 13977
+
+
+def test_token_usage_is_zero_when_the_model_never_ran():
+    """모델을 못 부르고 죽은 대화는 0이다. NULL("안 쟀다")과 갈려야 한다."""
+    usage = token_usage(_handler({}))
+
+    assert (usage.prompt, usage.completion, usage.reasoning) == (0, 0, 0)
+
+
+def test_token_usage_survives_a_provider_that_hides_reasoning():
+    """`output_token_details`가 없거나 비어도 죽지 않는다. 그 제공처는 reasoning이 0이다."""
+    usage = token_usage(_handler({"gpt-5.6-luna": {"input_tokens": 10, "output_tokens": 3}}))
+
+    assert (usage.prompt, usage.completion, usage.reasoning) == (10, 3, 0)
+
+
+def test_token_usage_is_frozen():
+    """재시도 경로에서 값이 바뀌면 원장과 트레이스가 어긋난다."""
+    usage = token_usage(_handler({}))
+
+    with pytest.raises(ValidationError):
+        usage.prompt = 1

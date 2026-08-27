@@ -61,6 +61,7 @@ from decimal import Decimal
 from enum import StrEnum
 from typing import Annotated, Any, Literal, TypedDict
 
+from langchain_core.callbacks import UsageMetadataCallbackHandler
 from langchain_core.language_models import BaseChatModel
 from langchain_core.messages import BaseMessage, HumanMessage, SystemMessage
 from langgraph.graph import END, START, StateGraph
@@ -222,7 +223,13 @@ class FollowupNarrator:
         self._include_outcome = include_outcome
         self._schema = response_format(Narratives, "thesis_narratives")
         self._tool_node = tool_node(toolbox)
+        self._usage = UsageMetadataCallbackHandler()
         self._graph = self._build_graph()
+
+    @property
+    def usage(self) -> llm.TokenUsage:
+        """그래프가 지금까지 청구된 토큰. **예외가 나도 읽을 수 있다**(`modules/llm.py`)."""
+        return llm.token_usage(self._usage)
 
     @property
     def variant(self) -> NarrativeVariant:
@@ -323,6 +330,7 @@ class FollowupNarrator:
             config={
                 "run_name": "narrate_followups",
                 "metadata": {"horizon_days": horizon_days, "run_slot": run_slot.value, "variant": self.variant.value},
+                "callbacks": [self._usage],
             },
         )
         drafts = final.get("drafts")

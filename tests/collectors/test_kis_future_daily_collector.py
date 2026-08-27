@@ -139,8 +139,8 @@ def future_send(pages: list[tuple[bytes, str]]):
         requests.append((path, tr_id, dict(query), tr_cont))
         if len(requests) > len(pages):
             # 대본을 다 쓰면 빈 응답이다. 같은 장을 되풀이하면 걷기가 중복 날짜 오류로 끝나
-            # 실제 종료 조건을 가린다.
-            return future_payload(()), 200, {"tr_cont": ""}
+            # 실제 종료 조건을 가린다. 빈 응답에는 코드 칸도 없다 — 실측의 만기물·`.DJI`가 그렇다.
+            return future_payload((), echoed_code=None), 200, {"tr_cont": ""}
         body, next_flag = pages[len(requests) - 1]
         return body, 200, {"tr_cont": next_flag}
 

@@ -22,6 +22,7 @@ import pytest
 from modules.assessment import PROMPT_VERSION as ASSESSMENT_PROMPT_VERSION
 from modules.expectation.domain import PROMPT_VERSION as EXPECTATION_PROMPT_VERSION
 from modules.prompt import PROMPT_ROOT
+from modules.thesis.domain import PROMPT_VERSION as THESIS_PROMPT_VERSION
 from modules.thesis.outcomes import NARRATIVE_PROMPT_VERSION
 
 # 판이 붙는 프롬프트 파일. 흐름의 현재 판을 키에 함께 적는다.
@@ -29,6 +30,7 @@ from modules.thesis.outcomes import NARRATIVE_PROMPT_VERSION
 PROMPT_HASHES: dict[tuple[str, str], str] = {
     ("assessment", "3"): "98ca6e74ed7f241abeb7b4b459a86a3c22a459ff8189af6c063d92bc92ea8a79",
     ("expectation_extraction", "1"): "7108eab56e598ff642aeb7269f0f07ab9ef21707798202447db6a6b0a3b52a41",
+    ("thesis_generation", "7"): "ba0a741a06869b16aa3a439ebe56c33cdfa8b4084366c3d6ec183e8d5c426154",
     ("thesis_narrative", "2"): "1baea1c554c90619576036db58ad42d2a1e24052fc8ab982978e605c6e696b8b",
 }
 
@@ -36,6 +38,7 @@ PROMPT_HASHES: dict[tuple[str, str], str] = {
 PROMPT_VERSIONS: dict[str, str] = {
     "assessment": ASSESSMENT_PROMPT_VERSION,
     "expectation_extraction": EXPECTATION_PROMPT_VERSION,
+    "thesis_generation": THESIS_PROMPT_VERSION,
     "thesis_narrative": NARRATIVE_PROMPT_VERSION,
 }
 

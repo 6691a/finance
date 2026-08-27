@@ -9,7 +9,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from modules.assessment import DEFAULT_PERSPECTIVE, Assessment, system_prompt
 from modules.briefing import picks
-from modules.expectation_extraction import SYSTEM_PROMPT as EXTRACTION_PROMPT
+from modules.expectation.extraction import SYSTEM_PROMPT as EXTRACTION_PROMPT
 from modules.llm import (
     NUMBER_STYLE,
     REQUEST_TIMEOUT_SECONDS,
@@ -25,8 +25,8 @@ from modules.llm import (
     thesis_model,
 )
 from modules.schema import response_format, strict_json_schema
-from modules.thesis_generation import SYSTEM_PROMPT as THESIS_PROMPT
-from modules.thesis_outcomes import NARRATIVE_SYSTEM_PROMPT
+from modules.thesis.generation import SYSTEM_PROMPT as THESIS_PROMPT
+from modules.thesis.outcomes import NARRATIVE_SYSTEM_PROMPT
 
 
 class ScriptedModel:

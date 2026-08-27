@@ -20,7 +20,7 @@
 ## 0. 왜 — 쌓는 것의 대부분을 볼 길이 없다
 
 Slack이 보여 주는 것은 **채택된 방향 하나의 확률·이유, 그리고 근거 제목 세 개**다
-(`thesis_render.render_blocks`, `SLACK_EVIDENCE_LIMIT = 3`). 나머지는 전부 DB에만 있다.
+(`thesis.render.render_blocks`, `SLACK_EVIDENCE_LIMIT = 3`). 나머지는 전부 DB에만 있다.
 
 | DB에 있는 것 | Slack | 지금 보는 법 |
 | --- | --- | --- |
@@ -111,7 +111,7 @@ llm_run    — 이 추론을 만든 대화(13단계). id·모델·판·왕복·�
 `narrative_at`·`llm_model`·`prompt_version`), 그리고 그 지평 해설이 인용한 근거 배열이다.
 
 **`url`이 붙는 근거는 `document`와 `disclosure` 둘뿐이다.** `macro_change`와
-`technical_signal`은 링크할 곳이 없어 항상 `null`이다(`thesis_toolbox`가 그렇게 만든다).
+`technical_signal`은 링크할 곳이 없어 항상 `null`이다(`thesis.toolbox`가 그렇게 만든다).
 클라이언트가 그것을 알 수 있게 `kind`를 함께 주는 것이지, `url`이 없다고 항목을 감추지 않는다.
 
 ### 1.3 이웃 그래프
@@ -296,26 +296,40 @@ wiring이 `packages=["apps.api.routes"]`라 `container.py`는 provider만 늘고
   Airflow UI도 같은 조건이다.
 - **`.env` 파일이 없다.** 읽을 별칭은 `main.py`의 상수이고 나머지는 `config.yaml`이다.
   `test_api_stack.py`가 어느 스택도 서비스 전용 환경변수를 안 갖는 것을 확인한다.
-- `justfile`에 태스크 여섯(`web`·`web-down`·`web-prod`·`web-prod-down`·`build-api`·`deploy-api`)과
+- `justfile`에 태스크 여섯(`api`·`api-down`·`api-prod`·`api-prod-down`·`build-api`·`deploy-api`)과
   `deploy` 의존에 `deploy-api`을 더한다. 이름과 모양은 realtime 짝을 그대로 따른다.
-- `tests/config/test_realtime_stack.py`가 local·prod의 `requirements.txt`·`Dockerfile`·
-  `.env.sample`이 주석 빼고 같을 것을 강제한다. **`test_api_stack.py`를 같은 모양으로 둔다.**
-  거기에 둘을 더한다 — 운영 compose가 포트를 열고 있는지, Dockerfile `CMD`가
-  `python -m apps.api.main`인지.
+- `tests/config/test_realtime_stack.py`가 local·prod의 파일이 주석 빼고 같을 것을 강제한다.
+  **`test_api_stack.py`를 같은 모양으로 둔다.** 거기에 셋을 더한다 — 운영 compose가 포트를
+  열고 있는지, Dockerfile `CMD`가 `python -m apps.api.main`인지, 그리고 이미지가 두 번째
+  의존성 목록 없이 lockfile로 까는지.
 
 ### 3.1 의존성
 
-`pyproject.toml`에 `fastapi`와 `uvicorn` 둘만 는다. `httpx`는 이미 루트 의존성이라
-`ASGITransport` 테스트가 새 의존성 없이 돈다.
+`pyproject.toml`에 `fastapi`·`uvicorn`·`dependency-injector`가 는다. `httpx`는 이미 루트
+의존성이라 `ASGITransport` 테스트가 새 의존성 없이 돈다.
 
 **`uvicorn[standard]`가 아니다.** uvloop·httptools·watchfiles·python-dotenv·colorama 다섯을
 더 끌고 오는데, 사설망에서 초당 한 자릿수 요청을 받는 읽기 API에 잴 수 있는 이득이 없다.
 `fastapi[standard]`도 같은 이유로 안 쓴다.
 
-compose의 `requirements.txt`는 realtime 것에서 `websockets`와 `tzdata`를 빼고 `fastapi`·
-`uvicorn`을 넣은 것이다. WebSocket을 안 쓰고, 시각을 UTC로만 내보내 `zoneinfo`를 부를 일이
-없다. **`redis`는 남긴다** — `apps.core.config`가 `apps.core.redis`의 `RedisConfig`를
-import해서 없으면 설정 로딩이 죽는다. 연결은 하지 않는다.
+**이미지는 `uv`가 저장소의 `uv.lock`으로 깐다**(`uv sync --frozen --no-install-project
+--only-group api`). requirements.txt를 따로 두지 않는다 — 그것이 두 번째 의존성 목록이
+되어 조용히 어긋난다. 2026-08-27에 실제로 `dependency-injector`가 빠져 컨테이너만
+`ModuleNotFoundError`로 죽었고, 로컬 venv는 `pyproject.toml`로 깔려 있어 네이티브 실행과
+테스트는 전부 통과했다. **requirements.txt를 쓰는 것은 Airflow뿐이고**, 그건 운영 Airflow
+이미지에 이미 깔린 것에 맞춰야 하는 특수한 사정이다.
+
+`[dependency-groups]`의 `api` 그룹이 그 이미지가 쓰는 것을 고른다. `[project].dependencies`
+전체를 깔지 않는 이유는 거기 `scrapling[fetchers]`(playwright·patchright)와 `ipykernel`처럼
+조회 API가 절대 부르지 않는 것이 있어서다. **그룹에는 버전 하한을 적지 않는다** — 하한은
+`[project].dependencies`에 한 벌이고 실제 버전은 lockfile이 정한다. 그룹은 선택 목록이다.
+`tzdata`만 그룹에 있는데, `run_date`가 KST 세션 날짜라 slim 이미지에서 `zoneinfo`가
+시스템 tzdata 없이도 돌아야 하기 때문이다. **`redis`는 남긴다** — `apps.core.config`가
+`apps.core.redis`의 `RedisConfig`를 import해서 없으면 설정 로딩이 죽는다. 연결은 하지 않는다.
+
+빌드 컨텍스트는 저장소 루트다(이미지가 루트의 `pyproject.toml`·`uv.lock`을 읽는다).
+루트 `.dockerignore`가 그 둘만 남긴다 — 안 그러면 `.venv`·`.git`·Airflow 데이터가
+컨텍스트로 딸려 간다. 결과 이미지는 250MB다.
 
 ## 4. 테스트
 
@@ -367,7 +381,7 @@ import해서 없으면 설정 로딩이 죽는다. 연결은 하지 않는다.
 
 ### 확인 끝 (2026-08-26 운영 DB 읽기 전용 실측 포함)
 
-- **죽은 코드 셋을 지웠다**(2026-08-26). `thesis_render.SLACK_REVIEW_HORIZON`,
+- **죽은 코드 셋을 지웠다**(2026-08-26). `thesis.render.SLACK_REVIEW_HORIZON`,
   `ThesisStore.stored_outcomes()`와 `StoredOutcome`, `thesis_outcome/select_by_thesis_ids.sql`
   넷 다 호출자가 없었다 — 5-followup.md 7절의 Slack T+5 해설 섹션이 구현되지 않은
   흔적이다. 이 API는 `apps/models`의 ORM으로 읽어 그 SQL과 무관하다.

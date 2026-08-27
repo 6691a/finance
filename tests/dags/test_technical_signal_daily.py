@@ -1,6 +1,6 @@
 """DAG 객체와 params 해석만 검증한다.
 
-검출·저장 규칙은 `modules/technical_signals.py`에 있고 `tests/modules/test_technical_signals.py`가
+검출·저장 규칙은 `modules/technical/signals.py`에 있고 `tests/modules/test_technical_signals.py`가
 덮는다. 설계는 docs/analysis/market-technical-indicators.md 12.3절이다.
 """
 
@@ -10,7 +10,7 @@ import pytest
 from airflow.exceptions import AirflowFailException
 
 from dags import technical_signal_daily
-from modules.technical import SIGNAL_SCAN_BARS_MAX
+from modules.technical.indicators import SIGNAL_SCAN_BARS_MAX
 
 
 def test_the_dag_runs_after_both_daily_collectors():
@@ -66,7 +66,7 @@ def test_the_scan_cap_covers_the_backfilled_history():
     (docs/analysis/market-thesis/10-base-rate.md 4.1절). 2016-08-15부터 약 2,500 거래일이라
     상한이 그보다 커야 한 번에 전 구간을 훑을 수 있다.
     """
-    from modules.technical import TECHNICAL_LOOKBACK_BARS
+    from modules.technical.indicators import TECHNICAL_LOOKBACK_BARS
 
     assert SIGNAL_SCAN_BARS_MAX > TECHNICAL_LOOKBACK_BARS
     assert SIGNAL_SCAN_BARS_MAX >= 2500

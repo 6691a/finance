@@ -19,10 +19,10 @@ from langchain_core.messages import AIMessage, ToolMessage
 from sqlalchemy import Table
 
 from apps.models.analysis import Thesis, ThesisEvidence, ThesisOutcome, ThesisPrecedent
-from modules import base_rate
 from modules.sql import read_sql
-from modules.technical import TECHNICAL_LOOKBACK_BARS
-from modules.thesis_domain import (
+from modules.technical import base_rate
+from modules.technical.indicators import TECHNICAL_LOOKBACK_BARS
+from modules.thesis.domain import (
     DART_VIEWER_URL,
     FLAT_THRESHOLD_PCT,
     HORIZON_DAYS,
@@ -50,21 +50,21 @@ from modules.thesis_domain import (
     classify_outcome,
     evidence_ref,
 )
-from modules.thesis_generation import (
+from modules.thesis.generation import (
     ThesisBuilder,
     normalize_probabilities,
 )
-from modules.thesis_outcomes import (
+from modules.thesis.outcomes import (
     MAX_NARRATIVE_CHARS,
     FollowupNarrator,
     NarrativeDraft,
     NarrativeTarget,
 )
-from modules.thesis_render import (
+from modules.thesis.render import (
     render_blocks,
     render_text,
 )
-from modules.thesis_state import (
+from modules.thesis.state import (
     FORECAST_SLOTS,
     INTRADAY_SLOTS,
     NARRATED_SLOTS,
@@ -73,17 +73,17 @@ from modules.thesis_state import (
     RunSlot,
     StockObservation,
 )
-from modules.thesis_store import (
+from modules.thesis.store import (
     StoredEvidence,
     StoredThesis,
     ThesisStore,
 )
-from modules.thesis_toolbox import (
+from modules.thesis.toolbox import (
     ThesisToolbox,
     ToolLimitExceeded,
     tool_node,
 )
-from modules.thesis_tools import DocumentDetail, MacroDetail
+from modules.thesis.tools import DocumentDetail, MacroDetail
 
 THESIS_INSERT = read_sql("postgres", "thesis", "insert.sql")
 THESIS_SELECT_BY_RUN = read_sql("postgres", "thesis", "select_by_run.sql")
@@ -1050,7 +1050,7 @@ SUBJECTS = (
     Subject(kind=ThesisSubjectKind.INDEX, code="KOSPI", label="코스피"),
     Subject(kind=ThesisSubjectKind.STOCK, code="000660", label="SK하이닉스"),
 )
-# 관측 상태의 모양은 `thesis_state`가 정한다. 맨 dict를 넘기면 프롬프트에 실릴 키가
+# 관측 상태의 모양은 `thesis.state`가 정한다. 맨 dict를 넘기면 프롬프트에 실릴 키가
 # 테스트에서만 존재할 수 있다.
 OBSERVED = ObservedState(
     session=date(2026, 8, 20),
@@ -2336,7 +2336,7 @@ def test_past_theses_returns_reviews_beside_forecasts():
     query = body(PAST_THESES)
 
     # 장후 리뷰의 사후 해설이 다음 예측으로 돌아오는 길이 이것 하나다. 슬롯 목록은
-    # 파라미터이고 원본은 `thesis_state.NARRATED_SLOTS`다.
+    # 파라미터이고 원본은 `thesis.state.NARRATED_SLOTS`다.
     assert "thesis.run_slot = ANY(%s)" in query
     assert "'post_close'" not in query
     # 건수 상한은 슬롯마다다. 총량으로 자르면 장후가 들어온 만큼 장전 예측 이력이 짧아진다.
@@ -2442,7 +2442,7 @@ def test_narratives_and_backlog_watch_the_same_slots():
     backlog = body(THESIS_BACKLOG)
 
     # 둘 다 리터럴이 아니라 파라미터로 받는다. 같은 상수를 보게 만드는 것이 어긋남을
-    # 막는 방법이고, 그 상수는 `thesis_state.NARRATED_SLOTS` 하나다.
+    # 막는 방법이고, 그 상수는 `thesis.state.NARRATED_SLOTS` 하나다.
     assert "thesis.run_slot = ANY(%s)" in narratives
     assert "due.run_slot = ANY(%s)" in backlog
     assert "'pre_open'" not in narratives
@@ -3367,7 +3367,7 @@ def test_tool_timestamps_are_iso_8601_not_python_str():
 
 def test_return_error_grades_only_the_realised_direction():
     """조건부 추정이라 실현된 방향의 것만 대조한다. 방향 오답은 Brier가 이미 벌점을 줬다."""
-    from modules.thesis_domain import return_error
+    from modules.thesis.domain import return_error
 
     graded = return_error(
         actual_return_pct=Decimal("-1.50"),
@@ -3382,7 +3382,7 @@ def test_return_error_grades_only_the_realised_direction():
 
 def test_return_error_keeps_the_sign_so_over_and_under_are_distinguishable():
     """절댓값만 남기면 모델이 늘 크게 부르는지 작게 부르는지를 못 읽는다."""
-    from modules.thesis_domain import return_error
+    from modules.thesis.domain import return_error
 
     over = return_error(
         actual_return_pct=Decimal("0.50"),
@@ -3396,7 +3396,7 @@ def test_return_error_keeps_the_sign_so_over_and_under_are_distinguishable():
 
 def test_return_error_skips_flat_and_missing_estimates():
     """flat은 정의가 이미 크기를 담고, 판 7 이전 행은 추정 자체가 없다."""
-    from modules.thesis_domain import return_error
+    from modules.thesis.domain import return_error
 
     assert (
         return_error(
@@ -3420,7 +3420,7 @@ def test_return_error_skips_flat_and_missing_estimates():
 
 def test_a_size_below_the_flat_threshold_is_dropped_not_stored():
     """임계보다 작은 크기는 정의상 flat이다. 방향의 크기로 두면 모순이 저장된다."""
-    from modules.thesis_generation import normalize_return_pct
+    from modules.thesis.generation import normalize_return_pct
 
     assert normalize_return_pct(0.3) is None
     assert normalize_return_pct(0.31) == Decimal("0.31")
@@ -3428,7 +3428,7 @@ def test_a_size_below_the_flat_threshold_is_dropped_not_stored():
 
 def test_a_runaway_size_is_dropped_not_clamped():
     """상한으로 자르면 모델이 부르지 않은 숫자를 우리가 지어내는 것이 된다."""
-    from modules.thesis_generation import normalize_return_pct
+    from modules.thesis.generation import normalize_return_pct
 
     assert normalize_return_pct(30.1) is None
     assert normalize_return_pct(30) == Decimal("30.00")

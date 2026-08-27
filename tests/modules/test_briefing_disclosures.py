@@ -286,7 +286,7 @@ def test_the_report_name_links_to_the_dart_viewer():
 
 def test_the_viewer_url_is_the_one_the_thesis_tools_use():
     """상수를 두 벌 두지 않는다."""
-    from modules.thesis_domain import DART_VIEWER_URL
+    from modules.thesis.domain import DART_VIEWER_URL
 
     assert DART_VIEWER_URL.format(rcept_no="1") == NewDisclosure(
         rcept_no="1",

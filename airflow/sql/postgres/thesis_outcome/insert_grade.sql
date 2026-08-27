@@ -9,7 +9,7 @@
 -- 그 지평은 영영 채점되지 않는다.
 --
 -- **크기 채점 둘은 방향 채점과 같은 트랜잭션·같은 행이다**(판 7부터). 실현이 `flat`이거나
--- 그 방향의 추정이 없으면 NULL이고, 그것을 정하는 것은 `thesis_domain.return_error`다.
+-- 그 방향의 추정이 없으면 NULL이고, 그것을 정하는 것은 `thesis.domain.return_error`다.
 INSERT INTO thesis_outcome (
     thesis_id,
     horizon_days,

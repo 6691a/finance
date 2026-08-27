@@ -8,12 +8,12 @@
   리포트가 `document`로 들어오는 경로 — 기대치의 주 원천), `earnings_fact`(실적 실제값).
 - 산출물: `apps/models/analysis/events.py`에 `StockEventClaim`·`StockEventExtraction`·
   `StockEventOutcome`과 enum 넷, 수기 리비전 `a4c9e1f7b3d6`,
-  `airflow/modules/expectation_domain.py`·`expectation_extraction.py`·`expectation_judgment.py`
+  `airflow/modules/expectation/domain.py`·`expectation/extraction.py`·`expectation/judgment.py`
   (순수 함수와 저장 모양 / `ExpectationExtractor` / `ExpectationStore`와 렌더링),
   `airflow/dags/event_expectation_hourly.py`, `modules/llm.py`의 `expectation_model()`,
   SQL 아홉(`stock_event_claim/*` 넷, `stock_event_extraction/upsert.sql`,
   `stock_event_outcome/*` 둘, `document/select_pending_extraction.sql`,
-  `earnings_fact/select_actual_for_judgment.sql`), `thesis_toolbox.py`에 `event_surprises` 툴,
+  `earnings_fact/select_actual_for_judgment.sql`), `thesis/toolbox.py`에 `event_surprises` 툴,
   테스트 넷. 컨센서스 수집기는 후행(6절)
 
 ## 0. 왜 — 기대치가 숫자로 안 쌓여서 "미달"을 판단하지 못한다
@@ -138,7 +138,7 @@ stock_event_outcome (            -- 이벤트·지표 하나의 판정. 첫 성�
 
 ## 3. 추출 — `ExpectationExtractor` (LLM은 여기에만)
 
-`airflow/modules/expectation_extraction.py`. `DocumentAssessor` 계보 — 컴파일된 LangGraph를 소유한
+`airflow/modules/expectation/extraction.py`. `DocumentAssessor` 계보 — 컴파일된 LangGraph를 소유한
 클래스, 응답은 Pydantic + `response_format` 강제, 프롬프트 조립·파싱은 `@staticmethod`.
 
 - **대상 문서**: `assessed_at IS NOT NULL`이고 `document_instrument` 태그가 있는 문서 중

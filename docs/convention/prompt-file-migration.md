@@ -22,11 +22,11 @@ AST로 최상위 프롬프트 상수만 센 값이다(2026-08-27).
 
 | 모듈 | 줄 | 상수 | 버전 칸 | 특징 |
 | --- | ---: | --- | --- | --- |
-| `thesis_generation.py` | 174 | `SYSTEM_PROMPT`(103)·`INSTRUCTION`(44)·`SLOT_INSTRUCTION`(23)·`REPAIR_INSTRUCTION`(4) | `thesis_domain.PROMPT_VERSION` | **가장 크고 가장 얽혀 있다.** 자리표시자 10개, 슬롯별 딕셔너리 |
+| `thesis/generation.py` | 174 | `SYSTEM_PROMPT`(103)·`INSTRUCTION`(44)·`SLOT_INSTRUCTION`(23)·`REPAIR_INSTRUCTION`(4) | `thesis.domain.PROMPT_VERSION` | **가장 크고 가장 얽혀 있다.** 자리표시자 10개, 슬롯별 딕셔너리 |
 | `assessment.py` | 50 | `INSTRUCTION`(29)·`PERSPECTIVES`(15)·`SYSTEM_PROMPT_TEMPLATE`(5)·`REPAIR_INSTRUCTION`(1) | `assessment.PROMPT_VERSION` | 유일하게 `.format()`을 실제로 쓴다 |
-| `thesis_outcomes.py` | 49 | `NARRATIVE_SYSTEM_PROMPT`(33)·`NARRATIVE_INSTRUCTION`(12)·`NARRATIVE_REPAIR_INSTRUCTION`(4) | `NARRATIVE_PROMPT_VERSION` | |
+| `thesis/outcomes.py` | 49 | `NARRATIVE_SYSTEM_PROMPT`(33)·`NARRATIVE_INSTRUCTION`(12)·`NARRATIVE_REPAIR_INSTRUCTION`(4) | `NARRATIVE_PROMPT_VERSION` | |
 | `briefing/picks.py` | 36 | `SYSTEM_PROMPT`(31)·`INSTRUCTION`(4)·`REPAIR_INSTRUCTION`(1) | **없음** | 채점하지 않는다 |
-| `expectation_extraction.py` | 35 | `INSTRUCTION`(29)·`SYSTEM_PROMPT`(5)·`REPAIR_INSTRUCTION`(1) | `expectation_domain.PROMPT_VERSION` | |
+| `expectation/extraction.py` | 35 | `INSTRUCTION`(29)·`SYSTEM_PROMPT`(5)·`REPAIR_INSTRUCTION`(1) | `expectation.domain.PROMPT_VERSION` | |
 | `llm.py` | 10 | `NUMBER_STYLE`(10) | — | **조각이다.** 위 넷 중 셋이 끼워 쓴다 |
 
 `briefing/disclosure_picks.py`는 이미 옮겼다(3줄만 남았다).
@@ -56,9 +56,9 @@ AST로 최상위 프롬프트 상수만 센 값이다(2026-08-27).
 자리표시자: `$max_reads`·`$max_watches`·`$max_why_chars`·`$number_style`(system),
 `$window_hours`·`$candidates`(instruction).
 
-### 2단계 — `expectation_extraction.py`
+### 2단계 — `expectation/extraction.py`
 
-버전(`expectation_domain.PROMPT_VERSION`)이 붙지만 **`INSTRUCTION`이 29줄로 단순하고
+버전(`expectation.domain.PROMPT_VERSION`)이 붙지만 **`INSTRUCTION`이 29줄로 단순하고
 자리표시자가 적다.** 여기서 4절의 해시 가드를 처음 만든다.
 
 **`NUMBER_STYLE`을 안 쓰는 유일한 프롬프트다**(`test_llm.py`가 그 사실을 지킨다 — 그쪽
@@ -76,12 +76,12 @@ AST로 최상위 프롬프트 상수만 센 값이다(2026-08-27).
 
 같이 고칠 것: `test_llm.py`의 `.format(perspective=...)` 호출과 중괄호 검사 둘.
 
-### 4단계 — `thesis_outcomes.py`
+### 4단계 — `thesis/outcomes.py`
 
 `NARRATIVE_PROMPT_VERSION`이 붙는다. 자리표시자는 `$run_date`·`$slot_label`·
 `$horizon_days` 정도로 단순하다. 3단계까지 왔으면 기계적이다.
 
-### 5단계 — `thesis_generation.py`
+### 5단계 — `thesis/generation.py`
 
 **가장 크고 마지막이다.** 앞의 넷에서 형태가 검증된 뒤에 손댄다.
 
@@ -118,7 +118,7 @@ AST로 최상위 프롬프트 상수만 센 값이다(2026-08-27).
 PROMPT_HASHES = {
     # 문장을 고쳤으면 판을 올리고 이 해시도 같이 바꾼다. 둘을 같은 커밋에서 만진다.
     ("expectation_extraction", "1"): "sha256:…",
-    ("thesis_generation", "7"): "sha256:…",
+    ("thesis.generation", "7"): "sha256:…",
 }
 ```
 
@@ -148,7 +148,7 @@ DAG은 돌리지 않는다. 프롬프트가 실제로 모델에게 잘 가는지
 
 ## 6. 옮기지 않는 것
 
-- **`thesis_toolbox.py`의 `Field(description=...)`.** 툴 인자 설명도 모델이 읽는 문장이지만
+- **`thesis/toolbox.py`의 `Field(description=...)`.** 툴 인자 설명도 모델이 읽는 문장이지만
   **상한 값을 f-string으로 싣는 것이 저장소 규칙**이고(`MAX_TOOL_CALLS`를 고치면 프롬프트가
   따라간다), Pydantic 모델 선언과 한 몸이다. 떼면 스키마와 설명이 두 파일로 갈린다.
 - **`PROMPT_VERSION`·`NARRATIVE_PROMPT_VERSION` 상수와 그 위 판별 주석.** 채점과 이어져
@@ -168,7 +168,7 @@ DAG은 돌리지 않는다. 프롬프트가 실제로 모델에게 잘 가는지
 
 ## 8. 이 전환이 끝나면
 
-- 파이썬 파일에서 354줄이 빠진다. `thesis_generation.py`는 713줄에서 540줄 안팎이 된다.
+- 파이썬 파일에서 354줄이 빠진다. `thesis/generation.py`는 713줄에서 540줄 안팎이 된다.
 - 문장만 고친 PR이 코드 diff 0줄이 된다.
 - `llm.py`의 중괄호 제약이 사라진다.
 - 프롬프트 판과 문장이 해시로 묶여, **판을 안 올리고 문장을 고치는 사고**가 테스트에서 죽는다.

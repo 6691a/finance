@@ -2,6 +2,10 @@
 
 두 스택은 노출 포트와 DSN만 다르고 이미지·의존성은 같아야 한다. 한쪽만 고치면 개발에서
 통과한 코드가 운영 이미지에서 깨진다. `test_realtime_stack.py`와 같은 형태다.
+
+**의존성 목록은 하나다** — 루트 `pyproject.toml`의 `api` 그룹이고 이미지는 `uv sync
+--only-group api`로 깐다. requirements.txt를 따로 두던 때 그것이 두 번째 목록이 되어
+조용히 어긋났다(2026-08-27, `dependency-injector`).
 """
 
 from pathlib import Path
@@ -13,10 +17,6 @@ PROD = Path("compose/prod/api")
 def payload_lines(path: Path) -> list[str]:
     """주석과 빈 줄을 뺀 실질 내용."""
     return [line.strip() for line in path.read_text().splitlines() if line.strip() and not line.strip().startswith("#")]
-
-
-def test_requirements_are_identical_between_local_and_prod():
-    assert payload_lines(LOCAL / "requirements.txt") == payload_lines(PROD / "requirements.txt")
 
 
 def test_dockerfiles_are_identical_between_local_and_prod():
@@ -76,3 +76,54 @@ def test_the_code_is_mounted_read_only_not_baked_into_the_image():
         compose = (path / "docker-compose.yaml").read_text()
         assert "/apps:/app/apps:ro" in compose
         assert "/app/config.yaml:ro" in compose
+
+
+def test_the_image_group_covers_every_third_party_import_it_runs():
+    """이미지가 도는 코드가 import하는 서드파티가 전부 `api` 그룹에 있어야 한다.
+
+    로컬 venv는 그룹 전부를 깔아서 **네이티브 실행은 통과하고 컨테이너만 죽는다.**
+    2026-08-27에 `dependency-injector`가 그렇게 빠져 있었다 — 진입점이
+    `ModuleNotFoundError`로 죽는 것을 컨테이너를 띄워 보고서야 알았다.
+    """
+    import ast
+    import sys
+    import tomllib
+
+    # import 이름과 배포 이름이 다른 것만 적는다. 나머지는 `_`를 `-`로 바꾸면 같다.
+    DISTRIBUTION = {"yaml": "pyyaml"}
+
+    def roots(path: Path) -> set[str]:
+        found: set[str] = set()
+        for node in ast.walk(ast.parse(path.read_text())):
+            if isinstance(node, ast.Import):
+                found |= {alias.name.split(".")[0] for alias in node.names}
+            elif isinstance(node, ast.ImportFrom) and node.level == 0 and node.module:
+                found.add(node.module.split(".")[0])
+        return found
+
+    # 이미지는 `apps/`를 통째로 마운트하지만 진입점이 닿는 것은 이 셋이다.
+    imported: set[str] = set()
+    for tree in ("apps/api", "apps/core", "apps/models"):
+        for path in Path(tree).rglob("*.py"):
+            imported |= roots(path)
+
+    third_party = {
+        DISTRIBUTION.get(name, name.replace("_", "-"))
+        for name in imported
+        if name not in sys.stdlib_module_names and name != "apps"
+    }
+    group = tomllib.loads(Path("pyproject.toml").read_text())["dependency-groups"]["api"]
+    declared = {entry.split(">=")[0].split("==")[0].split("[")[0].strip() for entry in group}
+
+    assert third_party <= declared, f"pyproject.toml의 api 그룹에 없다: {sorted(third_party - declared)}"
+
+
+def test_the_image_installs_from_the_lockfile_not_a_second_list():
+    """`uv.lock`이 버전의 원본이다. requirements.txt를 다시 만들면 그것이 두 번째
+    목록이 되고, 한쪽만 고친 날 컨테이너에서만 죽는다. Airflow는 운영 이미지에 이미
+    깔린 것에 맞춰야 해서 예외다."""
+    for path in (LOCAL, PROD):
+        directives = payload_lines(path / "Dockerfile")
+
+        assert not (path / "requirements.txt").exists()
+        assert "RUN uv sync --frozen --no-install-project --only-group api" in directives

@@ -20,6 +20,30 @@ dependencies = [
 ]
 
 [dependency-groups]
+# 조회 API 이미지가 까는 것. **버전 하한은 여기 적지 않는다** — 하한은 위
+# `[project].dependencies`에 한 벌이고 실제 버전은 `uv.lock`이 정한다. 이 목록은
+# "그 이미지가 무엇을 쓰나"라는 선택일 뿐이다.
+#
+# 이미지가 `[project].dependencies` 전체를 깔지 않는 이유는 거기 scrapling[fetchers]
+# (playwright·patchright)와 ipykernel처럼 조회 API가 절대 부르지 않는 것이 있어서다.
+# 목록이 코드와 어긋나면 `tests/config/test_api_stack.py`가 잡는다.
+api = [
+    "asyncpg",
+    "dependency-injector",
+    "fastapi",
+    "pydantic",
+    "pydantic-settings",
+    "pyyaml",
+    "redis",
+    "sentry-sdk",
+    "sqlalchemy[asyncio]",
+    # `run_date`가 KST 세션 날짜라 zoneinfo("Asia/Seoul")를 쓴다. slim 이미지에 시스템
+    # tzdata가 없을 때의 순수 파이썬 폴백이다.
+    "tzdata",
+    # `uvicorn[standard]`가 아니다. uvloop·httptools·watchfiles 등 다섯을 더 끌고 오는데
+    # 사설망에서 초당 한 자릿수 요청을 받는 읽기 API에 잴 수 있는 이득이 없다.
+    "uvicorn",
+]
 dev = [
     "apache-airflow==3.3.0",
     "apache-airflow-providers-postgres>=7.0.0",

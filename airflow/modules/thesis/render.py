@@ -53,15 +53,15 @@ from datetime import date
 from decimal import Decimal
 from typing import Any
 
-from modules.thesis_domain import (
+from modules.thesis.domain import (
     SLOT_LABELS,
     ThesisVerdict,
 )
-from modules.thesis_state import (
+from modules.thesis.state import (
     INTRADAY_SLOTS,
     RunSlot,
 )
-from modules.thesis_store import (
+from modules.thesis.store import (
     StoredEvidence,
     StoredThesis,
 )
@@ -81,7 +81,7 @@ VERDICT_TIE_GAP = Decimal("0.05")
 
 # 헤더는 이모지 + 라벨이다. **장중 넷은 이모지가 같고 시각으로 갈린다** — 하루 다섯 건이
 # 같은 채널에 쌓이므로 "언제 기준인가"가 값의 절반이다(차트·표 표기 규칙과 같은 이유).
-# 라벨의 원본은 `thesis_domain.SLOT_LABELS`라 스케줄을 옮기면 여기도 따라온다.
+# 라벨의 원본은 `thesis.domain.SLOT_LABELS`라 스케줄을 옮기면 여기도 따라온다.
 SLOT_HEADERS = {
     RunSlot.PRE_OPEN: f"🔮 {SLOT_LABELS[RunSlot.PRE_OPEN]}",
     **{slot: f"⏱ {SLOT_LABELS[slot]}" for slot in INTRADAY_SLOTS},

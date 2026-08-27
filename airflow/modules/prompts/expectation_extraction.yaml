@@ -1,10 +1,10 @@
 # 이벤트 기대·실제 주장 추출(`event_expectation_hourly`)의 프롬프트.
 #
-# 읽는 코드: `airflow/modules/expectation_extraction.py`
+# 읽는 코드: `airflow/modules/expectation/extraction.py`
 #
 # ## 고치기 전에 알아야 할 것
 #
-# - **판이 붙는 프롬프트다.** 문장을 고치면 `expectation_domain.PROMPT_VERSION`을 올리고
+# - **판이 붙는 프롬프트다.** 문장을 고치면 `expectation.domain.PROMPT_VERSION`을 올리고
 #   `tests/modules/test_prompt_versions.py`의 해시도 같은 커밋에서 바꾼다. 판을 안 올리면
 #   ops 창의 판정이 서로 다른 프롬프트의 결과를 한 판으로 섞는다.
 # - **`{`와 `}`는 그대로 써도 된다.** 치환이 `string.Template`이라 JSON 예시와 안 부딪힌다.

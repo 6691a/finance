@@ -26,9 +26,9 @@ from typing import Any
 from pendulum import timezone
 from pydantic import AwareDatetime, BaseModel, ConfigDict
 
-from modules import technical
 from modules.db import Connection
 from modules.sql import read_sql
+from modules.technical import indicators
 from modules.utility import KST_TIMEZONE
 
 LATEST_QUOTES = read_sql("postgres", "quote_bar", "select_latest_briefing_bars.sql")
@@ -123,7 +123,7 @@ DAILY_CHART_SUBJECTS: tuple[str, ...] = ("KOSPI", "KOSDAQ", "005930", "000660", 
 # 500봉(약 2년)인 이유는 둘이다. 120일선이 표시 구간 왼쪽 끝부터 그려지려면 표시 봉 수의
 # 두 배가 필요하고, 그보다 더 받는 만큼 EMA 초기값의 흔적이 옅어져 증권사 앱 값에 가까워진다.
 #
-# **`technical.TECHNICAL_LOOKBACK_BARS`(120)는 건드리지 않는다.** 그 값은 신호 DAG
+# **`indicators.TECHNICAL_LOOKBACK_BARS`(120)는 건드리지 않는다.** 그 값은 신호 DAG
 # (`technical_signal_daily`)가 과거 교차를 훑는 창이라, 늘리면 이미 채점된 신호의 판정이
 # 조용히 바뀐다. 브리핑이 보는 창과 신호가 세는 창은 목적이 다르다.
 INDICATOR_HISTORY_BARS = 500
@@ -391,7 +391,7 @@ class MarketSummary(BaseModel):
     funds: MarketFundsSnapshot | None = None
     short_positions: tuple[StockShortPositionSnapshot, ...] = ()
     spreads: tuple[RateSpread, ...] = ()
-    technicals: tuple[technical.TechnicalSnapshot, ...] = ()
+    technicals: tuple[indicators.TechnicalSnapshot, ...] = ()
     signals: tuple[RecentSignal, ...] = ()
 
 
@@ -428,7 +428,7 @@ class DailyChartSeries(BaseModel):
     label: str
     kind: str
     venue: str
-    bars: tuple[technical.DailyBar, ...]
+    bars: tuple[indicators.DailyBar, ...]
 
 
 class MarketBriefingReader:
@@ -689,14 +689,14 @@ class MarketBriefingReader:
         """일봉 보조지표 차트에 그릴 계열. `DAILY_CHART_SUBJECTS` 순서를 지킨다.
 
         지표를 낼 만큼 봉이 없는 대상은 뺀다. 표가 그 대상을 그리지 않는 것과 같은 기준이다
-        (`technical.TECHNICAL_MIN_BARS`).
+        (`indicators.TECHNICAL_MIN_BARS`).
         """
         subjects = self._daily_bars(DAILY_CHART_SUBJECTS, include_watched=False, limit=INDICATOR_HISTORY_BARS)
         available = {subject.subject_code: subject for subject in subjects}
         return tuple(
             subject
             for code in DAILY_CHART_SUBJECTS
-            if (subject := available.get(code)) is not None and len(subject.bars) >= technical.TECHNICAL_MIN_BARS
+            if (subject := available.get(code)) is not None and len(subject.bars) >= indicators.TECHNICAL_MIN_BARS
         )
 
     def _daily_bars(self, symbols: Sequence[str], *, include_watched: bool, limit: int) -> tuple[DailyChartSeries, ...]:
@@ -732,7 +732,7 @@ class MarketBriefingReader:
                     kind=str(ascending[0][3]),
                     venue=PROVIDER_VENUES.get(str(ascending[0][0]), str(ascending[0][0])),
                     bars=tuple(
-                        technical.DailyBar(
+                        indicators.DailyBar(
                             business_date=row[5],
                             open=float(row[6]),
                             high=float(row[7]),
@@ -746,7 +746,7 @@ class MarketBriefingReader:
             )
         return tuple(subjects)
 
-    def _technicals(self) -> tuple[technical.TechnicalSnapshot, ...]:
+    def _technicals(self) -> tuple[indicators.TechnicalSnapshot, ...]:
         """지수와 watched 종목의 기술지표. 조회 한 번으로 전부 받아 대상별로 계산한다.
 
         지표를 못 내는 대상은 결과에서 빠진다. **0으로 채우지 않는다** — 표에 줄이 없는 것이
@@ -754,7 +754,7 @@ class MarketBriefingReader:
         """
         snapshots = []
         for subject in self._daily_bars(TECHNICAL_INDEXES, include_watched=True, limit=INDICATOR_HISTORY_BARS):
-            snapshot = technical.summarize(
+            snapshot = indicators.summarize(
                 subject.subject_code,
                 subject.label,
                 subject.bars,

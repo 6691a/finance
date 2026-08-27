@@ -110,8 +110,8 @@ SCHEDULE = "*/10 7-20 * * 1-5"   # KST 평일 07:00~20:50, 10분마다 = UTC 전
 - **`detected_at`은 "최초 감지"로 표시한다.** 공시 시각이 아니다 — DART가 분 단위 접수
   시각을 주지 않아 우리가 처음 본 시각이 상한이다. 표시 시간대는 KST다.
 - 접수번호에 DART 뷰어 링크를 건다.
-  `thesis_domain.DART_VIEWER_URL`을 그대로 import한다. 상수를 두 벌 두지 않는다 —
-  `thesis_domain`은 LangChain을 import하지 않아 브리핑이 끌고 와도 무겁지 않다.
+  `thesis.domain.DART_VIEWER_URL`을 그대로 import한다. 상수를 두 벌 두지 않는다 —
+  `thesis.domain`은 LangChain을 import하지 않아 브리핑이 끌고 와도 무겁지 않다.
 
 ## 5. 선별 — `DisclosurePicker`
 
@@ -199,7 +199,7 @@ DAG이 태스크 안에서 늦게 읽는다. `tests/modules/test_import_weight.p
 - `highlights: []`가 정상 응답으로 통과한다.
 - 실적 렌더 — CFS 우선, `prior_year_amount`가 없으면 YoY 칸이 비고 0이 아니다.
 - 금액 표기 — 조·억 단위와 천 단위 쉼표.
-- `DART_VIEWER_URL`이 `thesis_domain`의 값과 같다.
+- `DART_VIEWER_URL`이 `thesis.domain`의 값과 같다.
 
 `tests/dags/test_slack_disclosure_briefing.py`
 

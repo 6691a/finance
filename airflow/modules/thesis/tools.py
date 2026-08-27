@@ -2,14 +2,14 @@
 
 이 값들은 두 경계를 넘는다 — LLM 프롬프트와 `thesis_evidence.detail` JSONB다. 맨 dict로
 흘리면 키 오타가 런타임까지 살아 있고, 프롬프트에 빈 칸이 실려도 아무도 못 잡는다.
-`thesis_state.py`가 관측 상태에 대해 하는 일을 여기서는 툴 응답에 대해 한다.
+`thesis/state.py`가 관측 상태에 대해 하는 일을 여기서는 툴 응답에 대해 한다.
 
-**`thesis_state.py`에 넣지 않는 이유.** 그 모듈이 따로 있는 까닭은 `thesis.py`(LangChain)와
-`thesis_common.py`(Airflow)가 서로를 모듈 수준에서 import할 수 없어서인데, 툴 응답 모델은
+**`thesis/state.py`에 넣지 않는 이유.** 그 모듈이 따로 있는 까닭은 `thesis.py`(LangChain)와
+`thesis/common.py`(Airflow)가 서로를 모듈 수준에서 import할 수 없어서인데, 툴 응답 모델은
 `thesis.py`만 쓴다. 그렇다고 이미 2950줄인 `thesis.py`에 더 얹지도 않는다.
 
-**이 모듈은 LangChain·Airflow·DB를 import하지 않는다.** pydantic과 `modules.technical`,
-`modules.thesis_state`뿐이다.
+**이 모듈은 LangChain·Airflow·DB를 import하지 않는다.** pydantic과 `modules.technical.indicators`,
+`modules.thesis.state`뿐이다.
 
 두 무리로 나뉘고 규칙이 다르다.
 
@@ -26,8 +26,8 @@ from typing import Any, ClassVar
 
 from pydantic import AwareDatetime, BaseModel, ConfigDict, SerializerFunctionWrapHandler, model_serializer
 
-from modules import technical
-from modules.thesis_state import SignalObservation
+from modules.technical import indicators
+from modules.thesis.state import SignalObservation
 
 
 class ToolModel(BaseModel):
@@ -264,7 +264,7 @@ class DailyHistoryPayload(ToolModel):
 
     symbol: str
     bars: tuple[DailyBarRow, ...] = ()
-    technical_snapshot: technical.TechnicalSnapshot | None = None
+    technical_snapshot: indicators.TechnicalSnapshot | None = None
     recent_signals: tuple[SignalObservation, ...] = ()
 
 

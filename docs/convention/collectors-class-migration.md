@@ -121,7 +121,7 @@ airflow/modules/collectors/
 ### 2단계 — 연결·기준 시각·레지스트리를 도는 흐름 코드 (완료, 2026-08-25)
 
 수집기가 아니지만 같은 규칙에 걸리던 곳이다. 기준 구현은
-`airflow/modules/thesis_nxt_review.py`의 `NxtAfterHoursReview`였다 — 그 클래스 docstring이
+`airflow/modules/thesis/nxt_review.py`의 `NxtAfterHoursReview`였다 — 그 클래스 docstring이
 규칙을 그대로 적어 뒀다("연결과 세션 날짜가 상태다… 함수로 두면 인자에 매번 다시 들어간다",
 "기준 시각 계산은 모듈 함수다"). 나머지는 전부 그것의 미적용판이었다.
 
@@ -131,10 +131,10 @@ airflow/modules/collectors/
 | 위치 | 전(반복 인자) | 후 |
 | --- | --- | --- |
 | `modules/thesis.py` | `connection` 12, `run_date` 6, `as_of_at` 4, `run_slot` 4, `registry` 3. `store_theses` 인자 11 | `ThesisStore(connection)` — 조회·저장 열두 개가 메서드. `connection` 0 |
-| `modules/thesis_common.py` | `conn` 7(저장소 최다), `run_date` 3, `as_of_at` 3. `build_and_store` 인자 9 | `ThesisRun(connection, run_date, as_of_at)` — 반복 0, `build_and_store` 인자 6 |
-| `modules/thesis_forecast.py` | `conn` 2, `run_date` 2 | `PreOpenForecast(connection, run_date)` — 반복 0 |
-| `modules/thesis_review.py` | `conn` 2, `run_date` 3 | `PostCloseReview(connection, run_date)` — `run_date` 2(순수 시각 계산 둘) |
-| `modules/expectation.py` | `connection` 3, `dag_run_id` 2, `prompt_version` 2 | `ExpectationStore(connection, prompt_version)` — `connection` 0. 파일은 2026-08-25에 `expectation_domain`·`expectation_extraction`·`expectation_judgment`로 갈렸다 |
+| `modules/thesis/common.py` | `conn` 7(저장소 최다), `run_date` 3, `as_of_at` 3. `build_and_store` 인자 9 | `ThesisRun(connection, run_date, as_of_at)` — 반복 0, `build_and_store` 인자 6 |
+| `modules/thesis/forecast.py` | `conn` 2, `run_date` 2 | `PreOpenForecast(connection, run_date)` — 반복 0 |
+| `modules/thesis/review.py` | `conn` 2, `run_date` 3 | `PostCloseReview(connection, run_date)` — `run_date` 2(순수 시각 계산 둘) |
+| `modules/expectation.py` | `connection` 3, `dag_run_id` 2, `prompt_version` 2 | `ExpectationStore(connection, prompt_version)` — `connection` 0. 파일은 2026-08-25에 `expectation/domain`·`expectation/extraction`·`expectation/judgment`로 갈렸다 |
 | `modules/assessment.py` | `connection` 3, `prompt_revision` 2. `store_assessment` 인자 8 | `AssessmentStore(connection, prompt_revision)` — 반복 0, `store` 인자 6 |
 | `modules/briefing/market.py` | `connection` 6, `now` 5 | `MarketBriefingReader(connection, now)`(2026-08-24 선행) |
 | `modules/briefing/ops.py` | `now` 4, `connection` 1 | `OpsBriefingReader(connection, now)` — `now` 2(렌더러) |
@@ -236,8 +236,8 @@ import하므로 이제 `monkeypatch.setattr(kis_quote, "send_get", ...)`다. 형
 
 | 위치 | 겉보기 신호 | 제외 이유 |
 | --- | --- | --- |
-| `modules/technical.py` | `bars`·`period` 각 3 | 호출마다 바뀌는 **입력**이지 상태가 아니다. 규칙상 메서드 인자에 해당한다 |
-| `modules/technical_signals.py` | — | 최상위 함수가 `detect_and_store` 하나. 반복 0 |
+| `modules/technical/indicators.py` | `bars`·`period` 각 3 | 호출마다 바뀌는 **입력**이지 상태가 아니다. 규칙상 메서드 인자에 해당한다 |
+| `modules/technical/signals.py` | — | 최상위 함수가 `detect_and_store` 하나. 반복 0 |
 | `modules/market_session.py` | `connection` 3, `session_date` 3 | `krx_open_day`·`us_equity_open_day`가 `market_open_day`의 한 줄 래퍼다. DB를 만지는 건 하나뿐이고 각 DAG은 하나만 부른다 |
 | `modules/dedup.py` | `connection` 3 | `link_duplicates`가 유일한 진입점이고 나머지는 순수 판정이다. DAG은 그 한 줄만 부른다 |
 | `modules/llm.py` | — | 규칙이 명시적으로 함수라고 못박은 자리다. 모델 정의와 오류 분류는 감쌀 상태가 없고 **API 키를 우리가 안 쥔다** |
@@ -272,8 +272,8 @@ import하므로 이제 `monkeypatch.setattr(kis_quote, "send_get", ...)`다. 형
 
 | 파일 | 유지 이유 |
 | --- | --- |
-| `airflow/modules/thesis_tools.py` | 작은 Pydantic DTO 카탈로그이며 운영 소비자가 `thesis_toolbox.py` 하나뿐 |
-| `airflow/modules/thesis_state.py` | 관측 상태·XCom 계약을 모은 의존성 방화벽이며 아홉 파일이 쓴다 |
+| `airflow/modules/thesis/tools.py` | 작은 Pydantic DTO 카탈로그이며 운영 소비자가 `thesis/toolbox.py` 하나뿐 |
+| `airflow/modules/thesis/state.py` | 관측 상태·XCom 계약을 모은 의존성 방화벽이며 아홉 파일이 쓴다 |
 | `airflow/modules/collectors/indicator/ecos.py` | 한 제공처의 wire model과 collector가 응집돼 있음 |
 | `airflow/modules/assessment.py` | 두 LangGraph 클래스와 DTO가 하나의 평가 배치 흐름을 구성 |
 | `airflow/modules/collectors/document/dart.py` | 한 인증·전송 계약 아래 공시와 실적 파서가 이미 함수 경계로 갈려 있음 |
@@ -326,13 +326,13 @@ uv run pyrefly check
 
 - 2단계 표의 신호 열을 **줄 수에서 반복 인자 개수로** 바꿨다. 줄 수는 커밋마다 낡는다.
 - `modules/expectation.py`가 표에 없었다. 문서 작성 뒤 생겼고 `assessment.py`와 같은 모양이다.
-- `thesis_nxt_review.py`의 `NxtAfterHoursReview`를 2단계 기준 구현으로 명시했다.
+- `thesis/nxt_review.py`의 `NxtAfterHoursReview`를 2단계 기준 구현으로 명시했다.
   그 커밋이 형제 모듈을 안 건드려서 세 슬롯 중 하나만 클래스인 비대칭이 남아 있었다.
 - 인자 개수를 다시 셌다. `build_and_store` 8→9(`past` 추가), `store_theses` 10→11
   (`precedents` 추가)로 문서보다 늘어 있었다.
 - Protocol 중복 18→20파일.
 - `modules/briefing/documents.py`를 표에서 뺐고, `migrations/env.py`·`heartbeat.py`·
-  `technical_signals.py`·`market_session.py`·`dedup.py`를 검토해 "함수로 두는 것이 맞는"으로
+  `technical/signals.py`·`market_session.py`·`dedup.py`를 검토해 "함수로 두는 것이 맞는"으로
   판정했다.
 
 남은 것은 3단계(수집기 아홉 모듈의 폴더 이동)와 규칙 밖 정리 둘(`modules/db.py`,

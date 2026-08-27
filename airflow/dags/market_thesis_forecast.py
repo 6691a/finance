@@ -16,7 +16,7 @@
 **시각은 전제이지 보장이 아니다.** 선행 DAG에 재시도가 있어 그 시각을 넘길 수 있다.
 그래서 `build_thesis` 안에 readiness guard가 있고 이 DAG도 재시도를 셋 갖는다.
 
-`build_thesis`는 `execution_timeout` 30분(`thesis_common.BUILD_TIMEOUT`)이다. 요청 타임아웃은
+`build_thesis`는 `execution_timeout` 30분(`common.BUILD_TIMEOUT`)이다. 요청 타임아웃은
 모델 호출 하나만 막고 한 빌드는 모델을 여러 번 부르므로, 이것이 없으면 느린 실행이 개장을
 한참 넘겨도 Airflow는 기다린다.
 
@@ -72,7 +72,7 @@ from typing import Any
 import pendulum
 from airflow.sdk import dag, task
 
-from modules import thesis_common, thesis_forecast
+from modules.thesis import common, forecast
 from modules.utility import KST_TIMEZONE
 
 
@@ -84,20 +84,20 @@ from modules.utility import KST_TIMEZONE
     start_date=pendulum.datetime(2026, 8, 21, tz=KST_TIMEZONE),  # KST 2026-08-21 00:00 = UTC 2026-08-20 15:00
     catchup=False,
     max_active_runs=1,
-    default_args=thesis_common.DEFAULT_ARGS,
-    params=thesis_common.run_date_param(),
+    default_args=common.DEFAULT_ARGS,
+    params=common.run_date_param(),
     doc_md=__doc__,
     tags=["thesis", "llm", "market", "korea"],
 )
 def market_thesis_forecast():
-    @task(task_display_name="추론 생성", execution_timeout=thesis_common.BUILD_TIMEOUT)
+    @task(task_display_name="추론 생성", execution_timeout=common.BUILD_TIMEOUT)
     def build_thesis() -> dict[str, Any]:
         # XCom 경계다. Airflow가 Pydantic 모델을 어떻게 직렬화하는지에 기대지 않는다.
-        return thesis_forecast.build().model_dump(mode="json")
+        return forecast.build().model_dump(mode="json")
 
     @task(task_display_name="Slack 발송")
     def notify_slack(built: dict[str, Any]) -> str:
-        return thesis_common.notify_slack(built)
+        return common.notify_slack(built)
 
     notify_slack(build_thesis())
 

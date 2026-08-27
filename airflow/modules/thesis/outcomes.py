@@ -1,9 +1,9 @@
 """사후 평가 — 지평별 해설과 판정, `FollowupNarrator`.
 
-지나간 추론을 T+1·3·5에 되돌아본다. **채점 수식은 여기 없다** — `thesis_domain`의
+지나간 추론을 T+1·3·5에 되돌아본다. **채점 수식은 여기 없다** — `thesis.domain`의
 `classify_outcome`·`brier_score`가 순수 함수로 갖는다. LLM은 산문을 쓰는 자리에만 있다.
 
-채점 값을 읽고 쓰는 것은 `thesis_store.ThesisStore`다.
+채점 값을 읽고 쓰는 것은 `thesis.store.ThesisStore`다.
 
 **문장은 여기 없다.** 해설 프롬프트는 `modules/prompts/thesis_narrative.yaml`이 갖는다.
 읽는 방법은 `modules/prompt.py`에 있다. **여기 문장에는 판이 붙는다** — 고치면
@@ -71,7 +71,7 @@ from modules import llm
 from modules.llm import UnsupportedResponseFormat
 from modules.prompt import read_prompt
 from modules.schema import SchemaError, json_object, response_format
-from modules.thesis_domain import (
+from modules.thesis.domain import (
     MAX_TOOL_CALLS,
     SLOT_LABELS,
     Subject,
@@ -81,13 +81,13 @@ from modules.thesis_domain import (
     _shorten_to,
     kst_label,
 )
-from modules.thesis_generation import (
+from modules.thesis.generation import (
     _text,
 )
-from modules.thesis_state import (
+from modules.thesis.state import (
     RunSlot,
 )
-from modules.thesis_toolbox import (
+from modules.thesis.toolbox import (
     ThesisToolbox,
     tool_node,
 )

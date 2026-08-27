@@ -6,7 +6,7 @@
 -- `receipt_date`가 아니라 `detected_at`으로 거른다. 접수일은 날짜뿐이라 창의 끝을 시각으로
 -- 자를 수 없고, 우리가 실제로 알 수 있었던 시점은 감지 시각이다.
 --
--- 뷰어 URL은 여기서 만들지 않는다. 접수번호만 주고 `modules/thesis_toolbox.py`가 붙인다.
+-- 뷰어 URL은 여기서 만들지 않는다. 접수번호만 주고 `modules/thesis/toolbox.py`가 붙인다.
 WITH bounds AS (
     SELECT %s::timestamptz AS window_start,
            %s::timestamptz AS as_of_at

@@ -26,7 +26,7 @@ from langgraph.graph import END, START, StateGraph
 from pydantic import BaseModel, ConfigDict, ValidationError
 
 from modules import llm
-from modules.expectation_domain import (
+from modules.expectation.domain import (
     EVENT_METRICS,
     PERIOD_KEY_PATTERN,
     ExtractionError,

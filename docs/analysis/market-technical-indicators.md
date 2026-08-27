@@ -1,7 +1,7 @@
 # 국내 기술적 보조지표·매매 신호
 
 - 날짜: 2026-08-23 (검토 반영)
-- 상태: **구현 완료.** `airflow/modules/technical.py`(계산)·`technical_signals.py`(검출·저장),
+- 상태: **구현 완료.** `airflow/modules/technical/indicators.py`(계산)·`technical/signals.py`(검출·저장),
   `airflow/dags/technical_signal_daily.py`, `apps/models/analysis/technical.py`의 `TechnicalSignal`,
   리비전 `c9f4b2e70a18`까지 있다. 남은 것은 코드가 아니라 관측이다 — 12.6절 SQL로 신호 셋의
   지평별 적중률을 본다
@@ -99,7 +99,7 @@ KIS 국내주식업종기간별시세
 stock_investor_trade_daily ────┼─> technical/select_history.sql
   watched 국내 종목            │       │
                                │       ▼
-                               └─> modules/technical.py
+                               └─> modules/technical/indicators.py
                                         │
                   ┌─────────────────────┼─────────────────────┐
                   ▼                     ▼                     ▼
@@ -117,7 +117,7 @@ stock_investor_trade_daily ────┼─> technical/select_history.sql
 
 1. 수집기는 외부 응답을 검증해 원천 일봉만 저장한다.
 2. SQL은 지수와 종목의 서로 다른 컬럼명을 한 모양으로 읽는다.
-3. `modules/technical.py`는 DB·Airflow·LLM을 import하지 않는 순수 계산 모듈이다. 지표 snapshot과
+3. `modules/technical/indicators.py`는 DB·Airflow·LLM을 import하지 않는 순수 계산 모듈이다. 지표 snapshot과
    신호 검출이 **같은 시리즈 계산**을 쓴다. 두 벌이 되면 Slack의 SMA와 신호의 SMA가 어긋나는 날이 온다.
 4. thesis만 방향 확률을 만든다. 기술지표 모듈과 Slack 표는 관측값을 해석하지 않는다. 신호는
    "교차가 일어났다"는 사건이지 "사라" 판정이 아니고, 그 사건이 유효했는지는 사후 수익률이 답한다.
@@ -472,7 +472,7 @@ signals: tuple[RecentSignal, ...] = ()   # 12.4절. symbol, signal_date, kind, d
 **Files:**
 
 - Create: `tests/modules/test_technical.py`
-- Create: `airflow/modules/technical.py`
+- Create: `airflow/modules/technical/indicators.py`
 
 - [ ] `test_technical.py`에 120봉 고정 벡터, 평평한 가격(RSI 50), 59봉 미만, 거래량 결측·0, 날짜 역순·중복, NaN·무한대, 35% 초과 가격 단절 테스트를 먼저 작성한다.
 - [ ] 실패를 확인한다.
@@ -487,7 +487,7 @@ uv run pytest tests/modules/test_technical.py -q
 
 ```bash
 uv run pytest tests/modules/test_technical.py -q
-uv run ruff check airflow/modules/technical.py tests/modules/test_technical.py
+uv run ruff check airflow/modules/technical/indicators.py tests/modules/test_technical.py
 ```
 
 ### Task 2: KIS 지수 일봉 수집을 기존 collector에 추가한다
@@ -554,7 +554,7 @@ uv run ruff check airflow/dags/kis_index_daily.py tests/dags/test_kis_index_dail
 - Create: `airflow/sql/postgres/technical/select_symbols.sql`
 - Delete: `airflow/sql/postgres/quote_daily/select_thesis_history.sql`
 - Delete: `airflow/sql/postgres/quote_daily/select_thesis_symbols.sql`
-- Modify: `airflow/modules/thesis_toolbox.py`
+- Modify: `airflow/modules/thesis/toolbox.py`
 - Modify: `tests/modules/test_thesis_pipeline.py`
 
 - [ ] `test_thesis_pipeline.py`에 국내 지수와 watched 종목이 같은 응답 계약으로 나오는지, raw bars는 요청한 `days`만 나오고 계산에는 120봉을 쓰는지, 60봉 미만이면 snapshot만 `null`인지 먼저 테스트한다.
@@ -576,7 +576,7 @@ uv run pytest tests/modules/test_thesis_pipeline.py -q
 
 ```bash
 uv run pytest tests/modules/test_technical.py tests/modules/test_thesis_pipeline.py -q
-uv run ruff check airflow/modules/technical.py airflow/modules/thesis_toolbox.py tests/modules/test_technical.py tests/modules/test_thesis_pipeline.py
+uv run ruff check airflow/modules/technical/indicators.py airflow/modules/thesis/toolbox.py tests/modules/test_technical.py tests/modules/test_thesis_pipeline.py
 ```
 
 ### Task 5: 한국장 Slack에 기술적 관측 표를 추가한다
@@ -687,7 +687,7 @@ Task 1~6이 지표 층이고 아래 Task 7~11이 신호 층(12절)이다. 신호
 
 **Files:**
 
-- Modify: `airflow/modules/technical.py`
+- Modify: `airflow/modules/technical/indicators.py`
 - Modify: `tests/modules/test_technical.py`
 
 - [ ] 고정 벡터를 먼저 쓴다. 종가가 60봉 내림(120→61) 뒤 60봉 오름(61→120)인 계단형에서 `sma_cross` up이 정확히 한 번, 계산한 날짜에 나는지. 5.3 단조 증가 벡터에서는 `sma_cross`·`macd_cross`가 0건이고 RSI가 100에 붙어 `rsi_reversal`도 0건인지. MACD 교차와 RSI 30 재돌파는 각각 작은 손제작 벡터로 잡는다. 같은 날 셋이 동시에 나도 셋 다 돌려주는지. `scan_bars=1`이면 마지막 봉만, `scan_bars=5`면 마지막 다섯 봉의 사건을 전부 돌려주는지. 60봉 미만·35% 단절이면 빈 리스트인지.
@@ -702,7 +702,7 @@ uv run pytest tests/modules/test_technical.py -q
 
 ```bash
 uv run pytest tests/modules/test_technical.py -q
-uv run ruff check airflow/modules/technical.py tests/modules/test_technical.py
+uv run ruff check airflow/modules/technical/indicators.py tests/modules/test_technical.py
 ```
 
 ### Task 8: `technical_signal` 모델과 수기 리비전
@@ -729,7 +729,7 @@ uv run ruff check apps migrations tests
 
 **Files:**
 
-- Create: `airflow/modules/technical_signals.py`
+- Create: `airflow/modules/technical/signals.py`
 - Create: `airflow/sql/postgres/technical_signal/upsert.sql`
 - Create: `airflow/dags/technical_signal_daily.py`
 - Create: `tests/modules/test_technical_signals.py`
@@ -743,7 +743,7 @@ uv run ruff check apps migrations tests
 
 ```bash
 uv run pytest tests/modules/test_technical_signals.py tests/dags/test_technical_signal_daily.py -q
-uv run ruff check airflow/modules/technical_signals.py airflow/dags/technical_signal_daily.py tests
+uv run ruff check airflow/modules/technical/signals.py airflow/dags/technical_signal_daily.py tests
 ```
 
 ### Task 10: Slack 표에 신호 열을 붙인다
@@ -769,7 +769,7 @@ uv run ruff check airflow/modules/briefing/market.py tests/modules/test_briefing
 **Files:**
 
 - Create: `airflow/sql/postgres/technical_signal/select_thesis_recent.sql`
-- Modify: `airflow/modules/thesis_toolbox.py`
+- Modify: `airflow/modules/thesis/toolbox.py`
 - Modify: `tests/modules/test_thesis_pipeline.py`
 - Modify: `docs/analysis/market-thesis/2-agent.md`
 - Modify: `docs/analysis/market-thesis/TUNING.md`
@@ -902,10 +902,10 @@ def detect_signals(
 - 자동 실행은 KRX 휴장일이면 skip — `kis_index_daily`와 같은 guard를 쓴다. 수동 실행은 guard를 타지 않는다.
 - Param `scan_bars`: 기본 5, 최소 1, 최대 `SIGNAL_SCAN_BARS_MAX`(120). `title`·`description` 필수. upsert라 재검출은 무해하므로 기본값을 1이 아니라 5로 둬서 앞단이 하루 늦게 복구돼도 사건이 빠지지 않는다. 초기 백필은 120.
 - 조회는 6절 `technical/select_history.sql` 한 번 — `symbols=["KOSPI", "KOSDAQ"]`, `include_watched=true`, `as_of_at=now`, `limit=120`. 새 조회 SQL을 만들지 않는다.
-- 새 모듈 `airflow/modules/technical_signals.py`가 "조회 → subject별 오름차순 정렬 → `detect_signals()` → `technical_signal/upsert.sql`"을 한다. 국내 KIS 행에는 `max_abs_daily_change_pct=35.0`을 준다(Task 4와 같음). subject마다 `atomic(connection)`이다.
+- 새 모듈 `airflow/modules/technical/signals.py`가 "조회 → subject별 오름차순 정렬 → `detect_signals()` → `technical_signal/upsert.sql`"을 한다. 국내 KIS 행에는 `max_abs_daily_change_pct=35.0`을 준다(Task 4와 같음). subject마다 `atomic(connection)`이다.
 - 실패 판정은 "항목별 실패 수집"이다. 60봉 미만 subject는 건너뛰고 이름을 모아 로그에 남긴다. **전부 건너뛰면 `AirflowFailException`** — 조용한 성공을 만들지 않는다. 계산·DB 예외는 그대로 올린다.
 - `dag_display_name="📐 국내 기술적 매매 신호 (계산)"`, 한 문장 `description`, `doc_md=__doc__`.
-- `technical.py`는 계속 DB·Airflow를 모른다. 연결을 쥐는 것은 `technical_signals.py`뿐이다.
+- `technical/indicators.py`는 계속 DB·Airflow를 모른다. 연결을 쥐는 것은 `technical/signals.py`뿐이다.
 
 ### 12.4 Slack
 
@@ -1003,7 +1003,7 @@ ORDER BY kind, direction, rule_version, horizon;
 | 14.1 신호 개수 | 관측 상태는 30일·최대 3건, 툴은 90일·`MAX_TOOL_RESULTS` | 관측 상태가 사건 목록으로 채워지지 않게 묶었다 |
 | 12.3 실패 판정 | "60봉 미만은 건너뛴다"에 더해 **조회가 0행이어도 실패**시킨다 | 볼 대상이 하나도 없는 것은 앞단 수집이 빈 것이다. 건너뜀과 원천 부재를 다른 예외 메시지로 가른다 |
 | Task 5 표 | `신호` 열을 Task 10에서 더했다 | 표 자체(Task 5)와 신호 열(Task 10)의 앞단이 달라 순서를 지켰다 |
-| 관측 상태·과거 추론의 반환 타입 | `dict[str, Any]` → `thesis_state.py`의 Pydantic 모델(`ObservedState`·`NxtObservedState`·`TechnicalState`·`PastThesis` 등) | 사용자 요청(2026-08-24). 프롬프트와 JSONB 둘로 나가는 값이라 키 오타가 조용히 살아남으면 안 된다. 규칙은 `.claude/CLAUDE.md`·`.codex/AGENTS.md`의 "함수가 돌려주는 데이터 모양은 Pydantic 모델이다"에 적었고, 남은 곳도 2026-08-24에 함께 옮겼다(툴 응답은 `thesis_tools.py`) |
+| 관측 상태·과거 추론의 반환 타입 | `dict[str, Any]` → `thesis/state.py`의 Pydantic 모델(`ObservedState`·`NxtObservedState`·`TechnicalState`·`PastThesis` 등) | 사용자 요청(2026-08-24). 프롬프트와 JSONB 둘로 나가는 값이라 키 오타가 조용히 살아남으면 안 된다. 규칙은 `.claude/CLAUDE.md`·`.codex/AGENTS.md`의 "함수가 돌려주는 데이터 모양은 Pydantic 모델이다"에 적었고, 남은 곳도 2026-08-24에 함께 옮겼다(툴 응답은 `thesis/tools.py`) |
 | `technical` 블록의 모양 | `{"as_of_date": ..., "KOSPI": {...}}` → `{"as_of_date": ..., "subjects": {"KOSPI": {...}}}` | 위 전환의 따라오는 변경. 기준일과 대상 코드가 같은 층에 섞이면 모델로 표현할 수 없다. 14.4절 평가 SQL의 경로도 `-> 'technical' -> 'subjects' -> subject_code`로 고쳤다 |
 
 `ruff format`은 저장소가 강제하지 않는다(기존 파일 다수가 미포맷). 새로 만든 파일만 포맷했다.
@@ -1014,16 +1014,16 @@ ORDER BY kind, direction, rule_version, horizon;
 - `quote_symbol` 시드에 `kis/005930`·`kis/000660`이 `equity`로 있다. 6절 두 번째 UNION의 JOIN이 종목 행을 떨어뜨리지 않는다.
 - `quote_daily` 뷰는 `created_at`을 갖는다(`e5b2d7a41c93` `DAILY_COLUMNS`). 6절의 cutoff가 동작한다.
 - 5.3 고정 벡터는 손으로 다시 계산해 맞다. 선형 종가에 SMA 시드 EMA는 처음부터 정상 상태(`t - (n-1)/2`)라 MACD가 정확히 7.0이다.
-- `MIN_HISTORY_DAYS=1`·`MAX_HISTORY_DAYS=30`·`MAX_TOOL_CALLS`(전부 `thesis_domain.py`. 상한은 2026-08-25에 20, 2026-08-26에 32로 올랐다) — 7.1절과 같다.
+- `MIN_HISTORY_DAYS=1`·`MAX_HISTORY_DAYS=30`·`MAX_TOOL_CALLS`(전부 `thesis/domain.py`. 상한은 2026-08-25에 20, 2026-08-26에 32로 올랐다) — 7.1절과 같다.
 - `kis_investor_trade_daily`의 `pages` Param은 최소 1이고 상한이 없다. Task 6의 `pages: 5`(150거래일)가 된다.
 
 ## 14. LLM 추론·평가에서 쓰는 방법
 
-지표와 신호를 만들어 두는 것만으로는 추론이 나아지지 않는다. 모델이 **언제 무엇을 보고**, 그것을 **어떻게 인용하고**, 그 인용이 **실제로 도움이 됐는지**를 잴 수 있어야 한다. 세 층을 각각 정한다. 기준 구현은 `thesis_common.observed_state`(관측 상태), `ThesisToolbox`(툴·근거 레지스트리), `thesis_outcome`·`thesis_evidence`(채점·인용 기록)다.
+지표와 신호를 만들어 두는 것만으로는 추론이 나아지지 않는다. 모델이 **언제 무엇을 보고**, 그것을 **어떻게 인용하고**, 그 인용이 **실제로 도움이 됐는지**를 잴 수 있어야 한다. 세 층을 각각 정한다. 기준 구현은 `thesis.common.observed_state`(관측 상태), `ThesisToolbox`(툴·근거 레지스트리), `thesis_outcome`·`thesis_evidence`(채점·인용 기록)다.
 
 ### 14.1 추론 입력 — 관측 상태에 싣고(push), 이력은 툴로(pull)
 
-지금 관측 상태(`thesis_common.py:162`)는 subject별 세션 종가·등락률만 준다. 지표는 7.1절대로 `daily_history` 툴로만 받는다. 그런데 **추론 대상이 곧 지표 대상**(KOSPI·KOSDAQ·watched 종목)이라, 툴로만 두면 모델이 실행당 12회 상한 중 대상 수만큼을 같은 조회에 쓰거나 아예 안 본다. 둘 다 나쁘다.
+지금 관측 상태(`thesis/common.py:162`)는 subject별 세션 종가·등락률만 준다. 지표는 7.1절대로 `daily_history` 툴로만 받는다. 그런데 **추론 대상이 곧 지표 대상**(KOSPI·KOSDAQ·watched 종목)이라, 툴로만 두면 모델이 실행당 12회 상한 중 대상 수만큼을 같은 조회에 쓰거나 아예 안 본다. 둘 다 나쁘다.
 
 그래서 관측 상태에 `technical` 블록을 **함께 싣는다.**
 
@@ -1049,21 +1049,21 @@ ORDER BY kind, direction, rule_version, horizon;
 ```
 
 - 값은 7.2절 Slack 표와 **같은 다섯 칸**이다. 절대값(`sma20=3160.2`)이 아니라 비율로 준다 — 모델이 "종가가 SMA20 위인가"를 계산하지 않고 읽게 하기 위해서다. 절대값이 필요하면 툴이 있다.
-- **모양은 `modules/thesis_state.py`의 Pydantic 모델이 정한다.** `ObservedState`·`TechnicalState`·
+- **모양은 `modules/thesis/state.py`의 Pydantic 모델이 정한다.** `ObservedState`·`TechnicalState`·
   `TechnicalObservation`·`SignalObservation`이고, JSON이 되는 것은 프롬프트 조립과 저장
   경계에서 `model_dump(mode="json")` 한 번뿐이다. 대상별 값이 `subjects` 아래로 한 단 들어간
   이유가 이것이다 — `as_of_date`와 대상 코드가 같은 층에 섞이면 모델로 표현할 수 없다.
 - `as_of_date`는 블록에 하나다. 6절 cutoff(`created_at <= as_of_at`) 때문에 장후 슬롯(15:30)은 전일까지의 값이고, 장전(08:35)은 전 영업일 값이다. 프롬프트가 이 칸을 가리켜 "이 날짜 마감 기준"이라고 알린다(프로젝트 규칙 — 섞인 시간대·기준일은 프롬프트가 직접 알린다).
 - 60봉 미만·가격 단절이면 그 subject의 `technical`은 `null`이다. 빈 dict나 0으로 채우지 않는다 — 모델이 "지표가 중립"으로 읽는다.
 - `recent_signals`는 최근 20거래일이다(툴의 60거래일보다 짧다 — 관측 상태는 "지금 상태"고 툴은 "이력"이다).
-- 계산은 `technical.summarize()`·`technical_signal/select_thesis_recent.sql`을 그대로 쓴다. `observed_state`가 커지므로 `technical_state(conn, session, as_of_at, targets)`를 `thesis_common.py`에 함수로 따로 두고 `observed_state`가 합친다. 슬롯으로 갈리지 않는다 — 세션·기준 시각은 부르는 쪽(`thesis_forecast.py:101`, `thesis_review.py:90`)이 이미 정해 넘긴다. `thesis_nxt_review`도 같은 함수를 쓴다(종목만).
+- 계산은 `technical.summarize()`·`technical_signal/select_thesis_recent.sql`을 그대로 쓴다. `observed_state`가 커지므로 `technical_state(conn, session, as_of_at, targets)`를 `thesis/common.py`에 함수로 따로 두고 `observed_state`가 합친다. 슬롯으로 갈리지 않는다 — 세션·기준 시각은 부르는 쪽(`thesis/forecast.py:101`, `thesis/review.py:90`)이 이미 정해 넘긴다. `thesis.nxt_review`도 같은 함수를 쓴다(종목만).
 - `daily_history` 툴은 그대로 둔다. 추론 대상이 아닌 심볼(해외 일봉), 30일 bars, 60거래일 신호 이력은 툴 몫이다.
 
 관측 상태는 `thesis.input_state`(JSONB)에 그대로 저장된다. 그래서 **14.4절의 평가에 스키마 변경이 필요 없다** — 어떤 지표 체제에서 추론했는지가 행마다 남는다.
 
 ### 14.2 프롬프트 — 읽는 법을 알려 주되 결론을 주지 않는다
 
-`SYSTEM_PROMPT`(`thesis_generation.py`)에 절 하나를 더한다. 초안:
+`SYSTEM_PROMPT`(`thesis/generation.py`)에 절 하나를 더한다. 초안:
 
 ```text
 ## 기술적 관측
@@ -1164,14 +1164,14 @@ Task 11 뒤다. 둘 다 테스트 먼저.
 
 **Task 12: 관측 상태 `technical` 블록과 프롬프트**
 
-- Modify: `airflow/modules/thesis_common.py`, `airflow/modules/thesis_generation.py`(`SYSTEM_PROMPT`), `tests/modules/test_thesis_common.py`, `tests/modules/test_thesis_pipeline.py`
+- Modify: `airflow/modules/thesis/common.py`, `airflow/modules/thesis/generation.py`(`SYSTEM_PROMPT`), `tests/modules/test_thesis_common.py`, `tests/modules/test_thesis_pipeline.py`
 - [ ] `technical_state()`가 subject마다 14.1절 모양을 내고, 60봉 미만이면 `null`이고, `created_at > as_of_at` 봉·신호를 보지 않고, 세 슬롯 모듈이 같은 함수를 부르는지 먼저 테스트한다.
 - [ ] `SYSTEM_PROMPT`에 임계 상수가 f-string으로 들어가고 `RSI_OVERBOUGHT`·`RSI_OVERSOLD`가 12.1절과 같은 객체인지 테스트한다.
 - [ ] 구현 뒤 `tests/modules/test_thesis*.py` 통과. `PROMPT_VERSION`은 같은 릴리스면 `"3"` 유지.
 
 **Task 13: 신호 인용**
 
-- Modify: `airflow/modules/thesis_domain.py`(`ThesisEvidenceKind`)·`thesis_toolbox.py`(`ThesisToolbox.register`, `_tool_daily_history`), `apps/models/analysis/thesis.py`(`ThesisEvidenceKind`, CHECK), Task 8 리비전, `tests/modules/test_thesis_pipeline.py`, `tests/migrations/`
+- Modify: `airflow/modules/thesis/domain.py`(`ThesisEvidenceKind`)·`thesis/toolbox.py`(`ThesisToolbox.register`, `_tool_daily_history`), `apps/models/analysis/thesis.py`(`ThesisEvidenceKind`, CHECK), Task 8 리비전, `tests/modules/test_thesis_pipeline.py`, `tests/migrations/`
 - [ ] `recent_signals` 항목이 `technical_signal:<id>` ref로 레지스트리에 들어가고, 모델이 그 ref를 `claims`에 쓰면 `thesis_evidence`에 `direction`·`mechanism`과 함께 저장되고, 레지스트리 밖 ref는 버려지는지 먼저 테스트한다.
 - [ ] offline SQL에 `ck_thesis_evidence_kind`가 `technical_signal`을 포함하는지 테스트한다.
 - [ ] `docs/analysis/market-thesis/2-agent.md`의 근거 종류 표에 `technical_signal`을 더한다.

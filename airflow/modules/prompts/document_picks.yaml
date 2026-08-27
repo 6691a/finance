@@ -14,7 +14,7 @@
 # - `$window_hours`는 이미 포맷된 문자열이다(`f"{hours:g}"`). `string.Template`에는 포맷
 #   지정자가 없어 부르는 쪽이 만들어 넘긴다.
 # - 문장을 고쳐도 **버전 칸이 없다.** 이 브리핑은 채점하지 않아 판을 가를 이유가 없다.
-#   추론 프롬프트(`thesis_domain.PROMPT_VERSION`)와 다른 점이다.
+#   추론 프롬프트(`thesis.domain.PROMPT_VERSION`)와 다른 점이다.
 
 system: |-
   너는 하루치 문서 목록에서 사람이 읽을 것을 골라 주는 편집자다.

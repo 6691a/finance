@@ -30,7 +30,7 @@ SELECT
           AND outcome.evaluated_at IS NULL
     ) AS ungraded,
     -- 슬롯 목록 둘은 `select_pending_grades.sql`·`select_pending_narratives.sql`과
-    -- **같아야 한다.** 그래서 리터럴이 아니라 파라미터이고 원본은 `thesis_state`의
+    -- **같아야 한다.** 그래서 리터럴이 아니라 파라미터이고 원본은 `thesis.state`의
     -- `FORECAST_SLOTS`·`NARRATED_SLOTS`다. 해설을 만들지 않는 슬롯(post_nxt_close)이
     -- 목록에 남으면 목표일이 지난 뒤 영영 밀림으로 잡혀 이 숫자가 매일 자라고,
     -- 위 머리말이 경고한 "아무도 안 보게 된다"가 그대로 일어난다.

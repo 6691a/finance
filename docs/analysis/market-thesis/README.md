@@ -70,19 +70,19 @@ requirements) **배포 단위(worktree/PR 하나)마다 문서를 나눴다.** �
 
 | 순서 | 문서 | 산출물 | 의존 | LLM |
 | --- | --- | --- | --- | --- |
-| 1 | [1-storage.md](1-storage.md) | `apps/models/analysis/thesis.py`, 수기 리비전, `thesis/*.sql`·`thesis_evidence/*.sql`, 세션 등락률 SQL, `thesis_domain.py`의 채점 순수 함수, 스키마·채점 테스트 | 없음 | 없음 |
-| 2 | [2-agent.md](2-agent.md) | `thesis_toolbox.py`의 Toolbox·`thesis_generation.py`의 Builder·`thesis_store.py`의 저장, 툴 SQL 3개, `thesis_model()`, `llm.invoke` tools+schema 가드, `tests/modules/test_thesis_pipeline.py` | 1 | 있음 |
+| 1 | [1-storage.md](1-storage.md) | `apps/models/analysis/thesis.py`, 수기 리비전, `thesis/*.sql`·`thesis_evidence/*.sql`, 세션 등락률 SQL, `thesis/domain.py`의 채점 순수 함수, 스키마·채점 테스트 | 없음 | 없음 |
+| 2 | [2-agent.md](2-agent.md) | `thesis/toolbox.py`의 Toolbox·`thesis/generation.py`의 Builder·`thesis/store.py`의 저장, 툴 SQL 3개, `thesis_model()`, `llm.invoke` tools+schema 가드, `tests/modules/test_thesis_pipeline.py` | 1 | 있음 |
 | 3 | [3-dag-slack.md](3-dag-slack.md) | `dags/market_thesis_forecast.py`·`market_thesis_review.py`, 스케줄, 채점 호출, Slack 렌더링·발송, DAG 테스트. **여기서 첫 운영 발송** | 1, 2 | 있음 |
 | 4 | [4-graph.md](4-graph.md) | `airflow/modules/graph.py`, `sync_graph` 태스크, `sync_only` Param, compose·requirements, `tests/modules/test_graph.py` | 1 (3과 병렬 가능) | 없음 |
 | 5 | [5-followup.md](5-followup.md) | `thesis_outcome` 테이블, 다지평(T+0·1·3·5) 채점, `FollowupNarrator` 사후 해설과 `verdict`, `past_theses` 툴 | 1, 2, 3 | 있음 |
 | 6 | [6-analyst.md](6-analyst.md) | `stock_analyst_opinion` 테이블과 리비전, `collectors/kis_analyst_opinion.py`, `dags/kis_analyst_opinion_daily.py`, `analyst_opinions` 툴, `SourceKind.research`와 네이버 리서치 출처 여섯(`document_listings.py`의 `enrich` 단계), 테스트 | 5 | 없음(리포트는 기존 문서 평가가 읽는다) |
-| 7 | [7-nxt-review.md](7-nxt-review.md) | `post_nxt_close` 슬롯, `thesis_nxt_review.py`, `market_thesis_nxt_review` DAG, 애프터마켓 조회 SQL, 수기 리비전(CHECK 확장) | 1, 2, 3 | 있음 |
-| 8 | [8-expectation.md](8-expectation.md) | `stock_event_claim`·`stock_event_extraction`·`stock_event_outcome`과 수기 리비전, `modules/expectation_domain.py`·`expectation_extraction.py`·`expectation_judgment.py`, `event_expectation_hourly` DAG, `event_surprises` 툴, 컨센서스 수집기(후행) | 2, 6 | 추출만 |
-| 9 | [9-intraday.md](9-intraday.md) | 장중 슬롯 넷과 수기 리비전, `thesis_intraday.py`, `market_thesis_intraday` DAG, 장중 봉·되짚기·채점 SQL 다섯, 채점·해설 슬롯 목록 파라미터화 | 1, 2, 3, 5 | 있음 |
-| 10 | [10-base-rate.md](10-base-rate.md) | 일봉 백필(`kis_index_daily`의 `start_date`), 수정주가 소급 조정 가드와 자동 재백필, `detect_and_store`의 `lookback_bars`, `modules/base_rate.py`, 조회 SQL 둘, `SignalObservation` 확장과 프롬프트 교체 | 1, 2, 5, 9 | 없음(계산은 전부 SQL·파이썬) |
+| 7 | [7-nxt-review.md](7-nxt-review.md) | `post_nxt_close` 슬롯, `thesis/nxt_review.py`, `market_thesis_nxt_review` DAG, 애프터마켓 조회 SQL, 수기 리비전(CHECK 확장) | 1, 2, 3 | 있음 |
+| 8 | [8-expectation.md](8-expectation.md) | `stock_event_claim`·`stock_event_extraction`·`stock_event_outcome`과 수기 리비전, `modules/expectation/domain.py`·`expectation/extraction.py`·`expectation/judgment.py`, `event_expectation_hourly` DAG, `event_surprises` 툴, 컨센서스 수집기(후행) | 2, 6 | 추출만 |
+| 9 | [9-intraday.md](9-intraday.md) | 장중 슬롯 넷과 수기 리비전, `thesis/intraday.py`, `market_thesis_intraday` DAG, 장중 봉·되짚기·채점 SQL 다섯, 채점·해설 슬롯 목록 파라미터화 | 1, 2, 3, 5 | 있음 |
+| 10 | [10-base-rate.md](10-base-rate.md) | 일봉 백필(`kis_index_daily`의 `start_date`), 수정주가 소급 조정 가드와 자동 재백필, `detect_and_store`의 `lookback_bars`, `modules/technical/base_rate.py`, 조회 SQL 둘, `SignalObservation` 확장과 프롬프트 교체 | 1, 2, 5, 9 | 없음(계산은 전부 SQL·파이썬) |
 | 11 | [11-expected-return.md](11-expected-return.md) | `thesis`에 방향별 기대 등락률 두 칸, `thesis_outcome`에 크기 채점 두 칸, 수기 리비전(+`thesis_precedent` 인덱스), `return_error` 순수 함수, 프롬프트 `## 크기` 절과 `PROMPT_VERSION` 7, Slack 결론 줄, ops 브리핑 한 칸 | 1, 2, 3, 5 | 있음(크기 추정만 — 채점은 순수 함수) |
 | 12 | [12-api.md](12-api.md) | `apps/api/`(FastAPI 읽기 전용 조회 API 넷), `compose/prod/api`·`compose/local/api`, `justfile` 태스크 여섯, `tests/api/`·`tests/config/test_api_stack.py`, 프로젝트 가이드 문서의 구조 표 | 1, 5 (11은 선택 — 없으면 응답 칸이 빈다) | 없음 |
-| 13 | [13-llm-ledger.md](13-llm-ledger.md) | `thesis_llm_run`·`thesis_tool_call` 테이블과 수기 리비전(+`thesis`·`thesis_outcome`에 연결 칸), `thesis_toolbox.py`의 기록 래퍼, 생성·해설 흐름의 대화 열고 닫기, SQL 넷, 테스트 | 2, 5, 7 | 없음(기록만) |
+| 13 | [13-llm-ledger.md](13-llm-ledger.md) | `thesis_llm_run`·`thesis_tool_call` 테이블과 수기 리비전(+`thesis`·`thesis_outcome`에 연결 칸), `thesis/toolbox.py`의 기록 래퍼, 생성·해설 흐름의 대화 열고 닫기, SQL 넷, 테스트 | 2, 5, 7 | 없음(기록만) |
 | 14 | [14-web-ui.md](14-web-ui.md) | React·TypeScript 실행 추적·추론 상세·주간 품질 화면, Cytoscape.js 관계 그래프, FastAPI 정적 자산 제공, Grafana 로컬 서비스·대시보드·테스트·문서 제거 | 11, 12, 13 | 없음(조회만) |
 
 **5단계는 1단계의 `thesis` 채점 컬럼을 `thesis_outcome`으로 옮긴다.** 채택했으므로
@@ -99,7 +99,7 @@ requirements) **배포 단위(worktree/PR 하나)마다 문서를 나눴다.** �
   않도록 두 SQL에 슬롯 목록을 걸어야 한다([7-nxt-review.md](7-nxt-review.md) 3절).
 - **9는 반대로 5의 루프 안으로 들어간다.** 장중 슬롯은 예측이라 채점 대상이고 해설도
   받는다. 7이 리터럴로 걸어 둔 슬롯 목록을 그래서 파라미터로 바꿨다 —
-  원본이 `thesis_state`의 `FORECAST_SLOTS`·`NARRATED_SLOTS` 둘이다.
+  원본이 `thesis.state`의 `FORECAST_SLOTS`·`NARRATED_SLOTS` 둘이다.
 - **11은 5의 채점 루프에 칸을 더한다.** 방향 채점(`brier_score`)과 나란히 크기 채점을
   두되 둘을 합치지 않는다([11-expected-return.md](11-expected-return.md) 4절).
 - **13은 12보다 먼저 하는 것이 낫다.** 12의 상세 응답이 원장을 싣기 때문에, 순서를

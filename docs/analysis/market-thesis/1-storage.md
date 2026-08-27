@@ -3,7 +3,7 @@
 - 상위: [README.md](README.md)
 - 의존: 없음. LLM 없음. 이 단계만으로 운영에 나가도 아무 것도 하지 않는 빈 테이블이다.
 - 산출물: `apps/models/analysis/thesis.py`, 수기 리비전, `airflow/sql/postgres/thesis/*.sql`·
-  `thesis_evidence/*.sql`, 세션 등락률 SQL, `airflow/modules/thesis_domain.py`(채점 순수 함수만),
+  `thesis_evidence/*.sql`, 세션 등락률 SQL, `airflow/modules/thesis/domain.py`(채점 순수 함수만),
   `tests/migrations/test_thesis_schema.py`, `tests/modules/test_thesis_pipeline.py`(채점 부분)
 
 ## 1. 테이블
@@ -98,7 +98,7 @@ thesis_evidence (                 -- 추론 → 근거 = 엣지
     동시호가가 빠져 있었다(`collectors/kis.py` `fetch_stock_bars` docstring 실측).
   - 지수: `index_bar`의 15:30 봉 close vs 그 봉의 `previous_close`. `kis_quote_intraday`가
     `*/5 8-16`으로 돌아 16:00이면 확정이다.
-- **수식은 Python 순수 함수다.** `airflow/modules/thesis_domain.py`의 `classify_outcome(return_pct, horizon_days)`·
+- **수식은 Python 순수 함수다.** `airflow/modules/thesis/domain.py`의 `classify_outcome(return_pct, horizon_days)`·
   `brier_score(prob_up, prob_down, prob_flat, outcome)`. SQL에 넣으면 DB 없이 경계값을
   테스트할 수 없다(테스트에서 실 DB를 쓰지 않는 프로젝트 규칙). `select_session_return.sql`이
   등락률을 주고, `update_outcome.sql`은 계산된 값 넷을 쓰기만 한다.

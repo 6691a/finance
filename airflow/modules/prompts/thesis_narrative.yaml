@@ -1,15 +1,15 @@
 # 지나간 추론의 사후 해설·판정(`market_thesis_followup`)의 프롬프트.
 #
-# 읽는 코드: `airflow/modules/thesis_outcomes.py`
+# 읽는 코드: `airflow/modules/thesis/outcomes.py`
 # 설계: `docs/analysis/market-thesis/5-followup.md`
 #
 # ## 고치기 전에 알아야 할 것
 #
-# - **판이 붙는 프롬프트다.** 문장을 고치면 `thesis_outcomes.NARRATIVE_PROMPT_VERSION`을
+# - **판이 붙는 프롬프트다.** 문장을 고치면 `thesis.outcomes.NARRATIVE_PROMPT_VERSION`을
 #   올리고 `tests/modules/test_prompt_versions.py`의 해시도 같은 커밋에서 바꾼다. 판은
 #   `thesis_outcome.prompt_version`에 변형과 함께 저장된다(`2/informed`).
 # - **`{`와 `}`는 그대로 써도 된다.** 치환이 `string.Template`이라 JSON 예시와 안 부딪힌다.
-# - `$max_narrative_chars`는 코드 상수(`thesis_outcomes.MAX_NARRATIVE_CHARS`)에서 온다.
+# - `$max_narrative_chars`는 코드 상수(`thesis.outcomes.MAX_NARRATIVE_CHARS`)에서 온다.
 #   여기에 숫자를 직접 적지 마라 — 두 곳에 적으면 반드시 어긋난다.
 # - `$number_style`은 산문 숫자 표기 규칙 한 벌(`llm.NUMBER_STYLE`)이다.
 # - `$as_of_at`은 **한국 시간 표기**다(`thesis.kst_label`). 저장·조회는 UTC지만 UTC ISO를

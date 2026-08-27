@@ -1,8 +1,8 @@
 """DAG이 모듈 수준에서 끌고 오는 무게.
 
 **DagBag은 파일 하나를 30초 안에 import해야 한다.** LangChain·LangGraph는 그것만으로
-몇 초를 쓰므로, 슬롯 모듈과 `thesis_common`이 모듈 수준에서 그것을 끌고 오면 스케줄러가
-DAG을 못 읽는다. 무거운 것은 `thesis_toolbox`·`thesis_generation`·`thesis_outcomes`에 있고
+몇 초를 쓰므로, 슬롯 모듈과 `thesis.common`이 모듈 수준에서 그것을 끌고 오면 스케줄러가
+DAG을 못 읽는다. 무거운 것은 `thesis.toolbox`·`thesis.generation`·`thesis.outcomes`에 있고
 부르는 쪽이 함수 안에서 늦게 import한다.
 
 `thesis.py`가 한 파일이던 때는 `ThesisSubjectKind` 하나를 쓰려 해도 전체가 딸려 와서
@@ -21,17 +21,17 @@ import sys
 
 # 추론 DAG 태스크가 모듈 수준에서 import하는 것들.
 THESIS_DAG_MODULES = (
-    "modules.thesis_common",
-    "modules.thesis_domain",
-    "modules.thesis_forecast",
-    "modules.thesis_review",
-    "modules.thesis_nxt_review",
+    "modules.thesis.common",
+    "modules.thesis.domain",
+    "modules.thesis.forecast",
+    "modules.thesis.review",
+    "modules.thesis.nxt_review",
 )
 
 # 기대 대비 발표에서 LLM이 없는 쪽. 판정 태스크만 쓰는 코드다.
 EXPECTATION_LIGHT_MODULES = (
-    "modules.expectation_domain",
-    "modules.expectation_judgment",
+    "modules.expectation.domain",
+    "modules.expectation.judgment",
 )
 
 # 공시 알림 DAG이 모듈 수준에서 import하는 것. 강조를 고르는 층은 따로 있고 태스크가
@@ -77,6 +77,6 @@ def test_the_disclosure_briefing_query_side_does_not_import_langchain():
 
 def test_the_llm_modules_are_where_the_weight_lives():
     """반대 방향도 잰다. 무거운 것이 아예 없으면 위 테스트들은 아무 것도 지키지 않는다."""
-    assert _heavy_modules_after_importing(("modules.thesis_generation",))
-    assert _heavy_modules_after_importing(("modules.expectation_extraction",))
+    assert _heavy_modules_after_importing(("modules.thesis.generation",))
+    assert _heavy_modules_after_importing(("modules.expectation.extraction",))
     assert _heavy_modules_after_importing(("modules.briefing.disclosure_picks",))

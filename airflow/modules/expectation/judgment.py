@@ -1,7 +1,7 @@
 """기대와 실제를 대조해 서프라이즈를 판정한다 — 원장과 Slack 표현.
 
 **LLM이 없다.** 실제값 확보 → 발표 전 기대 집계 → 분류 → INSERT가 전부 결정론이고 수식은
-`expectation_domain`의 순수 함수가 갖는다. 그래서 이 모듈은 LangChain을 끌고 오지 않는다.
+`expectation/domain`의 순수 함수가 갖는다. 그래서 이 모듈은 LangChain을 끌고 오지 않는다.
 
 `ExpectationStore`가 연결 하나를 쥔다. 조회·저장·판정이 같은 원장을 보므로 층마다 store를
 따로 두지 않는다.
@@ -19,7 +19,7 @@ from typing import Any
 from pydantic import BaseModel, ConfigDict
 
 from modules.db import Connection, Cursor
-from modules.expectation_domain import (
+from modules.expectation.domain import (
     DEFAULT_BATCH_SIZE,
     EVENT_LABELS,
     METRIC_LABELS,

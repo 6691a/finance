@@ -21,7 +21,7 @@ from apps.models.analysis.thesis import ThesisDirection
 
 
 class TechnicalSignalKind(StrEnum):
-    """매매 신호(사건)의 종류. `modules/technical.py`의 `SignalKind`와 값이 같아야 한다.
+    """매매 신호(사건)의 종류. `modules/technical/indicators.py`의 `SignalKind`와 값이 같아야 한다.
 
     셋을 고른 기준은 서로 다른 렌즈다 — 추세추종(`sma_cross`), 모멘텀(`macd_cross`),
     역추세(`rsi_reversal`). 같은 렌즈를 여럿 두면 적중률 비교가 서로를 설명하지 못한다.
@@ -123,5 +123,5 @@ class TechnicalSignal(EntityBase):
     rule_version: Mapped[str] = mapped_column(
         Text,
         nullable=False,
-        comment="검출 규칙 버전(modules/technical.py의 RULE_VERSION). thesis.prompt_version과 같은 역할이다",
+        comment="검출 규칙 버전(modules/technical/indicators.py의 RULE_VERSION). thesis.prompt_version과 같은 역할이다",
     )

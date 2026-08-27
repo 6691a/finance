@@ -3549,6 +3549,29 @@ def test_a_size_below_the_flat_threshold_is_dropped_not_stored():
     assert normalize_return_pct(0.31) == Decimal("0.31")
 
 
+def test_the_wire_schema_forbids_a_zero_size_but_validation_still_accepts_one():
+    """제공처에 보내는 스키마만 조인다. Pydantic까지 조이면 답 전체가 사라진다.
+
+    2026-08-27 장중 트레이스: 조사 단계가 낸 0.42·0.48이 스키마 강제 재요청에서 전부 `0`으로
+    돌아왔다. `0`은 임계 이하라 버려지고 크기 칸이 매번 비었다. 스키마가 그 값을 애초에
+    못 내게 한다 — 지키지 않는 제공처면 `normalize_return_pct`가 지금처럼 그 칸만 버린다.
+    """
+    from modules.schema import strict_json_schema
+    from modules.thesis.domain import MAX_EXPECTED_RETURN_PCT
+    from modules.thesis.generation import Answers, ThesisAnswer
+
+    field = strict_json_schema(Answers)["$defs"]["ThesisAnswer"]["properties"]["up_return_pct"]
+
+    assert field["exclusiveMinimum"] == float(FLAT_THRESHOLD_PCT[0])
+    assert field["maximum"] == float(MAX_EXPECTED_RETURN_PCT)
+    # `null`은 그대로 낼 수 있다. 크기를 못 대겠으면 비우는 것이 맞다.
+    assert {"type": "null"} in field["anyOf"]
+
+    # 검증은 느슨하다. 규칙을 어긴 크기 하나가 확률과 이유까지 지우면 안 된다.
+    answer = ThesisAnswer(subject_code="KOSPI", prob_up=0.4, prob_down=0.3, prob_flat=0.3, up_return_pct=0)
+    assert answer.up_return_pct == 0
+
+
 def test_a_runaway_size_is_dropped_not_clamped():
     """상한으로 자르면 모델이 부르지 않은 숫자를 우리가 지어내는 것이 된다."""
     from modules.thesis.generation import normalize_return_pct

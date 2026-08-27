@@ -125,6 +125,13 @@ class ClaimAnswer(BaseModel):
     mechanism: str = ""
 
 
+# 크기 칸의 wire 스키마 경계. Pydantic 검증이 아니라 제공처에 보내는 JSON Schema에만 나간다.
+RETURN_BOUNDS = {
+    "exclusiveMinimum": float(FLAT_THRESHOLD_PCT[0]),
+    "maximum": float(MAX_EXPECTED_RETURN_PCT),
+}
+
+
 class ThesisAnswer(BaseModel):
     """모델이 subject 하나에 대해 낸 답. 검증 전 원본이다."""
 
@@ -134,10 +141,18 @@ class ThesisAnswer(BaseModel):
     prob_up: float = Field(ge=0, le=1)
     prob_down: float = Field(ge=0, le=1)
     prob_flat: float = Field(ge=0, le=1)
-    # 방향별 **조건부** 크기다. 확률을 곱한 기대값이 아니다. 상한은 폭주만 막고 정합성
-    # (임계보다 커야 한다)은 저장 전 검증이 본다 — 스키마로 막으면 답 전체가 사라진다.
-    up_return_pct: float | None = Field(default=None, ge=0)
-    down_return_pct: float | None = Field(default=None, ge=0)
+    # 방향별 **조건부** 크기다. 확률을 곱한 기대값이 아니다.
+    #
+    # **Pydantic 검증은 느슨하게 두고 제공처에 보내는 스키마만 조인다.** 여기서 `gt=`로
+    # 막으면 크기 하나가 규칙을 어긴 순간 답 전체가 `ValidationError`가 되어 확률과 이유까지
+    # 사라진다. 정합성은 `normalize_return_pct`가 그 칸만 버리는 것으로 본다.
+    #
+    # `json_schema_extra`는 **wire 스키마에만** 나가고 검증에는 안 걸린다. 제약 디코딩이
+    # 이것을 지키면 모델이 `0`을 낼 수 없다 — 2026-08-27 장중 트레이스에서 조사 단계가 낸
+    # 0.42·0.48이 스키마 강제 재요청에서 전부 `0`으로 돌아왔고, 그 값이 임계 이하라 버려져
+    # 크기 칸이 매번 비어 있었다. 지키지 않는 제공처면 지금과 같다(`0`이 와서 버려진다).
+    up_return_pct: float | None = Field(default=None, ge=0, json_schema_extra=RETURN_BOUNDS)
+    down_return_pct: float | None = Field(default=None, ge=0, json_schema_extra=RETURN_BOUNDS)
     up_reasoning: str = ""
     down_reasoning: str = ""
     flat_reasoning: str = ""

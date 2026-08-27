@@ -77,7 +77,9 @@ SOURCE = "boe"
 
 # 수집 단위는 시계열이 아니라 조회 한 번이다. `source_record.source_key`에 이 값을 넣는다.
 # IADB에서 이 세 시계열이 놓인 노드 이름이다.
+# 조회 이름. `source_record.source_key`에 들어가 어느 묶음을 받은 것인지 가른다.
 SOURCE_KEY = "gilt_nominal_par_yields"
+POLICY_SOURCE_KEY = "bank_rate"
 
 ENCODING = "utf-8"
 
@@ -98,12 +100,15 @@ SERIES_UNIT = "Percent"
 FETCH_PADDING_DAYS = 14
 
 
-class GiltSeries(StrEnum):
+class BoeSeries(StrEnum):
     """수집 대상 시계열. 저장 식별자, IADB 코드, 만기, 한국어 이름을 한 줄에 묶는다.
 
-    IADB의 명목 par yield 노드가 일별로 고시하는 만기는 이 셋뿐이다. `S`, `M`, `L`은
+    IADB의 명목 par yield 노드가 일별로 고시하는 만기는 셋뿐이다. `S`, `M`, `L`은
     short(5년), medium(10년), long(20년)이다. 코드만 보고는 만기를 알 수 없어 여기서
     사람이 읽을 수 있는 ID로 바꿔 저장한다.
+
+    **정책금리에는 만기가 없어 `maturity_months`가 `None`이다.** 마스터에도 `NULL`로
+    들어간다. 0으로 채우면 만기별 비교 쿼리가 "0개월물"로 그린다.
 
     Enum 값은 `indicator_observation.series_id`에 그대로 저장한다. 시계열을 늘리려면
     여기와 `reference.indicator_series` 시드를 같은 커밋에서 함께 늘린다. 관측값에서
@@ -112,10 +117,10 @@ class GiltSeries(StrEnum):
     """
 
     boe_code: str
-    maturity_months: int
+    maturity_months: int | None
     label: str
 
-    def __new__(cls, series_id: str, boe_code: str, maturity_months: int, label: str) -> Self:
+    def __new__(cls, series_id: str, boe_code: str, maturity_months: int | None, label: str) -> Self:
         member = str.__new__(cls, series_id)
         member._value_ = series_id
         member.boe_code = boe_code
@@ -127,14 +132,57 @@ class GiltSeries(StrEnum):
     GILT_10Y = ("GILT10Y", "IUDMNPY", 120, "영국 10년물")
     GILT_20Y = ("GILT20Y", "IUDLNPY", 240, "영국 20년물")
 
+    # 영란은행 기준금리. 통화정책위원회가 정하고 영업일마다 같은 값이 채워져 온다.
+    # 코드와 이력은 2026-08-27에 IADB로 확인했다.
+    BANK_RATE = ("GBBASE", "IUDBEDR", None, "영란은행 기준금리")
 
-GILT_SERIES: tuple[str, ...] = tuple(series.value for series in GiltSeries)
 
-# 요청에 넣는 IADB 코드. 요청 순서가 응답 순서를 정한다.
-SERIES_CODES: tuple[str, ...] = tuple(series.boe_code for series in GiltSeries)
+class BoeDataset(BaseModel):
+    """한 번의 조회가 함께 받는 시계열 묶음.
 
-# IADB 코드에서 저장 시계열로 되짚는 표. 응답이 코드로만 오기 때문에 필요하다.
-SERIES_BY_CODE: dict[str, GiltSeries] = {series.boe_code: series for series in GiltSeries}
+    IADB는 `SeriesCodes`에 코드를 여러 개 받아 한 응답으로 준다. 그래서 "무엇을 받을지"가
+    모듈 상수가 아니라 요청에 실리는 값이다. 국채 곡선은 일별로, 기준금리는 주별로 돌아
+    **조회 주기와 실패 성격이 다르므로 묶음도 나눈다.**
+
+    `source_key`는 `source_record`가 그 조회를 가리키는 이름이다. 둘이 같은 이름을 쓰면
+    어느 묶음을 실제로 받았는지 되짚을 수 없다.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    source_key: str
+    series: tuple[BoeSeries, ...]
+
+    @field_validator("series")
+    @classmethod
+    def require_series(cls, series: tuple[BoeSeries, ...]) -> tuple[BoeSeries, ...]:
+        if not series:
+            raise ValueError("dataset must name at least one series")
+        return series
+
+    @property
+    def codes(self) -> tuple[str, ...]:
+        """요청에 넣는 IADB 코드. 요청 순서가 응답 순서를 정한다."""
+        return tuple(item.boe_code for item in self.series)
+
+    @property
+    def series_ids(self) -> tuple[str, ...]:
+        return tuple(item.value for item in self.series)
+
+    @property
+    def by_code(self) -> dict[str, BoeSeries]:
+        """IADB 코드에서 저장 시계열로 되짚는 표. 응답이 코드로만 오기 때문에 필요하다."""
+        return {item.boe_code: item for item in self.series}
+
+
+GILT_DATASET = BoeDataset(
+    source_key=SOURCE_KEY,
+    series=(BoeSeries.GILT_5Y, BoeSeries.GILT_10Y, BoeSeries.GILT_20Y),
+)
+POLICY_DATASET = BoeDataset(source_key=POLICY_SOURCE_KEY, series=(BoeSeries.BANK_RATE,))
+
+GILT_SERIES: tuple[str, ...] = GILT_DATASET.series_ids
+POLICY_RATE_SERIES: tuple[str, ...] = POLICY_DATASET.series_ids
 
 # `CSVF=CN`이 주는 세로 형식의 헤더. 열을 위치로 읽으므로 매번 대조한다. BoE가 열을
 # 추가하거나 순서를 바꾸면 값이 조용히 옆 칸으로 밀린다.
@@ -187,10 +235,11 @@ class BoeNotCsvError(BoePayloadError):
 
 
 class BoeRequest(BaseModel):
-    """한 번의 수집이 저장할 관측 구간."""
+    """한 번의 수집이 저장할 관측 구간과 그때 받을 시계열 묶음."""
 
     model_config = ConfigDict(frozen=True)
 
+    dataset: BoeDataset
     observation_start: date
     observation_end: date
 
@@ -215,7 +264,7 @@ class BoeObservation(BaseModel):
 
     model_config = ConfigDict(frozen=True)
 
-    series: GiltSeries
+    series: BoeSeries
     observation_date: date
     value: Decimal
 
@@ -270,8 +319,8 @@ def format_query_date(day: date) -> str:
     return f"{day.day:02d}/{MONTH_NAMES[day.month - 1]}/{day.year}"
 
 
-def build_url(fetch_start: date, fetch_end: date) -> str:
-    """세 시계열을 한 번에 받는 CSV 내보내기 URL.
+def build_url(fetch_start: date, fetch_end: date, codes: tuple[str, ...]) -> str:
+    """묶음의 시계열을 한 번에 받는 CSV 내보내기 URL.
 
     `CSVF=CN`이 `DATE,SERIES,VALUE` 세로 형식을 준다. 가로 형식(`CSVF=TN`)은 시계열을
     늘릴 때 열이 늘어 헤더 대조가 시계열 목록에 묶인다.
@@ -281,7 +330,7 @@ def build_url(fetch_start: date, fetch_end: date) -> str:
             "csv.x": "yes",
             "Datefrom": format_query_date(fetch_start),
             "Dateto": format_query_date(fetch_end),
-            "SeriesCodes": ",".join(SERIES_CODES),
+            "SeriesCodes": ",".join(codes),
             "CSVF": "CN",
             "UsingCodes": "Y",
             "VPD": "Y",
@@ -353,13 +402,14 @@ def parse_curve(body: bytes, request: BoeRequest) -> BoeCurve:
     """
     observations: list[BoeObservation] = []
     observation_dates: list[date] = []
+    series_by_code = request.dataset.by_code
 
     for row in _data_rows(body):
         observation_date = parse_query_date(row[DATE_INDEX])
         observation_dates.append(observation_date)
 
         code = row[SERIES_INDEX]
-        series = SERIES_BY_CODE.get(code)
+        series = series_by_code.get(code)
         if series is None:
             raise BoePayloadError(f"BoE returned an unrequested series code {code!r}")
 
@@ -390,8 +440,8 @@ def parse_observations(body: bytes, request: BoeRequest) -> tuple[BoeObservation
 
 
 def fetch_curve(request: BoeRequest) -> BoeResponse:
-    """세 시계열을 한 번에 받는다. 요청 구간보다 앞에서부터 받는다."""
-    url = build_url(request.fetch_start, request.fetch_end)
+    """묶음의 시계열을 한 번에 받는다. 요청 구간보다 앞에서부터 받는다."""
+    url = build_url(request.fetch_start, request.fetch_end, request.dataset.codes)
     started_at = datetime.now(UTC)
     http_request = Request(url, headers={"User-Agent": USER_AGENT})
     try:
@@ -442,7 +492,7 @@ def store_observations(connection: Connection, response: BoeResponse) -> int:
     request_metadata = json.dumps(
         {
             "http_status": response.status,
-            "url": build_url(request.fetch_start, request.fetch_end),
+            "url": build_url(request.fetch_start, request.fetch_end, request.dataset.codes),
             "source_unit_name": SOURCE_UNIT_NAME,
             "observation_start": request.observation_start.isoformat(),
             "observation_end": request.observation_end.isoformat(),
@@ -453,8 +503,8 @@ def store_observations(connection: Connection, response: BoeResponse) -> int:
             "response_first_date": curve.response_first_date.isoformat(),
             "response_last_date": curve.response_last_date.isoformat(),
             "response_row_count": curve.response_row_count,
-            "series_codes": list(SERIES_CODES),
-            "series_ids": list(GILT_SERIES),
+            "series_codes": list(request.dataset.codes),
+            "series_ids": list(request.dataset.series_ids),
         },
         ensure_ascii=False,
     )
@@ -465,7 +515,7 @@ def store_observations(connection: Connection, response: BoeResponse) -> int:
             (
                 "api",
                 SOURCE,
-                SOURCE_KEY,
+                request.dataset.source_key,
                 response.started_at,
                 response.completed_at,
                 "succeeded",

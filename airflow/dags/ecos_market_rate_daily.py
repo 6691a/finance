@@ -1,14 +1,14 @@
 """ECOS 국내 시장금리 일별 수집 DAG.
 
 시계열마다 태스크를 하나씩 매핑한다. 하나가 실패해도 나머지는 저장되고, 재시도도 실패한
-시계열만 다시 호출한다. 수집 대상은 `modules.collectors.indicator.ecos.MarketRateSeries`가 정한다
+시계열만 다시 호출한다. 수집 대상은 `modules.collectors.indicator.ecos.EcosSeries`가 정한다
 (현재 `KTB2Y`, `KTB3Y`, `KTB10Y`, `KTB30Y`, `CD91D`). 시계열을 늘려도 이 파일은 바뀌지 않는다.
 
 한국은행 통계표 `1.3.2.1. 시장금리(일별)`(817Y002)을 주기 `D`로 조회한다. 미국 국채를
 받는 `fred_treasury_daily`와 같은 테이블에 쌓이며 `provider`로 갈린다.
 
 저장하는 `series_id`는 `KTB10Y`처럼 읽을 수 있는 ID다. ECOS 항목코드(`010210000`)는
-`MarketRateSeries`가 들고 있다가 요청 URL에만 쓰고 `source_record.metadata`에 남긴다.
+`EcosSeries`가 들고 있다가 요청 URL에만 쓰고 `source_record.metadata`에 남긴다.
 숫자 코드를 그대로 저장하면 DB와 대시보드에서 무슨 값인지 읽을 수 없기 때문이다.
 
 스케줄과 조회 기간은 한국 시간(KST) 기준이다. 저장하는 시각(`started_at`, `completed_at`)은

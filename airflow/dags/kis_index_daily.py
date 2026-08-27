@@ -1,7 +1,17 @@
-"""KOSPI·KOSDAQ 확정 일봉 수집 DAG.
+"""KOSPI·KOSPI200·KOSDAQ 확정 일봉 수집 DAG.
 
 분봉(`kis_quote_intraday`)은 당일 흐름용이고, 이 DAG는 기술적 보조지표(SMA·RSI·MACD)의
 원천이 되는 **확정 일봉**을 받는다. 설계는 docs/analysis/market-technical-indicators.md 4절이다.
+
+## 수집 대상
+
+`DomesticIndex` 전체(KOSPI·KOSPI200·KOSDAQ)다. 부분집합 상수를 두지 않는다 — 전에 시장 등락
+분포용 `MOVEMENT_INDEXES`를 재사용하는 바람에 KOSPI200이 빠져 있었다.
+
+**KOSPI200 일봉이 곧 기술 신호가 되지는 않는다.** `technical_signal_daily`가 보는 대상은
+`modules/technical/signals.py`의 `SIGNAL_INDEXES`이고 거기에는 KOSPI·KOSDAQ만 있다. 여기서
+받은 KOSPI200 봉을 읽는 곳은 `quote_daily` 조회와 추론 툴 `daily_history`다. KOSPI200을 신호
+대상으로 삼을지는 그 목록을 늘리는 별도 결정이다.
 
 ## 왜 200달력일인가
 
@@ -71,6 +81,7 @@ from airflow.sdk.exceptions import AirflowFailException, AirflowSkipException
 from pydantic import SecretStr
 
 from modules.collectors.kis import (
+    DomesticIndex,
     KisHTTPError,
     KisPayloadError,
     KisResultError,
@@ -78,7 +89,6 @@ from modules.collectors.kis import (
     access_token,
 )
 from modules.collectors.market.kis_index_daily import KisIndexDailyCollector
-from modules.collectors.market.kis_quote import MOVEMENT_INDEXES
 from modules.market_session import krx_open_day
 from modules.utility import CONNECTION_ID, KIS_UNRECOVERABLE_STATUSES, KST_TIMEZONE, atomic
 
@@ -163,7 +173,7 @@ def fetch_windows(start_date: date, end_date: date) -> list[tuple[date, date]]:
 @dag(
     dag_id="kis_index_daily",
     dag_display_name="📅 국내 지수 확정 일봉 (KIS)",
-    description="KOSPI·KOSDAQ 확정 일봉을 최근 200달력일 창으로 받아 기술지표의 원천으로 저장한다.",
+    description="KOSPI·KOSPI200·KOSDAQ 확정 일봉을 최근 200달력일 창으로 받아 기술지표의 원천으로 저장한다.",
     schedule="20 18 * * 1-5",  # KST 월~금 18:20 = UTC 월~금 09:20
     start_date=pendulum.datetime(2026, 8, 24, tz=KST_TIMEZONE),  # KST 2026-08-24 00:00 = UTC 2026-08-23 15:00
     catchup=False,
@@ -217,7 +227,9 @@ def kis_index_daily():
         stored = 0
         failures: list[str] = []
         with closing(_connection()) as connection:
-            for index in MOVEMENT_INDEXES:
+            # 수집 대상은 `DomesticIndex` 전체다. 부분집합을 따로 두지 않는다 — 전에는 시장
+            # 등락 분포용 `MOVEMENT_INDEXES`를 재사용해서 KOSPI200이 조용히 빠져 있었다.
+            for index in DomesticIndex:
                 # 창 하나가 실패하면 그 심볼의 남은 창은 건너뛴다. 구멍 난 구간 위에 나머지를
                 # 얹어 봐야 지표 계산이 그 구멍에서 멈춘다.
                 for window_start, window_end in windows:

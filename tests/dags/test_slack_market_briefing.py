@@ -24,17 +24,17 @@ ALL_BRIEFINGS = [
 
 def test_korea_briefing_runs_during_the_domestic_session():
     """08:10 프리마켓, 09:00 개장, 매시 정각 10:00~19:00(정규장·NXT 애프터마켓),
-    15:30 KRX 마감, 20:15 최종이다.
+    15:35 KRX 마감, 20:15 최종이다.
 
     분이 제각각이라 cron 하나가 아니라 다중 cron 타임테이블이다. 주말은 cron이 뺀다.
     """
     timetable = slack_kr_market_briefing.slack_kr_market_briefing.schedule
 
-    assert timetable.summary == "10 8 * * 1-5, 0 9 * * 1-5, 0 10-19 * * 1-5, 30 15 * * 1-5, 15 20 * * 1-5"
+    assert timetable.summary == "10 8 * * 1-5, 0 9 * * 1-5, 0 10-19 * * 1-5, 35 15 * * 1-5, 15 20 * * 1-5"
 
 
-def test_preopen_scope_is_chosen_before_ten_kst(monkeypatch):
-    """10시 이전 발송(08:10·09:00)만 프리마켓 구성이다. 수동 실행은 지금 시각으로 판정한다."""
+def test_scope_follows_the_scheduled_korean_slot(monkeypatch):
+    """10시 전은 프리마켓, 15:35만 KRX 마감이고 이후에는 다시 NXT를 포함한다."""
     from datetime import UTC, datetime
 
     from modules.briefing.market import MarketScope
@@ -44,9 +44,13 @@ def test_preopen_scope_is_chosen_before_ten_kst(monkeypatch):
     premarket = datetime(2026, 8, 17, 23, 10, tzinfo=UTC)  # KST 08:10
     opening = datetime(2026, 8, 18, 0, 0, tzinfo=UTC)  # KST 09:00
     regular = datetime(2026, 8, 18, 1, 0, tzinfo=UTC)  # KST 10:00
+    krx_close = datetime(2026, 8, 18, 6, 35, tzinfo=UTC)  # KST 15:35
+    aftermarket = datetime(2026, 8, 18, 7, 0, tzinfo=UTC)  # KST 16:00
     assert slack_kr_market_briefing._scope(premarket) is MarketScope.KOREA_PREOPEN
     assert slack_kr_market_briefing._scope(opening) is MarketScope.KOREA_PREOPEN
     assert slack_kr_market_briefing._scope(regular) is MarketScope.KOREA
+    assert slack_kr_market_briefing._scope(krx_close) is MarketScope.KRX_CLOSE
+    assert slack_kr_market_briefing._scope(aftermarket) is MarketScope.KOREA
 
 
 def test_daily_chart_rides_only_the_open_and_close_slots(monkeypatch):
@@ -65,7 +69,7 @@ def test_daily_chart_rides_only_the_open_and_close_slots(monkeypatch):
     premarket = datetime(2026, 8, 17, 23, 10, tzinfo=UTC)  # KST 08:10
     aftermarket = datetime(2026, 8, 18, 11, 15, tzinfo=UTC)  # KST 20:15
     opening = datetime(2026, 8, 18, 0, 0, tzinfo=UTC)  # KST 09:00
-    krx_close = datetime(2026, 8, 18, 6, 30, tzinfo=UTC)  # KST 15:30
+    krx_close = datetime(2026, 8, 18, 6, 35, tzinfo=UTC)  # KST 15:35
     assert slack_kr_market_briefing._wants_daily_chart(premarket)
     assert slack_kr_market_briefing._wants_daily_chart(aftermarket)
     assert not slack_kr_market_briefing._wants_daily_chart(opening)

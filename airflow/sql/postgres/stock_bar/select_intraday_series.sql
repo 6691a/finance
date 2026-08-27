@@ -1,7 +1,6 @@
--- 장중 차트가 국내 종목의 당일 분봉 종가를 읽는다. 분마다 KRX·NXT 중 하나를 고르며
--- 같은 분에 둘 다 있으면 KRX를 우선한다. 그래서 정규장은 KRX, 15:30 이후는 NXT 봉이
--- 한 줄로 이어진다. quote_bar 뷰의 select_intraday_series.sql과 바인드 모양이 같고,
--- 여기만 exchange 열이 하나 더 있다. 차트 라벨이 어느 거래소 봉인지 밝히는 데 쓴다.
+-- 장중 차트가 국내 종목의 당일 분봉 종가를 읽는다. 일반 발송은 KRX·NXT를, 15:35 KRX
+-- 마감 발송은 KRX만 넘긴다. 같은 분에 둘 다 있으면 KRX를 우선한다. quote_bar 뷰의
+-- select_intraday_series.sql보다 허용 거래소와 결과의 exchange 열이 하나씩 더 있다.
 SELECT DISTINCT ON (bar.provider, bar.stock_code, bar.bar_at)
        bar.provider,
        bar.stock_code,
@@ -16,5 +15,5 @@ JOIN quote_symbol AS symbol
 WHERE bar.provider = ANY(%s)
   AND bar.stock_code = ANY(%s)
   AND bar.bar_at >= %s
-  AND bar.exchange IN ('KRX', 'NXT')
+  AND bar.exchange = ANY(%s)
 ORDER BY bar.provider, bar.stock_code, bar.bar_at, (bar.exchange = 'KRX') DESC

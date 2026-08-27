@@ -11,7 +11,7 @@
 
 | DAG | 스케줄(KST) | 채널 | 역할 |
 | --- | --- | --- | --- |
-| `slack_kr_market_briefing` | 평일 08:10, 09:00, 10:00~19:00 매시, 15:30, 20:15 | `SLACK_CHANNEL_MARKET` | NXT 프리·애프터마켓과 KRX 장중·마감 브리핑 |
+| `slack_kr_market_briefing` | 평일 08:10, 09:00, 10:00~19:00 매시, 15:35, 20:15 | `SLACK_CHANNEL_MARKET` | NXT 프리·애프터마켓과 KRX 장중·마감 브리핑 |
 | `slack_us_market_briefing` | 화~토 08:00 | `SLACK_CHANNEL_MARKET` | 밤사이 미국장 마감과 전일 국내장 복기 |
 | `slack_document_briefing` | 매일 08:00, 12:00, 15:30, 20:00 | `SLACK_CHANNEL_DOCUMENT` | 직전 발송 이후 평가 문서 집계·선별 |
 | `slack_ops_briefing` | 매일 08:00 | `SLACK_CHANNEL_OPS` | 최근 24시간 수집 성공·실패·무소식 |

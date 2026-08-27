@@ -68,7 +68,7 @@ from modules.utility import CONNECTION_ID, KST_TIMEZONE
 logger = logging.getLogger(__name__)
 
 # 08:10 프리마켓(시작 10분 뒤), 09:00 개장(프리마켓 마감 요약), 매시 정각 10:00~19:00
-# (정규장과 NXT 애프터마켓), 15:30 KRX 마감, 20:15 최종 마감이다.
+# (정규장과 NXT 애프터마켓), 15:35 KRX 마감, 20:15 최종 마감이다.
 # 확정 수급은 KST 18:10 수집이라 19:00부터 실린다. NXT 애프터마켓이 20:00에 끝나고
 # REST 확정 배치(kis_stock_minute_bars_daily)가 20:05에 돌아 20:15 리포트가 하루 완결이다.
 # 분이 제각각이라 cron 하나로 못 적는다. 시각을 바꾸려면 이 목록만 고친다.
@@ -76,7 +76,7 @@ SCHEDULE = MultipleCronTriggerTimetable(
     "10 8 * * 1-5",  # KST 평일 08:10 프리마켓 = UTC 일~목 23:10
     "0 9 * * 1-5",  # KST 평일 09:00 개장 = UTC 00:00
     "0 10-19 * * 1-5",  # KST 평일 매시 정각 10:00~19:00 = UTC 01:00~10:00
-    "30 15 * * 1-5",  # KST 평일 15:30 KRX 마감 = UTC 06:30
+    "35 15 * * 1-5",  # KST 평일 15:35 KRX 마감 = UTC 06:35
     "15 20 * * 1-5",  # KST 평일 20:15 NXT 마감 최종 = UTC 11:15
     timezone=KST_TIMEZONE,
 )
@@ -109,8 +109,10 @@ def _scope(now: datetime) -> MarketScope:
     수동 실행은 logical_date가 없을 수 있어 지금 시각으로 대신한다.
     """
     logical = get_current_context().get("logical_date") or now
-    hour = logical.astimezone(KST_TIMEZONE).hour
-    return MarketScope.KOREA_PREOPEN if hour < 10 else MarketScope.KOREA
+    local = logical.astimezone(KST_TIMEZONE)
+    if local.hour < 10:
+        return MarketScope.KOREA_PREOPEN
+    return MarketScope.KRX_CLOSE if (local.hour, local.minute) == (15, 35) else MarketScope.KOREA
 
 
 def _wants_daily_chart(now: datetime) -> bool:
@@ -157,7 +159,11 @@ def slack_kr_market_briefing():
         connection = _connection()
         try:
             _skip_when_closed(connection, now.astimezone(KST_TIMEZONE).date())
-            reader = market_data.MarketBriefingReader(connection, now)
+            reader = market_data.MarketBriefingReader(
+                connection,
+                now,
+                exchanges=("KRX",) if scope is MarketScope.KRX_CLOSE else ("KRX", "NXT"),
+            )
             summary = reader.summary()
             open_hour = (
                 market_data.NXT_PREMARKET_OPEN_HOUR_KST

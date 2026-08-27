@@ -442,9 +442,16 @@ class MarketBriefingReader:
     구간의 시작(`since`)처럼 호출마다 달라지는 값은 메서드 인자다.
     """
 
-    def __init__(self, connection: Connection, now: datetime) -> None:
+    def __init__(
+        self,
+        connection: Connection,
+        now: datetime,
+        *,
+        exchanges: tuple[str, ...] = ("KRX", "NXT"),
+    ) -> None:
         self.connection = connection
         self.now = now
+        self.exchanges = exchanges
 
     def summary(self) -> MarketSummary:
         """브리핑 한 통에 들어갈 값을 전부 읽는다."""
@@ -467,7 +474,7 @@ class MarketBriefingReader:
         )
         domestic_stocks = self._fetch(
             LATEST_DOMESTIC_STOCKS,
-            (since, since),
+            (since, since, list(self.exchanges)),
             lambda row: QuoteChange(
                 provider=row[0],
                 symbol=row[1],
@@ -650,7 +657,10 @@ class MarketBriefingReader:
                     continue
                 providers = sorted({provider for provider, _ in pairs})
                 symbols = [symbol for _, symbol in pairs]
-                cursor.execute(statement, (providers, symbols, session_open))
+                parameters = (providers, symbols, session_open)
+                if statement is DOMESTIC_STOCK_SERIES:
+                    parameters += (list(self.exchanges),)
+                cursor.execute(statement, parameters)
                 fetched = cursor.fetchall()
                 if statement is INTRADAY_SERIES:
                     fetched = [(*row, None) for row in fetched]

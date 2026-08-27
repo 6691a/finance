@@ -11,6 +11,7 @@ import hashlib
 import re
 from collections.abc import Iterable
 from datetime import UTC, date, datetime, time, timedelta
+from enum import StrEnum
 
 from pydantic import BaseModel, ConfigDict
 
@@ -106,3 +107,56 @@ def input_hash(
         )
     )
     return hashlib.sha256(material.encode("utf-8")).hexdigest()
+
+
+class CausalTargetKind(StrEnum):
+    """대상이 어느 마스터에서 오는지. **값의 성격이 아니라 저장소를 가른다.**
+
+    값은 `apps/models/analysis/causal.py`의 같은 이름 enum과 같아야 한다. Airflow는 `apps/`를
+    보지 못해 import하지 못하므로 한 벌 더 둔다(중복 허용 + 테스트 대조 규칙).
+    """
+
+    INSTRUMENT = "instrument"
+    INDEX = "index"
+    QUOTE = "quote"
+    INDICATOR = "indicator"
+
+
+class CausalSign(StrEnum):
+    """이 경로가 대상을 어느 쪽으로 밀었다고 모델이 주장하는가."""
+
+    UP = "up"
+    DOWN = "down"
+
+
+class CausalConfidence(StrEnum):
+    """주장의 성격. 둘 다 인과의 증명이 아니다."""
+
+    OBSERVED = "observed"
+    PLAUSIBLE = "plausible"
+
+
+class CausalTarget(BaseModel):
+    """경로가 닿는 대상 하나."""
+
+    model_config = ConfigDict(frozen=True)
+
+    kind: CausalTargetKind
+    code: str
+
+
+# 국내 지수. 종목과 달리 마스터를 훑지 않는다 — 늘어나는 목록이 아니다.
+INDEX_TARGETS: tuple[CausalTarget, ...] = (
+    CausalTarget(kind=CausalTargetKind.INDEX, code="KOSPI"),
+    CausalTarget(kind=CausalTargetKind.INDEX, code="KOSDAQ"),
+)
+
+# 매크로 다섯. **이것들이 대상에 있어야 그래프가 깊어진다**(설계 §3.1.1) — 대상이 못 되면
+# `미국 10년물 국채금리 상승` 같은 값이 사건으로만 들어와 사슬이 거기서 끊긴다.
+MACRO_TARGETS: tuple[CausalTarget, ...] = (
+    CausalTarget(kind=CausalTargetKind.QUOTE, code="USDKRW"),
+    CausalTarget(kind=CausalTargetKind.QUOTE, code="US10Y"),
+    CausalTarget(kind=CausalTargetKind.QUOTE, code="SOX"),
+    CausalTarget(kind=CausalTargetKind.QUOTE, code="VIX"),
+    CausalTarget(kind=CausalTargetKind.QUOTE, code="NASDAQ100_FUT"),
+)

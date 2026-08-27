@@ -34,6 +34,13 @@ EXPECTATION_LIGHT_MODULES = (
     "modules.expectation.judgment",
 )
 
+# 주간 인과 그래프 DAG이 모듈 수준에서 import하는 것. 후보 조립과 저장은 연결과 SQL만
+# 알고, LLM은 `causal.generation`에만 있다.
+CAUSAL_LIGHT_MODULES = (
+    "modules.causal.domain",
+    "modules.causal.candidates",
+)
+
 # 공시 알림 DAG이 모듈 수준에서 import하는 것. 강조를 고르는 층은 따로 있고 태스크가
 # 늦게 읽는다.
 DISCLOSURE_LIGHT_MODULES = ("modules.briefing.disclosures",)
@@ -75,8 +82,14 @@ def test_the_disclosure_briefing_query_side_does_not_import_langchain():
     assert _heavy_modules_after_importing(DISCLOSURE_LIGHT_MODULES) == []
 
 
+def test_the_causal_graph_query_side_does_not_import_langchain():
+    """`domain`은 순수 함수만, `candidates`는 연결과 SQL만 안다. 그것이 이 배치의 핵심이다."""
+    assert _heavy_modules_after_importing(CAUSAL_LIGHT_MODULES) == []
+
+
 def test_the_llm_modules_are_where_the_weight_lives():
     """반대 방향도 잰다. 무거운 것이 아예 없으면 위 테스트들은 아무 것도 지키지 않는다."""
     assert _heavy_modules_after_importing(("modules.thesis.generation",))
     assert _heavy_modules_after_importing(("modules.expectation.extraction",))
     assert _heavy_modules_after_importing(("modules.briefing.disclosure_picks",))
+    assert _heavy_modules_after_importing(("modules.causal.generation",))

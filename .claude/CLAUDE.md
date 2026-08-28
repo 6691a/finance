@@ -669,6 +669,36 @@ LLM을 부르는 코드는 **Pydantic, LangChain, LangGraph 위에서만 쓴다.
   노드와 엣지로 표현한다. `if`와 `for`로 흩어 놓지 않는다. 노드 이름이 그대로 트레이스에 남아
   어디서 몇 번 불렀는지 보이는 것이 이 규칙의 목적이다. 상태는 `TypedDict`로 선언하고 병합이
   필요한 칸에는 리듀서(`Annotated[list, operator.add]`)를 단다.
+- **모델을 부르는 흐름은 예외 없이 컴파일된 그래프를 소유한다**(2026-08-28 확인). 호출이
+  하나뿐이어도 그렇다 — 교정 재요청이 붙는 순간 분기가 생기고, 그것을 `if`로 쓰면 트레이스에
+  이름 없는 `ChatOpenAI` 호출만 남는다. `causal`이 그 상태였고(LangSmith run 이름이
+  `ChatOpenAI`, `tags` 빈 목록), 그것을 `with_config`로 호출마다 이름을 붙여 메우려던 것이
+  잘못된 방향이었다.
+- **호출–교정 흐름은 모양이 하나다.** 저장소의 다섯이 글자 그대로 같다
+  (`assessment`·`briefing/disclosure_picks`·`briefing/picks`·`expectation/extraction`·
+  `causal/generation`).
+
+  ```python
+  graph.add_node("call", self._call)
+  graph.add_node("repair", self._repair)
+  graph.add_edge(START, "call")
+  graph.add_conditional_edges("call", self._next, {"repair": "repair", END: END})
+  graph.add_edge("repair", "call")
+  ```
+
+  `_call`이 묻고 검증까지 하며, 쓸 것이 없으면 빈 결과를 상태에 남긴다. `_next`가
+  `attempts == 0`일 때만 `repair`로 보낸다 — **교정은 한 번뿐이고 재시도는 Airflow가 한다.**
+  새 흐름은 이 모양을 베낀다.
+
+  **툴이 붙으면 앞에 두 노드가 는다**(`thesis/generation`·`thesis/outcomes`):
+  `investigate` → 조건부 `tools` → `answer` → 조건부 `repair`. 뒤쪽 둘은 위와 같고
+  `ToolNode`가 `tools`에 들어간다. **문서·항목 팬아웃은 또 다른 축이다** — `assessment`가
+  바깥 그래프에서 `Send`로 문서마다 안쪽 그래프를 부른다. 셋은 겹쳐 쓸 수 있다.
+- **이름은 그래프 실행 하나에만 붙인다.** `graph.invoke(state, config={"run_name": ...,
+  "tags": [...], "metadata": {...}})`이고 호출별 이름은 노드가 대신한다. **`with_config`로
+  모델 호출마다 이름을 붙이고 있으면 그래프가 없다는 신호다.** `metadata`에는 그 실행을
+  특정하는 값(기준 주, 프롬프트 판)을 넣고 자격 증명은 넣지 않는다 — 상태와 config는
+  트레이스 입력으로 나간다.
 - **데이터 모양은 Pydantic이다.** 설정, 모델 응답, 노드가 주고받는 결과는 `BaseModel`로 선언한다.
   `dataclass`나 맨 dict를 쓰지 않는다. 응답 스키마는 Pydantic 모델에서 뽑아 `response_format`으로
   강제하고(`modules/schema.py`), 강제가 안 되는 제공처를 위해 검증을 그대로 남긴다.

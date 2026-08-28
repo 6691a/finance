@@ -9,10 +9,11 @@
 
 import logging
 from collections.abc import Iterable, Mapping, Sequence
-from typing import Literal
+from typing import Any, Literal, TypedDict
 
 from langchain_core.language_models import BaseChatModel
-from langchain_core.messages import HumanMessage, SystemMessage
+from langchain_core.messages import BaseMessage, HumanMessage, SystemMessage
+from langgraph.graph import END, START, StateGraph
 from pydantic import BaseModel, Field
 
 from modules import llm
@@ -181,6 +182,19 @@ def target_block(targets: Iterable[CausalTarget]) -> str:
     return "\n".join(f"  - {target.code} ({target.kind})" for target in targets)
 
 
+class CausalState(TypedDict):
+    """되짚기 한 번의 상태. **설정 객체를 넣지 않는다** — 상태는 트레이스 입력으로 나간다.
+
+    `found`와 `target_codes`는 노드가 답을 거를 때 쓰므로 상태에 있어야 한다.
+    """
+
+    messages: list[BaseMessage]
+    found: CandidateSet
+    target_codes: frozenset[str]
+    paths: tuple[VerifiedPath, ...] | None
+    attempts: int
+
+
 class CausalBuilder:
     """한 주를 되짚는 대화 하나를 소유한다.
 
@@ -194,6 +208,7 @@ class CausalBuilder:
     def __init__(self, model: BaseChatModel) -> None:
         self._model = model
         self._schema = response_format(CausalAnswer, "market_causal_paths")
+        self._graph = self._build_graph()
 
     def build(
         self,
@@ -209,77 +224,111 @@ class CausalBuilder:
 
         **검증에 쓰는 대상 집합은 `targets`가 아니라 `returns`의 키다.** 실현 등락이 없는
         대상은 저장할 수 없으므로(설계 §6) 프롬프트에도 보여 주지 않는다.
+
+        **이름은 여기 한 자리에만 붙인다.** 호출마다 `with_config`로 손으로 붙이고 있으면
+        그건 흐름이 그래프가 아니라는 신호다 — 노드 이름이 그 일을 한다.
         """
-        target_codes = set(returns)
-        targets = [target for target in targets if target.code in target_codes]
-        system = SystemMessage(
-            PROMPTS.render(
-                "system",
-                max_chain=MAX_CHAIN,
-                max_paths=MAX_PATHS,
-                max_reasoning_chars=MAX_REASONING_CHARS,
-                targets=target_block(targets),
-            )
-        )
-        human = HumanMessage(
-            PROMPTS.render(
-                "instruction",
-                week_start=window.week_start.isoformat(),
-                week_end=window.week_end.isoformat(),
-                vocabulary=vocabulary_block(events=events, channels=channels),
-                returns=returns_block(returns),
-                candidates=candidate_block(found),
-            )
-        )
-
-        messages = [system, human]
-        paths = self._ask(messages, window, "answer")
-        verified = verify_paths(paths, found, target_codes)
-        if verified:
-            return verified
-
-        # 후보가 있는데 경로가 하나도 안 남았다. 한 번만 다시 묻는다 — 무엇이 잘못됐는지를
-        # 실어야 모델이 같은 답을 다시 내지 않는다(thesis 판 11의 교훈).
-        logger.warning("causal answer had no usable 경로; asking once more")
-        messages = [
-            *messages,
-            HumanMessage(
-                PROMPTS.render(
-                    "repair",
-                    reason=(
-                        "쓸 수 있는 경로가 하나도 없었다. 대상은 위 목록 안의 값이어야 하고, "
-                        f"경로(channels)는 1~{MAX_CHAIN}단이어야 한다."
-                    ),
-                )
+        target_codes = frozenset(returns)
+        state: CausalState = {
+            "messages": self.build_messages(
+                window=window,
+                returns=returns,
+                found=found,
+                events=events,
+                channels=channels,
+                targets=[target for target in targets if target.code in target_codes],
             ),
-        ]
-        return verify_paths(self._ask(messages, window, "repair"), found, target_codes)
-
-    def _ask(
-        self,
-        messages: Sequence[object],
-        window: CausalWindow,
-        step: str,
-    ) -> tuple[CausalPathAnswer, ...]:
-        """한 번 묻는다. **어느 주의 무슨 단계였는지를 호출에 새긴다.**
-
-        `causal`은 LangGraph를 안 쓰므로 트레이스에 노드 이름이 붙지 않는다. 아무 것도
-        안 하면 LangSmith에 `ChatOpenAI` 하나가 덩그러니 남아, 어느 주인지도 첫 답변인지
-        교정인지도 알 수 없다(2026-08-28 운영 실행에서 실제로 그랬다). `with_config`는
-        LangChain 표준이라 추적이 꺼져 있으면 아무 일도 하지 않는다.
-        """
-        named = self._model.with_config(
-            {
-                "run_name": f"causal {window.week_start.isoformat()} {step}",
+            "found": found,
+            "target_codes": target_codes,
+            "paths": None,
+            "attempts": 0,
+        }
+        final = self._graph.invoke(
+            state,
+            config={
+                "run_name": f"causal {window.week_start.isoformat()}",
                 "tags": ["causal", f"prompt_v{PROMPT_VERSION}"],
                 "metadata": {
                     "week_start": window.week_start.isoformat(),
                     "prompt_version": PROMPT_VERSION,
-                    "step": step,
                 },
-            }
+            },
         )
-        reply = llm.invoke(named, messages, schema=self._schema)
-        answer = CausalAnswer.model_validate_json(json_object(str(reply.content)))
-        return tuple(answer.paths[:MAX_PATHS])
+        return final.get("paths") or ()
 
+    @staticmethod
+    def build_messages(
+        *,
+        window: CausalWindow,
+        returns: Mapping[str, TargetReturns],
+        found: CandidateSet,
+        events: Sequence[EventOption],
+        channels: Sequence[ChannelOption],
+        targets: Sequence[CausalTarget],
+    ) -> list[BaseMessage]:
+        """첫 대화. 상태가 없으므로 정적 메서드다."""
+        return [
+            SystemMessage(
+                PROMPTS.render(
+                    "system",
+                    max_chain=MAX_CHAIN,
+                    max_paths=MAX_PATHS,
+                    max_reasoning_chars=MAX_REASONING_CHARS,
+                    targets=target_block(targets),
+                )
+            ),
+            HumanMessage(
+                PROMPTS.render(
+                    "instruction",
+                    week_start=window.week_start.isoformat(),
+                    week_end=window.week_end.isoformat(),
+                    vocabulary=vocabulary_block(events=events, channels=channels),
+                    returns=returns_block(returns),
+                    candidates=candidate_block(found),
+                )
+            ),
+        ]
+
+    def _build_graph(self):
+        graph = StateGraph(CausalState)
+        graph.add_node("call", self._call)
+        graph.add_node("repair", self._repair)
+        graph.add_edge(START, "call")
+        graph.add_conditional_edges("call", self._next, {"repair": "repair", END: END})
+        graph.add_edge("repair", "call")
+        return graph.compile()
+
+    def _call(self, state: CausalState) -> dict[str, Any]:
+        """한 번 묻고 검증한다. 남은 것이 없으면 `paths`가 빈 튜플이다."""
+        messages = state["messages"]
+        reply = llm.invoke(self._model, messages, schema=self._schema)
+        answer = CausalAnswer.model_validate_json(json_object(str(reply.content)))
+        verified = verify_paths(
+            tuple(answer.paths[:MAX_PATHS]), state["found"], state["target_codes"]
+        )
+        return {"messages": [*messages, reply], "paths": verified}
+
+    def _repair(self, state: CausalState) -> dict[str, Any]:
+        """무엇이 잘못됐는지를 실어 한 번만 다시 묻는다(thesis 판 11의 교훈)."""
+        logger.warning("causal answer had no usable 경로; asking once more")
+        return {
+            "messages": [
+                *state["messages"],
+                HumanMessage(
+                    PROMPTS.render(
+                        "repair",
+                        reason=(
+                            "쓸 수 있는 경로가 하나도 없었다. 대상은 위 목록 안의 값이어야 "
+                            f"하고, 경로(channels)는 1~{MAX_CHAIN}단이어야 한다."
+                        ),
+                    )
+                ),
+            ],
+            "attempts": state["attempts"] + 1,
+        }
+
+    @staticmethod
+    def _next(state: CausalState) -> str:
+        if state["paths"]:
+            return END
+        return "repair" if state["attempts"] == 0 else END

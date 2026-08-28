@@ -192,7 +192,11 @@ def _returns() -> dict[str, domain.TargetReturns]:
 
 
 def _build(model: FakeModel) -> tuple[generation.VerifiedPath, ...]:
-    return generation.CausalBuilder(model).build(
+    return _build_with(generation.CausalBuilder(model))
+
+
+def _build_with(builder: generation.CausalBuilder) -> tuple[generation.VerifiedPath, ...]:
+    return builder.build(
         window=WINDOW,
         returns=_returns(),
         found=_candidates(),
@@ -206,34 +210,56 @@ def _build(model: FakeModel) -> tuple[generation.VerifiedPath, ...]:
     )
 
 
-class TestTraceIdentity:
-    """트레이스에 이 실행이 무엇이었는지가 남아야 한다.
+class TestTheFlowIsAGraph:
+    """흐름 제어는 LangGraph다(CLAUDE.md). `if`로 교정을 재요청하지 않는다.
 
     2026-08-28 운영 실행의 LangSmith run이 이름 `ChatOpenAI`에 `tags` 빈 목록이었다.
-    `causal`은 LangGraph를 안 쓰므로 노드 이름이 붙지 않는다 — 흐름이 스스로 밝혀야 한다.
+    노드 이름이 트레이스에 남는 것이 이 규칙의 목적이고, 저장소의 다른 흐름 여섯이
+    이미 같은 모양(`call` → 조건부 `repair` → `call`)이다.
     """
 
-    def test_the_first_call_is_named_with_the_week(self) -> None:
+    def test_the_flow_is_a_compiled_graph(self) -> None:
+        builder = generation.CausalBuilder(FakeModel([]))
+
+        nodes = set(builder._graph.get_graph().nodes)
+
+        assert {"call", "repair"} <= nodes
+
+    def test_the_graph_run_carries_the_week(self) -> None:
+        """이름은 그래프 실행 하나에만 붙인다. 호출마다 손으로 붙이면 그래프가 없다는 뜻이다."""
         model = FakeModel([ONE_PATH])
+        seen: list[dict] = []
+        builder = generation.CausalBuilder(model)
+        original = builder._graph.invoke
+        builder._graph = _Spy(original, seen)
 
-        _build(model)
+        _build_with(builder)
 
-        config = model.configured_with[0]
-        assert config["run_name"] == "causal 2026-08-10 answer"
+        config = seen[0]
+        assert config["run_name"] == "causal 2026-08-10"
         assert "causal" in config["tags"]
         assert config["metadata"]["week_start"] == "2026-08-10"
         assert config["metadata"]["prompt_version"] == domain.PROMPT_VERSION
 
-    def test_the_repair_call_is_named_apart(self) -> None:
-        """교정이 첫 답변과 같은 이름이면 트레이스에서 둘을 못 가른다."""
+    def test_a_repaired_run_calls_the_model_twice(self) -> None:
         model = FakeModel([NO_PATHS, ONE_PATH])
 
-        _build(model)
+        paths = _build(model)
 
-        assert [config["run_name"] for config in model.configured_with] == [
-            "causal 2026-08-10 answer",
-            "causal 2026-08-10 repair",
-        ]
+        assert len(model.calls) == 2
+        assert len(paths) == 1
+
+
+class _Spy:
+    """그래프 실행에 어떤 config가 갔는지만 본다."""
+
+    def __init__(self, invoke, seen: list[dict]) -> None:
+        self._invoke = invoke
+        self._seen = seen
+
+    def invoke(self, state, config=None):
+        self._seen.append(config)
+        return self._invoke(state, config=config)
 
 
 class TestCausalBuilder:

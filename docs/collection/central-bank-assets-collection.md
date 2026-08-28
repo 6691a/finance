@@ -211,7 +211,8 @@ JOIN LATERAL (
       AND p.observation_date
           BETWEEN o.observation_date - interval '1 year' - interval '10 days'
               AND o.observation_date - interval '1 year' + interval '10 days'
-    ORDER BY abs(p.observation_date - (o.observation_date - interval '1 year'))
+    -- `date - interval`은 timestamp라 `::date`를 빼면 `abs(interval)`이 없다고 죽는다.
+    ORDER BY abs(p.observation_date - (o.observation_date - interval '1 year')::date)
     LIMIT 1
 ) AS prev ON TRUE
 WHERE s.kind = 'balance_sheet'
@@ -327,3 +328,4 @@ airflow dags trigger central_bank_assets_weekly \
 | 2026-08-27 | 계열 좌표·주기·단위·이력을 제공처 여섯에 직접 조회해 확정(§3.1) |
 | 2026-08-28 | 45일 창으로 수집기 넷을 실제 호출 → `KRASSETS_M` 0건. 창을 800일로 바꿈(§6) |
 | 2026-08-28 | 800일 창으로 재확인 → 일곱 계열 전부 값이 돌아옴(115·114·26·25·114·4·114건) |
+| 2026-08-28 | 백필(1999-01-01~) 뒤 운영 DB를 읽기 전용으로 확인 → 마스터 7행, 관측값 5,888행, `source_record` 6건 전부 `succeeded`. §5 쿼리를 실제로 돌려 `::date` 캐스트 누락을 잡았다 |

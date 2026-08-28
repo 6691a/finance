@@ -116,10 +116,21 @@ def _day(value: Any, field: str) -> date:
 
 
 def _decimal(value: Any, field: str) -> Decimal:
-    """금액·비율 한 칸. 공백 패딩과 쉼표가 붙어 올 수 있고 음수는 정상값이다."""
+    """금액·비율 한 칸. 공백 패딩과 쉼표가 붙어 올 수 있고 음수는 정상값이다.
+
+    **빈 칸을 0으로 바꾸지 않는다.** 이 응답의 네 칸은 목표주가·전일종가·괴리액·괴리율이고
+    **0은 어느 쪽도 실제 값이 아니다** — 목표가 0원을 제시하는 애널리스트는 없다. 저장하면
+    `analyst_opinions` 툴이 그것을 실제 목표가로 읽어 추론 프롬프트에 싣는다.
+
+    2026-08-28 운영 실측에서 262행 전부가 네 칸에 값을 갖고 0이 하나도 없었다 — 이 분기는
+    한 번도 발화한 적이 없다. 제공처가 정말 빈 칸을 주기 시작하면 그때 알아야 하는 쪽이다.
+
+    수급·포지션 수집기의 같은 이름 함수는 **반대로 `Decimal(0)`이 맞다.** 거기 칸은
+    순매수 수량·금액이라 0이 "그 투자자가 그날 순매수 0"이라는 실제 값이다.
+    """
     text = str(value if value is not None else "").strip().replace(",", "")
     if not text or text == "-":
-        return Decimal(0)
+        raise KisPayloadError(f"KIS returned an empty {field}: {value!r}")
     try:
         return Decimal(text)
     except InvalidOperation:

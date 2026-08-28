@@ -174,6 +174,10 @@ def _decimal(value: Any, field: str) -> Decimal:
     """금액·비율 한 칸. 공백 패딩과 쉼표가 붙어 오고 음수는 정상값이다."""
     text = str(value if value is not None else "").strip().replace(",", "")
     if not text or text == "-":
+        # **여기서는 0이 진짜 값이다**(2026-08-28 판정) — 칸이 순매수 수량·금액·잔고라
+        # "그 투자자가 그날 순매수 0"이 정상 관측이고 제공처도 그 뜻으로 빈 칸을 준다.
+        # 목표주가처럼 0이 말이 안 되는 칸은 반대로 실패시킨다
+        # (`collectors/analyst/kis_opinion.py`의 같은 이름 함수).
         return Decimal(0)
     try:
         return Decimal(text)

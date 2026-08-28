@@ -327,3 +327,19 @@ def test_watched_stocks_come_from_the_instrument_master():
     statement, _ = connection.recorded_cursor.calls[0]
     assert statement is WATCHED_INSTRUMENTS
     assert "WHERE is_watched" in statement
+
+
+# 빈 목표주가. 0으로 저장하면 `analyst_opinions` 툴이 그것을 실제 목표가로 읽어 추론
+# 프롬프트에 싣는다. 2026-08-28 운영 실측에서 262행 전부가 값을 갖고 0이 하나도 없었다.
+
+
+@pytest.mark.parametrize("blank", ["", "  ", "-"], ids=["empty", "spaces", "dash"])
+def test_an_empty_price_is_an_error_not_a_zero_target(blank):
+    with pytest.raises(KisPayloadError):
+        kis_opinion._decimal(blank, "hts_goal_prc")
+
+
+def test_a_real_zero_still_parses():
+    """제공처가 진짜 `0`을 보내면 그건 값이다. 막는 것은 **빈 칸**뿐이다."""
+    assert kis_opinion._decimal("0", "nday_dprt") == Decimal(0)
+    assert kis_opinion._decimal("-1.5", "nday_dprt") == Decimal("-1.5")

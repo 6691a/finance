@@ -34,29 +34,46 @@ const STYLE: cytoscape.StylesheetJson = [
     style: {
       label: "data(label)",
       "text-wrap": "wrap",
-      "text-max-width": "150px",
+      "text-max-width": "180px",
       "font-size": "12px",
       "font-weight": 600,
       "line-height": 1.25,
       "text-valign": "center",
+      "text-halign": "center",
       color: CHIP_INK,
       "background-color": "#c9ced6",
-      width: 44,
-      height: 44,
+      // **노드가 글자에 맞춰 커진다.** 크기를 숫자로 못 박으면 한국어 이름 하나가
+      // 길어질 때마다 원 밖으로 글자가 새어 나온다 — 2026-08-28에 실제로 그랬다.
+      // `padding`이 글자와 테두리 사이 여백이다.
+      shape: "round-rectangle",
+      width: "label",
+      height: "label",
+      padding: "12px",
     },
   },
-  { selector: "node.thesis", style: { shape: "ellipse", "background-color": "#8fb6e8", width: 92, height: 92 } },
-  // 중심 테두리는 노드 채움(밝음)과 canvas(어두움) 사이에 놓인다. 둘 다와 대비되어야 한다.
-  { selector: "node.center", style: { width: 132, height: 132, "border-width": 4, "border-color": "#eef2f7" } },
+  {
+    selector: "node.thesis",
+    style: { "background-color": "#8fb6e8", padding: "18px", "text-max-width": "220px" },
+  },
+  // 중심은 크기가 아니라 **테두리와 글자 크기**로 드러낸다. 크기를 못 박으면 그 안에서
+  // 다시 글자가 넘친다. 테두리는 노드 채움(밝음)과 canvas(어두움) 둘 다와 대비되어야 한다.
+  {
+    selector: "node.center",
+    style: { "border-width": 4, "border-color": "#eef2f7", "font-size": "13.5px" },
+  },
   {
     selector: "node.evidence",
-    style: {
-      shape: "round-rectangle",
-      "background-color": "#cfe3c9",
-      width: 170,
-      height: 56,
-      "text-max-width": "156px",
-    },
+    style: { "background-color": "#cfe3c9", "text-max-width": "200px" },
+  },
+  // 인과 그래프의 셋. 사건과 대상은 채움색으로, 채널은 그 사이를 잇는 가운데 노드다.
+  {
+    selector: "node.event",
+    style: { "background-color": "#8fb6e8", padding: "18px", "text-max-width": "240px" },
+  },
+  { selector: "node.channel", style: { "background-color": "#d8cfa8" } },
+  {
+    selector: "node.target",
+    style: { "background-color": "#cfe3c9", "text-max-width": "200px" },
   },
   {
     selector: "edge",

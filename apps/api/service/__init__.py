@@ -15,6 +15,13 @@
 매핑인지가 부르는 자리에서 사라진다.
 """
 
+from apps.api.service.causal import (
+    MarketCausalReadService,
+    UnknownPath,
+    build_detail,
+    build_paths,
+    path_of,
+)
 from apps.api.service.collection import CollectionReadService, build_health, health_of, record_of
 from apps.api.service.common import number
 from apps.api.service.document import (
@@ -74,15 +81,19 @@ __all__ = [
     "EventReadService",
     "IndicatorReadService",
     "LlmRunReadService",
+    "MarketCausalReadService",
     "PositioningReadService",
     "QualityReadService",
     "QuoteReadService",
     "ThesisReadService",
+    "UnknownPath",
     "beats_uniform",
     "build_bars",
     "build_curve",
     "build_daily",
+    "build_detail",
     "build_health",
+    "build_paths",
     "build_points",
     "build_quality",
     "build_symbols",
@@ -101,6 +112,7 @@ __all__ = [
     "narrative_row_of",
     "number",
     "outcome_of",
+    "path_of",
     "precedent_of",
     "produced_of",
     "project_graph",

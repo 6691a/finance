@@ -15,7 +15,7 @@ Codex용 규칙 원본은 [.codex/AGENTS.md](../.codex/AGENTS.md)이며 두 문�
 | `apps/models/` | SQLAlchemy 모델. 파일은 도메인 단위로만 나눈다(스키마와 무관) |
 | `apps/realtime/` | KIS 실시간 WebSocket 수집 서비스. `python -m apps.realtime.main`, `compose/prod/` 배포 |
 | `apps/api/` | 읽기 전용 조회 API(FastAPI)와 `frontend/dist` 정적 제공. 리소스는 늘어난다 — 지금은 시장 추론과 LLM 실행 원장. `python -m apps.api.main`, `compose/prod/api/` 배포 |
-| `frontend/` | 추론 추적·수집 원자료 화면 아홉(React·TypeScript·Vite·Cytoscape.js·uPlot SPA). **상주 서비스가 아니다** — Vite가 구운 `dist`를 `apps/api/`가 같은 origin에서 준다 |
+| `frontend/` | 추론 추적·수집 원자료·인과 그래프 화면 열(React·TypeScript·Vite·Cytoscape.js·uPlot SPA). **상주 서비스가 아니다** — Vite가 구운 `dist`를 `apps/api/`가 같은 origin에서 준다 |
 | `migrations/` | Alembic. 리비전 파일은 `migrations/versions` 하나를 모든 별칭이 공유한다 |
 | `migrations/routing.py` | 어떤 테이블이 어떤 DB 별칭에 속하는지 판단하는 순수 함수 |
 | `../airflow/dags/` | Airflow DAG. 폴더로 나누지 않는다 — 스케줄·재시도·실패 판정만 갖는 얇은 파일이다 (아래 규칙) |

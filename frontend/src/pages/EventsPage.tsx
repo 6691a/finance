@@ -6,6 +6,16 @@
 import DatasetBrowser, { type Dataset } from "../components/DatasetBrowser";
 import type { Column } from "../components/DataTable";
 import { integerText, kstText, numberText } from "../format";
+import {
+  CLAIM_KINDS,
+  DIRECTIONS,
+  EVENT_METRICS,
+  EVENT_TYPES,
+  labelOf,
+  SIGNAL_KINDS,
+  VERDICTS,
+  type Labels,
+} from "../labels";
 import { type StockNames, stockText } from "../stocks";
 import type {
   AnalystOpinionRow,
@@ -21,11 +31,26 @@ function text<T>(key: string, label: string, pick: (row: T) => string | null): C
   return { key, label, value: (row) => pick(row) ?? "—" };
 }
 
+/** 저장 값 그대로가 아니라 한국어 이름으로. **표에 없는 값은 그대로 보인다.** */
+function named<T>(
+  key: string,
+  label: string,
+  labels: Labels,
+  pick: (row: T) => string | null,
+): Column<T> {
+  return { key, label, value: (row) => labelOf(labels, pick(row)) };
+}
+
 function num<T>(key: string, label: string, pick: (row: T) => number | null): Column<T> {
   return { key, label, value: (row) => integerText(pick(row)) };
 }
 
-function dec<T>(key: string, label: string, pick: (row: T) => number | null, digits = 2): Column<T> {
+function dec<T>(
+  key: string,
+  label: string,
+  pick: (row: T) => number | null,
+  digits = 2,
+): Column<T> {
   return { key, label, value: (row) => numberText(pick(row), digits) };
 }
 
@@ -50,11 +75,15 @@ const DATASETS: Dataset[] = [
         empty: "이 구간에 주장이 없다.",
         rows: data.items,
         columns: [
-          { key: "c", label: "종목", value: (row: EventClaimRow) => stockText(row.stock_code, names) },
-          text<EventClaimRow>("e", "사건", (row) => row.event_type),
+          {
+            key: "c",
+            label: "종목",
+            value: (row: EventClaimRow) => stockText(row.stock_code, names),
+          },
+          named<EventClaimRow>("e", "사건", EVENT_TYPES, (row) => row.event_type),
           text<EventClaimRow>("p", "기간", (row) => row.period_key),
-          text<EventClaimRow>("m", "지표", (row) => row.metric),
-          text<EventClaimRow>("k", "종류", (row) => row.claim_kind),
+          named<EventClaimRow>("m", "지표", EVENT_METRICS, (row) => row.metric),
+          named<EventClaimRow>("k", "종류", CLAIM_KINDS, (row) => row.claim_kind),
           num<EventClaimRow>("v", "값(원)", (row) => row.value),
           num<EventClaimRow>("lo", "하단(원)", (row) => row.value_low),
           num<EventClaimRow>("hi", "상단(원)", (row) => row.value_high),
@@ -76,10 +105,14 @@ const DATASETS: Dataset[] = [
         empty: "이 구간에 판정이 없다.",
         rows: data.items,
         columns: [
-          { key: "c", label: "종목", value: (row: EventOutcomeRow) => stockText(row.stock_code, names) },
-          text<EventOutcomeRow>("e", "사건", (row) => row.event_type),
+          {
+            key: "c",
+            label: "종목",
+            value: (row: EventOutcomeRow) => stockText(row.stock_code, names),
+          },
+          named<EventOutcomeRow>("e", "사건", EVENT_TYPES, (row) => row.event_type),
           text<EventOutcomeRow>("p", "기간", (row) => row.period_key),
-          text<EventOutcomeRow>("m", "지표", (row) => row.metric),
+          named<EventOutcomeRow>("m", "지표", EVENT_METRICS, (row) => row.metric),
           num<EventOutcomeRow>("ex", "기대(원)", (row) => row.expected_value),
           num<EventOutcomeRow>("n", "기대 수", (row) => row.expectation_count),
           num<EventOutcomeRow>("ac", "실제(원)", (row) => row.actual_value),
@@ -91,8 +124,10 @@ const DATASETS: Dataset[] = [
               row.verdict === null ? (
                 <span className="badge">보류</span>
               ) : (
-                <span className={`badge ${row.verdict === "beat" ? "badge-ok" : row.verdict === "miss" ? "badge-bad" : ""}`}>
-                  {row.verdict}
+                <span
+                  className={`badge ${row.verdict === "beat" ? "badge-ok" : row.verdict === "miss" ? "badge-bad" : ""}`}
+                >
+                  {labelOf(VERDICTS, row.verdict)}
                 </span>
               ),
           },
@@ -136,13 +171,13 @@ const DATASETS: Dataset[] = [
         columns: [
           text<SignalRow>("s", "심볼", (row) => row.symbol),
           text<SignalRow>("d", "거래일", (row) => row.signal_date),
-          text<SignalRow>("k", "종류", (row) => row.kind),
+          named<SignalRow>("k", "종류", SIGNAL_KINDS, (row) => row.kind),
           {
             key: "dir",
             label: "방향",
             value: (row: SignalRow) => (
               <span className={`badge ${row.direction === "up" ? "badge-ok" : "badge-bad"}`}>
-                {row.direction}
+                {labelOf(DIRECTIONS, row.direction)}
               </span>
             ),
           },
@@ -168,7 +203,11 @@ const DATASETS: Dataset[] = [
         empty: "이 구간에 투자의견이 없다.",
         rows: data.items,
         columns: [
-          { key: "c", label: "종목", value: (row: AnalystOpinionRow) => stockText(row.stock_code, names) },
+          {
+            key: "c",
+            label: "종목",
+            value: (row: AnalystOpinionRow) => stockText(row.stock_code, names),
+          },
           text<AnalystOpinionRow>("d", "발표일", (row) => row.business_date),
           text<AnalystOpinionRow>("b", "증권사", (row) => row.broker_name),
           text<AnalystOpinionRow>("o", "의견", (row) => row.opinion),

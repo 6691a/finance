@@ -9,6 +9,8 @@
 import { NavLink, Navigate, Route, Routes } from "react-router-dom";
 
 import Boundary from "./components/Boundary";
+import CausalDetailPage from "./pages/CausalDetailPage";
+import CausalPage from "./pages/CausalPage";
 import CollectionPage from "./pages/CollectionPage";
 import CurvePage from "./pages/CurvePage";
 import DocumentDetailPage from "./pages/DocumentDetailPage";
@@ -39,6 +41,7 @@ export default function App() {
           <NavLink to="/positioning">수급</NavLink>
           <NavLink to="/events">사건</NavLink>
           <NavLink to="/collection">수집</NavLink>
+          <NavLink to="/causal">인과</NavLink>
           <NavLink to="/runs">실행</NavLink>
           <NavLink to="/theses">판단</NavLink>
           <NavLink to="/quality">품질</NavLink>
@@ -60,6 +63,8 @@ export default function App() {
             <Route path="/positioning" element={<PositioningPage />} />
             <Route path="/events" element={<EventsPage />} />
             <Route path="/collection" element={<CollectionPage />} />
+            <Route path="/causal" element={<CausalPage />} />
+            <Route path="/causal/:pathId" element={<CausalDetailPage />} />
             <Route path="/runs" element={<RunsPage />} />
             <Route path="/runs/:llmRunId" element={<RunDetailPage />} />
             <Route path="/runs/:llmRunId/tool-calls/:seq" element={<ToolCallPage />} />

@@ -288,6 +288,32 @@ def test_every_symbol_kind_has_a_table_on_both_axes():
     assert set(DAILY_TABLES) | {QuoteSymbolKind.EQUITY} == set(QuoteSymbolKind)
 
 
+def test_only_the_index_future_daily_reads_the_contract_code():
+    """월물은 지수선물에만 있는 칸이다. 다른 kind에 넣으면 조회 자체가 죽는다.
+
+    빈 배열이 "월물 개념이 없다"이므로 응답 모양은 kind마다 다르다.
+    """
+    future = str(
+        QuoteReadRepository.daily_statement(
+            kind=QuoteSymbolKind.INDEX_FUTURE,
+            symbol="KOSPI200_FUT",
+            start=date(2026, 1, 1),
+            end=date(2026, 8, 27),
+        ).compile()
+    )
+    index = str(
+        QuoteReadRepository.daily_statement(
+            kind=QuoteSymbolKind.INDEX,
+            symbol="KOSPI",
+            start=date(2026, 1, 1),
+            end=date(2026, 8, 27),
+        ).compile()
+    )
+
+    assert "contract_code" in future
+    assert "contract_code" not in index
+
+
 def test_the_domestic_daily_comes_from_the_investor_trade_table():
     """`stock_daily`는 해외 상장 종목용이고 국내 일봉은 수급 테이블이 갖는다."""
     krx = str(

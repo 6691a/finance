@@ -170,8 +170,13 @@ class QuoteReadRepository:
         """
         if kind is not QuoteSymbolKind.EQUITY:
             table = DAILY_TABLES[kind]
+            columns = [table.business_date, table.open, table.high, table.low, table.close, table.volume]
+            # **월물은 지수선물에만 있다.** 다른 kind의 테이블에는 그 칸이 없어서 조건 없이
+            # 넣으면 조회가 죽는다. 부르는 쪽은 배열이 비었는지로 구분한다.
+            if kind is QuoteSymbolKind.INDEX_FUTURE:
+                columns.append(IndexFutureDaily.contract_code)
             return (
-                select(table.business_date, table.open, table.high, table.low, table.close, table.volume)
+                select(*columns)
                 .where(table.symbol == symbol, table.business_date >= start, table.business_date <= end)
                 .order_by(table.business_date)
                 .limit(limit + 1)

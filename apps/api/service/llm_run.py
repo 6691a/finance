@@ -51,7 +51,7 @@ def item_of(run: ThesisLlmRun, produced: int = 0) -> LlmRunItem:
         id=run.id,
         kind=run.kind.value,
         run_date=run.run_date,
-        run_slot=run.run_slot.value,
+        run_slot=None if run.run_slot is None else run.run_slot.value,
         horizon_days=run.horizon_days,
         as_of_at=run.as_of_at,
         dag_run_id=run.dag_run_id,
@@ -68,6 +68,12 @@ def item_of(run: ThesisLlmRun, produced: int = 0) -> LlmRunItem:
         tool_result_chars=run.tool_result_chars,
         investigation_truncated=run.investigation_truncated,
         produced_count=produced,
+        subjects_requested=run.subjects_requested,
+        subjects_answered=run.subjects_answered,
+        prompt_tokens=run.prompt_tokens,
+        cached_prompt_tokens=run.cached_prompt_tokens,
+        completion_tokens=run.completion_tokens,
+        reasoning_tokens=run.reasoning_tokens,
         url=run_url(run.id),
     )
 

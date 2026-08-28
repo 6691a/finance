@@ -61,7 +61,7 @@ export default function RunDetailPage() {
               <dd>{run.status}</dd>
               <dt>대상일 · 슬롯</dt>
               <dd>
-                {run.run_date} · {run.run_slot}
+                {run.run_date} · {run.run_slot ?? "—"}
                 {run.horizon_days === null ? "" : ` · T+${run.horizon_days}`}
               </dd>
               <dt>모델 · 판 · 시도</dt>
@@ -73,6 +73,30 @@ export default function RunDetailPage() {
               <dt>왕복 · 툴 · 결과 문자</dt>
               <dd>
                 {run.tool_rounds} · {run.tool_call_count} · {integerText(run.tool_result_chars)}
+              </dd>
+              <dt>대상(답/요청)</dt>
+              <dd>
+                {run.subjects_requested === null ? (
+                  "—"
+                ) : (
+                  <>
+                    {run.subjects_answered ?? 0}/{run.subjects_requested}
+                    {/* 요청보다 적으면 조용히 빠진 대상이 있다는 뜻이라 밝힌다. */}
+                    {(run.subjects_answered ?? 0) < run.subjects_requested && " · 빠진 대상이 있다"}
+                  </>
+                )}
+              </dd>
+              <dt>입력 토큰(캐시)</dt>
+              <dd>
+                {run.prompt_tokens === null
+                  ? "—"
+                  : `${integerText(run.prompt_tokens)} (${integerText(run.cached_prompt_tokens)} 캐시)`}
+              </dd>
+              <dt>출력 토큰(사고)</dt>
+              <dd>
+                {run.completion_tokens === null
+                  ? "—"
+                  : `${integerText(run.completion_tokens)} (${integerText(run.reasoning_tokens)} 사고)`}
               </dd>
             </dl>
             {run.status === "running" && (

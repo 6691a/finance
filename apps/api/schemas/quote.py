@@ -100,3 +100,11 @@ class DailySeries(ApiModel):
     low: tuple[float, ...] = Field(default=(), description="그 거래일의 저가.")
     close: tuple[float, ...] = Field(default=(), description="그 거래일의 종가.")
     volume: tuple[float | None, ...] = Field(default=(), description="그 거래일의 거래량.")
+    contracts: tuple[str | None, ...] = Field(
+        default=(),
+        description=(
+            "그 거래일의 실제 월물 코드. **`index_future`에만 있고 나머지 kind에서는 빈 배열이다.** "
+            "월물이 바뀌면 가격에 갭이 생기는데, 이 값이 없으면 그 갭이 시장 급변인지 롤오버인지 "
+            "구분할 수 없다. Yahoo 연속 심볼(ES=F)은 null이다."
+        ),
+    )

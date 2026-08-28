@@ -48,7 +48,9 @@ export default function QuotesPage() {
   const kind = params.get("kind") ?? "";
   const country = params.get("country") ?? "";
 
-  const resource = useJson<QuoteSymbolList>("/api/quotes/symbols");
+  // **마스터 전부를 받는다.** 이 화면은 kind·국가를 화면 안에서 거르므로 한 쪽만 받으면
+  // 거르기가 첫 쪽 안에서만 맞는다. 심볼 마스터는 수십 행이라 상한(200) 한 쪽에 들어간다.
+  const resource = useJson<QuoteSymbolList>("/api/quotes/symbols?limit=200");
 
   const items = useMemo(() => {
     const all = resource.data?.items ?? [];
@@ -73,8 +75,8 @@ export default function QuotesPage() {
     <section>
       <h2>시세</h2>
       <p className="state">
-        수집 중인 심볼과 **실제로 쌓인 구간**이다. 행 수가 0이면 마스터에만 있고 수집이 안
-        돌고 있다는 뜻이다.
+        수집 중인 심볼과 **실제로 쌓인 구간**이다. 행 수가 0이면 마스터에만 있고 수집이 안 돌고
+        있다는 뜻이다.
       </p>
       <div className="filters">
         <label>
@@ -107,7 +109,9 @@ export default function QuotesPage() {
             <Empty>이 조건에 심볼이 없다.</Empty>
           ) : (
             <table>
-              <caption>분봉과 일봉은 축이 다르다 — 분봉은 UTC 시각, 일봉은 그 시장의 거래일이다.</caption>
+              <caption>
+                분봉과 일봉은 축이 다르다 — 분봉은 UTC 시각, 일봉은 그 시장의 거래일이다.
+              </caption>
               <thead>
                 <tr>
                   <th scope="col">종류</th>

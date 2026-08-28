@@ -7,6 +7,7 @@ import { Link, useSearchParams } from "react-router-dom";
 
 import { query, useJson } from "../api";
 import { Async, Empty } from "../components/AsyncState";
+import Pager, { pageOf } from "../components/Pager";
 import { numberText, percentText, signedPercentText } from "../format";
 import type { ThesisList } from "../types";
 
@@ -120,7 +121,11 @@ export default function ThesesPage() {
                       <td className="down">{percentText(thesis.prob_down)}</td>
                       <td>{percentText(thesis.prob_flat)}</td>
                       <td>{signedPercentText(thesis.up_return_pct)}</td>
-                      <td>{thesis.down_return_pct === null ? "—" : `-${thesis.down_return_pct.toFixed(2)}%`}</td>
+                      <td>
+                        {thesis.down_return_pct === null
+                          ? "—"
+                          : `-${thesis.down_return_pct.toFixed(2)}%`}
+                      </td>
                       <td>{thesis.graded_horizons}</td>
                       <td>{thesis.narrated_horizons}</td>
                       <td>{numberText(thesis.mean_brier)}</td>
@@ -128,17 +133,7 @@ export default function ThesesPage() {
                   ))}
                 </tbody>
               </table>
-              <div className="pager">
-                <button type="button" disabled={offset === 0} onClick={() => page(Math.max(0, offset - data.limit))}>
-                  이전
-                </button>
-                <button type="button" disabled={!data.has_more} onClick={() => page(offset + data.limit)}>
-                  다음
-                </button>
-                <span>
-                  {offset + 1}–{offset + data.items.length}
-                </span>
-              </div>
+              <Pager page={pageOf(data)} onMove={page} />
             </>
           )
         }

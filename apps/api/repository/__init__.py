@@ -8,6 +8,7 @@
 리포지토리들이 공유하는 것이고, `__init__.py`는 **재수출만** 한다.
 """
 
+from apps.api.repository.causal import MarketCausalReadRepository, PathRows
 from apps.api.repository.collection import CollectionReadRepository
 from apps.api.repository.common import (
     DEFAULT_LIMIT,
@@ -81,7 +82,9 @@ __all__ = [
     "LlmRunDetailRows",
     "LlmRunListRows",
     "LlmRunReadRepository",
+    "MarketCausalReadRepository",
     "NarrativeGrade",
+    "PathRows",
     "PositioningReadRepository",
     "QualityReadRepository",
     "QualityRows",

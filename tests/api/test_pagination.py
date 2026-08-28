@@ -23,6 +23,7 @@ EXEMPT: dict[str, str] = {
     "/api/llm-runs/{llm_run_id}/tool-calls/{seq}": "단건",
     "/api/theses/{thesis_id}": "단건",
     "/api/theses/{thesis_id}/graph": "한 추론의 그래프 하나다",
+    "/api/causal/paths/{path_id}": "단건과 그 사건의 형제 경로 전부. 한 사건이 한 판이다",
 }
 
 

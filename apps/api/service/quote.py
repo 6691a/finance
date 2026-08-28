@@ -118,6 +118,8 @@ def build_bars(
         low=tuple(number(value) or 0.0 for value in columns(rows, 3)),
         close=tuple(number(value) or 0.0 for value in columns(rows, 4)),
         volume=tuple(number(value) for value in columns(rows, 5)),
+        # 지수선물만 칸이 하나 더 온다. 없는 kind는 빈 배열이고 그것이 "월물 개념이 없다"다.
+        contracts=tuple(columns(rows, 6)) if rows and len(rows[0]) > 6 else (),
     )
 
 
@@ -141,6 +143,8 @@ def build_daily(
         low=tuple(number(value) or 0.0 for value in columns(rows, 3)),
         close=tuple(number(value) or 0.0 for value in columns(rows, 4)),
         volume=tuple(number(value) for value in columns(rows, 5)),
+        # 지수선물만 칸이 하나 더 온다. 없는 kind는 빈 배열이고 그것이 "월물 개념이 없다"다.
+        contracts=tuple(columns(rows, 6)) if rows and len(rows[0]) > 6 else (),
     )
 
 

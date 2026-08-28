@@ -196,6 +196,8 @@ export default function QuoteDetailPage() {
             // 부를지를 정할 뿐이고, 지금 그려야 할 것은 지금 손에 있는 응답이다.
             const bars = isBar(series);
             const axis = bars ? series.times : series.dates;
+            // 월물 배열은 지수선물 일봉에만 온다. 빈 배열이면 "월물 개념이 없다"다.
+            const contracts = !bars && series.contracts.length > 0;
             const last = lastPoint(axis, series.close);
             return series.points === 0 ? (
               <Empty>이 구간에 봉이 없다. 기간을 넓히거나 다른 거래소를 골라 본다.</Empty>
@@ -246,6 +248,8 @@ export default function QuoteDetailPage() {
                       <th scope="col">저가</th>
                       <th scope="col">종가</th>
                       <th scope="col">거래량</th>
+                      {/* 지수선물만 월물이 온다. 갭이 급변인지 롤오버인지 이 칸이 가른다. */}
+                      {contracts && <th scope="col">월물</th>}
                     </tr>
                   </thead>
                   <tbody>
@@ -261,6 +265,7 @@ export default function QuoteDetailPage() {
                           <td>{numberText(series.low[index], 2)}</td>
                           <td>{numberText(series.close[index], 2)}</td>
                           <td>{integerText(series.volume[index])}</td>
+                          {contracts && <td>{series.contracts[index] ?? "—"}</td>}
                         </tr>
                       ))}
                   </tbody>

@@ -37,6 +37,12 @@ export const RUN: LlmRunItem = {
   tool_result_chars: 54555,
   investigation_truncated: false,
   produced_count: 1,
+  subjects_requested: 6,
+  subjects_answered: 6,
+  prompt_tokens: 41200,
+  cached_prompt_tokens: 38000,
+  completion_tokens: 5100,
+  reasoning_tokens: 3900,
   url: "/api/llm-runs/9",
 };
 
@@ -123,7 +129,11 @@ export const RUN_DETAIL: LlmRunDetail = {
 export const CALL_DETAIL: ToolCallDetail = { ...CALL, result: '{"rows": [1, 2]}' };
 
 /** JSON이 아닌 결과. 파싱 실패는 화면 오류가 아니라 원문 표시다. */
-export const PLAIN_CALL_DETAIL: ToolCallDetail = { ...CALL, seq: 4, result: "not json <script>alert(1)</script>" };
+export const PLAIN_CALL_DETAIL: ToolCallDetail = {
+  ...CALL,
+  seq: 4,
+  result: "not json <script>alert(1)</script>",
+};
 
 export const THESIS_LIST: ThesisList = {
   items: [
@@ -219,7 +229,13 @@ export const GRAPH: GraphResponse = {
     {
       id: "thesis:2",
       labels: ["Thesis"],
-      properties: { id: 2, run_date: "2026-08-25", run_slot: "pre_open", subject_code: "KOSPI", label: "코스피" },
+      properties: {
+        id: 2,
+        run_date: "2026-08-25",
+        run_slot: "pre_open",
+        subject_code: "KOSPI",
+        label: "코스피",
+      },
     },
     {
       id: "document:4471",
@@ -230,7 +246,12 @@ export const GRAPH: GraphResponse = {
     { id: "mystery:1", labels: ["Rumour"], properties: {} },
   ],
   edges: [
-    { type: "CITES", start: "thesis:1", end: "document:4471", properties: { rank: 1, direction: "up" } },
+    {
+      type: "CITES",
+      start: "thesis:1",
+      end: "document:4471",
+      properties: { rank: 1, direction: "up" },
+    },
     { type: "INFORMED_BY", start: "thesis:1", end: "thesis:2", properties: {} },
     { type: "WHISPERS", start: "thesis:1", end: "mystery:1", properties: {} },
   ],

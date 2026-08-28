@@ -60,6 +60,7 @@ describe("barChartData", () => {
       low: [3199, 3208],
       close: [3205, 3212],
       volume: [1000, 2000],
+      contracts: [],
     };
 
     const { data, labels } = barChartData(overnight);
@@ -118,6 +119,7 @@ describe("dailyChartData", () => {
       low: [1, 2],
       close: [1.5, 2.5],
       volume: [10, null],
+      contracts: [],
     };
 
     const { data, labels } = dailyChartData(daily);
@@ -140,6 +142,7 @@ describe("dailyChartData", () => {
       low: [1, 2],
       close: [1.5, 2.5],
       volume: [10, 20],
+      contracts: [],
     };
 
     expect(dailyChartData(weekend).data[0]).toEqual([0, 1]);

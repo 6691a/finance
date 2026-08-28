@@ -8,6 +8,7 @@ import { Link, useSearchParams } from "react-router-dom";
 
 import { query, useJson } from "../api";
 import { Async, Empty } from "../components/AsyncState";
+import Pager, { pageOf } from "../components/Pager";
 import { durationText, integerText, kstText } from "../format";
 import type { LlmRunList } from "../types";
 
@@ -134,6 +135,9 @@ export default function RunsPage() {
                     <th scope="col">결과 문자</th>
                     <th scope="col">소요</th>
                     <th scope="col">산출물</th>
+                    <th scope="col">대상(답/요청)</th>
+                    <th scope="col">입력(캐시)</th>
+                    <th scope="col">출력(사고)</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -146,7 +150,7 @@ export default function RunsPage() {
                       </td>
                       <td>{run.run_date}</td>
                       <td>{run.kind}</td>
-                      <td>{run.run_slot}</td>
+                      <td>{run.run_slot ?? "—"}</td>
                       <td>{run.horizon_days === null ? "—" : `T+${run.horizon_days}`}</td>
                       <td>{run.llm_model}</td>
                       <td>{run.prompt_version}</td>
@@ -159,21 +163,26 @@ export default function RunsPage() {
                       <td>{integerText(run.tool_result_chars)}</td>
                       <td>{durationText(run.duration_ms)}</td>
                       <td>{run.produced_count}</td>
+                      <td>
+                        {run.subjects_requested === null
+                          ? "—"
+                          : `${run.subjects_answered ?? 0}/${run.subjects_requested}`}
+                      </td>
+                      <td>
+                        {run.prompt_tokens === null
+                          ? "—"
+                          : `${integerText(run.prompt_tokens)} (${integerText(run.cached_prompt_tokens)})`}
+                      </td>
+                      <td>
+                        {run.completion_tokens === null
+                          ? "—"
+                          : `${integerText(run.completion_tokens)} (${integerText(run.reasoning_tokens)})`}
+                      </td>
                     </tr>
                   ))}
                 </tbody>
               </table>
-              <div className="pager">
-                <button type="button" disabled={offset === 0} onClick={() => page(Math.max(0, offset - data.limit))}>
-                  이전
-                </button>
-                <button type="button" disabled={!data.has_more} onClick={() => page(offset + data.limit)}>
-                  다음
-                </button>
-                <span>
-                  {offset + 1}–{offset + data.items.length}
-                </span>
-              </div>
+              <Pager page={pageOf(data)} onMove={page} />
             </>
           )
         }

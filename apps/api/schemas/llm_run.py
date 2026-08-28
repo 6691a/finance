@@ -113,7 +113,13 @@ class LlmRunItem(ApiModel):
             "실행일이 아니므로 목록 필터의 축과 다르다."
         )
     )
-    run_slot: str = Field(description="대상 슬롯. 해설이면 원 추론의 슬롯이다.")
+    run_slot: str | None = Field(
+        default=None,
+        description=(
+            "대상 슬롯. 해설이면 원 추론의 슬롯이다. **인과 그래프(`causal`) 실행은 null이다** — "
+            "그 대화의 축은 슬롯이 아니라 주(week)다."
+        ),
+    )
     horizon_days: int | None = Field(
         default=None, description="해설 대화의 지평(1·3·5). 생성 대화는 null이다."
     )
@@ -160,6 +166,30 @@ class LlmRunItem(ApiModel):
             "이 대화가 만든 산출물 수. 생성 대화는 추론 수, 해설 대화는 해설한 지평 수다. "
             "**실패·running 실행은 0이다.**"
         ),
+    )
+    subjects_requested: int | None = Field(
+        default=None,
+        description="이 대화에 요청한 대상 수. 한 대화가 대상 여럿을 다루는 흐름에만 있다.",
+    )
+    subjects_answered: int | None = Field(
+        default=None,
+        description=(
+            "그중 모델이 실제로 답한 수. **요청보다 적으면 조용히 빠진 대상이 있다는 뜻이다.**"
+        ),
+    )
+    prompt_tokens: int | None = Field(default=None, description="입력 토큰. 캐시분을 포함한다.")
+    cached_prompt_tokens: int | None = Field(
+        default=None,
+        description=(
+            "그중 프롬프트 캐시에서 읽은 입력 토큰. **`prompt_tokens`에 포함된다** — "
+            "제공처가 이 부분을 훨씬 싸게 청구하므로 이 칸이 없으면 실제 비용을 알 수 없다."
+        ),
+    )
+    completion_tokens: int | None = Field(
+        default=None, description="출력 토큰. **`reasoning_tokens`를 포함한다.**"
+    )
+    reasoning_tokens: int | None = Field(
+        default=None, description="그중 사고 토큰. 제공처가 안 주면 null이다."
     )
     url: str = Field(description="실행 상세 경로.")
 

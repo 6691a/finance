@@ -278,6 +278,38 @@ it("데이터셋 표에도 쪽 이동이 붙고 데이터셋을 바꾸면 첫 �
   expect(last).not.toContain("offset=");
 });
 
+it("필터 없는 데이터셋도 쪽이 요청까지 간다", async () => {
+  // 개장 캘린더의 `path`는 인자를 안 받는다. 쪽을 데이터셋에 맡기면 그 데이터셋만
+  // 조용히 첫 쪽에 갇힌다 — 2026-08-28에 실제로 그랬다.
+  const page = {
+    items: [
+      {
+        market_code: "KRX",
+        market_name: "한국거래소",
+        country_code: "KR",
+        session_date: "2026-08-28",
+        kis_business_day: true,
+        kis_trading_day: true,
+        kis_open_day: true,
+        effective_open_day: true,
+        local_settlement_date: null,
+        domestic_settlement_date: null,
+        verified_by: null,
+      },
+    ],
+    limit: 50,
+    offset: 0,
+    has_more: true,
+  };
+  const log = stubFetch({ "/api/collection/sessions": page });
+  renderAt("/collection?dataset=sessions", "/collection", <CollectionPage />);
+  await screen.findByRole("table");
+
+  await userEvent.click(screen.getByRole("button", { name: /다음/ }));
+
+  expect(log.paths.some((path) => path.includes("offset=50"))).toBe(true);
+});
+
 it("종목 수급은 기관을 일곱으로 나눠 두 번째 표에 그린다", async () => {
   // 제공처가 이 단위로 준다. 합쳐 두면 "연기금이 샀나 금융투자가 샀나"를 되물을 수 없다.
   const rows = {

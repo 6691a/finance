@@ -21,6 +21,7 @@
 
 from fastapi import APIRouter
 
+from apps.api.routes.causal import router as causal_router
 from apps.api.routes.collection import router as collection_router
 from apps.api.routes.document import router as document_router
 from apps.api.routes.event import router as event_router
@@ -40,12 +41,14 @@ routers: tuple[APIRouter, ...] = (
     positioning_router,
     event_router,
     collection_router,
+    causal_router,
     llm_run_router,
     quality_router,
     thesis_router,
 )
 
 __all__ = [
+    "causal_router",
     "collection_router",
     "document_router",
     "event_router",

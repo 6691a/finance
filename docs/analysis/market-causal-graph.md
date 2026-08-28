@@ -7,6 +7,9 @@
   선반영 표현(§9)은 [정책금리 수집](../collection/policy-rate-collection.md)이 선행 조건이다.
 - 목표: 한 주에 일어난 사건이 어떤 경로로 어떤 대상에 닿았는지를 LLM이 사후에 정리해
   **노드와 엣지로 누적**한다. 주가 쌓이면서 같은 노드를 공유해 다중 홉 탐색이 가능해진다.
+- 조회: `GET /api/causal/paths`·`/events`·`/channels`와 화면 `/causal`이 붙었다(2026-08-28,
+  [15단계](market-thesis/15-collection-browser.md) §8.3). **표로 먼저 낸다** — 지금 저장된 것이
+  4주·경로 14개라 그래프보다 표가 더 많이 읽힌다.
 - 산출물: `apps/models/analysis/causal.py`, 수기 리비전 `b4e91c72a3d5`,
   `airflow/modules/causal/`(`domain`·`candidates`·`generation`·`store`·`run`),
   `airflow/modules/prompts/causal_graph.yaml`, `airflow/sql/postgres/`의 SQL 열다섯,

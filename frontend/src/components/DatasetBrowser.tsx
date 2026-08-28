@@ -44,6 +44,21 @@ export interface Dataset {
   choices?: (data: never) => { name: string; values: string[] } | null;
 }
 
+/**
+ * 쪽을 경로에 붙인다. **데이터셋이 빠뜨려도 붙는다.**
+ *
+ * `path`는 데이터셋이 쓰는 함수라 필터를 안 받는 것도 있다(개장 캘린더는 인자가 없다).
+ * 그것을 그대로 두면 그 데이터셋만 조용히 첫 쪽에 갇힌다 — 2026-08-28에 실제로 그랬다.
+ * 쪽은 화면의 일이지 데이터셋의 일이 아니므로 여기서 붙인다.
+ */
+export function withOffset(path: string, offset: number): string {
+  if (offset <= 0) return path;
+  const [base = "", search = ""] = path.split("?");
+  const params = new URLSearchParams(search);
+  params.set("offset", String(offset));
+  return `${base}?${params}`;
+}
+
 /** 기간 프리셋. 데이터셋마다 행 밀도가 달라 기본을 다르게 준다. */
 export function daysAgo(days: number): string {
   return new Date(Date.now() - days * 86_400_000).toISOString().slice(0, 10);
@@ -79,9 +94,8 @@ export default function DatasetBrowser({
   if (active.filters.includes("stock") && stock) scoped.set("stock_code", stock);
   if (active.filters.includes("market") && market) scoped.set("market", market);
   if (active.filters.includes("day") && day) scoped.set("standard_date", day);
-  if (offset > 0) scoped.set("offset", String(offset));
 
-  const resource = useJson<never>(active.path(scoped));
+  const resource = useJson<never>(withOffset(active.path(scoped), offset));
   // **이름은 장식이라 본 데이터를 막지 않는다.** 아직 안 왔으면 코드가 그대로 보인다.
   const names = useStockNames();
 

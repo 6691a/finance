@@ -170,7 +170,8 @@ export interface LlmRunItem {
   id: number;
   kind: string;
   run_date: DayText;
-  run_slot: string;
+  /** **인과 그래프(`causal`) 실행은 null이다** — 그 대화의 축은 슬롯이 아니라 주다. */
+  run_slot: string | null;
   horizon_days: number | null;
   as_of_at: UtcText;
   dag_run_id: string;
@@ -187,6 +188,16 @@ export interface LlmRunItem {
   tool_result_chars: number;
   investigation_truncated: boolean;
   produced_count: number;
+  subjects_requested: number | null;
+  /** 요청보다 적으면 조용히 빠진 대상이 있다. */
+  subjects_answered: number | null;
+  /** 캐시분을 포함한 입력 토큰. */
+  prompt_tokens: number | null;
+  /** `prompt_tokens`에 포함된다 — 이 부분이 훨씬 싸다. */
+  cached_prompt_tokens: number | null;
+  /** `reasoning_tokens`를 포함한다. */
+  completion_tokens: number | null;
+  reasoning_tokens: number | null;
   url: string;
 }
 
@@ -288,6 +299,11 @@ export interface DailySeries {
   low: number[];
   close: number[];
   volume: (number | null)[];
+  /**
+   * 그 거래일의 실제 월물. **`index_future`에만 있고 나머지는 빈 배열이다.** 월물이 바뀌면
+   * 가격에 갭이 생기는데, 이 값이 없으면 그 갭이 시장 급변인지 롤오버인지 구분할 수 없다.
+   */
+  contracts: (string | null)[];
 }
 
 export interface IndicatorSeriesItem {
@@ -701,4 +717,49 @@ export interface Paged<T> extends Items<T> {
   limit: number;
   offset: number;
   has_more: boolean;
+}
+
+/** 인과 그래프의 경로 하나. 사건 → 채널 체인 → 대상이다. */
+export interface CausalPathRow {
+  id: number;
+  week_start: DayText;
+  event_id: number;
+  event_title: string;
+  event_occurred_on: DayText;
+  /** 값의 성격이 아니라 저장소를 가른다 — `US10Y`는 시세, `KTB10Y`는 지표다. */
+  target_kind: string;
+  target_code: string;
+  /** 사건 쪽에서 대상 쪽 순서다. */
+  channels: string[];
+  sign: string;
+  /** observed는 함께 관찰됨, plausible은 해석. **둘 다 인과의 증명이 아니다.** */
+  confidence: string;
+  reasoning: string;
+  return_week_change: number;
+  return_t1_change: number;
+  return_t5_change: number;
+  /** percent·basis_point. **숫자만 읽으면 안 된다.** */
+  return_unit: string;
+  llm_run_id: number | null;
+}
+
+/** 경로 하나와 **그 사건이 그 주에 뻗은 경로 전부**. 자기 자신을 포함한다. */
+export interface CausalPathDetail {
+  path: CausalPathRow;
+  siblings: CausalPathRow[];
+}
+
+export interface CausalEventRow {
+  id: number;
+  title: string;
+  occurred_on: DayText;
+  first_seen_week: DayText;
+  paths: number;
+}
+
+export interface CausalChannelRow {
+  id: number;
+  name: string;
+  first_seen_week: DayText;
+  steps: number;
 }

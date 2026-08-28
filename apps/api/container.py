@@ -21,6 +21,7 @@ from apps.api.repository import (
     EventReadRepository,
     IndicatorReadRepository,
     LlmRunReadRepository,
+    MarketCausalReadRepository,
     PositioningReadRepository,
     QualityReadRepository,
     QuoteReadRepository,
@@ -32,6 +33,7 @@ from apps.api.service import (
     EventReadService,
     IndicatorReadService,
     LlmRunReadService,
+    MarketCausalReadService,
     PositioningReadService,
     QualityReadService,
     QuoteReadService,
@@ -166,6 +168,16 @@ class ApiContainer(containers.DeclarativeContainer):
     event_service = providers.Factory(
         EventReadService,
         repository=event_repository,
+    )
+
+    causal_repository = providers.Factory(
+        MarketCausalReadRepository,
+        session_factory=session_factory,
+    )
+
+    causal_service = providers.Factory(
+        MarketCausalReadService,
+        repository=causal_repository,
     )
 
     collection_repository = providers.Factory(

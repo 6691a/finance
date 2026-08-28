@@ -103,6 +103,7 @@ const DAILY: DailySeries = {
   low: [3080],
   close: [3140],
   volume: [null],
+  contracts: [],
 };
 
 afterEach(() => vi.unstubAllGlobals());
@@ -194,6 +195,35 @@ it("일봉으로 바꾸면 거래일 축을 쓴다", async () => {
 
   await screen.findByRole("table");
   expect(screen.getByRole("columnheader", { name: "거래일" })).toBeTruthy();
+});
+
+it("지수선물 일봉은 월물을 함께 보인다", async () => {
+  // 월물이 바뀌면 가격에 갭이 생긴다. 이 칸이 없으면 그 갭이 급변인지 롤오버인지 못 가른다.
+  const future = {
+    ...DAILY,
+    kind: "index_future",
+    symbol: "KOSPI200_FUT",
+    contracts: ["A01609"],
+  };
+  stubFetch({ "/api/quotes/daily": future });
+  renderAt(
+    "/quotes/index_future/KOSPI200_FUT?mode=daily",
+    "/quotes/:kind/:symbol",
+    <QuoteDetailPage />,
+  );
+
+  await screen.findByRole("table");
+  expect(screen.getByRole("columnheader", { name: "월물" })).toBeTruthy();
+  expect(screen.getByRole("cell", { name: "A01609" })).toBeTruthy();
+});
+
+it("월물이 없는 kind에는 그 열이 없다", async () => {
+  // 빈 배열이 "월물 개념이 없다"다. 빈 열을 그리면 없는 개념이 있는 것처럼 보인다.
+  stubFetch({ "/api/quotes/daily": DAILY });
+  renderAt("/quotes/index/KOSPI?mode=daily", "/quotes/:kind/:symbol", <QuoteDetailPage />);
+
+  await screen.findByRole("table");
+  expect(screen.queryByRole("columnheader", { name: "월물" })).toBeNull();
 });
 
 it("분봉↔일봉을 오갈 때 화면이 죽지 않는다", async () => {

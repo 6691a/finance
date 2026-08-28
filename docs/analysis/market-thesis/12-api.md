@@ -53,6 +53,16 @@ GET /api/theses/{thesis_id}/graph
 **상세와 평가를 나누지 않는다.** 상세 화면은 언제나 둘 다 필요하다. 라우트를 가르면
 클라이언트가 매번 두 번 부르고 우리는 조인을 두 번 쓴다.
 
+[14-web-ui.md](14-web-ui.md)가 같은 앱에 실행 원장과 품질 넷을 더했다(`/api/llm-runs`,
+`/api/llm-runs/{id}`, `/api/llm-runs/{id}/tool-calls/{seq}`, `/api/theses/quality`).
+**`/api/theses/quality`는 정적 경로라 `/api/theses/{thesis_id}`보다 먼저 등록한다** —
+순서가 뒤집히면 `quality`가 동적 id의 422로 잡힌다.
+
+[15-collection-browser.md](15-collection-browser.md)가 수집 원자료 여섯을 더했다
+(`/api/quotes/symbols`·`/bars`·`/daily`, `/api/indicators/series`·`/curve`·`/observations`).
+**시세 봉만 컬럼 지향 응답이다** — 5,000점에 키 이름이 3만 번 반복되는 것을 피하고 화면의
+차트가 먹는 모양이 그것이기 때문이고, 그 예외의 근거는 그 문서 2.4절에 있다.
+
 ### 1.1 목록
 
 | 파라미터 | 뜻 | 기본 |
@@ -77,8 +87,13 @@ GET /api/theses/{thesis_id}/graph
  "limit": 50, "offset": 0, "has_more": true}
 ```
 
-`has_more`는 `limit + 1`건을 읽어 판단한다. `count(*)`를 따로 세지 않는다 — 총 건수를
-쓰는 화면이 아직 없다.
+`has_more`는 `limit + 1`건을 읽어 판단한다. `count(*)`를 따로 세지 않는다 — 화면에
+필요한 것은 "다음" 버튼을 켤지뿐이고, 분봉 53만 행짜리 표에서는 그 두 번째 조회가
+첫 번째보다 비싸다.
+
+**이 모양이 이제 전 라우트의 계약이다.** 15단계에서 `Page[T]`(`apps/api/schemas/common.py`)
+하나로 묶었고, 행을 주는 라우트가 쪽 없이 들어오면 `tests/api/test_pagination.py`가
+깨진다. 면제는 그 파일의 `EXEMPT`에 이유와 함께 적는다.
 
 `graded_horizons`·`narrated_horizons`·`mean_brier`는 `thesis_outcome`을 왼쪽 조인해 집계한
 요약이다. 목록에서 "평가가 붙었나"를 봐야 상세로 들어갈 이유가 생긴다.
@@ -92,8 +107,13 @@ thesis     — 목록 항목 + 이유 셋 + input_state + tool_rounds·llm_model
 evidence   — 원 추론이 인용한 근거 전부(outcome_horizon_days IS NULL). rank 순
 outcomes   — 지평별 채점과 해설. 그 해설이 인용한 근거를 각 지평 안에 중첩한다
 precedents — 프롬프트에서 본 과거 추론(id·run_date·run_slot·label과 그 확률)
-llm_run    — 이 추론을 만든 대화(13단계). id·모델·판·왕복·호출 수·상태
+llm_run    — 이 추론을 만든 대화(13단계). id·모델·판·왕복·호출 수(tool_call_count)·상태
 ```
+
+**호출 수의 칸 이름은 `tool_call_count`다**(14단계에서 확정). 실행 상세의 `tool_calls`가
+배열이라, 한 이름을 목록에서는 정수로 상세에서는 배열로 내면 프런트의
+`LlmRunDetail extends LlmRunItem`이 그 자리에서 깨진다. DB 컬럼은 `thesis_llm_run.tool_calls`
+그대로다 — 갈리는 것은 응답 계약뿐이다.
 
 툴 호출은 thesis가 아니라 `llm_run`에 속한다. 대화 하나가 여러 thesis를 만들고 실패
 대화에는 thesis가 없으므로 같은 호출 배열을 모든 상세에 복제하지 않는다. 이 응답은

@@ -1,0 +1,530 @@
+/* CSS framework와 icon 패키지를 넣지 않는다. 내부 운영 화면이고 필요한 것은 표·목록·
+   상세 패널·그래프뿐이다. 색만으로 상태·방향을 구분하지 않는다 — 글자를 함께 쓴다.
+
+   **다크 한 벌이다.** 색·간격·둥글기 값은 전부 아래 토큰에 있고 나머지 규칙은 토큰만
+   참조한다 — 테마를 바꿀 일이 생기면 이 블록만 갈린다.
+
+   `color-scheme: dark`가 네이티브 컨트롤(`<input type="date">`, `<select>`, 스크롤바,
+   포커스 링)을 함께 어둡게 만든다. 그 자리를 직접 칠하면 브라우저마다 어긋난다. */
+
+:root {
+  --bg: #0f1115;
+  --surface: #171a20;
+  --surface-2: #1e222a;
+  --line: #2a2f39;
+  --line-soft: #21252d;
+  --ink: #e6e9ee;
+  --muted: #98a2b0;
+  --link: #7fb2f0;
+  --accent: #6ea8fe;
+  --up: #4ade80;
+  --down: #f87171;
+  --radius: 10px;
+  --radius-sm: 7px;
+  --shadow: 0 1px 2px rgb(0 0 0 / 45%), 0 10px 30px rgb(0 0 0 / 22%);
+  color-scheme: dark;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  font-family: system-ui, -apple-system, "Segoe UI", "Pretendard", sans-serif;
+  font-size: 14px;
+  line-height: 1.55;
+  /* **배경을 명시한다.** 안 하면 body가 흰색으로 남아 토큰만 어두워진다. */
+  background: var(--bg);
+  color: var(--ink);
+  -webkit-font-smoothing: antialiased;
+}
+
+a {
+  color: var(--link);
+  text-underline-offset: 2px;
+}
+
+a:hover {
+  color: var(--accent);
+}
+
+/* --- 뼈대 ------------------------------------------------------------------ */
+
+/* **좁은 고정 폭을 쓰지 않는다.** 이 화면의 주 내용이 열 열넷짜리 표와 관계 그래프라,
+   1180px에 가두면 그래프가 손톱만 해지고 표는 가로로 잘린다. */
+.shell {
+  width: min(1600px, 96vw);
+  margin: 0 auto;
+  padding: 0 20px 48px;
+}
+
+header {
+  position: sticky;
+  top: 0;
+  z-index: 5;
+  display: flex;
+  align-items: center;
+  gap: 24px;
+  padding: 14px 0 12px;
+  margin-bottom: 20px;
+  background: var(--bg);
+  border-bottom: 1px solid var(--line);
+}
+
+header h1 {
+  font-size: 16px;
+  font-weight: 650;
+  letter-spacing: -0.01em;
+  margin: 0;
+}
+
+nav {
+  display: flex;
+  gap: 4px;
+}
+
+nav a {
+  padding: 5px 12px;
+  border-radius: 999px;
+  color: var(--muted);
+  text-decoration: none;
+  font-weight: 550;
+}
+
+nav a:hover {
+  background: var(--surface);
+  color: var(--ink);
+}
+
+nav a.active {
+  background: var(--surface-2);
+  color: var(--ink);
+}
+
+h2 {
+  font-size: 19px;
+  font-weight: 640;
+  letter-spacing: -0.015em;
+  margin: 4px 0 14px;
+}
+
+h3 {
+  font-size: 14px;
+  font-weight: 640;
+  color: var(--ink);
+  margin: 26px 0 8px;
+}
+
+/* --- 표 -------------------------------------------------------------------- */
+
+table {
+  border-collapse: separate;
+  border-spacing: 0;
+  width: 100%;
+  margin-bottom: 14px;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  overflow: hidden;
+}
+
+caption {
+  text-align: left;
+  color: var(--muted);
+  font-size: 12.5px;
+  padding: 0 2px 8px;
+  caption-side: top;
+}
+
+th,
+td {
+  padding: 7px 12px;
+  text-align: left;
+  vertical-align: top;
+  white-space: nowrap;
+  border-bottom: 1px solid var(--line-soft);
+}
+
+/* 숫자가 자리를 맞춰야 열이 읽힌다. */
+td {
+  font-variant-numeric: tabular-nums;
+}
+
+/* **머리행을 sticky로 두지 않는다.** 둥근 모서리를 만드는 `overflow: hidden`이 sticky의
+   기준 컨테이너를 만들어 버려서, 붙는 것처럼 보이지 않고 조용히 안 붙는다. 둘 중 하나를
+   골라야 하고 여기서는 모서리를 골랐다 — 표가 한 화면에 대개 들어간다. */
+thead th {
+  background: var(--surface-2);
+  color: var(--muted);
+  font-size: 11.5px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+  border-bottom: 1px solid var(--line);
+}
+
+tbody tr:last-child th,
+tbody tr:last-child td {
+  border-bottom: none;
+}
+
+tbody tr:hover td,
+tbody tr:hover th {
+  background: var(--surface-2);
+}
+
+tbody th[scope="row"] {
+  color: var(--muted);
+  font-weight: 600;
+}
+
+td.wrap,
+th.wrap {
+  white-space: normal;
+  max-width: 60ch;
+}
+
+/* --- 필터와 컨트롤 ---------------------------------------------------------- */
+
+.filters {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 14px;
+  align-items: flex-end;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  padding: 12px 14px;
+  margin-bottom: 16px;
+}
+
+.filters label {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  color: var(--muted);
+  font-size: 11.5px;
+  letter-spacing: 0.02em;
+}
+
+.filters fieldset {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  align-items: center;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  padding: 6px 12px 8px;
+  margin: 0;
+}
+
+.filters fieldset legend {
+  color: var(--muted);
+  font-size: 11.5px;
+  letter-spacing: 0.02em;
+  padding: 0 4px;
+}
+
+/* 체크박스 줄은 세로로 쌓지 않는다 — 옆으로 붙어야 한 줄로 읽힌다. */
+.filters fieldset label {
+  flex-direction: row;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  color: var(--ink);
+}
+
+input,
+select,
+button {
+  font: inherit;
+  color: var(--ink);
+  background: var(--surface-2);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  padding: 5px 9px;
+}
+
+input:focus-visible,
+select:focus-visible,
+button:focus-visible,
+a:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+button {
+  cursor: pointer;
+  font-weight: 550;
+}
+
+button:hover:not(:disabled) {
+  background: var(--line);
+}
+
+button:disabled {
+  color: var(--muted);
+  cursor: default;
+  opacity: 0.55;
+}
+
+/* 표 안의 버튼은 링크처럼 보여야 한다 — 목록의 노드·엣지를 고르는 자리다. */
+tbody button {
+  background: none;
+  border: none;
+  padding: 0;
+  color: var(--link);
+  text-align: left;
+  font-weight: 400;
+}
+
+tbody button:hover {
+  background: none;
+  color: var(--accent);
+  text-decoration: underline;
+}
+
+/* --- 조각 ------------------------------------------------------------------ */
+
+.state {
+  color: var(--muted);
+  padding: 18px 0;
+}
+
+/* 쪽 이동. 표 아래 가운데다. 번호는 아는 만큼만 그린다. */
+.pager {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  margin: 12px 0 24px;
+}
+
+.pager ol {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.pager li {
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.pager li button {
+  min-width: 32px;
+  padding: 6px 8px;
+  font-variant-numeric: tabular-nums;
+}
+
+/* 지금 쪽. 테두리만으로는 어두운 배경에서 잘 안 보인다. */
+.pager li button.here {
+  background: var(--surface-2);
+  border-color: var(--accent);
+  color: var(--ink);
+  font-weight: 600;
+}
+
+.panel {
+  border: 1px solid var(--line);
+  background: var(--surface);
+  border-radius: var(--radius);
+  padding: 14px 16px;
+  margin-bottom: 14px;
+}
+
+dl.meta {
+  display: grid;
+  grid-template-columns: max-content minmax(0, 1fr);
+  gap: 4px 18px;
+  margin: 0;
+}
+
+dl.meta dt {
+  color: var(--muted);
+  font-size: 12.5px;
+}
+
+dl.meta dd {
+  margin: 0;
+  max-width: 90ch;
+}
+
+pre {
+  background: var(--bg);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  padding: 12px 14px;
+  overflow: auto;
+  max-height: 60vh;
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-size: 12.5px;
+  line-height: 1.5;
+}
+
+/* 상태·방향 배지. **색 위에 글자가 있다** — 색만으로 구분하지 않는다. */
+.badge {
+  display: inline-block;
+  padding: 1px 8px;
+  border-radius: 999px;
+  border: 1px solid var(--line);
+  background: var(--surface-2);
+  color: var(--muted);
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.badge-ok {
+  border-color: color-mix(in srgb, var(--up) 45%, transparent);
+  background: color-mix(in srgb, var(--up) 14%, transparent);
+  color: var(--up);
+}
+
+.badge-bad {
+  border-color: color-mix(in srgb, var(--down) 45%, transparent);
+  background: color-mix(in srgb, var(--down) 14%, transparent);
+  color: var(--down);
+}
+
+.up {
+  color: var(--up);
+}
+
+.down {
+  color: var(--down);
+}
+
+.warn {
+  border-left: 3px solid var(--down);
+  background: color-mix(in srgb, var(--down) 8%, transparent);
+  border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
+  padding: 8px 12px;
+  margin: 10px 0 0;
+}
+
+.pager {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  color: var(--muted);
+  margin-bottom: 16px;
+}
+
+/* --- 관계 그래프 ------------------------------------------------------------ */
+
+/* **그래프가 이 화면의 본문이다.** 고정 520px로 두면 노드 열다섯이 손톱만 해진다 —
+   뷰포트를 따라가되 위아래 한계를 둔다. */
+.graph-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 340px;
+  gap: 14px;
+  height: clamp(560px, 74vh, 940px);
+  margin-bottom: 16px;
+}
+
+.graph-canvas {
+  height: 100%;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+}
+
+.graph-layout aside {
+  overflow: auto;
+  margin-bottom: 0;
+}
+
+.graph-layout aside pre {
+  max-height: none;
+}
+
+@media (max-width: 900px) {
+  .graph-layout {
+    grid-template-columns: minmax(0, 1fr);
+    height: auto;
+  }
+
+  .graph-canvas {
+    height: 60vh;
+  }
+}
+
+/* --- 차트 ------------------------------------------------------------------ */
+
+/* uPlot이 자체 CSS를 싣는데 그것이 라이트 팔레트다(`uPlot.min.css`). 여기서 덮는다 —
+   축·격자 색은 JS 설정이 정하고(`ChartView`의 상수), 그리드 밖의 크롬이 이 블록이다. */
+
+.chart-canvas {
+  width: 100%;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--surface);
+  padding: 8px 10px 4px;
+  margin-bottom: 14px;
+  overflow: hidden;
+}
+
+.uplot,
+.uplot * {
+  font-family: inherit;
+}
+
+.uplot .u-title {
+  color: var(--ink);
+}
+
+.uplot .u-legend {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.uplot .u-legend .u-marker {
+  border-radius: 2px;
+}
+
+.uplot .u-legend th,
+.uplot .u-legend td {
+  border: none;
+  padding: 1px 6px;
+  background: none;
+}
+
+.uplot .u-legend tr:hover th,
+.uplot .u-legend tr:hover td {
+  background: none;
+}
+
+.uplot .u-legend .u-value {
+  color: var(--ink);
+  font-variant-numeric: tabular-nums;
+}
+
+/* 커서를 따라다니는 세로선. 기본이 검정이라 어두운 바탕에서 안 보인다. */
+.uplot .u-cursor-x,
+.uplot .u-cursor-y {
+  border-color: var(--muted);
+}
+
+.uplot .u-select {
+  background: rgb(110 168 254 / 18%);
+}
+
+/* 값 한 줄 요약. 차트만으로는 정확한 숫자를 못 읽는다. */
+.readout {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 22px;
+  align-items: baseline;
+  margin-bottom: 12px;
+}
+
+.readout .value {
+  font-size: 22px;
+  font-weight: 650;
+  font-variant-numeric: tabular-nums;
+}

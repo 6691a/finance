@@ -26,7 +26,7 @@
 | [document-assessment-workflow.md](analysis/document-assessment-workflow.md) | `document_assessment_hourly`의 LangGraph 흐름도 | 구현 완료 |
 | [market-technical-indicators.md](analysis/market-technical-indicators.md) | SMA·RSI·MACD 관측값과 매매 신호 검출·채점 | 구현 완료. 남은 것은 적중률 관측 |
 | [market-episode-analysis.md](analysis/market-episode-analysis.md) | 일봉 변화·추정 매물대·시장 근거를 연결하는 `MarketEpisode` 설계 | **미구현. 구현 계약** |
-| [market-thesis/](analysis/market-thesis/README.md) | 시장 추론 기록. 단계마다 문서 하나 | 1·2·3·5~11·13단계 완료, 4(그래프)·12(API)·14(웹 화면)는 미착수 — 그 README가 원본 |
+| [market-thesis/](analysis/market-thesis/README.md) | 시장 추론 기록. 단계마다 문서 하나 | 1~3·5~15단계 완료(15가 테이블 49개를 전부 화면에 올렸다), 4(그래프 DB)만 미착수 — 그 README가 원본 |
 
 ## `briefing/` — 읽어서 내보내기만 하는 DAG
 

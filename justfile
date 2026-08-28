@@ -5,7 +5,7 @@ realtime_prod_compose := "compose/prod/docker-compose.yaml"
 api_compose := "compose/local/api/docker-compose.yaml"
 api_prod_compose := "compose/prod/api/docker-compose.yaml"
 
-# Application PostgreSQL, Redis and Grafana.
+# Application PostgreSQL, Redis and Neo4j. The web UI is `just api`.
 dev:
     docker compose -f {{dev_compose}} up -d
 
@@ -37,7 +37,14 @@ realtime-prod:
 realtime-prod-down:
     docker compose -f {{realtime_prod_compose}} down
 
-# 조회 API(개발). 호스트 18000으로 열린다. read_only alias만 붙는다.
+# `just --list`는 붙어 있는 주석의 **마지막 줄만** 요약으로 보인다. 그래서 배경을 먼저
+# 쓰고 한 줄 요약을 레시피 바로 위에 둔다.
+#
+# 이미지가 frontend/dist를 구워서 담으므로 화면이 바뀌면 build가 다시 필요하다.
+# 화면을 고치는 동안은 `just web`(Vite dev)이 그 왕복을 없앤다.
+# **`apps/`는 마운트지만 그것도 다시 띄워야 반영된다** — 파이썬은 import 시점에 읽고
+# 이 컨테이너에 `--reload`가 없다. 백엔드를 고쳤으면 `just api`를 다시 돌린다.
+# 조회 API(개발). 호스트 18000. read_only alias만 붙고 화면도 이 포트가 준다.
 api:
     docker compose -f {{api_compose}} build
     docker compose -f {{api_compose}} up -d
@@ -45,7 +52,25 @@ api:
 api-down:
     docker compose -f {{api_compose}} down
 
-# 조회 API(운영). 호스트 8000. 내부는 LAN, 외부는 Tailscale로 닿는다.
+# `/api`·`/healthz`만 18000으로 프록시된다 — **`just api`가 먼저 떠 있어야 한다.**
+# 컨테이너가 아니라 이 머신의 Node이고 저장하면 바로 반영된다. compose service로 만들지
+# 않는 이유는 운영에 Node 프로세스가 없기 때문이다.
+# 웹 화면(개발). http://localhost:5173 을 연다. Ctrl+C로 멈춘다.
+web:
+    [ -d frontend/node_modules ] || npm --prefix frontend ci
+    npm --prefix frontend run dev
+
+# 화면 테스트. jsdom이라 브라우저가 필요 없다.
+web-test:
+    npm --prefix frontend test -- --run
+
+# `tsc --noEmit && vite build`다. **운영에 나가는 dist는 이것이 아니라 이미지의 node
+# stage가 다시 굽는 것이다** — 여기서 만든 frontend/dist는 커밋되지 않는 로컬 확인용이다.
+# 화면 빌드 검사. 타입 오류는 vite bundle만으로는 안 잡혀서 둘을 한 script에 묶었다.
+web-build:
+    npm --prefix frontend run build
+
+# 조회 API와 웹 화면(운영). 호스트 8000. 내부는 LAN, 외부는 Tailscale로 닿는다.
 api-prod:
     docker compose -f {{api_prod_compose}} build
     docker compose -f {{api_prod_compose}} up -d
@@ -71,6 +96,7 @@ deploy-realtime:
 
 # realtime과 같은 이유로 무조건 재시작한다 — apps/가 bind-mount라 up이 코드 변경을
 # 감지하지 못한다. 읽기 전용이라 끊겨도 잃는 것이 없다.
+# **프런트가 바뀌었으면 `just build-api`를 먼저 돌린다** — frontend/dist는 이미지 안에 있다.
 deploy-api:
     docker compose -f compose/prod/api/docker-compose.yaml up -d
     docker compose -f compose/prod/api/docker-compose.yaml restart

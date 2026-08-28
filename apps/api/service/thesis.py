@@ -139,7 +139,7 @@ def llm_run_of(run: ThesisLlmRun) -> LlmRunSummary:
         started_at=run.started_at,
         finished_at=run.finished_at,
         tool_rounds=run.tool_rounds,
-        tool_calls=run.tool_calls,
+        tool_call_count=run.tool_calls,
         tool_result_chars=run.tool_result_chars,
         error=run.error,
     )

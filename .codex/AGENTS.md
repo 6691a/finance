@@ -46,7 +46,8 @@
 | `apps/core/utility.py` | 상태 없는 공통 변환(`utc_text`·`kst_today`). `airflow/modules/utility.py`의 대칭 |
 | `apps/models/` | SQLAlchemy 모델. 파일은 도메인 단위로만 나눈다(스키마와 무관) |
 | `apps/realtime/` | KIS 실시간 WebSocket 수집 서비스. `python -m apps.realtime.main`, `compose/prod/` 배포 |
-| `apps/api/` | 읽기 전용 조회 API(FastAPI). 리소스는 늘어난다 — 지금은 시장 추론. `python -m apps.api.main`, `compose/prod/api/` 배포 |
+| `apps/api/` | 읽기 전용 조회 API(FastAPI)와 `frontend/dist` 정적 제공. 리소스는 늘어난다 — 지금은 시장 추론과 LLM 실행 원장. `python -m apps.api.main`, `compose/prod/api/` 배포 |
+| `frontend/` | 추론 추적·수집 원자료 화면 아홉(React·TypeScript·Vite·Cytoscape.js·uPlot SPA). **상주 서비스가 아니다** — Vite가 구운 `dist`를 `apps/api/`가 같은 origin에서 준다 |
 | `migrations/` | Alembic. 리비전 파일은 `migrations/versions` 하나를 모든 별칭이 공유한다 |
 | `migrations/routing.py` | 어떤 테이블이 어떤 DB 별칭에 속하는지 판단하는 순수 함수 |
 | `airflow/dags/` | Airflow DAG |
@@ -163,6 +164,8 @@ just makemigrations "create instrument table"
 just migrate upgrade head
 uv run pytest tests -q
 uv run ruff check apps airflow migrations tests
+npm --prefix frontend test -- --run
+npm --prefix frontend run build
 ```
 
 한 번의 명령이 마이그레이션이 켜진 모든 별칭을 순서대로 처리한다. 별칭을 인자로 주지 않는다.
@@ -411,6 +414,10 @@ Sentry 프로젝트는 둘이다. Airflow는 NAS `.env`의 `AIRFLOW__SENTRY__*`�
 INFO 이상 Sentry Logs), 트레이싱(`sentry_traces_sample_rate`), 트랜잭션 연동 프로파일링.
 DSN이 비면 전체 비활성이다. 새 상주 서비스(FastAPI 등)도 같은 `settings.sentry_*`로 init한다.
 
+- **조회 API는 `SENTRY_ENABLED=1`일 때만 리포트한다**(2026-08-27). 개발 머신의
+  `config.yaml`이 운영 것의 사본이라 DSN이 거기 있고, 그대로 로컬에서 진입점을 돌리면
+  개발 트래픽이 운영 프로젝트에 production으로 찍힌다. 켜는 자리는 `compose/prod/api`
+  하나이고 기본은 꺼짐이다 — 안전한 쪽이 기본이어야 한다. `apps/realtime`은 아직 그대로다.
 - 메트릭(`sentry_sdk.metrics`의 count/gauge/distribution)은 아직 안 쓴다.
 - **측정할 가치가 있는 지점을 발견하면 사용자에게 제안한다.** 처리 건수, 큐·버퍼 깊이,
   외부 API 지연, 저장 실패율처럼 나중에 대시보드나 알림이 필요해질 값이 코드에 생기면
@@ -530,7 +537,7 @@ API, 크롤링, 웹소켓 수집 결과의 출처와 상태를 가볍게 보존�
 `quote_symbol` 마스터가 갖는다.
 
 - **`quote_bar`/`quote_daily`는 이들을 UNION ALL 한 읽기 전용 뷰다.** 조회(브리핑 SQL,
-  Grafana)는 뷰를 써도 되지만 **쓰기는 반드시 물리 테이블로 간다.** 수집기가 kind별
+  조회 API)는 뷰를 써도 되지만 **쓰기는 반드시 물리 테이블로 간다.** 수집기가 kind별
   upsert 파일(`airflow/sql/postgres/<table>/upsert.sql`)을 쓴다.
 - 매크로 테이블의 자연키는 `(provider, symbol, bar_at|business_date)`다. `contract_code`는
   `index_future_bar`에만 있다.

@@ -4,6 +4,13 @@
 # `apps.core.config`가 작업 디렉터리의 config.yaml을 읽으므로 WORKDIR가 /app이어야 한다.
 # compose/local/api/Dockerfile과 내용이 같다 — 갈라질 이유가 생기기 전까지 함께 고친다.
 #
+# **프런트 빌드 산출물만 예외로 굽는다.** `frontend/dist`는 Vite가 만든 정적 파일이고
+# 소스가 아니라서 마운트할 것이 없다. 그래서 Node stage에서 만들고 그 결과만 옮긴다 —
+# **런타임에는 Node 프로세스가 없다.** Node 24는 문서 작성 시점의 LTS다.
+#
+# 프런트가 바뀌면 `just build-api`로 이미지를 다시 만들어야 한다. Python만 바뀌면
+# bind-mount라 `just deploy-api`의 restart로 끝난다.
+#
 # **의존성은 uv가 저장소의 uv.lock에서 깐다.** requirements.txt를 따로 두면 그것이 두
 # 번째 의존성 목록이 되어 조용히 어긋난다 — 2026-08-27에 dependency-injector가 그렇게
 # 빠져서 컨테이너만 ModuleNotFoundError로 죽었다. Airflow만 requirements.txt를 쓰는데,
@@ -16,6 +23,14 @@
 # `uvicorn apps.api.app:app`이 아니라 `python -m apps.api.main`이다. 전자는 모듈 수준
 # `app = create_app()`을 요구하고, 그러면 import만으로 config.yaml이 필요해져
 # "테스트는 설정 파일 없이 이 모듈을 import한다"는 규칙이 그 자리에서 깨진다.
+FROM node:24-alpine AS frontend
+
+WORKDIR /build
+COPY frontend/package.json frontend/package-lock.json /build/
+RUN npm ci
+COPY frontend /build/
+RUN npm run build
+
 FROM python:3.13-slim
 
 COPY --from=ghcr.io/astral-sh/uv:0.9.7 /uv /usr/local/bin/uv
@@ -23,6 +38,8 @@ COPY --from=ghcr.io/astral-sh/uv:0.9.7 /uv /usr/local/bin/uv
 WORKDIR /app
 COPY pyproject.toml uv.lock /app/
 RUN uv sync --frozen --no-install-project --only-group api
+
+COPY --from=frontend /build/dist /app/frontend/dist
 
 ENV PATH=/app/.venv/bin:$PATH PYTHONPATH=/app PYTHONUNBUFFERED=1
 

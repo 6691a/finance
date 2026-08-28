@@ -176,7 +176,7 @@ LEFT JOIN indicator_series s ON s.provider = o.provider AND s.series_id = o.seri
 
 ## 6. 안 하는 것
 
-- **Grafana 대시보드** — 이 값의 소비자는 화면이 아니라 리포트 쪽 계산이다. 다섯 계열로 화면을
+- **전용 화면** — 이 값의 소비자는 화면이 아니라 리포트 쪽 계산이다. 다섯 계열로 화면을
   만들 값어치가 없다. 계열이 늘면 그때 만든다.
 - **한국 CPI·PPI** — ECOS는 `STAT_CODE`와 `CYCLE`이 모듈 상수로 일별 표에 고정돼 있고 응답
   파서가 `YYYYMMDD` 8자리를 강제한다. 월간 경로를 새로 여는 일이라 별도 과제다.

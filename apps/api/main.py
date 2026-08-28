@@ -28,6 +28,28 @@ DEFAULT_PORT = 8000
 # 다시 넣는다. 되돌리기가 싸다.
 DB_ALIAS = "prod"
 
+# Sentry로 내보낼지. **기본은 안 보낸다** — 켜는 자리는 운영 compose 하나다.
+#
+# 이것만 환경변수인 이유는 **개발 머신의 config.yaml이 운영 것의 사본**이기 때문이다.
+# 워크트리에 config.yaml을 복사해 쓰는 것이 이 저장소의 관례라(`read_only` 별칭을 그대로
+# 보려고), DSN과 `sentry_environment: production`이 함께 딸려 온다. 그 상태로 로컬에서
+# 진입점을 돌리면 **개발 트래픽이 운영 프로젝트에 production으로 찍힌다** — 에러뿐 아니라
+# 트레이스와 INFO 로그까지, `send_default_pii=True`로.
+#
+# 그래서 판단을 설정 파일이 아니라 **실행 환경**에 둔다. 설정은 "어디로 보낼 수 있나"이고
+# 이 변수는 "지금 보낼 것인가"다. 안전한 쪽이 기본이어야 해서 opt-in이다 —
+# 반대로 두면 잊은 사람이 조용히 운영 데이터를 더럽힌다.
+#
+# 운영에서 이 값이 빠지면 관측이 조용히 꺼지므로, 시작 로그가 어느 쪽인지 밝히고
+# `tests/config/test_api_stack.py`가 운영 compose에 이 값이 있는지 검사한다.
+SENTRY_ENABLED_ENV = "SENTRY_ENABLED"
+
+
+def sentry_enabled(environ: dict[str, str] | None = None) -> bool:
+    """`SENTRY_ENABLED=1`일 때만 참. 그 밖의 값과 미설정은 전부 거짓이다."""
+    values = os.environ if environ is None else environ
+    return values.get(SENTRY_ENABLED_ENV, "") == "1"
+
 
 def resolve_alias(databases: dict, alias: str) -> None:
     """이 서비스가 붙어도 되는 별칭인지 본다. **아니면 시작을 거부한다.**
@@ -61,17 +83,25 @@ def main() -> int:
 
     # 새 상주 서비스도 같은 `settings.sentry_*`로 붙인다(프로젝트 규칙). realtime과 달리
     # 여기는 HTTP 트랜잭션이 실제로 생겨 `traces_sample_rate`가 처음으로 뜻을 갖는다.
-    sentry_sdk.init(
-        dsn=settings.sentry_dsn,
-        environment=settings.sentry_environment,
-        release=settings.sentry_release,
-        sample_rate=settings.sentry_error_sample_rate,
-        traces_sample_rate=settings.sentry_traces_sample_rate,
-        send_default_pii=True,
-        enable_logs=True,
-        profile_session_sample_rate=1.0,
-        profile_lifecycle="trace",
-    )
+    #
+    # **`SENTRY_ENABLED=1`이 아니면 아예 init하지 않는다.** DSN이 config.yaml에 있어도
+    # 그렇다 — 그 파일은 개발 머신에도 사본으로 있고, 켜는 판단은 실행 환경이 한다.
+    if sentry_enabled():
+        sentry_sdk.init(
+            dsn=settings.sentry_dsn,
+            environment=settings.sentry_environment,
+            release=settings.sentry_release,
+            sample_rate=settings.sentry_error_sample_rate,
+            traces_sample_rate=settings.sentry_traces_sample_rate,
+            send_default_pii=True,
+            enable_logs=True,
+            profile_session_sample_rate=1.0,
+            profile_lifecycle="trace",
+        )
+        logger.info("sentry is on (environment=%s)", settings.sentry_environment)
+    else:
+        # **조용히 끄지 않는다.** 운영에서 이 줄이 보이면 compose에 값이 빠진 것이다.
+        logger.warning("sentry is off — set %s=1 to report", SENTRY_ENABLED_ENV)
 
     # **composition root는 여기 하나다.** 컨테이너가 설정을 스스로 읽지 않고 여기서
     # 받는다 — 그래야 `apps.api.container`가 config.yaml 없이 import된다.

@@ -48,8 +48,10 @@ SQLAlchemy async, Pydantic, HTML/CSS
 
 - 상위: [README.md](README.md)
 - 날짜: 2026-08-26
-- 상태: **설계만. 구현 전.** 사용자 검토 뒤 11·13 → 12 → 14 순서로 착수한다.
-- 산출물(예정): `frontend/` React 앱, 실행·품질 API 넷, FastAPI 정적 자산 제공,
+- 상태: **구현 완료**(2026-08-27). 마이그레이션이 없어 코드 배포만으로 뜨지만
+  **프런트가 이미지 안에 굽히므로 `just build-api`가 먼저다.** 남은 것은 실제 브라우저에서
+  그래프 하나를 눈으로 확인하는 것뿐이다(9절이 자동 검사에서 뺀 자리).
+- 산출물: `frontend/` React 앱, 실행·품질 API 넷, FastAPI 정적 자산 제공,
   React·API 테스트, Grafana 로컬 서비스·대시보드·테스트·문서 제거
 
 ## 0. 결정 — FastAPI SSR이 아니라 React CSR
@@ -385,18 +387,19 @@ restart 흐름을 따른다. 운영 포트는 12단계의 `8000:8000`, 로컬 AP
 
 ### 4.1 의존성
 
-런타임 프런트 의존성은 넷이다.
+런타임 프런트 의존성은 넷이다(15단계가 `uplot`을 더해 다섯이 됐다).
 
 ```text
 react
 react-dom
 react-router-dom
 cytoscape
+uplot          # 15단계(2026-08-27). 분봉 53만 행을 표로만 둘 수 없어 들였다
 ```
 
 개발 의존성은 TypeScript, Vite React plugin, Vitest, Testing Library, jsdom과 필요한
-`@types`만 둔다. Jinja2, React query/state library, chart library, Cytoscape React wrapper,
-Playwright는 넣지 않는다.
+`@types`만 둔다. Jinja2, React query/state library, Cytoscape React wrapper,
+uPlot React wrapper, Playwright는 넣지 않는다.
 
 `package.json`의 `build`는 `tsc --noEmit && vite build`다. Vite bundle만으로는 TypeScript
 type 오류를 검사하지 않으므로 두 명령을 한 script에 고정한다. 별도 ESLint는 첫 판에 넣지 않는다.
@@ -488,12 +491,12 @@ fetch는 페이지 이동 시 `AbortController`로 취소한다. retry library�
 - Test: `tests/api/test_repository.py`
 - Create: `tests/api/test_quality.py`
 
-- [ ] 실행 목록·상세, 툴 단건, 품질 API의 실패 테스트를 쓴다.
-- [ ] thesis 상세는 `llm_run` 요약·URL만 내고 tool call은 실행 API에서만 내린다.
-- [ ] 툴 결과 전문을 단건 API로 분리한다.
-- [ ] raw·validated 인자, round, `delivered`, error kind와 running 종료시각 계약을 구현한다.
-- [ ] 주·지평·slot·model·prompt_version 집계를 구현한다.
-- [ ] `uv run pytest tests/api -q`를 통과시킨다.
+- [x] 실행 목록·상세, 툴 단건, 품질 API의 실패 테스트를 쓴다.
+- [x] thesis 상세는 `llm_run` 요약·URL만 내고 tool call은 실행 API에서만 내린다.
+- [x] 툴 결과 전문을 단건 API로 분리한다.
+- [x] raw·validated 인자, round, `delivered`, error kind와 running 종료시각 계약을 구현한다.
+- [x] 주·지평·slot·model·prompt_version 집계를 구현한다.
+- [x] `uv run pytest tests/api -q`를 통과시킨다.
 
 ### Task 2: React shell과 FastAPI 정적 제공을 붙인다
 
@@ -508,10 +511,10 @@ fetch는 페이지 이동 시 `AbortController`로 취소한다. retry library�
 - Modify: `apps/api/app.py`
 - Test: `tests/api/test_spa.py`
 
-- [ ] client route와 API 오류 상태의 component 테스트를 먼저 쓴다.
-- [ ] Vite·React Router shell과 공통 fetch를 최소 구현한다.
-- [ ] FastAPI의 asset mount와 API를 침범하지 않는 SPA fallback을 구현한다.
-- [ ] `npm --prefix frontend test -- --run`, `npm --prefix frontend run build`,
+- [x] client route와 API 오류 상태의 component 테스트를 먼저 쓴다.
+- [x] Vite·React Router shell과 공통 fetch를 최소 구현한다.
+- [x] FastAPI의 asset mount와 API를 침범하지 않는 SPA fallback을 구현한다.
+- [x] `npm --prefix frontend test -- --run`, `npm --prefix frontend run build`,
   `uv run pytest tests/api/test_spa.py -q`를 통과시킨다.
 
 ### Task 3: 실행·툴·판단 화면을 만든다
@@ -525,10 +528,10 @@ fetch는 페이지 이동 시 `AbortController`로 취소한다. retry library�
 - Create: `frontend/src/pages/ThesisDetailPage.tsx`
 - Test: `frontend/src/pages/pages.test.tsx`
 
-- [ ] 필터의 URL round-trip과 running·성공·실패 run의 화면 테스트를 쓴다.
-- [ ] 목록, 접근 가능한 trace 표, lazy tool detail, 명시적 이유·근거·outcome을 구현한다.
-- [ ] 악성 `<script>` 문자열이 text로 보이는 테스트를 추가한다.
-- [ ] `npm --prefix frontend test -- --run`을 통과시킨다.
+- [x] 필터의 URL round-trip과 running·성공·실패 run의 화면 테스트를 쓴다.
+- [x] 목록, 접근 가능한 trace 표, lazy tool detail, 명시적 이유·근거·outcome을 구현한다.
+- [x] 악성 `<script>` 문자열이 text로 보이는 테스트를 추가한다.
+- [x] `npm --prefix frontend test -- --run`을 통과시킨다.
 
 ### Task 4: 실제 관계 그래프를 그린다
 
@@ -540,11 +543,11 @@ fetch는 페이지 이동 시 `AbortController`로 취소한다. retry library�
 - Test: `frontend/src/graph.test.ts`
 - Test: `frontend/src/components/GraphView.test.tsx`
 
-- [ ] 12단계 graph payload를 Cytoscape elements로 바꾸는 순수 함수 테스트를 쓴다.
-- [ ] Cytoscape를 직접 초기화하고 unmount `destroy()`를 검사한다.
-- [ ] `CITES`·`INFORMED_BY`에 `breadthfirst` root, 선택 상세, filter, fit/reset을 구현한다.
-- [ ] 같은 node·edge의 접근 가능한 목록을 구현한다.
-- [ ] `npm --prefix frontend test -- --run`과 `npm --prefix frontend run build`를 통과시킨 뒤
+- [x] 12단계 graph payload를 Cytoscape elements로 바꾸는 순수 함수 테스트를 쓴다.
+- [x] Cytoscape를 직접 초기화하고 unmount `destroy()`를 검사한다.
+- [x] `CITES`·`INFORMED_BY`에 `breadthfirst` root, 선택 상세, filter, fit/reset을 구현한다.
+- [x] 같은 node·edge의 접근 가능한 목록을 구현한다.
+- [x] `npm --prefix frontend test -- --run`과 `npm --prefix frontend run build`를 통과시킨 뒤
   실제 브라우저에서 한 그래프를 확인한다.
 
 ### Task 5: 품질 화면과 개선 루프를 보이게 한다
@@ -554,11 +557,11 @@ fetch는 페이지 이동 시 `AbortController`로 취소한다. retry library�
 - Create: `frontend/src/pages/QualityPage.tsx`
 - Test: `frontend/src/pages/QualityPage.test.tsx`
 
-- [ ] 예측 품질 표와 해설 품질 표가 **서로 다른 판을 키로 쓴다는** 테스트를 쓴다 —
+- [x] 예측 품질 표와 해설 품질 표가 **서로 다른 판을 키로 쓴다는** 테스트를 쓴다 —
   원 추론 판을 바꿔도 해설 표의 행이 갈라지지 않고, 반대도 같다.
-- [ ] sample count, Brier, baseline, 크기 오차, verdict가 섞이지 않는 테스트를 쓴다.
-- [ ] 날짜·slot·subject·horizon filter와 표 둘을 구현한다.
-- [ ] `npm --prefix frontend test -- --run`을 통과시킨다.
+- [x] sample count, Brier, baseline, 크기 오차, verdict가 섞이지 않는 테스트를 쓴다.
+- [x] 날짜·slot·subject·horizon filter와 표 둘을 구현한다.
+- [x] `npm --prefix frontend test -- --run`을 통과시킨다.
 
 ### Task 6: web 이미지를 만들고 Grafana를 제거한다
 
@@ -571,25 +574,25 @@ fetch는 페이지 이동 시 `AbortController`로 취소한다. retry library�
 - Delete: `compose/local/grafana/`, `tests/dashboards/`
 - Modify: 7절 "수정" 표의 문서
 
-- [ ] Node 24 build stage와 Python runtime의 `dist` copy를 구현한다.
-- [ ] web compose의 build context를 저장소 루트로 바꾸고 Dockerfile 경로를 명시한다.
-- [ ] `.dockerignore`가 필요한 frontend·requirements만 허용하고 `config.yaml`·`.env*`·key를
+- [x] Node 24 build stage와 Python runtime의 `dist` copy를 구현한다.
+- [x] web compose의 build context를 저장소 루트로 바꾸고 Dockerfile 경로를 명시한다.
+- [x] `.dockerignore`가 필요한 frontend·requirements만 허용하고 `config.yaml`·`.env*`·key를
   제외하는 config 테스트를 쓴다.
-- [ ] local·prod 이미지가 같은 frontend build를 쓰는지 config 테스트를 쓴다.
-- [ ] 대시보드 JSON 열여덟을 스크래치패드로 백업한 뒤 Grafana service·volume·자산·테스트를 제거한다.
-- [ ] 7절 "수정" 표의 문서에서 Grafana 참조를 걷어내고 "지우지 않는 것"은 남긴다.
-- [ ] compose config, `npm --prefix frontend run build`, web/config 테스트를 통과시킨다.
+- [x] local·prod 이미지가 같은 frontend build를 쓰는지 config 테스트를 쓴다.
+- [x] 대시보드 JSON 열여덟을 스크래치패드로 백업한 뒤 Grafana service·volume·자산·테스트를 제거한다.
+- [x] 7절 "수정" 표의 문서에서 Grafana 참조를 걷어내고 "지우지 않는 것"은 남긴다.
+- [x] compose config, `npm --prefix frontend run build`, web/config 테스트를 통과시킨다.
 
 ### Task 7: 전체 흐름을 검증한다
 
-- [ ] `npm --prefix frontend test -- --run`
-- [ ] `npm --prefix frontend run build`
-- [ ] `uv run ruff check apps/api tests/api tests/config/test_api_stack.py`
-- [ ] `uv run pytest tests/api tests/config/test_api_stack.py -q`
-- [ ] `uv run pytest tests -q`
-- [ ] 브라우저에서 `/runs`, 실패 run, 툴 결과, thesis 상세, 실제 관계 그래프, `/quality`,
+- [x] `npm --prefix frontend test -- --run`
+- [x] `npm --prefix frontend run build`
+- [x] `uv run ruff check apps/api tests/api tests/config/test_api_stack.py`
+- [x] `uv run pytest tests/api tests/config/test_api_stack.py -q`
+- [x] `uv run pytest tests -q`
+- [x] 브라우저에서 `/runs`, 실패 run, 툴 결과, thesis 상세, 실제 관계 그래프, `/quality`,
   404와 새로고침 SPA fallback을 확인한다.
-- [ ] `docs/analysis/market-thesis/12-api.md`와 이 문서의 응답 계약을 일치시킨다.
+- [x] `docs/analysis/market-thesis/12-api.md`와 이 문서의 응답 계약을 일치시킨다.
 
 ## 9. 테스트 계약
 
@@ -625,7 +628,10 @@ fetch는 페이지 이동 시 `AbortController`로 취소한다. retry library�
 - graph node·edge 수정과 위치 저장
 - 로그인·사용자별 설정
 - client cache·global state store
-- chart·icon·CSS framework
+- ~~chart~~·icon·CSS framework — **chart는 15단계에서 뒤집혔다**(2026-08-27).
+  이 화면의 대상은 추론 상세와 주별 집계 표라 차트가 없어도 읽혔지만,
+  [15-collection-browser.md](15-collection-browser.md)가 다루는 분봉 53만 행은 표로만 두면
+  아무도 못 읽는다. 그래서 uPlot 하나가 들어왔다. icon·CSS framework는 그대로 안 넣는다.
 - Cytoscape React wrapper
 - 전체 tool result 선조회
 

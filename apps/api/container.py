@@ -15,8 +15,28 @@
 from dependency_injector import containers, providers
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from apps.api.repository import ThesisReadRepository
-from apps.api.service import ThesisReadService
+from apps.api.repository import (
+    CollectionReadRepository,
+    DocumentReadRepository,
+    EventReadRepository,
+    IndicatorReadRepository,
+    LlmRunReadRepository,
+    PositioningReadRepository,
+    QualityReadRepository,
+    QuoteReadRepository,
+    ThesisReadRepository,
+)
+from apps.api.service import (
+    CollectionReadService,
+    DocumentReadService,
+    EventReadService,
+    IndicatorReadService,
+    LlmRunReadService,
+    PositioningReadService,
+    QualityReadService,
+    QuoteReadService,
+    ThesisReadService,
+)
 from apps.core.database import Database
 
 
@@ -68,4 +88,92 @@ class ApiContainer(containers.DeclarativeContainer):
     thesis_service = providers.Factory(
         ThesisReadService,
         repository=thesis_repository,
+    )
+
+    # 실행 원장과 품질 집계도 같은 모양이다 — 리소스마다 리포지토리 하나와 서비스 하나이고
+    # 둘 다 `Factory`다. 리포지토리를 하나로 합치지 않는 이유는 조회 단위가 다르기
+    # 때문이다: 추론은 판단 한 건, 실행은 대화 한 번, 품질은 주 단위 집계다.
+    llm_run_repository = providers.Factory(
+        LlmRunReadRepository,
+        session_factory=session_factory,
+    )
+
+    llm_run_service = providers.Factory(
+        LlmRunReadService,
+        repository=llm_run_repository,
+    )
+
+    quality_repository = providers.Factory(
+        QualityReadRepository,
+        session_factory=session_factory,
+    )
+
+    quality_service = providers.Factory(
+        QualityReadService,
+        repository=quality_repository,
+    )
+
+    # 수집 원자료(15단계). 추론 쪽과 리포지토리를 합치지 않는 이유는 조회 단위가 다르기
+    # 때문이다 — 이쪽은 심볼 하나의 시계열이고 저쪽은 판단 한 건이다.
+    quote_repository = providers.Factory(
+        QuoteReadRepository,
+        session_factory=session_factory,
+    )
+
+    quote_service = providers.Factory(
+        QuoteReadService,
+        repository=quote_repository,
+    )
+
+    indicator_repository = providers.Factory(
+        IndicatorReadRepository,
+        session_factory=session_factory,
+    )
+
+    indicator_service = providers.Factory(
+        IndicatorReadService,
+        repository=indicator_repository,
+    )
+
+    # 나머지 수집 도메인 넷. 리포지토리를 도메인으로 나눈 기준은 **조회 단위**다 —
+    # 문서는 문서 한 건, 수급은 날짜 구간의 행 묶음, 사건은 종목·기간의 주장, 수집 원장은
+    # 출처별 요약이다. 한 리포지토리에 합치면 그 넷이 한 파일에서 서로를 가린다.
+    document_repository = providers.Factory(
+        DocumentReadRepository,
+        session_factory=session_factory,
+    )
+
+    document_service = providers.Factory(
+        DocumentReadService,
+        repository=document_repository,
+    )
+
+    positioning_repository = providers.Factory(
+        PositioningReadRepository,
+        session_factory=session_factory,
+    )
+
+    positioning_service = providers.Factory(
+        PositioningReadService,
+        repository=positioning_repository,
+    )
+
+    event_repository = providers.Factory(
+        EventReadRepository,
+        session_factory=session_factory,
+    )
+
+    event_service = providers.Factory(
+        EventReadService,
+        repository=event_repository,
+    )
+
+    collection_repository = providers.Factory(
+        CollectionReadRepository,
+        session_factory=session_factory,
+    )
+
+    collection_service = providers.Factory(
+        CollectionReadService,
+        repository=collection_repository,
     )

@@ -22,10 +22,13 @@ from apps.models.analysis import (
     ThesisLlmRun,
     ThesisOutcome,
     ThesisSubjectKind,
+    ThesisToolCall,
     ThesisVerdict,
+    ToolCallErrorKind,
 )
 
 AS_OF = datetime(2026, 8, 26, 3, 35, tzinfo=UTC)
+FINISHED = datetime(2026, 8, 26, 3, 36, 30, tzinfo=UTC)
 RUN_DATE = date(2026, 8, 26)
 
 
@@ -111,22 +114,55 @@ def outcome_row(horizon: int = 0, narration_run_id: int | None = None) -> Thesis
     )
 
 
-def llm_run_row(run_id: int = 9, kind: LlmRunKind = LlmRunKind.FORECAST) -> ThesisLlmRun:
+def llm_run_row(
+    run_id: int = 9,
+    kind: LlmRunKind = LlmRunKind.FORECAST,
+    status: LlmRunStatus = LlmRunStatus.SUCCEEDED,
+) -> ThesisLlmRun:
+    """**`running`은 종료 시각과 사유가 둘 다 비어 있다**(DB CHECK가 그 조합만 허용한다)."""
     return ThesisLlmRun(
         id=run_id,
         kind=kind,
         run_date=RUN_DATE,
         run_slot=RunSlot.INTRADAY_MIDDAY,
-        horizon_days=None,
+        horizon_days=1 if kind is LlmRunKind.NARRATION else None,
         as_of_at=AS_OF,
         dag_run_id="scheduled__x",
         try_number=1,
         llm_model="grok-4.6",
-        prompt_version="7",
+        prompt_version="2/informed" if kind is LlmRunKind.NARRATION else "7",
         started_at=AS_OF,
-        finished_at=AS_OF,
-        status=LlmRunStatus.SUCCEEDED,
+        finished_at=None if status is LlmRunStatus.RUNNING else FINISHED,
+        status=status,
+        error="모델이 붙지 않았다" if status is LlmRunStatus.FAILED else None,
         tool_rounds=2,
         tool_calls=11,
         tool_result_chars=54555,
+        investigation_truncated=False,
+    )
+
+
+def tool_call_row(
+    seq: int = 1,
+    run_id: int = 9,
+    round_no: int = 1,
+    failed: bool = False,
+    delivered: bool = True,
+) -> ThesisToolCall:
+    """성공과 실패는 배타다 — `result`와 `error` 둘 중 하나만 채운다(DB CHECK)."""
+    return ThesisToolCall(
+        llm_run_id=run_id,
+        seq=seq,
+        round_no=round_no,
+        tool_call_id=f"call_{seq}",
+        tool_name="recent_documents",
+        arguments={"limit": 5},
+        validated_arguments=None if failed else {"limit": 5, "kind": "document"},
+        requested_at=AS_OF,
+        duration_ms=None if failed else 42,
+        result_chars=0 if failed else 18,
+        result=None if failed else '{"rows": []}',
+        delivered=delivered,
+        error_kind=ToolCallErrorKind.VALIDATION if failed else None,
+        error="limit must be <= 20" if failed else None,
     )

@@ -8,7 +8,7 @@
 불러도 `config.yaml`을 요구하지 않는다.
 """
 
-from datetime import UTC, date, datetime
+from datetime import UTC, date, datetime, time, timedelta
 from zoneinfo import ZoneInfo
 
 # 국내 세션 날짜의 기준. **고정 offset이 아니라 IANA 시간대를 쓴다**(프로젝트 규칙) —
@@ -36,3 +36,18 @@ def kst_today() -> date:
     UTC 날짜를 쓰면 08:00 KST 이전에 하루가 어긋난다.
     """
     return datetime.now(UTC).astimezone(KST).date()
+
+
+def kst_day_bounds(from_day: date, to_day: date) -> tuple[datetime, datetime]:
+    """KST 날짜 구간(양끝 포함)을 UTC 시각 구간 `[시작, 끝)`으로.
+
+    **날짜 함수를 SQL에 넣지 않으려는 것이다.** `(started_at AT TIME ZONE 'Asia/Seoul')::date`로
+    거르면 인덱스를 못 쓰고, 시간대 변환이 조회문 안에 흩어져 어느 축으로 걸렀는지가
+    쿼리마다 갈린다. 경계를 파이썬에서 한 번 계산하면 조회는 `>=`·`<` 둘뿐이다.
+
+    끝을 열어 두는 이유는 `to_day` 23:59:59.999999 같은 값을 만들지 않기 위해서다 —
+    그 표기는 마이크로초 아래를 조용히 버린다.
+    """
+    start = datetime.combine(from_day, time.min, tzinfo=KST)
+    end = datetime.combine(to_day + timedelta(days=1), time.min, tzinfo=KST)
+    return start.astimezone(UTC), end.astimezone(UTC)

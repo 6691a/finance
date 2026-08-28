@@ -23,15 +23,36 @@ def test_dockerfiles_are_identical_between_local_and_prod():
     assert payload_lines(LOCAL / "Dockerfile") == payload_lines(PROD / "Dockerfile")
 
 
-def test_neither_stack_carries_service_env_knobs():
+def test_neither_stack_carries_an_env_file():
     """읽을 DB 별칭은 `apps/api/main.py`의 상수다.
 
     `read_only` 별칭이 하나뿐이라 개발·운영 어디서나 값이 같다 — 손잡이가 아닌 것을
     환경변수로 두면 `.env` 파일 둘과 그 정합성 검사가 딸려 온다.
+
+    **예외가 하나 있다**(`SENTRY_ENABLED`). 그것은 설정이 아니라 실행 환경의 판단이라
+    compose에 인라인으로 적고, 파일로 빼지 않는 규칙은 그대로다.
     """
     for path in (LOCAL, PROD):
         assert not (path / ".env.sample").exists()
         assert "env_file" not in (path / "docker-compose.yaml").read_text()
+
+
+def test_only_the_prod_stack_turns_sentry_on():
+    """**개발 머신의 config.yaml이 운영 것의 사본이다.**
+
+    워크트리에 복사해 쓰는 것이 이 저장소의 관례라 DSN과 `sentry_environment: production`이
+    함께 딸려 온다. 진입점의 기본이 "안 보낸다"이고 운영 compose만 켜는 이유가 그것이다 —
+    2026-08-27에 로컬 실행이 운영 프로젝트로 트레이스와 로그를 보내고 있었다.
+
+    **이 줄이 빠지면 운영 관측이 조용히 꺼진다.** 그래서 여기서 검사한다.
+    """
+    import yaml
+
+    prod = yaml.safe_load((PROD / "docker-compose.yaml").read_text())
+    local = yaml.safe_load((LOCAL / "docker-compose.yaml").read_text())
+
+    assert prod["services"]["api"]["environment"]["SENTRY_ENABLED"] == "1"
+    assert "SENTRY_ENABLED" not in (local["services"]["api"].get("environment") or {})
 
 
 def test_the_image_runs_the_module_not_a_uvicorn_import_string():
@@ -127,3 +148,58 @@ def test_the_image_installs_from_the_lockfile_not_a_second_list():
 
         assert not (path / "requirements.txt").exists()
         assert "RUN uv sync --frozen --no-install-project --only-group api" in directives
+
+
+def test_the_image_builds_the_frontend_in_a_node_stage_and_keeps_no_node_at_runtime():
+    """운영에는 Python 프로세스 하나만 남는다.
+
+    `frontend/dist`는 Vite 산출물이라 마운트할 소스가 없다 — 그래서 유일하게 굽는 것이고,
+    구우려면 Node가 필요한데 그 Node는 build stage에만 있어야 한다.
+    """
+    for path in (LOCAL, PROD):
+        directives = payload_lines(path / "Dockerfile")
+
+        assert "FROM node:24-alpine AS frontend" in directives
+        assert "RUN npm ci" in directives
+        assert "RUN npm run build" in directives
+        assert "COPY --from=frontend /build/dist /app/frontend/dist" in directives
+        # 마지막 stage가 Python이어야 런타임에 Node가 없다.
+        assert [line for line in directives if line.startswith("FROM ")][-1] == "FROM python:3.13-slim"
+
+
+def test_both_stacks_build_from_the_repository_root_so_docker_can_read_the_frontend():
+    """컨텍스트가 compose 폴더면 `frontend/`가 보이지 않는다."""
+    for path in (LOCAL, PROD):
+        compose = (path / "docker-compose.yaml").read_text()
+
+        assert "context: ${CODE_DIR:-../../..}" in compose
+        assert f"dockerfile: {path}/Dockerfile" in compose
+
+
+def test_the_dockerignore_sends_the_frontend_source_and_nothing_secret():
+    """gitignore 여부와 무관하게 config.yaml·.env·key는 Docker daemon에 보내지 않는다."""
+    lines = [line.strip() for line in Path(".dockerignore").read_text().splitlines() if line.strip()]
+
+    assert "*" in lines
+    assert "!frontend" in lines
+    assert "!pyproject.toml" in lines
+    assert "!uv.lock" in lines
+    # 이미지 안에서 다시 만드는 것은 컨텍스트로 보내지 않는다.
+    assert "frontend/node_modules" in lines
+    assert "frontend/dist" in lines
+    for secret in ("**/.env", "**/.env.*", "**/config.yaml", "**/*.pem", "**/*.key", "**/id_rsa*"):
+        assert secret in lines
+    # 실행 코드는 마운트한다. 예외 목록에 apps/가 들어오면 그 계약이 깨진 것이다.
+    assert "!apps" not in lines
+
+
+def test_no_grafana_runtime_or_provisioning_is_left_in_the_repository():
+    """Grafana를 더 안 쓰기로 했다(사용자 결정 2026-08-26).
+
+    **과거 결정을 설명하는 마이그레이션 주석은 남긴다** — 왜 quote 뷰를 만들었는지가
+    거기 있고, 지우면 그 이유가 사라진다.
+    """
+    assert not Path("compose/local/grafana").exists()
+    assert not Path("tests/dashboards").exists()
+    assert "grafana" not in Path("compose/local/docker-compose.yaml").read_text().lower()
+    assert "grafana" not in Path("justfile").read_text().lower()

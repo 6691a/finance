@@ -9,7 +9,7 @@ from typing import Any
 
 from pydantic import Field
 
-from apps.api.schemas.common import ApiModel, UtcDatetime
+from apps.api.schemas.common import ApiModel, Page, UtcDatetime
 
 
 class ThesisSummary(ApiModel):
@@ -68,18 +68,7 @@ class ThesisSummary(ApiModel):
     )
 
 
-class ThesisList(ApiModel):
-    """목록 한 쪽."""
-
-    items: tuple[ThesisSummary, ...] = Field(default=(), description="as_of_at 내림차순.")
-    limit: int = Field(description="요청한 쪽 크기.")
-    offset: int = Field(description="건너뛴 건수.")
-    has_more: bool = Field(
-        description=(
-            "다음 쪽이 있나. `limit + 1`건을 읽어 판단한다 — **총 건수는 세지 않는다.** "
-            "실질 페이지네이션은 날짜 구간을 좁히는 것이다."
-        )
-    )
+ThesisList = Page[ThesisSummary]
 
 
 class EvidenceCitation(ApiModel):
@@ -168,10 +157,11 @@ class LlmRunSummary(ApiModel):
         default=None, description="끝난 시각(UTC). null이면 종료를 기록하지 못했다는 뜻이다."
     )
     tool_rounds: int = Field(description="조사 왕복 수. 왕복 하나가 모델 호출 하나다.")
-    tool_calls: int = Field(
+    tool_call_count: int = Field(
         description=(
             "기록된 툴 호출 수. **상한을 재는 카운터와 다른 수다** — 모르는 툴과 인자 검증 "
-            "실패도 세지만 툴박스의 예산 카운터는 함수에 진입한 것만 센다."
+            "실패도 세지만 툴박스의 예산 카운터는 함수에 진입한 것만 센다. "
+            "**건수이지 배열이 아니다** — 배열은 실행 상세(`/api/llm-runs/{id}`)의 `tool_calls`다."
         )
     )
     tool_result_chars: int = Field(

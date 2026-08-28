@@ -51,7 +51,7 @@ class StockExchange(StrEnum):
 # - 행 모양은 전부 같아 mixin 으로 선언한다. 심볼의 성격(라벨·국가)은 여전히
 #   `reference.quote_symbol` 마스터가 갖는다.
 # - 기존 이름 `quote_bar`/`quote_daily`는 kind 테이블을 UNION ALL 한 **뷰**로 남아
-#   브리핑 SQL과 Grafana 대시보드가 그대로 돈다. 뷰는 마이그레이션이 만들고 여기에는
+#   브리핑 SQL이 그대로 돈다. 뷰는 마이그레이션이 만들고 여기에는
 #   매핑하지 않는다. 매핑을 남기면 autogenerate 가 같은 이름의 테이블을 또 만들려 한다.
 # - 개별 종목(`stock_bar`/`stock_daily`)만 축이 다르다. 거래소(KRX/NXT)가 자연키에
 #   들어가고 종목코드 세계(`instrument.ticker`, 수급·공시 테이블)와 키 체계를 맞춘다.

@@ -1,5 +1,7 @@
 """리포지토리들이 공유하는 것. **리소스 하나에만 쓰이는 것은 여기 두지 않는다.**"""
 
+from collections.abc import Sequence
+
 from pydantic import BaseModel, ConfigDict
 
 # 한 번에 돌려줄 목록 크기. 상한을 두는 이유는 날짜 구간이 넓을 때의 폭주를 막는 것이고,
@@ -10,6 +12,15 @@ MAX_LIMIT = 200
 
 # 목록 기본 창(일). `to`가 오늘이고 `from`이 이만큼 전이다.
 DEFAULT_WINDOW_DAYS = 13
+
+
+def page_slice[T](rows: Sequence[T], limit: int) -> tuple[tuple[T, ...], bool]:
+    """`limit + 1`건을 읽어 온 것을 한 쪽과 "더 있나"로 가른다.
+
+    **총 건수를 세지 않는다.** `count(*)`는 조회를 두 번 하게 만들고, 분봉 53만 행짜리
+    표에서는 그 두 번째가 첫 번째보다 비싸다. 화면에 필요한 것은 다음 버튼을 켤지뿐이다.
+    """
+    return tuple(rows[:limit]), len(rows) > limit
 
 
 class RowBundle(BaseModel):

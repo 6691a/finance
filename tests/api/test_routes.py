@@ -89,7 +89,45 @@ async def test_the_route_set_is_what_we_meant_to_publish():
 
     published = {route.path for route in app.routes if route.path.startswith(("/api", "/healthz"))}
 
-    assert published == {"/healthz", "/api/theses", "/api/theses/{thesis_id}", "/api/theses/{thesis_id}/graph"}
+    assert published == {
+        "/healthz",
+        "/api/theses",
+        "/api/theses/quality",
+        "/api/theses/{thesis_id}",
+        "/api/theses/{thesis_id}/graph",
+        "/api/llm-runs",
+        "/api/llm-runs/{llm_run_id}",
+        "/api/llm-runs/{llm_run_id}/tool-calls/{seq}",
+        "/api/quotes/symbols",
+        "/api/quotes/bars",
+        "/api/quotes/daily",
+        "/api/indicators/series",
+        "/api/indicators/curve",
+        "/api/indicators/observations",
+        "/api/documents",
+        "/api/documents/sources",
+        "/api/documents/disclosures",
+        "/api/documents/earnings",
+        "/api/documents/{document_id}",
+        "/api/positioning/investor-flows",
+        "/api/positioning/market-movement",
+        "/api/positioning/stock-flows",
+        "/api/positioning/estimates",
+        "/api/positioning/short-sale",
+        "/api/positioning/lending",
+        "/api/positioning/credit",
+        "/api/positioning/funds",
+        "/api/positioning/credit-ranking",
+        "/api/events/claims",
+        "/api/events/outcomes",
+        "/api/events/extractions",
+        "/api/events/signals",
+        "/api/events/analyst-opinions",
+        "/api/collection/health",
+        "/api/collection/records",
+        "/api/collection/instruments",
+        "/api/collection/sessions",
+    }
 
 
 @pytest.mark.asyncio
@@ -215,7 +253,8 @@ async def test_the_detail_links_its_conversation_without_copying_the_tool_calls(
         payload = (await http.get("/api/theses/1")).json()
 
     assert payload["llm_run"]["id"] == 9
-    assert payload["llm_run"]["tool_calls"] == 11
+    # **건수이지 배열이 아니다.** 배열은 실행 상세가 준다.
+    assert payload["llm_run"]["tool_call_count"] == 11
     assert "arguments" not in str(payload["llm_run"])
 
 

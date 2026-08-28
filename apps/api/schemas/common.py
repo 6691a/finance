@@ -14,7 +14,7 @@
 from datetime import UTC, datetime
 from typing import Annotated
 
-from pydantic import BaseModel, ConfigDict, PlainSerializer
+from pydantic import BaseModel, ConfigDict, Field, PlainSerializer
 
 
 def _serialize_utc(value: datetime) -> str:
@@ -33,3 +33,28 @@ class ApiModel(BaseModel):
     """응답 모델의 공통 형태. 만든 뒤 바뀌지 않는다."""
 
     model_config = ConfigDict(frozen=True)
+
+
+class Page[T](ApiModel):
+    """목록 응답의 공통 형태. **행을 주는 모든 라우트가 이것이다.**
+
+    래퍼를 리소스마다 손으로 쓰면 어느 하나에서 `has_more`를 빠뜨리고, 그 라우트만
+    조용히 전부를 준다. 제네릭 하나로 두면 그럴 자리가 없다.
+
+    ## `has_more`이지 `total`이 아니다
+
+    **총 건수를 세지 않는다.** `count(*)`는 조회를 두 번 하게 만들고, 이 저장소의 표는
+    분봉 53만 행짜리도 있어서 그 두 번째가 첫 번째보다 비싸다. 대신 `limit + 1`을 읽어
+    다음 쪽이 있는지만 본다 — 화면에 필요한 것은 "다음" 버튼을 켤지 끌지뿐이다.
+
+    실질 페이지네이션은 **구간을 좁히는 것**이다. 대부분의 자연키가 날짜를 갖고 있어
+    날짜를 좁히면 결과가 곧 한 쪽이 된다.
+    """
+
+    items: tuple[T, ...] = ()
+    limit: int = Field(description="요청한 쪽 크기.")
+    offset: int = Field(description="건너뛴 건수.")
+    has_more: bool = Field(
+        default=False,
+        description="다음 쪽이 있나. `limit + 1`건을 읽어 판단한다 — **총 건수는 세지 않는다.**",
+    )

@@ -227,6 +227,28 @@ class TestTheVocabularyBlockSaysHowToPickEvents:
         assert "e:1" in block
 
 
+class TestResponsesApiContent:
+    """**Responses API는 `content`가 블록 리스트다.** 문자열이 아니다.
+
+    2026-08-28에 툴을 붙이며 `use_responses_api=True`로 옮겼더니 `str(reply.content)`가
+    파이썬 repr를 만들어 파싱이 죽었다 — `Invalid JSON: key must be a string`. 실제 모델이
+    아니면 못 잡는 사고다.
+    """
+
+    def test_a_block_list_is_flattened_to_its_text(self) -> None:
+        reply = type("Reply", (), {"content": [
+            {"type": "reasoning", "id": "rs_1"},
+            {"type": "text", "text": ONE_PATH},
+        ]})()
+
+        assert generation.reply_text(reply) == ONE_PATH
+
+    def test_a_plain_string_passes_through(self) -> None:
+        reply = type("Reply", (), {"content": ONE_PATH})()
+
+        assert generation.reply_text(reply) == ONE_PATH
+
+
 class TestTheFlowIsAGraph:
     """흐름 제어는 LangGraph다(CLAUDE.md). `if`로 교정을 재요청하지 않는다.
 
@@ -235,12 +257,22 @@ class TestTheFlowIsAGraph:
     이미 같은 모양(`call` → 조건부 `repair` → `call`)이다.
     """
 
-    def test_the_flow_is_a_compiled_graph(self) -> None:
+    def test_the_flow_investigates_before_it_answers(self) -> None:
+        """툴이 붙으면 앞에 두 노드가 는다(`thesis/generation`과 같은 모양)."""
         builder = generation.CausalBuilder(FakeModel([]))
 
         nodes = set(builder._graph.get_graph().nodes)
 
-        assert {"call", "repair"} <= nodes
+        assert {"investigate", "tools", "answer", "repair"} <= nodes
+
+    def test_the_tool_node_only_swallows_limit_errors(self) -> None:
+        """기본값(`True`)은 DB 연결 끊김을 "결과 없음"으로 위장한다. 모델이 고쳐 부를 수
+        있는 것만 `ToolMessage`가 되어야 한다."""
+        from modules.causal.toolbox import ToolLimitExceeded
+
+        builder = generation.CausalBuilder(FakeModel([]))
+
+        assert builder._tool_node._handle_tool_errors == (ToolLimitExceeded,)
 
     def test_the_graph_run_carries_the_week(self) -> None:
         """이름은 그래프 실행 하나에만 붙인다. 호출마다 손으로 붙이면 그래프가 없다는 뜻이다."""

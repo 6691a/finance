@@ -2,8 +2,8 @@
 
 - 상위: [README.md](README.md)
 - 날짜: 2026-08-24
-- 상태: **1~3단계 구현 완료(2026-08-24), 운영 반영 전.** 리비전 `a4c9e1f7b3d6`을 올리고
-  DAG을 unpause하는 것이 남았다. 4단계(컨센서스 수집기)는 출처 실측부터다. 검증은 11절.
+- 상태: **1~3단계 구현 완료(2026-08-24), 운영 반영 완료**(2026-08-28 실측).
+  4단계(컨센서스 수집기)는 출처 실측부터다. 검증은 11절.
 - 의존: [2-agent.md](2-agent.md)(툴을 늘리는 자리), [6-analyst.md](6-analyst.md)(리서치
   리포트가 `document`로 들어오는 경로 — 기대치의 주 원천), `earnings_fact`(실적 실제값).
 - 산출물: `apps/models/analysis/events.py`에 `StockEventClaim`·`StockEventExtraction`·

@@ -2,7 +2,8 @@
 
 - 상위: [README.md](README.md)
 - 의존: [1-storage.md](1-storage.md), [2-agent.md](2-agent.md), [5-followup.md](5-followup.md)
-- 상태: 구현 완료 (2026-08-21). 운영 배포는 선행 조건 둘이 남아 있다 — 7절
+- 상태: 구현 완료(2026-08-21). **운영 반영 완료**(2026-08-28 실측) — 7절의 선행 조건 둘은
+  해소됐다. 운영 head 값은 [README.md](README.md) 상태 줄이 갖는다
 - 산출물: `airflow/dags/market_thesis_forecast.py`·`market_thesis_review.py`,
   `airflow/modules/thesis/common.py`·`thesis/forecast.py`·`thesis/review.py`,
   렌더링 함수(지금 `airflow/modules/thesis/render.py`), 두 DAG 테스트, 렌더링 테스트
@@ -188,16 +189,16 @@ subject마다 `section()`(결론·이유)과 `context()`(근거) 둘:
 - 기존 행이 있으면 모델이 호출되지 않고 XCom 목록은 같은지.
 - 렌더링 한도: section 3,000자 초과 시 잘림, 블록 수가 50 이하인지.
 
-## 7. 배포 전 선행 조건 둘
+## 7. 배포 전 선행 조건 둘 — 둘 다 해소됐다(2026-08-28)
 
-코드는 끝났지만 **운영에 나가려면 저장소 밖 작업이 둘 남았다.** 둘 다 이 저장소에서
-할 수 없다.
+코드가 끝난 뒤 **운영에 나가려면 저장소 밖 작업이 둘 남아 있었다.** 아래는 그 기록이다.
 
-1. **운영 DB에 테이블이 없다.** 2026-08-21 확인: `thesis`·`thesis_outcome`·`thesis_evidence`
-   셋 다 없고 `alembic_version`이 `c5f81d3a9b46`(리비전 `6e09dafae6f8` 미적용)이다.
-   적용은 운영 DB 쓰기라 명시적 승인이 필요하다.
-2. **`XAI_API_KEY`.** `compose/prod/airflow/.env`의 값이 무효였다(2026-08-20 실측).
-   유효한 키를 넣기 전에는 매 슬롯 실패한다.
+1. ~~**운영 DB에 테이블이 없다.**~~ **해소.** 2026-08-21에는 `thesis`·`thesis_outcome`·
+   `thesis_evidence` 셋 다 없고 `alembic_version`이 `c5f81d3a9b46`이었다. 2026-08-28
+   읽기 전용 실측에서 운영 포인터가 체인 head까지 올라와 있고 `thesis`에 82행이 있다.
+   (head 값의 원본은 [README.md](README.md) 상태 줄이다 — 여기 적으면 또 낡는다.)
+2. ~~**`XAI_API_KEY`.**~~ **해소.** 2026-08-20에는 `compose/prod/airflow/.env`의 값이
+   무효였다. 지금은 추론이 돌고 프롬프트 판 12까지 저장돼 있다.
 
 `compose/**`와 `requirements.txt`는 이 단계가 건드리지 않는다. **운영 Airflow 이미지를
 다시 빌드할 필요가 없다** — NAS clone에서 `git pull` 뒤 `just deploy-airflow`면 된다.

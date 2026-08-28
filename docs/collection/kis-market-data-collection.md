@@ -88,12 +88,35 @@ airflow dags trigger kis_investor_trade_daily \
 
 | 데이터 | API / TR ID | 저장 테이블 | 조회 규칙 |
 | --- | --- | --- | --- |
-| 종목 신용잔고 | `daily-credit-balance` / `FHPST04760000` | `krx_stock_credit_balance_daily` | 입력이 결제일이라 거래일 구간에 14일 padding 후 필터 |
+| 종목 신용잔고 | `daily-credit-balance` / `FHPST04760000` | `krx_stock_credit_balance_daily` | 입력이 결제일이라 거래일 구간에 14일 padding 후 필터. **한 번에 30행**(아래) |
 | 신용잔고 순위 | `credit-balance` / `FHKST17010000` | `krx_credit_balance_ranking_daily` | 전체(`0000`)·코스닥(`1001`) 최신 스냅샷만 가능 |
 | 증시자금 | `mktfunds` / `FHKST649100C0` | `krx_market_funds_daily` | 종료일 한 번으로 약 100영업일 반환 |
 | 종목 공매도 | `daily-short-sale` / `FHPST04830000` | `krx_stock_short_sale_daily` | 시작·종료일 적용 |
 | 종목 대차 | `daily-loan-trans` / `HHPST074500C0` | `krx_stock_securities_lending_daily` | 구분 `3`, 시작·종료일 적용 |
 | 시장 대차 | `daily-loan-trans` / `HHPST074500C0` | `krx_market_securities_lending_daily` | KOSPI `1`, KOSDAQ `2` |
+
+
+### 신용잔고 조회의 결제일과 30행 상한 (2026-08-28 실측)
+
+같은 조사를 두 번 하지 않으려고 남긴다. 운영 앱키로 조회 전용 실측했다(삼성전자).
+
+| 요청 결제일 | 행수 | `deal_date` 범위 | `tr_cont` |
+| --- | --- | --- | --- |
+| 20260828 (오늘) | 30 | 20260713~20260825 | 빈 문자열 |
+| 20260729 | 30 | 20260615~20260727 | 빈 문자열 |
+| 20250828 (1년 전) | 30 | 20250715~20250826 | 빈 문자열 |
+| 20240313 (2년 전) | 30 | 20240125~20240311 | 빈 문자열 |
+
+- **`FID_INPUT_DATE_1`은 지켜진다.** 그 결제일 **이하**의 30행을 준다 — "날짜와 무관하게
+  최신 N행"이 아니다. 1년 전·2년 전 요청도 그 구간을 그대로 준다.
+- **한 번에 30행이고 `tr_cont`는 안 온다.** 공식 예제도 "한 번의 호출에 최대 30건 확인
+  가능하며 `fid_input_date_1`을 입력하여 다음 조회가 가능합니다"라고 적는다 —
+  연속조회 헤더가 아니라 **날짜를 앞으로 밀어 페이징**한다.
+- 그래서 **30거래일보다 긴 백필 창은 앞부분이 조용히 빈다.** 구간을 잘라 여러 번 돌린다.
+  수집기가 그때 경고를 남긴다(`kis_positioning.fetch_credit_balance`).
+- 0행의 뜻이 둘로 갈린다 — 반환 구간이 창과 **겹치는데** 0행이면 거르기가 깨진 것이라
+  실패시키고, 아예 **안 겹치면**(창 전체가 아직 결제 전이거나 30행 밖) 경고만 남긴다.
+  30행은 거래일이 이어져 있어 겹치면 반드시 한 행은 남는다는 것이 그 판정의 근거다.
 
 기본 조회 구간은 최근 7일이며 `observation_start`, `observation_end`, `lookback_days`로
 백필할 수 있다. 신용 순위는 과거 조회가 불가능하고, 증시자금은 응답 자체가 긴 구간을 주므로

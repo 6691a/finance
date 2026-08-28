@@ -7,7 +7,8 @@
   백필도 끝났다(`index_daily`가 2016-08부터). 추론 82건이 쌓였고 채점·해설 루프가 돈다.
   **장중 슬롯은 2026-08-28에 넷에서 `intraday_midday` 하나로 줄었다**([TUNING.md](TUNING.md) 6절).
   12단계는 마이그레이션이 없고 코드·테스트·`justfile deploy-api`까지 있으나 **배포는 14단계
-  화면과 함께 한다**(부를 클라이언트가 아직 없다). 4단계는 미착수, 14단계는 **설계만**.
+  화면과 함께 한다**(부를 클라이언트가 아직 없다). 4단계는 미착수, 14·16단계는 **설계만**.
+  16단계는 실측이 끝났고(해설 48건·예측 20건, 총 $0.54) 구현만 남았다.
   남은 확인은 5절
 
   **head 리비전 값의 원본은 이 줄 하나다.** 단계 문서에 각자 적지 않는다 — 그러면 리비전이
@@ -90,6 +91,7 @@ requirements) **배포 단위(worktree/PR 하나)마다 문서를 나눴다.** �
 | 13 | [13-llm-ledger.md](13-llm-ledger.md) | `thesis_llm_run`·`thesis_tool_call` 테이블과 수기 리비전(+`thesis`·`thesis_outcome`에 연결 칸), `thesis/toolbox.py`의 기록 래퍼, 생성·해설 흐름의 대화 열고 닫기, SQL 넷, 테스트 | 2, 5, 7 | 없음(기록만) |
 | 14 | [14-web-ui.md](14-web-ui.md) | React·TypeScript 실행 추적·추론 상세·주간 품질 화면, Cytoscape.js 관계 그래프, FastAPI 정적 자산 제공, Grafana 로컬 서비스·대시보드·테스트·문서 제거 | 11, 12, 13 | 없음(조회만) |
 | 15 | [15-return-basis.md](15-return-basis.md) | `thesis`에 축 세 칸과 크기 오차 두 칸, `thesis_outcome`에 오차 스냅샷, 수기 리비전, Slack 기준 줄과 `±` 표기, API 다섯 칸, 크기 앵커 툴 `typical_move`, 프롬프트 `## 크기` 절(앵커 + 오차), `select_window_changes.sql`의 국내 지수 제외 | 9, 10, 11, 12 | 있음(크기·오차 추정만 — 채점은 순수 함수) |
+| 16 | [16-narration-model.md](16-narration-model.md) | 사후 해설만 `gpt-5.6-luna`로 옮긴다 — `narration_model()` 하나, `thesis_narrative.yaml`에 조사 규칙·표기 절, `NARRATIVE_PROMPT_VERSION` 4. **예측은 `grok-4.6`에 그대로 둔다**(백테스트가 반대로 나왔다) | 5, 13 | 있음(해설만) |
 
 **5단계는 1단계의 `thesis` 채점 컬럼을 `thesis_outcome`으로 옮긴다.** 채택했으므로
 (2026-08-21) 그 이동을 1·2단계 코드에 먼저 반영한다. 무엇이 바뀌는지는

@@ -198,7 +198,7 @@ def narrate_followups(built: dict[str, Any]) -> int:
     슬롯을 나누는 이유는 `FollowupNarrator.run`에 있다 — 같은 날 장전·장후 추론이 같은
     대상을 가져 한 호출에 섞으면 응답을 대상에 되돌릴 수 없다.
     """
-    from modules.llm import LlmError, RetryableLlmError, model_name, thesis_model
+    from modules.llm import LlmError, RetryableLlmError, model_name, narration_model
     from modules.thesis.domain import NARRATED_HORIZON_DAYS, LlmRunStatus, ThesisError
     from modules.thesis.outcomes import FollowupNarrator
     from modules.thesis.store import ThesisStore
@@ -209,9 +209,10 @@ def narrate_followups(built: dict[str, Any]) -> int:
     dag_run_id = str(context["dag_run"].run_id)
     # 재시도는 새 대화다. dag_run_id는 재시도에도 같아 이 칸이 없으면 구분할 수 없다.
     try_number = int(context["ti"].try_number)
-    # 지평마다 호출이 갈리지만 시스템 프롬프트 접두는 같다. conv_id 하나로 묶으면 그
-    # 접두가 같은 서버의 캐시에 남는다(`modules/llm.py`).
-    model = thesis_model(f"thesis-narrate-{run_date}")
+    # **해설만 다른 모델이다**(`modules/llm.py`의 `narration_model`). 이 태스크의 병목은
+    # 추론이 아니라 조사라서 갈랐다 — 같은 DAG의 추론 생성은 `thesis_model`을 그대로 쓴다.
+    # conv_id를 넘기지 않는다: OpenAI는 캐시가 접두 해시로 자동이라 맞출 서버가 없다.
+    model = narration_model()
     written = 0
     attempted = 0
     failures: list[str] = []

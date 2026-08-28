@@ -169,6 +169,10 @@ select_pending_grades.sql  →  T+N 등락률 조회  →  classify_outcome / br
 
 `post_close` 슬롯 실행에서 돈다. `grade_followups` 뒤에 붙는다.
 
+> **어느 모델이 이 태스크를 도는지는 [16-narration-model.md](16-narration-model.md)가 정한다.**
+> 이 절은 흐름이고 거기는 모델 선택이다. 예측과 달리 해설은 `gpt-5.6-luna`로 옮기는 것이
+> 실측으로 유리했다 — 해설의 병목이 추론이 아니라 조사라서다.
+
 - **대상은 `pre_open`과 `post_close` 둘이다**(2026-08-21 변경). 채점(3절)은 `pre_open`만이지만 해설은
   `post_close` 리뷰에도 붙인다. 장후 리뷰는 "오늘 이래서 움직였다"는 **인과 주장**이라
   며칠 뒤 보도로 검증할 값어치가 오히려 크다. `post_close` 대상은 채점 넷이 NULL인 채로

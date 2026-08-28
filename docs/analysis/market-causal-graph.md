@@ -515,6 +515,36 @@ investigate → 조건부 tools → answer → 조건부 repair → answer
 - 원장은 `thesis_tool_call`을 그대로 쓴다. 새로 만들지 않는다 — 그 목적이 "툴 호출 패턴과
   결과의 상관을 재는 것"이고 여기에도 그대로 적용된다.
 
+상한은 코드 상수다: `MAX_TOOL_ROUNDS = 3`, `MAX_DAYS_BEFORE = 60`, `MAX_PAST_WEEKS = 12`,
+`MAX_PAST_PATHS = 60`. `thesis`가 왕복 5인 것은 그쪽 툴이 14개이고 슬롯마다 앞단이 달라서다.
+
+#### 실 모델이 아니면 못 잡는 것 둘 (2026-08-28 실측)
+
+**"새 툴 SQL은 운영 DB에 읽기 전용으로 한 번 돌려 보고 넣는다"는 규칙이 모델 쪽에도 필요했다.**
+SQL 여섯은 통과했는데 그 다음에 둘이 걸렸다.
+
+1. **`gpt-5.6-luna`는 Chat Completions에서 함수 툴과 reasoning을 같이 못 받는다.**
+
+   ```
+   Function tools with reasoning_effort are not supported for gpt-5.6-luna in
+   /v1/chat/completions. To use function tools, use /v1/responses or set
+   reasoning_effort to 'none'.
+   ```
+
+   `reasoning_effort="none"`으로 낮추는 대신 `use_responses_api=True`로 API를 옮겼다 —
+   **인과 추론이 이 흐름의 값어치이고 그것을 끄면 툴을 붙인 이유가 사라진다.**
+   `thesis`가 이 문제를 안 겪은 것은 그쪽이 `ChatXAI(grok-4.6)`라서다.
+
+2. **Responses API는 `content`가 블록 리스트다.** `[{"type": "reasoning", …},
+   {"type": "text", "text": "…"}]` 모양이라 `str()`을 씌우면 파이썬 repr가 되고 JSON 파싱이
+   `Invalid JSON: key must be a string`으로 죽는다. `generation.reply_text`가 그것을 편다
+   (`briefing/disclosure_picks._text`가 같은 일을 하는 자리다).
+
+**모델이 실제로 툴을 부른다.** 2026-08-10 주를 운영 데이터로 돌린 실측에서 7회 —
+`investor_flow` 둘(대형 반도체주 수급 확인), `past_paths` 다섯이다. `price_window`는 그 주에
+부르지 않았다. `observed` 비율이 5/25(20%)에서 5~6/15~20(30~40%)으로 올라갔지만 실행마다
+갈리므로 **주가 쌓인 뒤에 다시 잰다.**
+
 ### 5.3 답변 스키마
 
 기존 2단계를 그대로 쓴다 — 조사(툴만 바인딩) → 답변(툴 빼고 `response_format` 강제).

@@ -477,3 +477,36 @@ def test_store_repeats_the_same_upsert_for_a_rerun_of_the_same_period():
     assert [statement for statement, _ in first.recorded_cursor.calls] == [
         statement for statement, _ in second.recorded_cursor.calls
     ]
+
+
+def test_the_balance_sheet_is_its_own_bundle():
+    """국채 곡선·기준금리와 같은 IADB를 부르지만 묶음이 갈려야 어느 조회였는지 되짚는다."""
+    from modules.collectors.indicator.boe import (
+        BALANCE_SHEET_DATASET,
+        BALANCE_SHEET_SOURCE_UNIT_NAME,
+        BALANCE_SHEET_UNIT,
+        GILT_DATASET,
+        POLICY_DATASET,
+    )
+
+    source_keys = {GILT_DATASET.source_key, POLICY_DATASET.source_key, BALANCE_SHEET_DATASET.source_key}
+    assert len(source_keys) == 3
+
+    # 금리와 잔액은 단위가 다르다. 한 축에 놓을 수 없으므로 묶음도 계열도 따로 든다.
+    assert BALANCE_SHEET_DATASET.source_unit_name == BALANCE_SHEET_SOURCE_UNIT_NAME
+    assert GILT_DATASET.source_unit_name != BALANCE_SHEET_DATASET.source_unit_name
+    assert all(series.unit == BALANCE_SHEET_UNIT for series in BALANCE_SHEET_DATASET.series)
+    assert all(series.unit == SERIES_UNIT for series in GILT_DATASET.series)
+
+
+def test_total_assets_and_reserve_balances_are_different_kinds():
+    """BoE는 총자산을 주간으로 고시하지 않는다.
+
+    주간 보고는 대차대조표의 90%만 담은 항목 목록이라 총계 줄이 없다. 준비금잔액을 총자산과
+    한 `kind`에 두면 "중앙은행 총자산 전부"를 묻는 쿼리가 영국만 작게 읽는다.
+    """
+    assert BoeSeries.BANK_ASSETS_Q.kind == "balance_sheet"
+    assert BoeSeries.BANK_RESERVES_W.kind == "balance_sheet_item"
+    # 대차대조표 잔액에는 만기가 없다.
+    assert BoeSeries.BANK_ASSETS_Q.maturity_months is None
+    assert BoeSeries.BANK_RESERVES_W.maturity_months is None

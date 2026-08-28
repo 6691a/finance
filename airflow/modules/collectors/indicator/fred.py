@@ -59,7 +59,8 @@ class FredSeries(StrEnum):
     항목코드를 다루는 방식과 같다.
 
     **월간 계열은 `M`으로 끝난다.** 한 테이블에 일별과 월간이 섞여 있어 표시가 없으면 조회하는
-    쪽이 주기를 구분할 수 없다. `ecb_irs.py`가 먼저 쓴 규칙이다.
+    쪽이 주기를 구분할 수 없다. `ecb_irs.py`가 먼저 쓴 규칙이다. 주간 계열은 같은 이유로 `_W`로
+    끝낸다 — 대차대조표 잔액이 들어오면서 한 테이블에 일별·주간·월간이 함께 놓였다.
     """
 
     fred_id: str
@@ -109,15 +110,37 @@ class FredSeries(StrEnum):
     DFEDTARU = ("DFEDTARU", "DFEDTARU", "Percent", "policy_rate", "미국 연방기금 목표범위 상단")
     EADFR = ("EADFR", "ECBDFR", "Percent", "policy_rate", "ECB 예금금리")
 
+    # 중앙은행 대차대조표 총자산. 정책금리가 0에 붙어 있던 구간에서 통화정책의 강도를 가른
+    # 것은 금리가 아니라 이 잔액이다. 좌표·주기·단위·이력은 2026-08-27에 `series` 엔드포인트로
+    # 확인했다.
+    #
+    # **단위를 통화별로 그대로 둔다.** 한 통화로 환산하면 환율 변동이 자산 증감으로 위장한다.
+    # 2022년 엔 약세 구간에서 달러 환산 BOJ 자산은 줄고 엔화 잔액은 늘었다. 비교는 잔액이
+    # 아니라 증가율로 한다.
+    #
+    # **유로 지역은 분데스방크 API(`BBBK11`의 `D.TTA082`)도 같은 값을 준다.** 2026-08-21에
+    # 둘이 5,913,041로 글자 그대로 같은 것을 확인했다. FRED로 받는 쪽을 고른 이유는 `provider`가
+    # `bbk`가 되면 "유로 지역 값인데 제공처가 독일"로 읽히기 때문이다.
+    FED_ASSETS_W = ("FEDASSETS_W", "WALCL", "Millions of Dollars", "balance_sheet", "연준 총자산(주간)")
+    EA_ASSETS_W = ("EAASSETS_W", "ECBASSETSW", "Millions of Euros", "balance_sheet", "유로시스템 총자산(주간)")
+    JP_ASSETS_M = ("JPASSETS_M", "JPNASSETS", "Hundred Millions of Yen", "balance_sheet", "일본은행 총자산(월별)")
+
 
 # DAG이 태스크를 매핑하는 단위. 국채와 거시는 발표 주기가 달라 되돌아볼 구간이 다르고,
 # 그래서 DAG도 나뉜다.
 #
 # **세 목록이 계열 전부를 덮는지 테스트가 본다.** 국채는 `kind`로, 거시는 `is_monthly`로
 # 걸러서 어느 쪽에도 안 맞는 계열(일별 정책금리가 그렇다)이 조용히 어느 DAG에도 안 실린다.
+#
+# **거시 목록을 `is_monthly`로 거르지 않는다.** 월간 계열이라는 사실은 발표 주기일 뿐이고
+# 어느 DAG이 받을지를 정하지 않는다. 일본은행 총자산이 월간으로 들어오면서 그 필터가
+# 거짓이 됐다 — 자산 잔액이 `fred_macro_daily`에 조용히 실릴 뻔했다. 종류로 거른다.
+MACRO_KINDS = frozenset({"price_index", "activity"})
+
 TREASURY_SERIES: tuple[str, ...] = tuple(series.value for series in FredSeries if series.kind == "government_bond")
-MACRO_SERIES: tuple[str, ...] = tuple(series.value for series in FredSeries if series.is_monthly)
+MACRO_SERIES: tuple[str, ...] = tuple(series.value for series in FredSeries if series.kind in MACRO_KINDS)
 POLICY_RATE_SERIES: tuple[str, ...] = tuple(series.value for series in FredSeries if series.kind == "policy_rate")
+BALANCE_SHEET_SERIES: tuple[str, ...] = tuple(series.value for series in FredSeries if series.kind == "balance_sheet")
 
 # FRED가 휴장일과 미발표일에 값 대신 넣는 표시.
 MISSING_VALUE = "."

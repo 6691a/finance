@@ -83,6 +83,19 @@ def build_weekly_graph(
             toolbox=_toolbox(conn, window, targets),
         )
 
+    # 후보 인용률. **후보에 없어서 못 본 것과 있었는데 안 쓴 것은 다른 문제다**(2026-08-28).
+    # 앞쪽은 조립 SQL이 고치고 뒤쪽은 프롬프트가 고치는데, 재지 않으면 어느 쪽인지 모른다.
+    # 낮게 유지되면 후보를 넓힐 게 아니라 좁혀서 진하게 줘야 한다는 신호다 — 후보 목록이
+    # 길어지면 모델이 "하나 고르기"로 기우는 것이 프로토타입 v1에서 관측됐다(설계 §8.2).
+    cited = {ref for path in paths for ref in path.evidence_refs}
+    logger.info(
+        "week %s cited %d of %d candidates in %d paths",
+        week_start,
+        len(cited),
+        len(found.refs),
+        len(paths),
+    )
+
     input_hash = domain.input_hash(
         week_start=week_start,
         target_codes=list(returns),
@@ -107,6 +120,8 @@ def build_weekly_graph(
         skipped=False,
         targets=len(targets),
         documents=len(found.documents),
+        candidates=len(found.refs),
+        cited=len(cited),
     )
 
 
@@ -137,6 +152,8 @@ def _summary(
     skipped: bool,
     targets: int = 0,
     documents: int = 0,
+    candidates: int = 0,
+    cited: int = 0,
 ) -> dict[str, Any]:
     # XCom 경계다. Airflow가 Pydantic 모델을 어떻게 직렬화하는지에 기대지 않는다.
     return {
@@ -146,6 +163,8 @@ def _summary(
         "targets": targets,
         "documents": documents,
         "paths": paths,
+        "candidates": candidates,
+        "cited": cited,
         "stored": outcome.stored,
         "new_channels": outcome.new_channels,
         "skipped": skipped,

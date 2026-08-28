@@ -373,6 +373,31 @@ class TestFetchCandidates:
 
         assert found.refs == ()
 
+    def test_the_disclosure_query_drops_insider_holding_reports(self) -> None:
+        """**공시 후보의 95퍼센트가 임원 지분 신고다**(2026-08-28 실측: 3,850건 중 3,682건).
+        임원 하나가 사고팔 때마다 한 건이라 같은 회사 같은 날짜로 넷씩 쌓이고, 그 주 주가를
+        움직인 원인이 아니다. 프로토타입 두 번에서 공시 22건 중 인용이 0건이었다.
+        """
+        connection = self._connection()
+        candidates.fetch_candidates(connection, self._targets(), self.WINDOW)
+
+        sql, _ = next(call for call in connection.calls if "FROM disclosure_event" in call[0])
+        assert "NOT LIKE" in sql
+        assert "임원ㆍ주요주주특정증권등소유상황보고서" in sql
+
+    def test_the_document_query_caps_each_source(self) -> None:
+        """**점수순으로만 자르면 두꺼운 소스가 자리를 독식한다.** 8/17 주 실측에서 상위
+        60건이 einfomax 37건이었고 소스 열아홉 중 여섯만 남아 `fed`·`bls`·`census`가
+        통째로 빠졌다. 상한을 소스마다 걸어 열여덟이 남는다.
+        """
+        connection = self._connection()
+        candidates.fetch_candidates(connection, self._targets(), self.WINDOW)
+
+        sql, params = next(call for call in connection.calls if "FROM document" in call[0])
+        assert "PARTITION BY source_slug" in sql
+        assert params["per_source"] == candidates.MAX_DOCUMENTS_PER_SOURCE
+        assert params["limit"] == candidates.MAX_DOCUMENTS
+
 
 class TestVocabularyOptions:
     """다음 주 프롬프트에 실릴 어휘 후보. 이것이 주를 잇는다(설계 §4)."""

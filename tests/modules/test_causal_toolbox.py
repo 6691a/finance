@@ -7,7 +7,7 @@
 계약은 `docs/analysis/market-causal-graph.md` §5.2다.
 """
 
-from datetime import date
+from datetime import date, timedelta
 from decimal import Decimal
 
 import pytest
@@ -31,6 +31,108 @@ def _box(**results) -> toolbox.CausalToolbox:
         window=WINDOW,
         targets=TARGETS,
     )
+
+
+class TestMacroIndicators:
+    """**대상 목록 밖 매크로가 들어오는 유일한 문이다.** 수집 중인 지표 106계열 중 대상은
+    둘뿐이고, 월간 지표는 실현 등락 셋을 낼 수 없어 대상이 될 수도 없다(설계 §5.2).
+    """
+
+    ROW = (
+        "fred",
+        "CPI_M",
+        "US",
+        "미국",
+        "미국 소비자물가지수",
+        "price_index",
+        "Index 1982-1984=100",
+        date(2026, 8, 12),
+        Decimal("323.048"),
+        date(2026, 7, 15),
+        Decimal("322.132"),
+        date(2025, 8, 12),
+        Decimal("312.618"),
+    )
+
+    def test_a_non_rate_kind_reports_the_raw_difference(self) -> None:
+        """물가지수는 bp가 아니다. 323.048 - 322.132는 `+0.916`이지 `+91.6bp`가 아니다."""
+        box = _box(**{"FROM in_window": [self.ROW]})
+
+        result = box.macro_indicators(kind="price_index", days_before=30)
+
+        assert result.releases[0].change == pytest.approx(0.916)
+
+    def test_a_level_kind_also_reports_the_year_over_year_rate(self) -> None:
+        """**물가·고용의 표준 독법이 전년 대비다.** 이 칸이 없던 판 7 프로토타입에서 모델이
+        지수 332.813을 받고도 `연율 3.4퍼센트`를 기사 요약에서 가져다 근거로 썼다.
+        """
+        box = _box(**{"FROM in_window": [self.ROW]})
+
+        result = box.macro_indicators(kind="price_index", days_before=40)
+
+        assert result.releases[0].year_ago_value == pytest.approx(312.618)
+        assert result.releases[0].year_change_pct == pytest.approx(3.34, abs=0.01)
+
+    def test_a_rate_kind_reports_basis_points(self) -> None:
+        """4.239에서 4.313으로 가는 것은 `+1.75%`가 아니라 `+7.4bp`다."""
+        row = (
+            "ecos",
+            "KTB10Y",
+            "KR",
+            "한국",
+            "국고채 10년",
+            "government_bond",
+            "Percent",
+            date(2026, 8, 14),
+            Decimal("4.313"),
+            date(2026, 8, 13),
+            Decimal("4.239"),
+            date(2025, 8, 14),
+            Decimal("3.102"),
+        )
+        box = _box(**{"FROM in_window": [row]})
+
+        result = box.macro_indicators(kind="government_bond", days_before=10)
+
+        assert result.releases[0].change == pytest.approx(7.4)
+        # **금리에 전년 대비 비율을 주지 않는다.** 4.65에서 4.70으로 간 것을 `+1.08퍼센트`로
+        # 읽는 것과 같은 실수라, 칸이 있으면 모델이 그렇게 읽는다.
+        assert result.releases[0].year_change_pct is None
+
+    def test_a_first_observation_has_no_change(self) -> None:
+        """직전 값이 없으면 변화를 만들지 않는다. 첫 관측을 0 변화로 꾸미지 않는다."""
+        row = (*self.ROW[:9], None, None, None, None)
+        box = _box(**{"FROM in_window": [row]})
+
+        result = box.macro_indicators(kind="price_index", days_before=30)
+
+        assert result.releases[0].change is None
+        assert result.releases[0].previous_value is None
+
+    def test_the_window_ends_at_the_target_week(self) -> None:
+        """**반응 주 발표는 원인이 아니라 결과다.** 창 끝이 대상 주 금요일이어야 그 구분이 산다."""
+        box = _box(**{"FROM in_window": [self.ROW]})
+
+        box.macro_indicators(kind="activity", days_before=14)
+
+        _, parameters = box._connection.calls[0]
+        assert parameters["end"] == WINDOW.week_end
+        assert parameters["start"] == WINDOW.week_start - timedelta(days=14)
+        assert parameters["as_of_at"] == WINDOW.as_of_at
+
+    def test_an_unknown_kind_is_a_tool_error(self) -> None:
+        """모델이 고쳐 부를 수 있는 실수다. 조용히 다른 종류로 바꿔 주지 않는다 —
+        `activity`를 물었는데 국채가 오면 모델은 그것을 실물활동으로 읽는다."""
+        box = _box(**{"FROM in_window": []})
+
+        with pytest.raises(toolbox.ToolLimitExceeded, match="unknown kind"):
+            box.macro_indicators(kind="balance_sheet", days_before=10)
+
+    def test_too_many_days_is_a_tool_error(self) -> None:
+        box = _box(**{"FROM in_window": []})
+
+        with pytest.raises(toolbox.ToolLimitExceeded, match="days_before"):
+            box.macro_indicators(kind="activity", days_before=toolbox.MAX_DAYS_BEFORE + 1)
 
 
 class TestPriceWindow:
@@ -135,12 +237,13 @@ class TestPastPaths:
 class TestToolDefinitions:
     """`StructuredTool`이 `args_schema`에서 JSON Schema를 뽑는다. 손으로 안 쓴다."""
 
-    def test_three_tools_are_exposed(self) -> None:
+    def test_four_tools_are_exposed(self) -> None:
         box = _box()
 
         assert [tool.name for tool in box.tools] == [
             "price_window",
             "investor_flow",
+            "macro_indicators",
             "past_paths",
         ]
 

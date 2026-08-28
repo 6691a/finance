@@ -1,4 +1,4 @@
-"""주간 인과 그래프가 쓰는 툴 — 시세 창, 투자자별 수급, 과거 경로.
+"""주간 인과 그래프가 쓰는 툴 — 시세 창, 투자자별 수급, 과거 경로, 매크로 지표 발표.
 
 **LangChain을 import한다.** 그래서 `domain.py`가 이 모듈을 모르고, DAG 테스트와 순수 함수
 테스트가 이 무게 없이 돈다.
@@ -12,12 +12,19 @@
 직전 몇 시간용이고 과거 구간에 그대로 쓸 수 없다. 조회 SQL도 새 파일이다
 (`airflow/sql/postgres/causal_tools/`).
 
+넷째로 `macro_indicators`를 붙였다(2026-08-28). 수집 중인 지표 106계열 중 이 그래프가 값으로
+보던 것이 대상 둘(`KRBASE`·`KTB10Y`)뿐이었다 — `activity` 46, `government_bond` 40,
+`price_index` 4계열이 문서 태그 문자열로만 스쳐 갔다. **대상으로는 넣을 수 없다** — 실현
+등락이 주간·T+1·T+5 셋을 요구하는데 월간 지표는 그 주에 관측이 0~1건이라 실행이 죽는다.
+그래서 툴이다.
+
 계약은 `docs/analysis/market-causal-graph.md` §5.2다.
 """
 
 import logging
 from collections.abc import Sequence
 from datetime import date, timedelta
+from decimal import Decimal
 from typing import Any
 
 from langchain_core.tools import BaseTool, StructuredTool
@@ -54,6 +61,35 @@ PRICE_WINDOW_SQL: dict[CausalTargetKind, str] = {
 }
 INVESTOR_FLOW_SQL = read_sql("postgres", "causal_tools", "investor_flow.sql")
 PAST_PATHS_SQL = read_sql("postgres", "causal_tools", "past_paths.sql")
+INDICATOR_RELEASES_SQL = read_sql("postgres", "causal_tools", "indicator_releases.sql")
+
+# `macro_indicators`가 고를 수 있는 `indicator_series.kind`. **단위가 달라 반드시 걸어야
+# 한다** — 안 걸면 국채 금리(Percent)와 소매판매(Thousand US Dollars)가 한 표에 섞인다.
+#
+# `balance_sheet`·`balance_sheet_item`은 뺐다. 통화별 단위(백만 달러·억엔·십억원)라 한 표에
+# 못 놓는 것이 위와 같은 이유이고, 주간 그래프가 물을 값도 아니다.
+#
+# **`thesis/domain.py`의 같은 이름 상수와 값이 겹치지만 따로 둔다.** 두 트리가 서로를
+# import하지 않는 것이 우선이고(저장소 규칙), 이쪽은 되짚기라 고를 kind가 달라질 수 있다.
+INDICATOR_KINDS: tuple[str, ...] = (
+    "government_bond",
+    "money_market",
+    "policy_rate",
+    "tips_rate",
+    "credit_spread",
+    "price_index",
+    "activity",
+)
+
+# 값이 연이율 퍼센트라 변화를 bp로 읽어야 하는 종류. 4.65 → 4.70은 `+1.08%`가 아니라 `+5bp`다.
+BASIS_POINT_INDICATOR_KINDS = frozenset(
+    {"government_bond", "money_market", "policy_rate", "tips_rate", "credit_spread"}
+)
+
+# 한 호출이 돌려주는 계열 수 상한. 계열마다 한 줄로 접히므로(SQL 머리 참고) kind 하나가
+# 통째로 들어온다 — 2026-08-28 기준 `activity` 46, `government_bond` 40이 가장 크다.
+# 넘치면 창 앞쪽 오래된 발표부터 잘린다.
+MAX_INDICATOR_RESULTS = 60
 
 
 class ToolLimitExceeded(RuntimeError):
@@ -81,6 +117,24 @@ class InvestorFlowArgs(BaseModel):
     """`investor_flow` 인자. 국내 종목만 받는다."""
 
     stock_code: str = Field(description="국내 종목 코드. 지수·환율·금리에는 이 값이 없다")
+
+
+class MacroIndicatorsArgs(BaseModel):
+    """`macro_indicators` 인자. 상한은 코드 상수가 원본이고 설명에 f-string으로 실린다."""
+
+    kind: str = Field(
+        description=(
+            "지표 종류 하나. " + ", ".join(INDICATOR_KINDS) + " 중에서 고른다. "
+            "단위가 달라 한 번에 하나만 받는다"
+        )
+    )
+    days_before: int = Field(
+        description=(
+            f"대상 주 시작일로부터 며칠 전까지를 볼지. 1~{MAX_DAYS_BEFORE}. "
+            "**월간 지표의 관측일은 그 달 1일이다** — 지난달 물가·고용을 보려면 40 이상을 "
+            "준다. 20을 주면 지난달 값이 창 밖이라 빈 결과가 온다"
+        )
+    )
 
 
 class PastPathsArgs(BaseModel):
@@ -134,6 +188,43 @@ class InvestorFlow(BaseModel):
     rows: tuple[FlowRow, ...]
 
 
+class IndicatorRelease(BaseModel):
+    """계열 하나의 창 안 마지막 발표와 직전 관측 대비 변화.
+
+    **직전 값이 없으면 변화를 만들지 않는다.** 첫 관측을 0 변화로 꾸미지 않기 위해서다.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    provider: str
+    series_id: str
+    country: str | None = None
+    country_name: str | None = None
+    label: str
+    unit: str
+    observation_date: date
+    value: float
+    previous_date: date | None = None
+    previous_value: float | None = None
+    change: float | None = None
+    year_ago_date: date | None = None
+    year_ago_value: float | None = None
+    year_change_pct: float | None = None
+    """전년 대비 변화율(퍼센트). **수준 계열에만 있다** — 물가·고용·수출의 표준 독법이
+    전년 대비라 기사가 말하는 `물가 3.3퍼센트 상승`을 이 칸이 대조한다. 금리는 수준 자체가
+    뜻이라 전년 대비 비율을 쓰지 않으므로 비운다."""
+
+
+class IndicatorReleases(BaseModel):
+    """`macro_indicators` 응답. `unit_note`가 `change` 칸을 어떻게 읽을지 알린다."""
+
+    model_config = ConfigDict(frozen=True)
+
+    kind: str
+    unit_note: str
+    releases: tuple[IndicatorRelease, ...] = ()
+
+
 class PastPath(BaseModel):
     """과거 주가 이 대상에 이은 경로 하나."""
 
@@ -172,6 +263,13 @@ TOOL_DESCRIPTIONS: dict[str, str] = {
         "국내 종목의 투자자별 일별 순매수 수량. 외국인·기관·개인·연기금·투신 다섯을 준다. "
         "`수급`이나 `외국인 수급` 같은 경로를 쓸 참이면 **먼저 이 툴로 확인한다** — "
         "종가만 보고 누가 샀는지 추측하지 마라. 지수·환율·금리에는 이 값이 없다."
+    ),
+    "macro_indicators": (
+        "그 창에 고시된 매크로 지표와 변화. 종류 하나씩 준다. "
+        "**대상 아홉에 없는 값이 여기 있다** — 물가지수, 고용, 수출, 각국 국채·정책금리다. "
+        "기사가 `미국 물가 둔화`라고 쓸 때 **실제 숫자가 얼마나 움직였는지**를 확인할 때 쓴다. "
+        "`change`는 직전 관측 대비(금리는 bp, 나머지는 값 그대로)이고, 수준 계열은 "
+        "`year_change_pct`에 전년 대비 변화율이 함께 온다 — 물가·고용은 그쪽이 표준 독법이다."
     ),
     "past_paths": (
         "이 대상에 과거 주가 이은 경로. 사건, 사슬, 방향, 확신, 실현 등락을 준다. "
@@ -214,6 +312,12 @@ class CausalToolbox:
                 name="investor_flow",
                 description=TOOL_DESCRIPTIONS["investor_flow"],
                 args_schema=InvestorFlowArgs,
+            ),
+            StructuredTool.from_function(
+                func=self.macro_indicators,
+                name="macro_indicators",
+                description=TOOL_DESCRIPTIONS["macro_indicators"],
+                args_schema=MacroIndicatorsArgs,
             ),
             StructuredTool.from_function(
                 func=self.past_paths,
@@ -275,6 +379,42 @@ class CausalToolbox:
             )
         return InvestorFlow(code=target.code, rows=rows)
 
+    def macro_indicators(self, kind: str, days_before: int) -> IndicatorReleases:
+        """그 창에 고시된 지표. **대상 목록 밖 매크로가 들어오는 유일한 문이다.**"""
+        if kind not in INDICATOR_KINDS:
+            raise ToolLimitExceeded(
+                f"unknown kind {kind}; pick one of {', '.join(INDICATOR_KINDS)}"
+            )
+        if not 1 <= days_before <= MAX_DAYS_BEFORE:
+            raise ToolLimitExceeded(
+                f"days_before must be between 1 and {MAX_DAYS_BEFORE}, got {days_before}"
+            )
+        as_basis_points = kind in BASIS_POINT_INDICATOR_KINDS
+        with self._connection.cursor() as cursor:
+            cursor.execute(
+                INDICATOR_RELEASES_SQL,
+                {
+                    "kinds": [kind],
+                    "start": self._window.week_start - timedelta(days=days_before),
+                    # **반응 주는 안 본다.** 그 주 발표는 원인이 아니라 결과다.
+                    "end": self._window.week_end,
+                    "as_of_at": self._window.as_of_at,
+                    "limit": MAX_INDICATOR_RESULTS,
+                },
+            )
+            releases = tuple(
+                _release(row, as_basis_points=as_basis_points) for row in cursor.fetchall()
+            )
+        return IndicatorReleases(
+            kind=kind,
+            unit_note=(
+                "change는 직전 관측 대비 bp다"
+                if as_basis_points
+                else "change는 직전 관측 대비 값 그대로이고, year_change_pct는 전년 대비 퍼센트다"
+            ),
+            releases=releases,
+        )
+
     def past_paths(self, target_code: str, weeks: int) -> PastPaths:
         """이 대상에 과거 주가 이은 경로. **대상 주 이전만 본다.**"""
         target = self._target(target_code)
@@ -318,6 +458,42 @@ class CausalToolbox:
                 f"unknown target {code}; pick one of {', '.join(sorted(self._targets))}"
             )
         return target
+
+
+def _release(row: Sequence[Any], *, as_basis_points: bool) -> IndicatorRelease:
+    """행 하나를 응답 모델로. **변화 계산이 여기 한 곳이다.**
+
+    금리는 bp로 준다 — 4.65에서 4.70으로 가는 것은 `+1.08%`가 아니라 `+5bp`다. 물가지수처럼
+    퍼센트가 아닌 계열은 변화를 값 그대로 준다.
+    """
+    value, previous, year_ago = row[8], row[10], row[12]
+    change: float | None = None
+    if previous is not None:
+        difference = Decimal(value) - Decimal(previous)
+        change = (
+            round(float(difference) * 100, 1) if as_basis_points else round(float(difference), 4)
+        )
+    # **금리에는 전년 대비 비율을 안 준다.** 4.65에서 4.70으로 간 것을 `+1.08퍼센트`로 읽는
+    # 것과 같은 실수라, 칸이 있으면 모델이 그렇게 읽는다.
+    year_change: float | None = None
+    if not as_basis_points and year_ago is not None and Decimal(year_ago) != 0:
+        year_change = round(float(Decimal(value) / Decimal(year_ago) * 100 - 100), 2)
+    return IndicatorRelease(
+        provider=row[0],
+        series_id=row[1],
+        country=row[2],
+        country_name=row[3],
+        label=row[4],
+        unit=row[6],
+        observation_date=row[7],
+        value=float(value),
+        previous_date=row[9],
+        previous_value=_number(previous),
+        change=change,
+        year_ago_date=row[11],
+        year_ago_value=_number(year_ago),
+        year_change_pct=year_change,
+    )
 
 
 def _number(value: Any) -> float | None:

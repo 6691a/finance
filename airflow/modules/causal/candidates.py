@@ -63,6 +63,15 @@ SIGNALS = read_sql("postgres", "causal", "select_signals.sql")
 # 8주 프로토타입이 32~50건, 운영 첫 실행이 61건으로 잘 돌았다.
 MAX_DOCUMENTS = 60
 
+# 한 소스가 후보에서 가져갈 수 있는 최대 건수. 근거는 SQL 머리에 있다 — 점수순으로만
+# 자르면 두꺼운 소스가 자리를 독식해 원천 통계와 중앙은행 발표가 통째로 빠진다.
+#
+# **4는 커버리지와 두께의 균형점이다**(2026-08-28 8/17 주 실측). 8이면 소스 열둘,
+# 상한 없이 순번만 돌리면 열아홉이 남지만 1점짜리까지 들어온다. 4가 열여덟에 최저 3점이다.
+# 소스가 더 늘면 이 값을 내려야 한다 — 소스 수 × 이 값이 `MAX_DOCUMENTS`를 크게 넘으면
+# 상한이 다시 점수순 절단으로 돌아간다.
+MAX_DOCUMENTS_PER_SOURCE = 4
+
 
 def resolve_targets(connection: Connection) -> tuple[CausalTarget, ...]:
     """이 실행이 다룰 대상. 지수 둘 → 관심종목 → 매크로 다섯 → 금리 둘 순서다.
@@ -156,6 +165,7 @@ def fetch_candidates(
                 "week_after_at": week_after_at,
                 "as_of_at": window.as_of_at,
                 "limit": MAX_DOCUMENTS,
+                "per_source": MAX_DOCUMENTS_PER_SOURCE,
             },
         )
         documents = tuple(

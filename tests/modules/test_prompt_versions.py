@@ -45,6 +45,12 @@ PROMPT_HASHES: dict[tuple[str, str], str] = {
     ("causal_graph", "5"): "0711c09f0eef35133b476949efccdbe8e47af45b980f776046f68854c6a5547d",
     # 판 6은 툴 셋을 붙였다(2026-08-28). 프롬프트가 언제 무엇을 부를지 안내한다.
     ("causal_graph", "6"): "a3c835998eb65bfa4ed4449e7f4989daf451d3985eaded84e2f1bad6bb3d0886",
+    # 판 7은 넷째 툴 `macro_indicators`를 안내한다(2026-08-28). 대상 아홉에 없는 매크로
+    # 지표를 모델이 값으로 볼 수 있게 됐다.
+    ("causal_graph", "7"): "994dea4f799cf080666e5a233fe7903dea4e01e4272809b8bdf5f93cccb2bf61",
+    # 판 8은 기사 숫자를 근거로 쓰지 못하게 막았다(2026-08-28). 문서는 요약만 있고 원문이
+    # 비어 있어 그 숫자를 되짚을 수 없다.
+    ("causal_graph", "8"): "83d485c7ec318f95d85751bcac7c251d44f189a890d40afb96a590e4834205bb",
     ("expectation_extraction", "1"): "7108eab56e598ff642aeb7269f0f07ab9ef21707798202447db6a6b0a3b52a41",
     # 판 8은 문장이 아니라 **자리표시자에 들어가는 값의 모양**이 바뀐 것이다(2026-08-27).
     # 관측 상태·과거 추론 JSON에서 들여쓰기를 뺐다 — 모델이 보는 입력이 달라지므로 판을

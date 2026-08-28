@@ -10,7 +10,7 @@
 
 ## 장전과 무엇이 다른가
 
-**기준가가 전일 종가가 아니라 지금 가격이다.** 10:35 슬롯은 "10:35 가격에서 마감까지"를
+**기준가가 전일 종가가 아니라 지금 가격이다.** 12:35 슬롯은 "12:35 가격에서 마감까지"를
 맞힌다. 이미 오른 만큼은 예측에 안 들어가고, 그래서 채점 조회도 갈린다
 (`thesis.store.intraday_horizon_returns`). 관측 상태도 확정 종가가 아니라 봉에서 만든다 —
 `stock_investor_trade_daily`는 18:10에 들어오고 KIS가 15:40 전 당일 조회를 거절한다.
@@ -18,26 +18,27 @@
 **오늘 앞 슬롯을 되짚어 프롬프트에 싣는다.** 아침 예측이 지금 맞고 있는지가 다음 판단의
 재료다. `thesis_outcome`에 저장하지는 않는다 — 이유는 `thesis.state.SameDayThesis`.
 
-## 왜 10:35 / 12:35 / 15:00 인가
+## 왜 12:35 하나인가
 
 문서 평가(`document_assessment_hourly`, 매시 25분)가 끝난 뒤라야 직전 정시 수집분(:05)이
-근거 후보에 든다. 장전이 08:35인 것과 같은 이유이고, 그래서 앞 두 슬롯이 :35다.
-15:00만 예외다 — 그 슬롯의 목적이 "마감 30분 전"이라 시각이 먼저 정해진다(문서는 14:25
-평가분까지 본다).
+근거 후보에 든다. 장전이 08:35인 것과 같은 이유로 :35다.
+
+**넷이던 슬롯이 여기까지 줄었다.** 채점 84건(2026-08-21~28)에서 균등 추측(Brier 0.667)보다
+나은 슬롯은 `pre_open`(0.634)과 `intraday_midday`(0.595)뿐이었다. `intraday_afternoon`(0.719)은
+`pre_close`와 25분 차이라 08-27에, `intraday_morning`(0.721)과 `pre_close`(0.798)는 08-28에
+뺐다. 근거와 재측정 방법은 `docs/analysis/market-thesis/TUNING.md`에 있다.
 
 **시각은 전제이지 보장이 아니다.** 그래서 `build_thesis` 안에 readiness guard가 있다.
 봉이 아예 없으면 수집이 멈춘 것이고, 오래된 봉만 있으면 지연이다. 둘 다 `ThesisNotReady`로
 올려 Airflow 재시도에 맡긴다.
 
-## 왜 슬롯 셋이 DAG 하나인가
+## 슬롯이 하나여도 슬롯 장치는 남는다
 
-저장소 규칙은 "슬롯·모드로 갈리는 DAG는 나눈다"이고, 2026-08-21에 `market_thesis_analysis`를
-장전·장후로 가른 것이 그 규칙의 출처다. **그때 문제는 시각이 여럿인 것이 아니라 앞단
-데이터와 실패 성격이 다른 둘을 시계로 뭉뚱그린 것이었다.** 장중 셋은 같은 봉과 같은 문서
-평가를 같은 이유로 기다린다 — `slack_kr_market_briefing`이
-`MultipleCronTriggerTimetable` 하나로 남아 있는 것과 같은 경우다.
+지금 cron이 하나뿐이지만 `INTRADAY_SLOT_TIMES` 표와 `resolve_slot`은 그대로 둔다. 장중 슬롯은
+같은 봉과 같은 문서 평가를 같은 이유로 기다려서 늘어도 이 DAG 하나이고(저장소 규칙 "슬롯·모드로
+갈리는 DAG는 나눈다"의 예외 근거), 성적을 보고 다시 늘릴 수 있는 손잡이이기 때문이다.
 
-그때 실제로 사고를 낸 것("`logical_date`가 없는 수동 실행이 벽시계로 떨어져 조용히 다른
+2026-08-21에 실제로 사고를 낸 것("`logical_date`가 없는 수동 실행이 벽시계로 떨어져 조용히 다른
 모드를 돈다")은 `intraday.resolve_slot`이 막는다. Param도 `logical_date`도 없으면
 **실패시킨다.** 조용히 다른 슬롯을 도는 것보다 안 도는 편이 낫다.
 
@@ -52,11 +53,11 @@
 
 ## 실패와 재시도 — 장전·장후와 다르게 준다
 
-공유 `DEFAULT_ARGS`(재시도 3 × 10분)에 `BUILD_TIMEOUT`(30분)이면 최악 두 시간이라
-10:35 실행이 12:35 실행을 막는다(`max_active_runs=1`). 장중은 재시도 1 × 5분에
-`execution_timeout` 15분으로 최악 40분에 묶는다.
+공유 `DEFAULT_ARGS`(재시도 3 × 10분)에 `BUILD_TIMEOUT`(30분)이면 최악 두 시간이다. 슬롯이
+여럿이던 때는 그것이 다음 슬롯을 막았고(`max_active_runs=1`), 지금은 막을 다음 슬롯이 없어도
+같은 값을 쓴다 — 장중 판단은 늦게 나오면 값이 없다. 재시도 1 × 5분에 `execution_timeout`
+15분으로 최악 40분에 묶는다.
 
-근거는 수집 DAG의 판정과 같다 — **다음 슬롯이 두 시간 뒤에 같은 창을 다시 본다.**
 실패한 슬롯을 오래 붙들 값어치가 없고, 그 슬롯은 없던 것으로 남는다(추론 재시도·재평가를
 만들지 않는다는 원칙 그대로).
 
@@ -75,7 +76,7 @@
 | 이름 | 기본값 | 뜻 |
 | --- | --- | --- |
 | `run_date` | `null` | 대상 세션 날짜(YYYY-MM-DD). 비우면 logical time의 KST 날짜 |
-| `run_slot` | `null` | 장중 슬롯 넷 중 하나. 비우면 스케줄된 시각으로 정한다. **수동 실행은 반드시 고른다** |
+| `run_slot` | `null` | 장중 슬롯(지금은 `intraday_midday` 하나). 비우면 스케줄된 시각으로 정한다. **수동 실행은 반드시 고른다** |
 
 ## 필요한 환경
 
@@ -99,9 +100,7 @@ from modules.utility import KST_TIMEZONE
 # **`thesis.state.INTRADAY_SLOT_TIMES`와 같아야 한다.** 어긋나면 `resolve_slot`이 슬롯을
 # 못 찾아 실행이 죽는다 — 조용히 다른 슬롯으로 떨어지는 것보다 낫다. 테스트가 둘을 대조한다.
 SCHEDULE = MultipleCronTriggerTimetable(
-    "35 10 * * 1-5",  # KST 평일 10:35 = UTC 월~금 01:35
     "35 12 * * 1-5",  # KST 평일 12:35 = UTC 월~금 03:35
-    "0 15 * * 1-5",  # KST 평일 15:00 = UTC 월~금 06:00
     timezone=KST_TIMEZONE,
 )
 
@@ -113,7 +112,7 @@ BUILD_TIMEOUT = timedelta(minutes=15)
 @dag(
     dag_id="market_thesis_intraday",
     dag_display_name="🧠 시장 추론 · 장중 전망 (LLM)",
-    description="장중 세 시각에 지금 가격 기준의 방향을 확률로 적고 근거와 함께 Slack에 보낸다.",
+    description="장중 한 번, 지금 가격 기준의 방향을 확률로 적고 근거와 함께 Slack에 보낸다.",
     schedule=SCHEDULE,
     start_date=pendulum.datetime(2026, 8, 26, tz=KST_TIMEZONE),  # KST 2026-08-26 00:00 = UTC 2026-08-25 15:00
     catchup=False,

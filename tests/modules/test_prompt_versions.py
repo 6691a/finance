@@ -44,6 +44,10 @@ PROMPT_HASHES: dict[tuple[str, str], str] = {
     # 판 11은 교정 문구가 **버린 사유**를 싣는다(2026-08-27 intraday: 세 이유가 모두 비어
     # 전부 버려졌는데, 사유 없는 교정을 받은 모델이 같은 답을 다시 냈다).
     ("thesis_generation", "11"): "91166bc5f5e98244b1759f031763ba2828b2fc7afd0ed50ae364ef8fc3da6672",
+    # 판 12는 `prob_flat` 캘리브레이션이다(2026-08-28). 채점 84건에서 모델 평균 0.31,
+    # 실제 13%였다. "창이 짧으면 flat이 잦다"는 문장을 실측으로 뒤집고(장중 12~25%,
+    # 하루 13%) 기준선의 두 배를 상한으로 못박았다.
+    ("thesis_generation", "12"): "26997dc850158ca01af32d66269b30f74c766e2e62ee70da68ce6d1ece576be1",
     ("thesis_narrative", "2"): "1baea1c554c90619576036db58ad42d2a1e24052fc8ab982978e605c6e696b8b",
 }
 

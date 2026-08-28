@@ -75,13 +75,14 @@ NARRATED_SLOTS: tuple[RunSlot, ...] = (*FORECAST_SLOTS, RunSlot.POST_CLOSE)
 # **DAG의 cron과 이 표가 같아야 한다.** 어긋나면 `resolve_slot`이 슬롯을 못 찾아 실행이
 # 죽는다 — 조용히 다른 슬롯으로 떨어지는 것보다 낫다. 테스트가 둘을 대조한다.
 #
-# **`intraday_afternoon`(14:35)은 2026-08-27에 뺐다.** `pre_close`(15:00)와 25분 차이라
-# 두 슬롯이 사실상 같은 창을 물었다. 값은 `RunSlot`에 남는다 — 이미 저장된 행을
-# 채점·해설하고 조회하는 쪽이 그 값을 읽는다.
+# **넷이던 장중 슬롯이 하나로 줄었다.** `intraday_afternoon`(14:35)은 2026-08-27에
+# `pre_close`(15:00)와 25분 차이라 뺐고, `intraday_morning`(10:35)과 `pre_close`는
+# 2026-08-28에 뺐다 — 채점 84건에서 그 둘의 Brier가 0.721·0.798로 균등 추측(0.667)보다
+# 나빴다. 남은 `intraday_midday`(0.595)와 `pre_open`(0.634)만 균등보다 낫다.
+#
+# 값은 전부 `RunSlot`에 남는다 — 이미 저장된 행을 채점·해설하고 조회하는 쪽이 그 값을 읽는다.
 INTRADAY_SLOT_TIMES: dict[RunSlot, time] = {
-    RunSlot.INTRADAY_MORNING: time(10, 35),
     RunSlot.INTRADAY_MIDDAY: time(12, 35),
-    RunSlot.PRE_CLOSE: time(15, 0),
 }
 
 

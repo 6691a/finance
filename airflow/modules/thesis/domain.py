@@ -117,7 +117,7 @@ logger = logging.getLogger(__name__)
 #     이하라 그 칸을 매번 버렸다(실측: `intraday_midday` 넷 전부 up=0.0 down=0.0).
 #     확률과 이유는 살아 있었으므로 저장되는 추론 수는 같지만, **조건부 크기가 NULL이 아닌
 #     값으로 저장되기 시작하므로** 판을 가른다.
-PROMPT_VERSION = "11"
+PROMPT_VERSION = "12"
 
 # 채점 지평. KRX 영업일 수이고 달력일이 아니다. 0은 예측일 세션 하나다.
 HORIZON_DAYS: tuple[int, ...] = (0, 1, 3, 5)
@@ -581,11 +581,14 @@ def _shorten_to(text: str, limit: int) -> str:
 # 되면 안 돼서 뜻으로 짓고, 이쪽은 하루 다섯 건이 Slack에 쌓일 때 사람이 구분해야 해서
 # 시각을 적는다. 표에서 만들어 스케줄을 옮길 때 라벨이 따라오게 한다.
 #
-# **은퇴한 슬롯도 라벨을 갖는다.** `intraday_afternoon`은 2026-08-27에 표에서 빠졌지만
-# 저장된 행이 남아 있어 되돌아보기와 조회가 그 값을 렌더한다. 시각은 돌던 때의 것이다.
+# **은퇴한 슬롯도 라벨을 갖는다.** 셋이 표에서 빠졌지만(2026-08-27 `intraday_afternoon`,
+# 08-28 `intraday_morning`·`pre_close`) 저장된 행이 남아 있어 되돌아보기와 조회가 그 값을
+# 렌더한다. 시각은 돌던 때의 것이다. 아래 표 순회가 이 셋을 덮지 않는다 — 표에 없다.
 SLOT_LABELS = {
     RunSlot.PRE_OPEN: "장전 전망",
+    RunSlot.INTRADAY_MORNING: "장중 전망(10:35)",
     RunSlot.INTRADAY_AFTERNOON: "장중 전망(14:35)",
+    RunSlot.PRE_CLOSE: "마감 전 전망(15:00)",
     **{
         slot: f"{'마감 전' if slot is RunSlot.PRE_CLOSE else '장중'} 전망({at:%H:%M})"
         for slot, at in INTRADAY_SLOT_TIMES.items()

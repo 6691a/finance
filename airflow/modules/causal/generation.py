@@ -43,7 +43,9 @@ PROMPTS = read_prompt("causal_graph")
 class CausalPathAnswer(BaseModel):
     """모델이 낸 경로 하나. 저장 전에 `verify_paths`가 거른다."""
 
-    event: NodeChoice = Field(description="사건. 그 주에 실제로 일어난 일")
+    # **중첩 모델에 `Field(description=...)`을 붙이지 않는다.** 스키마가 `$ref` 옆에
+    # `description`을 두는데 OpenAI가 그것을 거절한다. 설명은 프롬프트가 한다.
+    event: NodeChoice
     event_date: str = Field(
         default="",
         description="사건 날짜 YYYY-MM-DD. 기존 사건을 고르면 빈 문자열",

@@ -146,7 +146,7 @@ class TestStorePaths:
         """실현 등락이 없으면 저장할 수 없다(설계 §6)."""
         connection = _connection()
 
-        stored = store.store_paths(
+        outcome = store.store_paths(
             connection,
             window=WINDOW,
             paths=(_path(target_code="KOSPI"),),
@@ -155,13 +155,15 @@ class TestStorePaths:
             llm_run_id=None,
         )
 
-        assert stored == 0
+        assert outcome.stored == 0
         assert not any("INSERT INTO market_causal_path" in call[0] for call in connection.calls)
 
-    def test_too_many_new_channels_are_refused(self) -> None:
-        """어휘 폭주 가드. 초과분 경로는 저장하지 않는다(설계 §6).
+    def test_new_channel_names_are_never_capped(self) -> None:
+        """**새 이름 수로 경로를 버리지 않는다**(2026-08-28 제거).
 
-        상한이 걸리는 것은 **어휘가 이미 쌓인 주**다 — 첫 주는 `TestSeedingWeek`가 덮는다.
+        전에는 상한을 넘긴 경로를 통째로 버렸다. 어휘 위생을 얻고 데이터를 잃는 교환인데,
+        어휘 목록은 이미 프롬프트에 **전부** 실려 있어서 모델이 보고도 새 이름을 만들면
+        그건 진짜 새 채널로 봐야 한다. 8주 프로토타입은 상한 없이 8개로 수렴했다.
         """
         connection = _connection()
         many = tuple(
@@ -169,10 +171,10 @@ class TestStorePaths:
                 channels=(NodeChoice(existing_id="c:9"), NodeChoice(new_name=f"경로{n}")),
                 sign="up" if n % 2 else "down",
             )
-            for n in range(domain.MAX_NEW_CHANNELS + 2)
+            for n in range(12)
         )
 
-        stored = store.store_paths(
+        outcome = store.store_paths(
             connection,
             window=WINDOW,
             paths=many,
@@ -182,7 +184,7 @@ class TestStorePaths:
             require_reuse=True,
         )
 
-        assert stored == domain.MAX_NEW_CHANNELS
+        assert outcome.stored == len(many)
 
     def test_an_answer_with_no_reused_channel_fails_the_task(self) -> None:
         """새 이름이 하나도 기존과 안 맞으면 정규화가 깨진 것이다. 조용히 넘어가면 다음 주에
@@ -285,17 +287,15 @@ class TestSeedingWeek:
     """어휘가 비어 있는 주는 전부 새로 만들 수밖에 없다.
 
     2026-08-27 개발 DB 실행에서 첫 주 경로 19개 중 17개가 `MAX_NEW_CHANNELS = 3`에 걸려
-    버려졌다. 상한은 **어휘가 이미 있는데 새로 만드는 것**에 걸려야 한다.
+    버려졌고, 넓힌 예산 12로도 2026-08-28 운영 실행에서 20개 중 4개가 잘렸다. 두 번 다
+    상한이 데이터를 버렸으므로 상한 자체를 걷어냈다 — 폭주는 `VocabularyDriftError`가 막는다.
     """
 
-    def test_the_first_week_gets_a_wider_budget(self) -> None:
+    def test_the_first_week_stores_everything(self) -> None:
         connection = _connection()
-        many = tuple(
-            _path(channels=(NodeChoice(new_name=f"경로{n}"),))
-            for n in range(domain.MAX_NEW_CHANNELS + 3)
-        )
+        many = tuple(_path(channels=(NodeChoice(new_name=f"경로{n}"),)) for n in range(20))
 
-        stored = store.store_paths(
+        outcome = store.store_paths(
             connection,
             window=WINDOW,
             paths=many,
@@ -305,31 +305,48 @@ class TestSeedingWeek:
             require_reuse=False,  # 어휘가 비어 있다
         )
 
-        assert stored == len(many)
+        assert outcome.stored == len(many)
 
-    def test_a_week_with_vocabulary_keeps_the_tight_budget(self) -> None:
-        """어휘가 쌓인 뒤에는 새 이름이 주당 0~2개였다(8주 프로토타입). 상한이 그것을 지킨다."""
+    def test_the_budget_constants_are_gone(self) -> None:
+        """상한이 상수로 남아 있으면 다음 사람이 다시 걸 자리가 생긴다."""
+        assert not hasattr(domain, "MAX_NEW_CHANNELS")
+        assert not hasattr(domain, "MAX_NEW_CHANNELS_SEED")
+
+    def test_the_outcome_reports_how_much_vocabulary_grew(self) -> None:
+        """상한이 사라진 자리에 관측이 들어간다. 매주 늘기만 하면 정규화가 안 되는 것이다."""
         connection = _connection()
-        many = tuple(
-            _path(
-                channels=(NodeChoice(existing_id="c:1"), NodeChoice(new_name=f"경로{n}")),
-            )
-            for n in range(domain.MAX_NEW_CHANNELS + 2)
+        many = (
+            _path(channels=(NodeChoice(new_name="가"),)),
+            _path(channels=(NodeChoice(new_name="나"),), sign="down"),
         )
 
-        stored = store.store_paths(
+        outcome = store.store_paths(
             connection,
             window=WINDOW,
             paths=many,
             returns=_returns(),
             input_hash="abc",
             llm_run_id=None,
-            require_reuse=True,
+            require_reuse=False,
         )
 
-        assert stored == domain.MAX_NEW_CHANNELS
+        assert outcome.stored == 2
+        assert outcome.new_channels == 2
 
-    def test_the_seed_budget_still_has_a_ceiling(self) -> None:
-        """무제한이면 모델이 경로마다 새 이름을 내도 막을 것이 없다."""
-        assert domain.MAX_NEW_CHANNELS_SEED > domain.MAX_NEW_CHANNELS
-        assert domain.MAX_NEW_CHANNELS_SEED < domain.MAX_PATHS
+    def test_the_same_new_name_twice_makes_one_channel(self) -> None:
+        """상한이 사라져도 이름 중복은 여전히 한 번만 만든다."""
+        connection = _connection()
+        many = tuple(_path(channels=(NodeChoice(new_name="같은 이름"),)) for _ in range(4))
+
+        store.store_paths(
+            connection,
+            window=WINDOW,
+            paths=many,
+            returns=_returns(),
+            input_hash="abc",
+            llm_run_id=None,
+            require_reuse=False,
+        )
+
+        upserts = [call for call in connection.calls if "INSERT INTO market_channel" in call[0]]
+        assert len(upserts) == 1

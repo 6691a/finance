@@ -42,7 +42,7 @@ def build_weekly_graph(
             # 첫 성공본이 불변이다. **skip이 아니라 성공이다** — 재실행이 정상 흐름이라
             # 매번 노란 태스크를 만들 이유가 없다(설계 §10.4).
             logger.info("week %s already has causal paths; skipping the model", week_start)
-            return _summary(window, stored=0, paths=0, skipped=True)
+            return _summary(window, outcome=_NOTHING, paths=0, skipped=True)
 
         targets = candidates.resolve_targets(conn)
         returns = candidates.fetch_returns(conn, targets, window)
@@ -52,7 +52,7 @@ def build_weekly_graph(
     if not returns:
         # 실현 등락이 하나도 없으면 저장할 수 있는 경로가 없다. 모델을 부를 이유도 없다.
         logger.warning("week %s has no target with realised returns", week_start)
-        return _summary(window, stored=0, paths=0, skipped=False)
+        return _summary(window, outcome=_NOTHING, paths=0, skipped=False)
 
     paths = _build_paths(
         window=window,
@@ -69,7 +69,7 @@ def build_weekly_graph(
         candidate_refs=list(found.refs),
     )
     with closing(connection()) as conn:
-        stored = store.store_paths(
+        outcome = store.store_paths(
             conn,
             window=window,
             paths=paths,
@@ -80,7 +80,7 @@ def build_weekly_graph(
             # 첫 주가 언제나 죽는다.
             require_reuse=bool(channels),
         )
-    return _summary(window, stored=stored, paths=len(paths), skipped=False)
+    return _summary(window, outcome=outcome, paths=len(paths), skipped=False)
 
 
 def _build_paths(**kwargs: Any) -> tuple[Any, ...]:
@@ -91,8 +91,16 @@ def _build_paths(**kwargs: Any) -> tuple[Any, ...]:
     return CausalBuilder(causal_model()).build(**kwargs)
 
 
+# 저장까지 못 간 실행(재실행 skip, 경로 0건)이 쓰는 값.
+_NOTHING = domain.StoreOutcome(stored=0, new_channels=0)
+
+
 def _summary(
-    window: domain.CausalWindow, *, stored: int, paths: int, skipped: bool
+    window: domain.CausalWindow,
+    *,
+    outcome: domain.StoreOutcome,
+    paths: int,
+    skipped: bool,
 ) -> dict[str, Any]:
     # XCom 경계다. Airflow가 Pydantic 모델을 어떻게 직렬화하는지에 기대지 않는다.
     return {
@@ -100,6 +108,7 @@ def _summary(
         "week_end": window.week_end.isoformat(),
         "as_of_at": window.as_of_at.isoformat(),
         "paths": paths,
-        "stored": stored,
+        "stored": outcome.stored,
+        "new_channels": outcome.new_channels,
         "skipped": skipped,
     }

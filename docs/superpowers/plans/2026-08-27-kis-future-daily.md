@@ -2,6 +2,10 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
+- 상태: **구현 완료(2026-08-27, 커밋 `de5e752`·`d146e5f`).** 아래 체크박스는 계획 시점 그대로 둔다.
+  `airflow/dags/kis_future_daily.py`, `airflow/modules/collectors/market/kis_future_daily.py`,
+  리비전 `f8a2c6d9e104`(`index_future_daily.contract_code`).
+
 **Goal:** Collect official daily OHLCV for `KOSPI200_FUT` and `KOSDAQ150_FUT` while preserving the actual KIS contract code on every row.
 
 **Architecture:** Add one focused collector and one Airflow DAG around KIS `inquire-daily-fuopchartprice`. Extend only `index_future_daily` with a nullable `contract_code`; Yahoo continuous futures continue writing `NULL`. The 2026-08-27 probe settled the code question — the intraday `A01609` form works on the daily API and the official example's `101W09` does not — so what is left to build is the enumeration of past quarterly contracts across a backfill range.

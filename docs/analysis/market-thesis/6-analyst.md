@@ -2,9 +2,10 @@
 
 - 상위: [README.md](README.md)
 - 날짜: 2026-08-22 (출처 조사는 2026-08-21)
-- 상태: **구현 완료(2026-08-22), 운영 반영 전.** 사용자 결정으로 두 갈래(KIS 투자의견,
-  네이버 리서치)를 함께 했다. 리비전 둘(`a1f3c7e9b2d4`, `c2d9e4f1a7b3`)을 올리고
-  `kis_analyst_opinion_daily`를 unpause하는 것이 남았다. KIS spike 결과는 9절.
+- 상태: **구현 완료(2026-08-22), 운영 반영 완료**(2026-08-28 실측 — 리비전 둘이 올라갔고
+  `kis_analyst_opinion_daily`가 돌아 `stock_analyst_opinion`에 262행이 있다). 사용자 결정으로
+  두 갈래(KIS 투자의견, 네이버 리서치)를 함께 했다. KIS spike 결과는 9절.
+  **조회 창과 100건 잘림은 2026-08-27에 고쳤다** — `lookback_days` 기본 30, 반환 100건이면 실패
 - 의존: [2-agent.md](2-agent.md)(툴을 늘리는 자리), [5-followup.md](5-followup.md)(리포트를
   6단계로 뺀 경위, 11절). 문서 수집 경로는 `docs/analysis/economic-document-archive-design.md`.
 - 산출물: `apps/models/market/fundamentals.py`에 `StockAnalystOpinion`, `apps/models/content.py`의

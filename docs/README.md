@@ -4,21 +4,24 @@
 파일을 열기 전에 안다.
 
 **지금 무엇이 남았나는 여기 적지 않는다.** 그 원본은 `docs/working/implementation-gaps.md`다
-(추적하지 않는 파일이라 이 저장소에는 없다). 목록을 두 벌 관리하면 반드시 어긋난다.
+(`.gitignore`의 `docs/working/`이라 커밋되지 않는다 — 로컬에는 있다).
+목록을 두 벌 관리하면 반드시 어긋난다.
 
 ## `collection/` — 외부에서 데이터를 가져오는 계약
 
 | 문서 | 무엇 | 상태 |
 | --- | --- | --- |
 | [kis-market-data-collection.md](collection/kis-market-data-collection.md) | KIS 수급·포지션·캘린더 다섯 DAG | 구현 완료 |
-| [kis-semiconductor-minute-bars.md](collection/kis-semiconductor-minute-bars.md) | 삼성전자·SK하이닉스 KRX·NXT 1분봉. KIS REST·WebSocket 계약의 원본 | 구현 완료. 9절 백필 DAG만 미구현 |
+| [kis-semiconductor-minute-bars.md](collection/kis-semiconductor-minute-bars.md) | 삼성전자·SK하이닉스 KRX·NXT 1분봉. KIS REST·WebSocket 계약의 원본 | 구현 완료. 9절 백필은 코드 없이 해소(2026-08-27) |
 | [kis-overseas-index-close.md](collection/kis-overseas-index-close.md) | 미국 현물 지수 마감 분봉과 미국장 브리핑 섹션 분리 | 구현 완료 |
-| [kis-index-daily-collection.md](collection/kis-index-daily-collection.md) | 빠진 국내지수·국내선물·미국 현물지수 다섯 개의 KIS 일봉 수집 | **미구현. 구현 계약.** 선물 단축코드·과거 만기물 프로브가 착수 게이트 |
+| [kis-index-daily-collection.md](collection/kis-index-daily-collection.md) | 빠진 국내지수·국내선물·미국 현물지수 다섯 개의 KIS 일봉 수집 | 코드 구현 완료(2026-08-27). **운영에는 미국지수만 들어온다** — `KOSPI200`·국내선물 둘은 0행(2026-08-28 실측) |
 | [kis-program-trading.md](collection/kis-program-trading.md) | 프로그램매매 수급. TR ID·필드 매핑표가 값어치다 | **미구현.** 착수 게이트는 누적/증분 프로브 |
 | [dart-disclosure-earnings.md](collection/dart-disclosure-earnings.md) | DART 공시와 잠정실적 숫자 추출 | 구현 완료 |
 | [ecb-convergence-monthly.md](collection/ecb-convergence-monthly.md) | 유로 회원국 10년물 월평균 | 구현 완료 |
 | [us-macro-indicators.md](collection/us-macro-indicators.md) | FRED 물가·실물 다섯 계열. `indicator_series`가 금리 전용에서 벗어난 경위 | 구현 완료 |
-| [policy-rate-collection.md](collection/policy-rate-collection.md) | 국채 수집국 중앙은행 다섯의 정책금리. `kind='policy_rate'`를 더한다 | **미구현. 구현 계약.** 계열 ID 실측이 선행 |
+| [policy-rate-collection.md](collection/policy-rate-collection.md) | 국채 수집국 중앙은행 다섯의 정책금리. `kind='policy_rate'`를 더한다 | 구현 완료(2026-08-27). `policy_rate_weekly` |
+| [central-bank-assets-collection.md](collection/central-bank-assets-collection.md) | 중앙은행 여섯의 대차대조표 총자산. `kind='balance_sheet'`와 그 항목 | 구현 완료(2026-08-28). `central_bank_assets_weekly` |
+| [korea-trade-collection.md](collection/korea-trade-collection.md) | 관세청 10일 단위 수출입 잠정치 42계열 | 구현 완료(2026-08-28). `kcs_trade_daily` |
 
 ## `analysis/` — LLM 평가·기술지표·시장 추론
 
@@ -28,8 +31,8 @@
 | [document-assessment-workflow.md](analysis/document-assessment-workflow.md) | `document_assessment_hourly`의 LangGraph 흐름도 | 구현 완료 |
 | [market-technical-indicators.md](analysis/market-technical-indicators.md) | SMA·RSI·MACD 관측값과 매매 신호 검출·채점 | 구현 완료. 남은 것은 적중률 관측 |
 | [market-episode-analysis.md](analysis/market-episode-analysis.md) | 일봉 변화·추정 매물대·시장 근거를 연결하는 `MarketEpisode` 설계 | **미구현. 구현 계약** |
-| [market-causal-graph.md](analysis/market-causal-graph.md) | 주간 사후 인과 그래프. 사건 → 경로 체인 → 대상을 누적해 다중 홉을 만든다 | **미구현. 구현 계약.** 프로토타입 2주 검증 완료 |
-| [market-thesis/](analysis/market-thesis/README.md) | 시장 추론 기록. 단계마다 문서 하나 | 1·2·3·5~11·13단계 완료, 4(그래프)·12(API)·14(웹 화면)는 미착수 — 그 README가 원본 |
+| [market-causal-graph.md](analysis/market-causal-graph.md) | 주간 사후 인과 그래프. 사건 → 경로 체인 → 대상을 누적해 다중 홉을 만든다 | §1~§8 구현 완료(2026-08-28, 프롬프트 판 5). §7 조회·§9 선반영만 미구현 |
+| [market-thesis/](analysis/market-thesis/README.md) | 시장 추론 기록. 단계마다 문서 하나 | 4(그래프)·14(웹 화면)를 뺀 전부 구현 완료. 12(API)는 구현됐고 배포만 14단계와 함께 — 그 README가 원본 |
 
 ## `briefing/` — 읽어서 내보내기만 하는 DAG
 

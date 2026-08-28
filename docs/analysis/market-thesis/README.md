@@ -3,11 +3,15 @@
 - 날짜: 2026-08-20 (2026-08-21 리뷰 반영 후 단계별 문서로 분리, 2026-08-22 6·7단계 추가,
   2026-08-24 8단계 추가, 2026-08-26 9·10단계와 11·12·13·14단계 추가)
 - 상태: 4단계(그래프)와 14단계(화면)를 뺀 전부 구현 완료이고 **리비전은 운영에
-  전부 반영됐다**(2026-08-27 실측, 운영 포인터가 체인 head `a8c5f207d1e6`). 10단계 일봉
-  백필도 끝났다(`index_daily`가 2016-08부터). 슬롯 일곱이 모두 실적을 갖고 장중 슬롯과
-  채점·해설 루프가 돌고 있다. 12단계는 마이그레이션이 없고 **배포는 14단계 화면과 함께
-  한다**(부를 클라이언트가 아직 없다). 4단계는 미착수, 14단계는 **설계만**.
+  전부 반영됐다**(2026-08-28 실측, 운영 포인터가 체인 head `a7c4e1b93f28`). 10단계 일봉
+  백필도 끝났다(`index_daily`가 2016-08부터). 추론 82건이 쌓였고 채점·해설 루프가 돈다.
+  **장중 슬롯은 2026-08-28에 넷에서 `intraday_midday` 하나로 줄었다**([TUNING.md](TUNING.md) 6절).
+  12단계는 마이그레이션이 없고 코드·테스트·`justfile deploy-api`까지 있으나 **배포는 14단계
+  화면과 함께 한다**(부를 클라이언트가 아직 없다). 4단계는 미착수, 14단계는 **설계만**.
   남은 확인은 5절
+
+  **head 리비전 값의 원본은 이 줄 하나다.** 단계 문서에 각자 적지 않는다 — 그러면 리비전이
+  붙을 때마다 다섯이 따로 낡는다
 
 한 문서로 쓰기엔 범위가 커서(모델·리비전, 모듈 둘, DAG, SQL 열 개, 테스트 넷, compose·
 requirements) **배포 단위(worktree/PR 하나)마다 문서를 나눴다.** 이 파일은 공통 원칙과
@@ -76,7 +80,7 @@ requirements) **배포 단위(worktree/PR 하나)마다 문서를 나눴다.** �
 | 3 | [3-dag-slack.md](3-dag-slack.md) | `dags/market_thesis_forecast.py`·`market_thesis_review.py`, 스케줄, 채점 호출, Slack 렌더링·발송, DAG 테스트. **여기서 첫 운영 발송** | 1, 2 | 있음 |
 | 4 | [4-graph.md](4-graph.md) | `airflow/modules/graph.py`, `sync_graph` 태스크, `sync_only` Param, compose·requirements, `tests/modules/test_graph.py` | 1 (3과 병렬 가능) | 없음 |
 | 5 | [5-followup.md](5-followup.md) | `thesis_outcome` 테이블, 다지평(T+0·1·3·5) 채점, `FollowupNarrator` 사후 해설과 `verdict`, `past_theses` 툴 | 1, 2, 3 | 있음 |
-| 6 | [6-analyst.md](6-analyst.md) | `stock_analyst_opinion` 테이블과 리비전, `collectors/kis_analyst_opinion.py`, `dags/kis_analyst_opinion_daily.py`, `analyst_opinions` 툴, `SourceKind.research`와 네이버 리서치 출처 여섯(`document_listings.py`의 `enrich` 단계), 테스트 | 5 | 없음(리포트는 기존 문서 평가가 읽는다) |
+| 6 | [6-analyst.md](6-analyst.md) | `stock_analyst_opinion` 테이블과 리비전, `collectors/analyst/kis_opinion.py`, `dags/kis_analyst_opinion_daily.py`, `analyst_opinions` 툴, `SourceKind.research`와 네이버 리서치 출처 여섯(`document_listings.py`의 `enrich` 단계), 테스트 | 5 | 없음(리포트는 기존 문서 평가가 읽는다) |
 | 7 | [7-nxt-review.md](7-nxt-review.md) | `post_nxt_close` 슬롯, `thesis/nxt_review.py`, `market_thesis_nxt_review` DAG, 애프터마켓 조회 SQL, 수기 리비전(CHECK 확장) | 1, 2, 3 | 있음 |
 | 8 | [8-expectation.md](8-expectation.md) | `stock_event_claim`·`stock_event_extraction`·`stock_event_outcome`과 수기 리비전, `modules/expectation/domain.py`·`expectation/extraction.py`·`expectation/judgment.py`, `event_expectation_hourly` DAG, `event_surprises` 툴, 컨센서스 수집기(후행) | 2, 6 | 추출만 |
 | 9 | [9-intraday.md](9-intraday.md) | 장중 슬롯 넷과 수기 리비전, `thesis/intraday.py`, `market_thesis_intraday` DAG, 장중 봉·되짚기·채점 SQL 다섯, 채점·해설 슬롯 목록 파라미터화 | 1, 2, 3, 5 | 있음 |

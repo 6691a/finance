@@ -1,7 +1,8 @@
 # 삼성전자·SK하이닉스 KIS 1분봉
 
 > 작성 기준: 2026-08-11 / 본문 구현 반영: 2026-08-26
-> 상태: **대부분 구현 완료. 남은 것은 9절 `kis_equity_backfill` 백필 DAG 하나다.**
+> 상태: **구현 완료.** 9절 백필 DAG는 2026-08-27에 **코드 없이 해소**했다 — 기존
+> `kis_stock_minute_bars_daily`를 열두 번 트리거해 1년치(52만 6천 봉)를 채웠다. 근거는 9절
 > 대상: 삼성전자(`005930`), SK하이닉스(`000660`)의 KRX·NXT 체결
 
 **무엇이 있고 무엇이 없나**
@@ -12,7 +13,7 @@
 | 5 | 저장 모델과 우선순위 | 구현 완료(`apps/models/market/series.py`의 `StockBar`) |
 | 7 | WebSocket 상주 수집기 | 구현 완료 — **위치는 `apps/realtime/`이다**(아래) |
 | 8 | 마감 후 REST 확정 | 구현 완료(`kis_stock_minute_bars_daily`, 30분 백업은 `kis_equity_bar_reconcile`) |
-| 9 | 백필 DAG | **미구현.** 이 문서에서 아직 안 만든 유일한 부분이다 |
+| 9 | 백필 DAG | **안 만들기로 했다**(2026-08-27). 기존 DAG 반복 트리거로 대체했고 그 실측이 9절이다 |
 | 11 | 배포 | 구현 완료 — 별도 스택 `compose/prod/`다(아래) |
 
 **작성 당시 계획과 실제가 갈린 곳 셋.** 아래 본문은 전부 실제 기준으로 고쳐 뒀고, 왜 갈렸는지만
@@ -807,7 +808,8 @@ airflow dags trigger kis_stock_minute_bars_daily --conf '{"business_date": "2026
 종목×거래소×조회일을 한 수집 단위로 두고 `source_key=inquire_time_dailychartprice`를 쓴다.
 페이지 수, 최초·최종 봉, 중복 제거 수, 중단 사유를 metadata에 기록한다.
 
-기존 insert SQL에 더해 running 세션을 종료할 `source_record/update.sql`을 추가한다. WebSocket은
+running 세션 종료는 SQL 파일이 아니라 ORM이 한다 — `apps/realtime/repository.py`의
+`SourceRecord` UPDATE다(`apps/`는 `airflow/sql/`을 보지 못한다). WebSocket은
 세션 레코드를 먼저 commit하고 봉마다 짧은 트랜잭션을 사용한 뒤 종료 상태를 별도 commit한다.
 REST 조정과 백필은 한정된 수집 단위의 source row·봉 upsert·완료 상태를 같은 트랜잭션에서
 commit한다. 연결 전체를 감싸는 장기 DB 트랜잭션은 만들지 않는다.
@@ -896,9 +898,10 @@ KRX는 끌 수 없다 — 그건 수집을 통째로 멈추는 것이고 그때�
 - 추가: `airflow/sql/postgres/stock_bar/upsert.sql` (REST 확정)
 - WebSocket 잠정 upsert는 SQL 파일이 아니라 ORM이다 — `apps/realtime/repository.py`의
   `provisional_upsert`. `apps/`는 `airflow/sql/`을 보지 못한다
-- 추가: `airflow/sql/postgres/source_record/update.sql`
 - 수정: `tests/models/test_market_models.py`
-- 추가: `tests/migrations/test_equity_bar_schema.py`
+- (계획에 있던 `airflow/sql/postgres/source_record/update.sql`과
+  `tests/migrations/test_equity_bar_schema.py`는 만들지 않았다 — 세션 종료는 ORM이고
+  스키마 검증은 `tests/models/test_market_models.py`가 한다)
 
 ### 작업 2 — REST 수집기와 파서
 
@@ -917,14 +920,15 @@ KRX는 끌 수 없다 — 그건 수집을 통째로 멈추는 것이고 그때�
 ### 작업 4 — REST 조정 DAG
 
 - 수정: `airflow/dags/kis_quote_intraday.py`
-- 추가: `tests/dags/test_kis_quote_intraday.py`
+- 추가: `tests/dags/test_quote_intraday.py`
 - 구현: 기존 수집과 주식 조정 task 분리, 08:00~20:00 schedule, 세션 self-gate
 
-### 작업 5 — 백필 DAG
+### 작업 5 — 백필 DAG (안 만들었다)
 
-- 추가: `airflow/dags/kis_equity_backfill.py`
-- 추가: `tests/dags/test_kis_equity_backfill.py`
-- 구현: 31일 제한, 날짜·시간 역방향 페이지, API pool, 재시도, 날짜별 계보
+2026-08-27에 착수하려고 코드를 읽었더니 필요한 것이 이미 다 있었다 — 커서 페이징은
+`KisQuoteCollector.fetch_stock_bars`, 날짜 역방향 순회와 31일 상한은
+`kis_stock_minute_bars_daily`의 `business_date`·`days` Param이다. 새 DAG·pool·backoff 없이
+그것을 열두 번 트리거해 1년치를 채웠다. 근거와 실측 넷은 9절에 있다.
 
 ### 작업 6 — 배포·운영
 
@@ -982,12 +986,12 @@ KRX는 끌 수 없다 — 그건 수집을 통째로 멈추는 것이고 그때�
 uv run pytest \
   tests/collectors/test_kis.py \
   tests/realtime/test_kis_realtime.py \
-  tests/dags/test_kis_quote_intraday.py \
+  tests/dags/test_quote_intraday.py \
   tests/models/test_market_models.py -q
 
-# 백필 DAG(9절)은 아직 없다. 만들면 tests/dags/test_kis_equity_backfill.py가 붙는다.
+# 백필 DAG(9절)은 만들지 않았다. 그 자리를 기존 DAG의 Param이 채운다.
 
-DJANGO_SETTINGS_MODULE=config.settings.test uv run python manage.py check
+uv run ruff check apps airflow migrations tests
 docker compose -f compose/local/airflow/docker-compose.yaml config --quiet
 ```
 
@@ -1045,7 +1049,7 @@ ORDER BY exchange, stock_code;
 
 ## 16. 완료 조건
 
-- 두 종목의 KRX·NXT 1분 OHLCV가 서로 다른 물리 테이블에 저장된다.
+- 두 종목의 KRX·NXT 1분 OHLCV가 `stock_bar` 한 테이블에 `exchange`로 갈려 저장된다.
 - 진행 중 REST 봉과 세션 밖 봉이 저장되지 않는다.
 - 같은 구간을 반복 수집해도 행 수가 늘지 않는다.
 - REST 확정 뒤 늦은 WebSocket 봉이 값을 바꾸지 못한다.

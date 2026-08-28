@@ -22,6 +22,7 @@ from modules.llm import (
     document_model,
     invoke,
     model_name,
+    narration_model,
     thesis_model,
     token_usage,
 )
@@ -109,6 +110,38 @@ def test_the_thesis_model_is_its_own_function(monkeypatch):
     assert THESIS_TIMEOUT_SECONDS > REQUEST_TIMEOUT_SECONDS
     # 툴 왕복마다 대화 전체가 재전송되는 흐름이라 이 헤더가 제일 급한 자리다.
     assert model.default_headers == {"x-grok-conv-id": "test-conv"}
+
+
+def test_the_narration_model_is_a_different_provider_from_the_thesis_model(monkeypatch):
+    """해설만 추론과 다른 모델이다. 두 작업의 병목이 반대라서 갈랐다(16단계).
+
+    이 검사가 잠그는 것은 "무엇을 부르나"가 아니라 **어떻게 불러야 도는가**다. 셋 중
+    하나라도 빠지면 운영에서만 죽거나 조용히 나빠진다.
+    """
+    monkeypatch.setenv("OPENAI_API_KEY", "secret-key")
+
+    model = narration_model()
+
+    assert model_name(model) == "gpt-5.6-luna"
+    # `/v1/chat/completions`는 이 모델에 function tool과 reasoning을 같이 주면 400이다.
+    # 툴 루프가 있는 흐름이라 이게 빠지면 첫 호출부터 죽는다.
+    assert model.use_responses_api is True
+    # `max`는 툴 호출을 자기 추론으로 대체해 조사가 얕아지고 `medium`은 표기가 샌다.
+    assert model.reasoning == {"effort": "high"}
+    assert model.max_retries == 0
+    # 툴 왕복이 있는 흐름이라 추론과 같은 타임아웃을 쓴다.
+    assert model.request_timeout == THESIS_TIMEOUT_SECONDS
+    # xAI의 sticky 라우팅 헤더를 붙이지 않는다 — OpenAI는 캐시가 접두 해시로 자동이라
+    # 맞출 서버가 없다. 붙이면 아무 일도 안 하는 헤더가 남는다.
+    assert "x-grok-conv-id" not in (model.default_headers or {})
+
+
+def test_the_thesis_model_stays_on_grok(monkeypatch):
+    """**예측은 옮기지 않는다.** 백테스트에서 방향 적중이 그록 9/20, 루나 5/20으로
+    무작위 기대(6.7)보다 낮았다(16단계 8절). `thesis` 채점 시계열도 이 함수에 걸려 있다."""
+    monkeypatch.setenv("XAI_API_KEY", "secret-key")
+
+    assert model_name(thesis_model("test-conv")) == "grok-4.6"
 
 
 def test_invoke_binds_the_schema_and_no_tools():

@@ -1,12 +1,11 @@
 # 고도화 — 무엇을 재고, 언제 보고, 어느 손잡이를 당기나
 
-- 대상: 시장 추론 전 단계 (`market_thesis_forecast`·`market_thesis_review` DAG와 `modules/thesis*.py`)
+- 대상: 시장 추론 전 단계 (`market_thesis_forecast`·`market_thesis_review` DAG와 `airflow/modules/thesis/`)
 - 성격: 단계 문서가 아니다. 1~6이 "무엇을 만드나"의 순서라면 이 문서는 **만든 뒤에 쓰는
   운영 규칙**이다. [README.md](README.md)와 같은 층이다.
-- 상태: **캘린더의 0일이 아직 안 왔다.** [3-dag-slack.md](3-dag-slack.md) 7절의 선행 조건
-  둘(운영 DB에 테이블 없음, `XAI_API_KEY` 무효)이 남아 있어 **지금은 4주 검증을 하려 해도
-  할 수 없다.** 배포일이 4절 캘린더의 기준점이다. (`config.yaml` 파손은 2026-08-21에
-  해소됐고 애초에 gitignore 대상이라 배포 산출물이 아니었다.)
+- 상태: **캘린더의 0일이 시작됐다.** 3-dag-slack.md 7절의 선행 조건 둘은 해소됐다 —
+  리비전은 운영 head까지 반영됐고(2026-08-28 실측) 추론도 돌고 있다(`thesis` 82행,
+  프롬프트 판 1~12가 섞여 있다). 실제 채점 결과는 아래 6절에 있다.
 
 기능은 다 만들었다. 남은 일은 "무엇을 더 만드나"가 아니라 **쌓이는 숫자를 보고 어느 상수를
 어느 방향으로 당기나**다. 그 판단 재료가 다섯 문서와 코드 주석에 흩어져 있어 한 곳에 모은다.
@@ -141,17 +140,17 @@ GROUP BY run_slot;
 | `INDEX_SUBJECTS` + `instrument.is_watched` | KOSPI·코스닥 + watched 종목 | `thesis/store.py` / `instrument` 테이블 | 표본 수 | **표본을 늘리는 가장 싼 손잡이다.** LLM 호출 수는 그대로고 날짜당 건수만 는다([5-followup.md](5-followup.md) 12절). 단 독립 사건 수는 안 는다 — 1절 |
 | `NarrativeVariant` 기본 | `INFORMED` | `thesis/outcomes.py`, `FollowupNarrator.__init__` | 분기 Brier + `verdict` 분포 | 노트북 재실행으로 재검증. `BLIND`가 남아 있어 되돌리기가 인자 하나다 |
 | `HORIZON_DAYS` | `(0,1,3,5)` | `thesis/domain.py` `HORIZON_DAYS`·`NARRATED_HORIZON_DAYS`, `ops.py` `THESIS_HORIZONS`, DB CHECK — **네 곳** | LLM 호출 비용 | 비용이 문제면 **해설만** T+5 하나로 줄인다. 채점은 SQL이라 공짜다. 네 곳을 같은 커밋에서 만진다 |
-| `PREFETCHED_PAST_THESES` | 2 | `thesis/domain.py` | 도입 전후 지평별 Brier 추이 | 장전·장중 프롬프트에 미리 싣는 과거 추론 수. **슬롯마다다** — 슬롯이 여섯이라 최대 12행이고 프롬프트 길이도 그만큼이다. 5에서 2로 내린 것이 2026-08-26 장중 슬롯 추가 때다(그대로 두면 30행). **효과가 관측되지 않으면 0으로 끈다**([5-followup.md](5-followup.md) 5절) — 절은 `(없음)`이 되고 `thesis_precedent` 엣지도 안 남는다. `past_theses` 툴은 그대로다. 분기 판단 |
+| `PREFETCHED_PAST_THESES` | 2 | `thesis/domain.py` | 도입 전후 지평별 Brier 추이 | 장전·장중 프롬프트에 미리 싣는 과거 추론 수. **슬롯마다다** — 2026-08-28 슬롯 축소로 장중이 넷에서 `intraday_midday` 하나가 됐으므로(6절) 그만큼 줄었고 프롬프트 길이도 그만큼이다. 5에서 2로 내린 것이 2026-08-26 장중 슬롯 추가 때다(그대로 두면 30행). **효과가 관측되지 않으면 0으로 끈다**([5-followup.md](5-followup.md) 5절) — 절은 `(없음)`이 되고 `thesis_precedent` 엣지도 안 남는다. `past_theses` 툴은 그대로다. 분기 판단 |
 | 툴 개수 | 14 | 같은 곳 | **어떤 툴을 실제로 부르는지**와 `tool_rounds` 분포. 앞의 것은 **DB로 못 읽는다** — `thesis_evidence`는 열넷 중 다섯 툴만 ref를 남기고 그것도 "불렀다"가 아니라 "인용됐다"라, 안 불림·빈 결과·인용 안 함이 전부 0으로 보인다. LangSmith 트레이스(`run_name = build_theses`)를 사람이 열어 센다 | 한 번도 안 불리는 툴은 뺀다(문맥만 먹는다). 반대로 상한에 붙어 있으면 왕복을 늘린다. **툴을 더 열기 전에 `MAX_TOOL_CALLS`부터 본다** — 세어야 할 것은 툴 개수가 아니라 **대상 수 × 대상별 툴 수**다(5절 실측은 26호출). **서브 에이전트로 나누는 것은 여기서 판단한다** — 5절 참고 |
 | `verdict` 값 셋 | `supported`/`contradicted`/`unresolved` | `apps/models/analysis/thesis.py` + CHECK | `contradicted` 비율 | 60% 위가 유지되면 "반박"과 "다른 원인 지목"을 가를지 본다. **지금은 안 가른다** |
 | `MAX_TOOL_ROUNDS` / `MAX_TOOL_CALLS` / `MAX_TOOL_RESULT_CHARS` | 5 / 32 / 250,000 | `thesis/domain.py` | **`thesis_llm_run.investigation_truncated`가 이제 직접 센다**(2026-08-27 추가). 그 전에는 쿼리 B의 `tool_rounds` 분포로 추정할 수밖에 없었다 | **끊긴 실행 비율이 다시 보이면 왕복을 올린다.** 왕복 상한이 곧 빌드 길이라 `BUILD_TIMEOUT`(30분)이 아니라 **장전 창**(08:35 시작, 09:00 개장)이 실질 울타리다 — 왕복당 약 2분이라 5왕복이 12~14분, 7왕복이면 창에 붙는다. 호출 상한은 인자 모델의 `Field(description=...)`에 f-string으로 실려 프롬프트가 따라간다. 문자 상한은 폭주만 받는 안전망이라 **호출 상한을 다 써도 남아야 한다** |
-| `PROMPT_VERSION` / `NARRATIVE_PROMPT_VERSION` | `"8"` / `"2"` | `thesis/domain.py` / `thesis/outcomes.py` | — | 프롬프트를 고치면 올린다. 올린 뒤 28일은 ops 창이 두 판에 걸친다. **판마다 무엇이 바뀌었는지는 `thesis.domain.PROMPT_VERSION` 위 주석이 원본이다** — 여기 옮겨 적으면 두 벌이 어긋난다. 요약하면 `"3"` 기술적 보조지표(2026-08-24), `"4"` 과거 추론 절에 장후 리뷰(2026-08-25), `"5"` `## 확률` 절 정의(2026-08-25), `"6"` 숫자 표기 규칙 + 장중 슬롯(2026-08-26), `"7"` 조건부 기저율 + 동적 `flat` 기준선 + 방향별 기대 등락률(2026-08-26), `"8"` JSON 들여쓰기 제거(2026-08-27, 문장은 그대로이고 자리표시자 값의 모양만 바뀌었다)다 |
+| `PROMPT_VERSION` / `NARRATIVE_PROMPT_VERSION` | `"12"` / `"2"` | `thesis/domain.py` / `thesis/outcomes.py` | — | 프롬프트를 고치면 올린다. 올린 뒤 28일은 ops 창이 두 판에 걸친다. **판마다 무엇이 바뀌었는지는 `thesis.domain.PROMPT_VERSION` 위 주석이 원본이다** — 여기 옮겨 적으면 두 벌이 어긋난다. 요약하면 `"3"` 기술적 보조지표(2026-08-24), `"4"` 과거 추론 절에 장후 리뷰(2026-08-25), `"5"` `## 확률` 절 정의(2026-08-25), `"6"` 숫자 표기 규칙 + 장중 슬롯(2026-08-26), `"7"` 조건부 기저율 + 동적 `flat` 기준선 + 방향별 기대 등락률(2026-08-26), `"8"` JSON 들여쓰기 제거(2026-08-27, 문장은 그대로이고 자리표시자 값의 모양만 바뀌었다), `"9"` 모자란 답을 한 번 다시 묻기(2026-08-27), `"10"` 크기 자리표시자 `0.0` → `null`(2026-08-27), `"11"`·`"12"`는 그 주석에서 읽는다 |
 | `RULE_VERSION` | `"1"` | `technical/indicators.py` | `kind`·`direction`별 지평 적중률(기술지표 문서 12.6절) | 신호 검출 규칙을 고치면 올린다. `PROMPT_VERSION`과 같은 역할이고 축이 다르다 — 저쪽은 "모델이 잘 읽었나", 이쪽은 "신호가 좋았나"다 |
 | `RSI_OVERBOUGHT` / `RSI_OVERSOLD` | 70 / 30 | `technical/indicators.py` | 같은 것 | 검출과 프롬프트가 **같은 상수**를 본다. `rsi_reversal` 건수가 너무 적거나 많으면 여기서 당긴다 |
 | `SIGNAL_STATE_DAYS` / `MAX_STATE_SIGNALS` | 30일 / 3건 | `thesis/common.py` | 프롬프트 길이 | 관측 상태에 싣는 신호의 창과 개수. 툴(`SIGNAL_HISTORY_DAYS`, 90일)보다 짧다 |
 | `THESIS_WINDOW_DAYS` | 28 | `ops.py` | — | 판을 올린 직후엔 짧게 줄여 새 판만 본다 |
 | 스케줄 | 08:35 / 20:30 KST | `market_thesis_forecast.py` / `market_thesis_review.py` | 쿼리 C + readiness 재시도 | 재시도가 잦으면 늦춘다. 08:35는 문서 평가(매시 25분) 뒤, 20:30은 확정 종가(18:10) 뒤라는 제약이 있다 |
-| 장중 스케줄 | 10:35 / 12:35 / 14:35 / 15:00 KST | `thesis.state.INTRADAY_SLOT_TIMES` + `market_thesis_intraday.SCHEDULE` — **두 곳** | 같은 것 + 슬롯별 발행률 | 앞의 셋은 문서 평가(:25) 뒤라 :35다. 15:00은 "마감 30분 전"이 목적이라 그 제약을 안 받는다. **두 곳을 같은 커밋에서 만진다** — 테스트가 대조하고, 어긋나면 `resolve_slot`이 실행을 죽인다. 슬롯 라벨은 표에서 만들어져 따라온다 |
+| 장중 스케줄 | 12:35 KST 하나 | `thesis.state.INTRADAY_SLOT_TIMES` + `market_thesis_intraday.SCHEDULE` — **두 곳** | 같은 것 + 슬롯별 발행률 | 문서 평가(:25) 뒤라 :35다. **2026-08-28에 넷(10:35·12:35·14:35·15:00)에서 `intraday_midday` 하나로 줄였다** — 근거는 6절. **두 곳을 같은 커밋에서 만진다** — 테스트가 대조하고, 어긋나면 `resolve_slot`이 실행을 죽인다. 슬롯 라벨은 표에서 만들어져 따라온다 |
 | `BAR_STALENESS` | 15분 | `thesis/intraday.py` | `ThesisNotReady`의 "older than" 건수 | 정상인 날 guard가 막으면 늘린다. 지수는 `*/5`, 종목은 WebSocket이라 정상이면 5분 안이다. 반대로 이 값이 크면 오래된 가격을 "지금"으로 읽는다 |
 | 장중 `retries` / `execution_timeout` | 1 × 5분 / 15분 | `market_thesis_intraday.py` | `AirflowTaskTimeout` 건수와 슬롯 간 밀림 | 최악 40분에 묶어 앞 슬롯이 다음 슬롯을 막지 않게 한 값이다. 늘리려면 **슬롯 간격 2시간 안에** 들어와야 한다. 장전·장후(3 × 10분 / 30분)와 일부러 다르다 |
 | `ASSESSMENT_LAG` | 20분 | 같은 파일 | 같은 것 | 평가가 정상인데 guard가 막으면 늘린다 |
@@ -159,13 +158,13 @@ GROUP BY run_slot;
 | `x-grok-conv-id` | 실행마다 하나 (`thesis-{run_date}-{slot}`) | `llm.py` `_conversation_headers`, 부르는 곳 넷 | LangSmith의 `prompt_token_details.cache_read` ÷ `prompt_tokens`. **원장은 이 값을 안 센다**(13-llm-ledger.md "토큰 셋") | **xAI 캐시는 서버마다다.** 헤더가 없으면 왕복마다 다른 서버로 가 대화 전체를 새로 낸다 — 2026-08-27 실측에서 적중이 21.5%(246,395 중 52,992)였다. 값은 **결정적**이어야 한다(난수면 재시도가 캐시를 버린다). 적중률이 안 오르면 값이 실행마다 갈리고 있는지부터 본다 |
 | 프롬프트 JSON 들여쓰기 | 없음 (`prompt.json_dump`) | `modules/prompt.py` | `thesis_llm_run.prompt_tokens`의 슬롯별 추이 | 들여쓰기 공백은 그대로 입력 토큰이고 **툴 왕복마다 재전송**된다. 2026-08-27 실측: 관측 상태 블록 15,144자 → 6,744자(-55%), 세 블록 합 -14,450자, 네 왕복이라 약 32,000 토큰. **되돌릴 이유가 생기기 어렵다** — 모델은 들여쓰기 없는 JSON을 똑같이 읽고 사람이 볼 때는 LangSmith가 포매팅한다 |
 | `THESIS_TIMEOUT_SECONDS` | 1800 | `llm.py` | 타임아웃 실패 건수 | 2026-08-21 첫 실행이 300초에서 죽어 900으로, 툴이 11개로 늘면서 2026-08-22에 1800으로 올렸다. **1800은 관측이 아니라 예방이다** — 900에서 죽은 실행은 아직 없다. 다음 실행들의 실제 소요를 보고 되돌릴 여지가 있다. 또 걸리면 툴 상한(`MAX_TOOL_ROUNDS`)을 먼저 의심한다 — 왕복이 늘수록 한 요청이 길어진다. 문서 태깅의 `REQUEST_TIMEOUT_SECONDS`(300)는 따로다 |
-| `BUILD_TIMEOUT` | 30분 | `thesis/common.py` | `build_thesis`의 `AirflowTaskTimeout` 건수와 성공 실행의 소요 분포 | 요청 타임아웃의 바깥 울타리. 한 빌드는 모델을 최대 왕복 3 + 답변 + 교정 = 6번 부른다. 장전이 09:00 개장 전에 닿아야 해서 이 값이고, 걸리면 `MAX_TOOL_ROUNDS`를 먼저 의심한다. 재시도 셋은 그대로라 최악 4회 × (30 + 10)분이다 |
+| `BUILD_TIMEOUT` | 30분 | `thesis/common.py` | `build_thesis`의 `AirflowTaskTimeout` 건수와 성공 실행의 소요 분포 | 요청 타임아웃의 바깥 울타리. 한 빌드는 모델을 최대 왕복 5 + 답변 + 교정 = 8번 부른다(`MAX_TOOL_ROUNDS`가 2026-08-27에 3 → 5). 장전이 09:00 개장 전에 닿아야 해서 이 값이고, 걸리면 `MAX_TOOL_ROUNDS`를 먼저 의심한다. 재시도 셋은 그대로라 최악 4회 × (30 + 10)분이다 |
 | `SLACK_EVIDENCE_LIMIT` | 3 | `thesis/render.py` | 사람 눈 | 줄이 길어 안 읽히면 줄인다. 조회 상한(`EVIDENCE_FETCH_LIMIT`, 12)은 따로다 — 결론 방향으로 거른 뒤에도 이만큼 남아야 한다 |
 | `FLAT_BASE_RATE_BARS` | `250` | `technical/base_rate.py` | 프롬프트에 실리는 `flat` 기준선을 재는 창(거래일) | **상수는 값이 아니라 창이다**(2026-08-26에 `FLAT_BASE_RATE_PCT`를 여기로 바꿨다 — 비율 자체는 실행마다 다시 잰다). 그 비율이 연도별로 단조 감소해(코스피 2016년 45%→2026년 6%) 값을 박아 두면 반년 만에 낡았다. 창이 짧을수록 지금 체제를 빨리 따라가고 표본이 얇아진다(132봉이면 코스피 `flat`이 8건). `FLAT_THRESHOLD_PCT[0]`을 고치면 이 값의 뜻도 함께 바뀐다 — 임계가 이 빈도의 정의다 |
 | `VERDICT_TIE_GAP` | `0.05` | `thesis/render.py` | 결론이 둘 이상 나오는 비율 | 최고 확률에서 이만큼 안에 붙은 방향을 Slack에 함께 보인다. **실측이 아니라 시작값이다** — 매번 둘이 나오면 좁히고 한 번도 안 나오면 넓힌다. `PROMPT_VERSION` 5가 확률을 벌려 놓으므로 그 뒤 분포로 판단한다 |
-| `MEET_BAND_PCT` | `5.0` | `expectation.py` | `stock_event_outcome.verdict` 분포 | 기대 대비 발표를 `meet`로 볼 폭(퍼센트). **실측이 아니라 시작값이다** — `meet`가 사실상 없거나 대부분이면 그 폭이 틀린 것이다. `FLAT_THRESHOLD_PCT`와 같은 성격이고 판단 시점도 같다(+4주) |
-| 추출 `PROMPT_VERSION` | `"1"` | `expectation.py` | 버림 로그의 사유 분포 | 프롬프트를 고치면 올린다. **올리면 이미 뽑은 문서가 전부 재추출 대상이 된다** — `document.prompt_version`과 같은 장치다. 버림 사유가 한 유형에 몰리면 프롬프트 예시를 보강할지 `StockEventType`을 늘릴지를 그 로그가 정한다 |
-| 추출 `DEFAULT_BATCH_SIZE` | 50 | `expectation.py` | 대상 문서 백로그 | 대상이 종목 태그 문서뿐이라 지금 물량에서는 남는다. watched가 크게 늘면 이 값과 대상 조건(`value_score` 하한 추가)이 손잡이다 |
+| `MEET_BAND_PCT` | `5.0` | `expectation/domain.py` | `stock_event_outcome.verdict` 분포 | 기대 대비 발표를 `meet`로 볼 폭(퍼센트). **실측이 아니라 시작값이다** — `meet`가 사실상 없거나 대부분이면 그 폭이 틀린 것이다. `FLAT_THRESHOLD_PCT`와 같은 성격이고 판단 시점도 같다(+4주) |
+| 추출 `PROMPT_VERSION` | `"1"` | `expectation/domain.py` | 버림 로그의 사유 분포 | 프롬프트를 고치면 올린다. **올리면 이미 뽑은 문서가 전부 재추출 대상이 된다** — `document.prompt_version`과 같은 장치다. 버림 사유가 한 유형에 몰리면 프롬프트 예시를 보강할지 `StockEventType`을 늘릴지를 그 로그가 정한다 |
+| 추출 `DEFAULT_BATCH_SIZE` | 50 | `expectation/domain.py` | 대상 문서 백로그 | 대상이 종목 태그 문서뿐이라 지금 물량에서는 남는다. watched가 크게 늘면 이 값과 대상 조건(`value_score` 하한 추가)이 손잡이다 |
 
 ---
 

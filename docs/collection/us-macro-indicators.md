@@ -53,7 +53,7 @@ FRED `series` 엔드포인트로 2026-08-16에 확인한 값이다.
   월간이 섞여 있어 표시가 없으면 조회하는 쪽이 주기를 구분할 수 없다.
 - **FRED id를 저장 식별자로 쓰지 않는다.** `DGS10`은 사람이 읽으니 그대로 뒀지만 `CPIAUCSL`은
   DB만 보고 무슨 값인지 알 수 없다. 제공처 좌표는 수집기 Enum이 들고 있다가 요청과
-  `source_record.metadata`에만 쓴다. `indicator/ecos.py`의 `MarketRateSeries`가 항목코드를 다루는 방식과 같다.
+  `source_record.metadata`에만 쓴다. `indicator/ecos.py`의 `EcosSeries`가 항목코드를 다루는 방식과 같다.
 - **지수 레벨을 저장한다.** 전년 대비 변화율은 저장하지 않는다. FRED가 `units=pc1`로 변환해
   주지만, 원본을 두면 변화율은 언제든 계산되고 반대는 안 된다.
 - **`kind`를 둘로 나눈다.** 지수(300 근처)와 백만 달러(70만 근처)를 한 축에 놓을 수 없다.
@@ -108,7 +108,7 @@ FRED `series` 엔드포인트로 2026-08-16에 확인한 값이다.
 ### 5.3 수집기에 계열 레지스트리를 둔다
 
 `airflow/modules/collectors/indicator/fred.py`의 `TREASURY_SERIES`는 문자열 tuple이라 계열마다 단위를 달
-자리가 없다. `indicator/ecos.py`의 `MarketRateSeries`와 같은 모양으로 바꾼다.
+자리가 없다. `indicator/ecos.py`의 `EcosSeries`와 같은 모양으로 바꾼다.
 
 ```python
 class FredSeries(StrEnum):

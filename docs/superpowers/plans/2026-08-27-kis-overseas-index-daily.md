@@ -2,6 +2,10 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
+- 상태: **구현 완료(2026-08-27, 커밋 `6781480`·`d3ac7d7`).** 아래 체크박스는 계획 시점 그대로 둔다.
+  `airflow/dags/kis_overseas_index_daily.py`,
+  `airflow/modules/collectors/market/kis_overseas_index_daily.py`.
+
 **Goal:** Collect official KIS daily OHLCV for `SP500` (`SPX`) and `NASDAQ` (`COMP`) into `index_daily`.
 
 **Architecture:** Add a daily collector beside, not inside, the existing overseas closing-minute collector. Reuse `OverseasIndex`, shared KIS transport, `index_daily` storage, and the established domestic-index pagination strategy; add a separate US-calendar DAG because its backfill and failure boundary differ from the closing-minute DAG.

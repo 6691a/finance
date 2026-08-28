@@ -16,6 +16,7 @@ from modules.collectors.indicator.fred import (
     MACRO_SERIES,
     OBSERVATION_UPSERT,
     POLICY_RATE_SERIES,
+    SIGNAL_SERIES,
     SOURCE_RECORD_INSERT,
     TREASURY_SERIES,
     FredCollector,
@@ -143,13 +144,19 @@ def test_treasury_series_cover_short_and_long_maturities():
 
 
 def test_the_series_groups_do_not_overlap():
-    """DAG이 넷으로 나뉘어 각각 목록을 돈다. 겹치면 같은 계열을 하루에 두 번 받는다.
+    """DAG이 다섯으로 나뉘어 각각 목록을 돈다. 겹치면 같은 계열을 하루에 두 번 받는다.
 
     **덮는지도 함께 본다.** 목록이 전부 `kind`로 걸러지므로, 새 종류를 더하면서 목록을
     안 만들면 그 계열이 조용히 어느 DAG에도 안 실린다. 전에 거시 목록이 `is_monthly`로
     걸렀는데 월간 잔액(`JPASSETS_M`)이 들어오면서 그 필터가 거짓이 됐다.
     """
-    groups = (set(TREASURY_SERIES), set(MACRO_SERIES), set(POLICY_RATE_SERIES), set(BALANCE_SHEET_SERIES))
+    groups = (
+        set(TREASURY_SERIES),
+        set(MACRO_SERIES),
+        set(POLICY_RATE_SERIES),
+        set(BALANCE_SHEET_SERIES),
+        set(SIGNAL_SERIES),
+    )
 
     assert set.intersection(*groups) == set()
     assert sum(len(group) for group in groups) == len(set.union(*groups))
@@ -175,6 +182,25 @@ def test_each_series_declares_its_own_unit():
     assert FredSeries.CPI_M.unit == "Index 1982-1984=100"
     assert FredSeries.RETAIL_SALES_M.unit == "Millions of Dollars"
     assert FredSeries.UNEMPLOYMENT_M.unit == "Percent"
+    # 근원 PCE는 CPI와 기준연도가 다르다. 한 단위 상수로 두면 이 계열에 거짓이 실린다.
+    assert FredSeries.CORE_PCE_M.unit == "Index 2017=100"
+    assert FredSeries.INITIAL_CLAIMS_W.unit == "Number"
+
+
+def test_the_tips_pair_shares_one_kind_apart_from_nominal_bonds():
+    """실질금리와 기대인플레를 더하면 명목 10년물이다. 따로 두면 조회가 조각을 못 맞춘다.
+
+    반대로 `government_bond`에 넣으면 만기가 같아서 미국 10년물이 세 개로 보인다.
+    """
+    assert FredSeries.REAL10Y.kind == FredSeries.BREAKEVEN10Y.kind == "tips_rate"
+    assert FredSeries.DGS10.kind == "government_bond"
+    assert FredSeries.HY_OAS.kind == "credit_spread"
+
+
+def test_the_weekly_series_is_not_mistaken_for_a_monthly_one():
+    # `is_monthly`가 참이면 수집기가 관측일이 그 달 1일인지 본다. 주간 계열은 토요일로 온다.
+    assert not FredSeries.INITIAL_CLAIMS_W.is_monthly
+    assert FredSeries.CORE_CPI_M.is_monthly
     assert FredSeries.NONFARM_PAYROLL_M.unit == "Thousands of Persons"
     # 단위가 계열마다 다르다는 것 자체가 계약이다.
     assert len({series.unit for series in FredSeries}) > 1

@@ -8,8 +8,9 @@ from modules.collectors.indicator.ecb_irs import MATURITY_MONTHS as CONVERGENCE_
 from modules.collectors.indicator.ecb_irs import ConvergenceSeries
 from modules.collectors.indicator.ecos import POLICY_RATE_SERIES as ECOS_POLICY_SERIES
 from modules.collectors.indicator.ecos import EcosSeries
-from modules.collectors.indicator.fred import MACRO_SERIES, TREASURY_SERIES
+from modules.collectors.indicator.fred import MACRO_SERIES, SIGNAL_SERIES, TREASURY_SERIES
 from modules.collectors.indicator.fred import POLICY_RATE_SERIES as FRED_POLICY_SERIES
+from modules.collectors.indicator.kcs import ALL_SERIES as KCS_SERIES
 from modules.collectors.indicator.mof import JgbSeries
 from tests.helpers import NO_REVISION_REASON, head_sql, revision_files
 
@@ -88,6 +89,58 @@ def test_every_macro_series_has_a_master_row(series_id, capsys):
     sql = head_sql(capsys)
 
     assert f"'fred', '{series_id}'" in sql
+
+
+@pytest.mark.parametrize("series_id", SIGNAL_SERIES)
+def test_every_signal_series_has_a_master_row(series_id, capsys):
+    sql = head_sql(capsys)
+
+    assert f"'fred', '{series_id}'" in sql
+
+
+def test_the_master_separates_real_rates_and_credit_from_the_curve(capsys):
+    """실질금리는 명목 국채와 만기가 같다. 같은 `kind`면 미국 10년물이 두 개로 보인다.
+
+    신용스프레드는 국채가 아니라 회사채 초과수익이라 곡선에 얹으면 만기 축이 거짓이 된다.
+    """
+    sql = head_sql(capsys)
+
+    latest = sql.rindex("ck_indicator_series_kind")
+    assert "'tips_rate'" in sql[latest : latest + 250]
+    assert "'credit_spread'" in sql[latest : latest + 250]
+
+
+def test_the_tips_pair_keeps_the_nominal_maturity(capsys):
+    # 만기를 NULL로 두면 명목 10년물과 나란히 놓고 볼 수 없다. 둘을 더하면 그 명목 금리다.
+    sql = head_sql(capsys)
+
+    for series_id in ("REAL10Y", "BREAKEVEN10Y"):
+        row_start = sql.index(f"'fred', '{series_id}'")
+        assert "120, 'tips_rate'" in sql[row_start : row_start + 200]
+
+
+@pytest.mark.parametrize("series_id", KCS_SERIES)
+def test_every_korea_trade_series_has_a_master_row(series_id, capsys):
+    sql = head_sql(capsys)
+
+    assert f"'kcs', '{series_id}'" in sql
+
+
+@pytest.mark.parametrize("series_id", ["KR_EXPORT_SEMICON_MTD", "KR_IMPORT_CHIPEQUIP_MTD", "KR_EXPORT_CN_MTD"])
+def test_korea_trade_rows_have_no_maturity(series_id, capsys):
+    # 수출입에는 만기 개념이 없다. 0으로 채우면 만기별 비교 쿼리가 "0개월물"로 그린다.
+    sql = head_sql(capsys)
+
+    row_start = sql.index(f"'kcs', '{series_id}'")
+    assert "NULL, 'activity'" in sql[row_start : row_start + 200]
+
+
+def test_country_rows_stay_korean_indicators(capsys):
+    """대중국 수출은 한국의 지표다. `country`가 상대국이 되면 중국 지표로 잡힌다."""
+    sql = head_sql(capsys)
+
+    row_start = sql.index("'kcs', 'KR_EXPORT_CN_MTD'")
+    assert "'KR', '대한민국'" in sql[row_start : row_start + 200]
 
 
 @pytest.mark.parametrize("series", list(EcosSeries))

@@ -5,6 +5,16 @@
 `tests/models/test_analysis_models.py`가 하위 모듈을 훑어 그 누락을 잡는다.
 """
 
+from apps.models.analysis.causal import (
+    MAX_CHAIN,
+    CausalConfidence,
+    CausalSign,
+    CausalTargetKind,
+    MarketCausalPath,
+    MarketCausalStep,
+    MarketChannel,
+    MarketEvent,
+)
 from apps.models.analysis.events import (
     EVENT_METRICS,
     PERIOD_KEY_PATTERN,
@@ -41,11 +51,19 @@ from apps.models.analysis.thesis import (
 
 __all__ = [
     "EVENT_METRICS",
+    "MAX_CHAIN",
     "NARRATED_HORIZON_DAYS",
     "PERIOD_KEY_PATTERN",
     "THESIS_HORIZON_DAYS",
+    "CausalConfidence",
+    "CausalSign",
+    "CausalTargetKind",
     "LlmRunKind",
     "LlmRunStatus",
+    "MarketCausalPath",
+    "MarketCausalStep",
+    "MarketChannel",
+    "MarketEvent",
     "RunSlot",
     "StockEventClaim",
     "StockEventClaimKind",

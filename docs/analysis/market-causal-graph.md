@@ -1,17 +1,17 @@
 # MarketCausalGraph — 주간 사후 인과 그래프 설계
 
 - 날짜: 2026-08-27
-- 상태: **미구현. 이 문서는 구현 계약이다.** 프로토타입으로 여덟 주를 세 판 돌려 값어치와
-  어휘 수렴을 확인했다(§8).
+- 상태: **§1~§8 구현 완료. 아직 운영에 배포되지 않았다**(2026-08-27). 리비전 `b4e91c72a3d5`가
+  운영 DB에 안 올라갔고 DAG도 배포 전이라 **한 번도 실제로 돈 적이 없다.** 구현 중에 설계가
+  넷 바뀌었고 그 자리마다 근거를 적어 뒀다(§2·§3.2·§5.2·§6).
   선반영 표현(§9)은 [정책금리 수집](../collection/policy-rate-collection.md)이 선행 조건이다.
 - 목표: 한 주에 일어난 사건이 어떤 경로로 어떤 대상에 닿았는지를 LLM이 사후에 정리해
   **노드와 엣지로 누적**한다. 주가 쌓이면서 같은 노드를 공유해 다중 홉 탐색이 가능해진다.
-- 산출물: `apps/models/analysis/causal.py`, 수기 리비전 하나,
-  `airflow/modules/causal/`(`domain.py`·`candidates.py`·`generation.py`·`store.py`),
-  `airflow/modules/prompts/causal_graph.yaml`, `airflow/sql/postgres/market_causal_*/`와
-  `market_event/`·`market_channel/`의 SQL, `airflow/dags/market_causal_weekly.py`,
-  `tests/modules/test_causal.py`·`tests/dags/test_market_causal_weekly.py`·
-  `tests/migrations/test_causal_schema.py`. 자리와 이유는 §10
+- 산출물: `apps/models/analysis/causal.py`, 수기 리비전 `b4e91c72a3d5`,
+  `airflow/modules/causal/`(`domain`·`candidates`·`generation`·`store`·`run`),
+  `airflow/modules/prompts/causal_graph.yaml`, `airflow/sql/postgres/`의 SQL 열다섯,
+  `airflow/dags/market_causal_weekly.py`, `modules/llm.py`의 `causal_model()`,
+  테스트 파일 여섯. 자리와 이유는 §10
 - 관련 원본:
   [시장 추론](market-thesis/README.md),
   [그래프 projection](market-thesis/4-graph.md),
@@ -72,7 +72,11 @@ W+2      월                ← 여기서 분석한다. 반응이 확정돼 있�
 - `as_of_at`은 **`W+1` 금요일 KST 15:40**이다(KRX 정규장 종가 확정 뒤). 기존 event-time
   cutoff 규칙을 그대로 쓴다 — 이 시각 이후에 감지·평가·갱신된 행은 보지 않는다. 실행은
   `W+2` 월요일이지만 그 사이 주말에 들어온 문서를 보지 않는 것이 이 값의 목적이다.
-  `W+1` 금요일이 KRX 휴장이면 그 주의 마지막 거래일 15:40이다.
+- **`W+1` 금요일이 KRX 휴장이어도 앞으로 당기지 않는다**(2026-08-27 구현 중 정정). 처음에는
+  "휴장이면 마지막 거래일 15:40"이라고 적었는데 **그쪽이 틀린다.** cutoff는 "이 시각 이후
+  감지된 행을 뺀다"라서 휴장이면 그 앞 거래일까지의 값이 전부 이 시각 안에 들어와 있다.
+  반대로 당기면 목요일 15:40 뒤에 들어온 문서를 잃는다. 고정이 맞고, 덕분에
+  `causal/domain.py`가 거래일 달력을 안 봐도 된다.
 - 스케줄은 `0 7 * * 1`(KST 월 07:00 = UTC 일 22:00)이다. 장과 무관하므로 시각 자체에
   의미는 없고, 주말 뒤 첫 실행이라는 것만 지킨다.
 - T+5는 `thesis_outcome`이 이미 쓰는 KRX 영업일 5일과 같은 값이다. 새 개념이 아니다.
@@ -232,6 +236,12 @@ W+2      월                ← 여기서 분석한다. 반응이 확정돼 있�
 때문이다(아래). 사건일 기준으로 재는 값은 §9.3의 `lead_days`뿐이고 그것은 목적이 다르다 —
 이 셋은 "그 주에 무슨 일이 있었나"이고 `lead_days`는 "언제부터 움직였나"다.
 
+**실현 등락 조회에는 `as_of_at` cutoff를 걸지 않는다**(2026-08-27 구현 중 결정). cutoff는
+"그 시점에 알 수 있었던 것"을 자르는 장치인데 실현 등락은 **일부러 미래를 보는 값**이다.
+게다가 반응 주에 휴장이 있으면 T+5가 cutoff 뒤로 밀려 그 대상이 통째로 빠진다. 조회 끝을
+`week_end + 15일`로 넉넉히 잡아 휴장이 겹쳐도 T+5가 잡히게 한다. **근거(문서·공시·신호)에만
+cutoff를 건다** — 그쪽은 반대로 그 시점에 알 수 있었던 것이어야 한다.
+
 #### 3.2.1 `target_kind` 넷은 어느 마스터에서 오는지를 가른다
 
 | 값 | 무엇 | 마스터 | 값 예 |
@@ -331,16 +341,29 @@ Channel은 수렴해서 좁고, Event는 날짜로 좁는다.
 
 | 후보 | 규칙 |
 | --- | --- |
-| 문서 | 국내 대상 넷에 태그된 것(`document_instrument`·`document_indicator`) 중 `value_score` 상위, 대상당 8건 |
-| 공시 | 그 주 대상 종목 DART 전량 |
-| 매크로 변화 | 그 주 `USDKRW`·`SP500_FUT`·`NASDAQ100_FUT`·`SOX`·`VIX`·`KTB10Y` 주간 변화 |
-| 기술 신호 | 그 주 `technical_signal` 전량 |
-| 실현 등락 | 대상별 그 주 일별·주간 수익률과 주 종료 뒤 T+1·T+5 |
+| 문서 | 대상에 태그된 것(`document_instrument` ∪ `document_indicator`) 중 `value_score` 상위, 대상당 8건 |
+| 공시 | 그 주 대상 종목 DART 전량. 점수로 거를 근거가 없다 |
+| 기술 신호 | 그 주 `technical_signal` 전량. 국내 지수 둘과 종목 둘만 갖는다 |
+| 실현 등락 | 대상별 그 주 변화와 주 종료 뒤 T+1·T+5 |
 
-### 5.2 툴(모델 재량)
+**매크로 변화는 후보에 없다**(2026-08-27 구현 중 정정). 처음에는 별도 후보로 적었는데,
+매크로가 대상이 되면서 실현 등락이 그것을 대신한다. 같은 값을 두 번 실을 이유가 없다.
 
-기존 툴 14개는 `recent_*(hours)` 형태라 슬롯 직전 몇 시간용이고 과거 구간에 그대로 쓸 수
-없다. 창 인자를 받는 툴 **둘만** 새로 만든다.
+**문서 태그는 두 테이블을 합쳐 본다.** 종목은 `document_instrument`에 붙지만
+`document_indicator`에도 `kis 005930`으로 붙어 있고, 지수·환율·금리는 뒤쪽에만 있다.
+한쪽만 보면 같은 대상의 문서를 절반쯤 잃는다. `series_id`만으로 거는 이유는 이것이 관측값
+조회가 아니라 태그 조회이고, 실측에서 같은 `series_id`가 두 제공처에 걸친 경우가 없기
+때문이다(2026-08-27 확인).
+
+### 5.2 툴 — **지금은 없다**
+
+**첫 배포에 툴을 바인딩하지 않는다**(2026-08-27 구현 중 결정). 후보를 코드가 이미 좁혀
+실었고, 8주 프로토타입이 그 형태로 돌아 어휘 수렴과 사슬 깊이를 둘 다 확인했다. 이 절이
+원래 "툴을 더 늘릴지는 첫 실행들의 로그를 보고 정한다"고 적고 있었으므로 그 순서를 그대로
+따른 것이다 — 다만 시작점이 둘이 아니라 **영**이다.
+
+늘릴 때 만들 것은 창 인자를 받는 툴이다. 기존 툴 14개는 `recent_*(hours)` 형태라 슬롯 직전
+몇 시간용이고 과거 구간에 그대로 쓸 수 없다.
 
 - `window_documents(target, start, end, limit)` — 후보에서 잘린 문서를 더 판다
 - `window_flows(target, start, end)` — 그 주 수급·공매도
@@ -348,7 +371,8 @@ Channel은 수렴해서 좁고, Event는 날짜로 좁는다.
 조회 SQL은 새 파일로 만든다. 기존 파일에 파라미터를 더하면 그것을 쓰지 않는 흐름이 매번
 값을 넘겨야 하고, 한쪽을 고칠 때 다른 쪽이 조용히 따라 바뀐다.
 
-툴을 더 늘릴지는 첫 실행들의 `thesis_tool_call` 로그를 보고 정한다.
+**늘릴 신호는 `thesis_tool_call` 원장이 아니라 결과다** — 툴이 없으므로 원장에 아무 것도 안
+남는다. 경로가 얇거나 `plausible` 비율이 높으면 후보가 모자란다는 뜻이고, 그때 이 둘을 붙인다.
 
 ### 5.3 답변 스키마
 
@@ -567,26 +591,28 @@ v2까지 채널 사슬이 2노드에서 멈췄다. 원인이 상한도 어휘도
 
 그래프에 기대야 할 것은 두 번째뿐이다.
 
-### 9.2 막고 있는 것 둘 — 하나는 이미 풀렸다
+### 9.2 막고 있는 것 — 둘이 풀렸고 둘이 남았다
 
-**`Target`에 금리가 없다는 문제는 §0에서 풀렸다.** 8주 프로토타입이 그것을 깊이 문제로도
-확인해(§8.3) 대상을 아홉으로 넓혔고, `US10Y`가 이미 대상이다. 남은 것은 국내 금리
-(`KTB10Y`·`KTB2Y`)와 정책금리를 대상에 더하는 것이며 그건 데이터가 오면 목록 한 줄이다.
+**`Target`에 금리가 없다는 문제는 풀렸다.** 8주 프로토타입이 그것을 깊이 문제로도
+확인해(§8.3) 대상을 넓혔고, 지금 `US10Y`(quote)와 `KRBASE`·`KTB10Y`(indicator)가 전부
+대상이다. 정책금리는 사건이자 대상이라 그 겹침이 그래프를 깊게 만든다.
+
+**정책금리 수집도 끝났다**(2026-08-27). `KRBASE`·`DFEDTARU`·`EADFR`·`GBBASE`·`JPBASE_M`
+다섯이 운영 DB에 있다. `JPBASE_M`은 월별 한 건이라 주간 변화를 못 내서 대상으로는 못 쓴다.
 
 남은 벽은 둘이다.
 
-- **데이터가 없다.** 국내 금리 계열이 2026-08-10부터 12건뿐이고(2026-08-27 실측),
-  **정책금리 시계열은 아예 없다.** 이것이 가장 큰 벽이고 이 문서 밖에서 푼다 —
-  [정책금리 수집](../collection/policy-rate-collection.md)이 그 설계다. 국채 이력 백필도 함께 필요하다.
+- **이력이 짧다.** 정책금리가 2026-07-14부터, 국내 국채(`KTB*`)가 2026-08-10부터라 겹치는
+  구간이 2.5주다. 리드-래그는 **정책금리 변경 사건 수**가 표본인데 그 사이에 변경이 없었다.
+  **5년이 최소선이고 정책금리·국채를 같은 구간으로 맞춰야 한다**(§9.4 2번).
 - **엣지에 시차가 없다.** `Event → Channel → Target`은 동시성만 표현한다. 선반영은 대상이
-  사건보다 **먼저** 움직인 것이라 시간 순서가 뒤집힌 엣지다.
+  사건보다 **먼저** 움직인 것이라 시간 순서가 뒤집힌 엣지다. §9.3 ②·③이 그 처방이다.
 
 ### 9.3 무엇을 더하면 되나
 
-**① `Target`에 국내 금리와 정책금리를 더한다.** §0의 대상 아홉에 `KTB10Y`·`KTB2Y`와
-정책금리 계열을 잇는다. 그러면 `한은 기준금리 인상 → 정책금리 기대 → KTB10Y`가 저장된다.
-**목록 한 줄이지만 데이터가 먼저다** — 지금 넣으면 값이 12건뿐이라 모델이 인용할 것이 없다.
-대상이 늘면 프롬프트도 커지므로 금리 전부가 아니라 **두어 개**부터 넓힌다.
+**① ~~`Target`에 금리를 더한다~~ — 끝났다**(2026-08-27). `KRBASE`·`KTB10Y`가 대상이고
+`domain.INDICATOR_TARGETS`가 그 목록이다. 값이 없는 주는 그 대상만 저장되지 않고 나머지는
+그대로 돈다(§6). 더 넓힐 때는 `KTB2Y`처럼 한두 개씩 더한다 — 대상이 늘면 프롬프트도 커진다.
 
 **② `market_causal_path`에 시차 두 칸을 더한다.**
 
@@ -621,10 +647,16 @@ post_move = 대상 변화 [D,   D+5]
 
 ### 9.4 순서
 
-1. [정책금리 수집](../collection/policy-rate-collection.md) — 별개 태스크
-2. 국내 금리 이력 백필 — 별개 태스크, 1과 함께 해야 값어치가 있다
-3. 이 문서 §1~§8 구현 — 자리와 파일은 §10
-4. §9.3의 ①~③
+1. ~~[정책금리 수집](../collection/policy-rate-collection.md)~~ — **완료**(2026-08-27).
+   `KRBASE`·`DFEDTARU`·`EADFR`·`GBBASE`·`JPBASE_M` 다섯이 운영 DB에 있다
+2. **국내 금리 이력 백필 — 남아 있다.** 정책금리는 2026-07-14부터, 국내 국채(`KTB*`)는
+   2026-08-10부터라 겹치는 구간이 2.5주뿐이다. 선반영을 재려면 **5년**이 필요하다 —
+   2021-08 시작된 인상 사이클 전체를 담는 최소선이고, 그보다 짧으면 한은 변경 사건이 거의 없다.
+   **정책금리만 백필하면 소용없다.** 비교 대상인 국채를 같은 구간으로 맞춰야 한다
+3. ~~이 문서 §1~§8 구현~~ — **완료**(2026-08-27). 배포는 아직이다
+4. §9.3의 ①~③ — 2가 끝난 뒤
+
+매크로·지수는 이미 2016년부터 10년치가 있어 백필 대상이 아니다.
 
 **3과 4를 같은 배포에 넣지 않는다.** 시차 칸을 채우려면 정책금리와 국채 이력이 이미 쌓여
 있어야 하는데 그 둘은 이 저장소 밖의 수집 일정에 달려 있다. 기본 그래프가 먼저 돌고 있으면
@@ -662,6 +694,10 @@ aggregate 하나다.
 **리비전은 손으로 쓴다.** `makemigrations`는 모든 별칭에 실제로 연결하는데 그 별칭이 운영
 DB다 — 워크트리에서 돌리지 않는다. 한 리비전에 셋이 들어간다.
 
+리비전은 `b7f4c2a91d38`(정책금리) 뒤에 잇는다. **머지 시점에 head가 갈리기 쉽다** —
+2026-08-27에 실제로 둘이 같은 부모를 가리켜 Alembic이 `upgrade head`를 거절할 상태가 됐다.
+다른 브랜치를 머지한 뒤에는 head가 하나인지 확인한다.
+
 1. 테이블 넷 `CREATE`(모델과 같은 테이블·컬럼 주석 포함)
 2. `thesis_llm_run.kind` CHECK에 `causal` 추가
 3. `thesis_llm_run.run_slot`을 nullable로 풀고 조합 CHECK 추가(§3.5)
@@ -672,20 +708,29 @@ DB다 — 워크트리에서 돌리지 않는다. 한 리비전에 셋이 들어
 
 ### 10.2 모듈은 `airflow/modules/causal/`
 
-파일이 넷이라 폴더다(규칙: 한 도메인의 파일이 셋 이상이면 폴더로 내리고 접두어를 뗀다).
+파일이 다섯이라 폴더다(규칙: 한 도메인의 파일이 셋 이상이면 폴더로 내리고 접두어를 뗀다).
 **`__init__.py`는 비운다** — 재수출하면 `causal.domain` 하나를 import해도 LangChain이 딸려
 와 DagBag이 그 무게를 문다.
 
 | 파일 | 무엇 | 무엇을 import하지 않나 |
 | --- | --- | --- |
-| `domain.py` | 상수(`MAX_CHAIN`·`MAX_PATHS`·`MAX_NEW_CHANNELS`·`MAX_REASONING_CHARS`·`PROMPT_VERSION`), `input_hash`, 주 경계 계산, Pydantic 값 객체 | LangChain·Airflow. **순수 함수만** |
-| `candidates.py` | 후보 조립(§5.1). 연결과 `as_of_at`을 생성자로 받는 클래스 | LangChain |
-| `generation.py` | LangChain·LangGraph. `CausalBuilder`, 답변 스키마, 어휘 후보 블록 조립 | Airflow |
+| `domain.py` | 상수, `input_hash`, 주 경계 계산, **Pydantic 값 객체 전부** | LangChain·Airflow. **순수 함수만** |
+| `candidates.py` | 후보 조립(§5.1), 대상 해석, 실현 등락, 어휘 후보 | LangChain·Airflow |
+| `generation.py` | LangChain. `CausalBuilder`, 답변 스키마, 프롬프트 블록 조립 | Airflow |
 | `store.py` | 저장(§3.2). 어휘 upsert → 경로 → 단계를 한 트랜잭션에 | LangChain·Airflow |
+| `run.py` | 한 실행의 조립. 연결을 열고 순서를 엮는다. DAG이 부르는 유일한 자리 | LangChain(태스크 안에서 늦게 import) |
+
+`run.py`가 원래 설계에 없었다. `dags/`에는 스케줄·재시도·실패 분류만 둔다는 규칙 때문에
+흐름을 담을 자리가 필요했다.
 
 **`domain.py`가 무거운 것을 import하지 않는 것이 이 배치의 핵심이다.** DAG 테스트와 순수
-함수 테스트가 LangChain 없이 돌아야 하고, `thesis/state.py`를 따로 뺀 이유와 같다. 값 객체가
-늘어 `domain.py`가 커지면 그때 `state.py`로 가른다.
+함수 테스트가 LangChain 없이 돌아야 하고, `thesis/state.py`를 따로 뺀 이유와 같다.
+
+**그 경계가 구현 중에 실제로 깨졌다**(2026-08-27). `NodeChoice`·`VerifiedPath`를 답변
+스키마라는 이유로 `generation.py`에 뒀더니 `store.py`가 그것을 import했고, 결국 **DAG
+파일까지 LangChain을 끌고 왔다.** `tests/modules/test_import_weight.py`가 잡아서 둘을
+`domain.py`로 내렸다. **값 객체는 전부 `domain.py`에 둔다** — 값 객체가 늘어 파일이 커지면
+그때 `state.py`로 가른다.
 
 ### 10.3 SQL
 
@@ -695,19 +740,32 @@ DB다 — 워크트리에서 돌리지 않는다. 한 리비전에 셋이 들어
 airflow/sql/postgres/
   market_event/          upsert.sql          select_recent.sql
   market_channel/        upsert.sql          select_all.sql
-  market_causal_path/    insert.sql          select_by_week.sql   exists_by_week.sql
+  market_causal_path/    insert.sql          exists_by_week.sql
   market_causal_step/    insert.sql
-  causal/                select_documents.sql        select_disclosures.sql
-                         select_macro_changes.sql    select_returns.sql
+  causal/                select_watched_stocks.sql
+                         select_index_returns.sql     select_stock_returns.sql
+                         select_quote_returns.sql     select_indicator_returns.sql
+                         select_documents.sql         select_disclosures.sql
+                         select_signals.sql
 ```
 
 - 테이블 이름 폴더는 그 테이블에 쓰는 것, `causal/` 폴더는 **여러 테이블을 읽는 후보 조립**이다.
   `thesis/`가 이미 그 형태다.
+- **실현 등락이 넷으로 갈린다.** 대상 종류마다 원본 테이블과 컬럼 이름이 다르고(`index_daily`·
+  `stock_investor_trade_daily`·`quote_daily`·`indicator_observation`), 금리만 bp다.
+  `quote_daily` 뷰가 국내 지수도 담지만 그 뷰는 KRX·NYSE만 태우고 NXT를 빼는 자체 규칙을
+  가져서, 합치면 그 규칙이 바뀔 때 이 계산이 조용히 따라 바뀐다.
+- **`select_macro_changes.sql`은 만들지 않았다.** 매크로가 대상이 되면서 실현 등락이 그것을
+  대신한다(§5.1).
 - **브리핑·thesis의 기존 조회를 재사용하지 않는다.** 그쪽은 지금까지를 보고 여기는 주 경계와
   `as_of_at`까지만 본다. 기존 파일에 파라미터를 얹으면 한쪽을 고칠 때 다른 쪽이 조용히 따라
   바뀐다.
 - **새 SQL은 운영 DB에 읽기 전용으로 한 번 돌려 보고 넣는다.** 테스트는 가짜 연결을 쓰므로
-  컬럼 이름과 조인 조건이 틀려도 통과한다.
+  컬럼 이름과 조인 조건이 틀려도 통과한다. 2026-08-27에 이 확인이 결함 하나를 잡았다 —
+  **SQL 주석 안의 맨 `%`를 psycopg가 자리표시자로 읽어** `execute`가 죽는다
+  (`only '%s', '%b', '%t' are allowed as placeholders, got '%)'`). 주석은 낱말로 쓰고
+  리터럴이 필요하면 `%%`로 이스케이프한다. `tests/modules/test_sql_placeholders.py`가
+  저장소의 모든 SQL을 훑어 그것을 막는다.
 
 ### 10.4 DAG — `airflow/dags/market_causal_weekly.py`
 
@@ -720,7 +778,10 @@ airflow/sql/postgres/
   `description`을 단다. 슬롯이 없으므로 `thesis.intraday.resolve_slot` 같은 장치는 필요 없다.
 - **태스크 하나**(`build_causal_graph`)다. 후보 조립부터 저장까지 한 흐름이고, 재시도가
   후보 조립을 다시 해도 `as_of_at` cutoff가 같아 같은 결과다. 태스크를 나누면 XCom으로
-  후보 50건을 넘기게 되는데 얻는 것이 없다.
+  후보 50건을 넘기게 되는데 얻는 것이 없다. `execution_timeout`은 20분이다 — 대화 하나에
+  교정이 붙으면 왕복이 둘이다.
+- **흐름 조립은 `causal/run.py`가 갖는다.** DAG 파일은 그것을 부르고 예외 종류만 가른다.
+  LangChain은 태스크 함수 안에서 늦게 import한다 — 모듈 수준이면 DagBag이 그 무게를 문다.
 - 그 주에 행이 이미 있으면 LLM을 부르지 않고 성공으로 끝난다(§5.4). **skip이 아니라 성공**이다 —
   재실행이 정상 흐름이라 매번 노란 태스크를 만들 이유가 없다.
 
@@ -728,10 +789,24 @@ airflow/sql/postgres/
 
 | 파일 | 무엇 |
 | --- | --- |
-| `tests/modules/test_causal.py` | `input_hash` 정렬 불변성, 주 경계 계산, ref 검증(목록 밖 버림), 어휘 정규화(`ref`를 고르면 새 행이 생기지 않음), `MAX_NEW_CHANNELS`·`MAX_CHAIN` 초과 처리, `chain_key`와 `position` 순서 일치, 저장 SQL 컬럼 vs 모델 metadata 대조 |
-| `tests/dags/test_market_causal_weekly.py` | cron과 `start_date` tz, Param 메타데이터, 그 주에 행이 있을 때 LLM을 안 부르는지, `LlmError`→fail·`ConnectionError`→재시도 |
+| `tests/modules/test_causal.py` | 주 경계, `input_hash` 정렬 불변성, 대상 해석, 실현 등락(종류별 테이블·단위·결측 제외), 어휘 후보 |
+| `tests/modules/test_causal_generation.py` | 프롬프트 블록 조립, 답변 검증(목록 밖 ref·마스터 밖 대상·체인 상한), `CausalBuilder` 왕복과 교정 한 번 |
+| `tests/modules/test_causal_store.py` | `chain_key` 순서, 어휘 중복 upsert 안 함, 단위 저장, `MAX_NEW_CHANNELS` 초과, 어휘 드리프트, 재실행 판정, **저장 SQL 넷 vs 모델 metadata 대조** |
+| `tests/modules/test_causal_run.py` | 조립 순서, 재실행 시 모델 미호출, `require_reuse`가 첫 주에 꺼지는지 |
+| `tests/dags/test_market_causal_weekly.py` | cron과 `start_date` tz, 화면 메타데이터, Param 계약, 태스크 하나, 실패 분류 |
 | `tests/migrations/test_causal_schema.py` | 오프라인 SQL에 테이블 넷과 CHECK, `run_slot` nullable 전환 |
-| `tests/modules/test_prompt_versions.py` | `causal_graph.yaml` 해시와 `PROMPT_VERSION` 잠금(표에 등록) |
-| `tests/modules/test_import_weight.py` | `causal.domain` import에 LangChain이 딸려 오지 않는지 |
+| `tests/modules/test_prompt_versions.py` | `causal_graph.yaml` 해시와 `PROMPT_VERSION` 잠금 |
+| `tests/modules/test_import_weight.py` | `causal.domain`·`candidates`·`store`·`run`이 LangChain을 안 끌고 오고, `generation`은 끌고 오는지 |
+| `tests/modules/test_sql_placeholders.py` | SQL에 psycopg가 오해할 맨 `%`가 없는지(저장소 전체) |
+| `tests/models/test_analysis_models.py` | 자연키 넷, CHECK, 컬럼 주석, 원장의 `causal` 종류 |
 
-가짜 연결·가짜 모델을 쓴다. **실제 LLM과 운영 DB를 부르지 않는다.**
+가짜 연결·가짜 모델을 쓴다. **실제 LLM과 운영 DB를 부르지 않는다.** 대신 SQL은 §10.3대로
+운영 DB에 읽기 전용으로 한 번 돌려 확인한다 — 그 둘이 서로를 대신하지 못한다.
+
+**가드가 실제로 잡은 것들**(2026-08-27 구현 중). 이 표가 장식이 아니라는 증거다.
+
+- 모델 등록 훑기 → `__all__`에 안 넣은 새 모델 넷
+- 프롬프트 판 잠금 → 등록 안 한 새 YAML
+- import 무게 → `generation.py`에 모델 호출부가 빠진 것, 그리고 `store.py`가 값 객체 때문에
+  DAG까지 LangChain을 끌고 오던 것(§10.2)
+- 실제 psycopg 실행 → SQL 주석의 맨 `%`(§10.3)

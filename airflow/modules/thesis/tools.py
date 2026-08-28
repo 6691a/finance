@@ -351,3 +351,46 @@ class EventSurprisesPayload(ToolModel):
     stock_code: str
     outcomes: tuple[SurpriseDetail, ...] = ()
     pending_expectations: tuple[PendingExpectationDetail, ...] = ()
+
+
+class MoveWindow(ToolModel):
+    """한 창의 하루 등락 크기 분포. **크기(`*_return_pct`)를 부르기 전의 기준선이다.**
+
+    통계가 전부 `None`이면 표본이 `base_rate.MIN_BASE_RATE_SAMPLE`에 못 미쳐 **재지
+    않았다**는 뜻이고 0이라는 뜻이 아니다. `up_days`·`down_days`는 그때도 온다.
+
+    **방향을 나눈다.** `up_return_pct`가 "상승한다면 얼마"인 조건부 값이라 앵커도
+    조건부여야 짝이 맞는다. 무방향 중앙값 하나만 주면 모델이 또 어림한다.
+
+    `p25`가 있는 이유는 오차 폭이다 — `p75 - p25`의 절반이 "평소 이만큼 흩어진다"이고
+    `p90`만으로는 꼬리밖에 못 본다.
+    """
+
+    bars: int
+    sample_size: int
+    median_abs_pct: float | None = None
+    p25_abs_pct: float | None = None
+    p75_abs_pct: float | None = None
+    p90_abs_pct: float | None = None
+    up_days: int = 0
+    up_median_pct: float | None = None
+    down_days: int = 0
+    down_median_pct: float | None = None
+
+
+class TypicalMovePayload(ToolModel):
+    """`typical_move` 툴의 응답. **축과 못 재는 것을 값과 함께 나른다.**
+
+    창 둘을 나란히 주는 이유는 체제 때문이다. `baseline`이 "평소 이만큼"이고 `recent`가
+    "요즘 이만큼"이라, 둘이 벌어져 있으면 지금이 평소보다 큰 구간이라는 뜻이다.
+    """
+
+    # 라벨을 담지 않는다 — 모델이 이 코드를 물어본 쪽이라 이미 무엇인지 안다.
+    symbol: str
+    as_of_date: date
+    # 이 분포가 무엇에서 무엇까지인가. 값만 주면 하루치인지 장중 잔여 구간인지 모른다.
+    axis: str
+    recent: MoveWindow
+    baseline: MoveWindow
+    # 못 재는 것을 명시한다. 없는 표본으로 숫자를 지어내지 않는다.
+    note: str

@@ -37,6 +37,7 @@ from modules.sql import read_sql
 from modules.technical.indicators import RULE_VERSION
 from modules.thesis.domain import ThesisDirection, classify_outcome
 from modules.thesis.state import HorizonBaseRate, SignalBaseRate
+from modules.thesis.tools import MoveWindow
 
 logger = logging.getLogger(__name__)
 
@@ -67,6 +68,14 @@ MIN_BASE_RATE_SAMPLE = 20
 # 이라 얇고, 1년이면 조용했던 구간과 요동친 구간을 함께 담는다. **상수가 아니라 실행마다
 # 다시 재므로 체제가 바뀌면 값이 따라간다** — 전에는 사람이 다시 재기 전까지 낡았다.
 FLAT_BASE_RATE_BARS = 250
+
+# 크기 앵커(`typical_move` 툴)가 재는 창(거래일). **`FLAT_BASE_RATE_BARS`와 같은 값에서
+# 출발하지만 다른 손잡이다** — `flat` 임계를 만지는 것이 크기 앵커를 조용히 움직이면 안 된다.
+MOVE_SIZE_BARS = 250
+
+# "지금 체제" 창. 기준선과 나란히 줘서 지금이 평소보다 큰 구간인지 모델이 읽는다.
+# `MIN_BASE_RATE_SAMPLE`과 같은 크기라, 이보다 좁히면 통계가 통째로 `None`이 된다.
+RECENT_MOVE_BARS = 20
 
 
 def _summarize(horizon_days: int, returns: Sequence[Decimal]) -> HorizonBaseRate:
@@ -108,6 +117,31 @@ def unconditional_rates(
     """
     horizon_list = list(horizons)
     symbol_list = list(symbols)
+    buckets = _unconditional_returns(connection, as_of_date=as_of_date, symbols=symbol_list, horizons=horizon_list)
+
+    def window(values: list[Decimal]) -> list[Decimal]:
+        return values if max_bars is None else values[-max_bars:]
+
+    return {
+        symbol: tuple(_summarize(horizon, window(rows.get(horizon, []))) for horizon in horizon_list)
+        for symbol, rows in buckets.items()
+    }
+
+
+def _unconditional_returns(
+    connection: Connection,
+    *,
+    as_of_date: date,
+    symbols: Sequence[str],
+    horizons: Sequence[int],
+) -> dict[str, dict[int, list[Decimal]]]:
+    """심볼·지평별 **원값** 목록. SQL이 거래일 오름차순으로 준다.
+
+    `unconditional_rates`가 이것을 분포로 접고 `move_sizes`는 원값 그대로 쓴다.
+    조회를 한 자리에 둬야 컷오프와 look-ahead 규칙이 한 벌로 남는다.
+    """
+    horizon_list = list(horizons)
+    symbol_list = list(symbols)
     if not symbol_list or not horizon_list:
         return {}
 
@@ -119,14 +153,85 @@ def unconditional_rates(
         )
         for symbol, horizon_days, return_pct in cursor.fetchall():
             buckets[str(symbol)][int(horizon_days)].append(return_pct)
+    return buckets
 
-    def window(values: list[Decimal]) -> list[Decimal]:
-        return values if max_bars is None else values[-max_bars:]
 
-    return {
-        symbol: tuple(_summarize(horizon, window(rows.get(horizon, []))) for horizon in horizon_list)
-        for symbol, rows in buckets.items()
-    }
+def _percentile(ordered: Sequence[Decimal], fraction: float) -> Decimal:
+    """정렬된 목록의 분위수. 이웃 둘 사이를 선형 보간한다.
+
+    DB 없이 경계값을 테스트하기 위해 파이썬에 둔다(`_summarize`의 중앙값과 같은 이유).
+    표본이 하나면 그 값이고, 부르는 쪽이 빈 목록을 넘기지 않는다.
+    """
+    if len(ordered) == 1:
+        return ordered[0]
+    position = Decimal(str(fraction)) * (len(ordered) - 1)
+    lower = int(position)
+    upper = min(lower + 1, len(ordered) - 1)
+    weight = position - lower
+    return ordered[lower] + (ordered[upper] - ordered[lower]) * weight
+
+
+def move_sizes(
+    connection: Connection,
+    *,
+    as_of_date: date,
+    symbols: Sequence[str],
+    bars: int,
+) -> dict[str, MoveWindow]:
+    """심볼별 **하루 등락 크기**의 분포. `typical_move` 툴의 재료다.
+
+    프롬프트가 크기의 기준선을 "최근 실현 변동폭"이라 해 놓고 그 숫자를 아무도 주지 않아,
+    모델이 `daily_history`의 일봉을 눈대중해 값을 불렀다. 그 결과가 체계적 과소다 —
+    2026-08-28 장전 코스피 예측이 0.90퍼센트였고 같은 창의 실현 |등락| 중앙값은 1.53이었다.
+
+    **방향을 나눠 준다.** `up_return_pct`가 "상승한다면 얼마"인 조건부 값이라 앵커도
+    조건부여야 짝이 맞는다. 무방향 중앙값 하나만 주면 모델이 또 어림한다.
+
+    **SQL을 새로 만들지 않는다.** `select_unconditional_returns.sql`이 이미 심볼별 모든
+    거래일의 N거래일 뒤 등락률을 주고 `as_of_date` 컷오프와 look-ahead 가드를 갖고 있으며
+    **이 모듈이 이미 매 실행 부른다**(`flat_base_rates`). 파일을 복제하면 그 두 규칙이
+    두 벌로 갈려 한쪽만 고쳐지는 날이 온다.
+
+    표본이 `MIN_BASE_RATE_SAMPLE` 미만이면 통계가 전부 `None`이고 `sample_size`만 온다.
+    0으로 채우지 않는다 — "재지 않았다"와 "0이다"는 다른 뜻이고 모델은 숫자가 보이면 쓴다.
+    """
+    buckets = _unconditional_returns(connection, as_of_date=as_of_date, symbols=symbols, horizons=[1])
+    windows: dict[str, MoveWindow] = {}
+    for symbol, rows in buckets.items():
+        # SQL이 거래일 오름차순이라 뒤에서 자르면 최근 창이다.
+        recent = rows.get(1, [])[-bars:]
+        windows[symbol] = _move_window(bars, recent)
+    return windows
+
+
+def _move_window(bars: int, returns: Sequence[Decimal]) -> MoveWindow:
+    """등락률 목록 하나를 크기 분포로. 방향은 부호로 가른다."""
+    sample_size = len(returns)
+    ups = sorted(value for value in returns if value > 0)
+    downs = sorted(-value for value in returns if value < 0)
+    if sample_size < MIN_BASE_RATE_SAMPLE:
+        return MoveWindow(bars=bars, sample_size=sample_size, up_days=len(ups), down_days=len(downs))
+
+    magnitudes = sorted(abs(value) for value in returns)
+    return MoveWindow(
+        bars=bars,
+        sample_size=sample_size,
+        median_abs_pct=_rounded(_percentile(magnitudes, 0.5)),
+        p25_abs_pct=_rounded(_percentile(magnitudes, 0.25)),
+        p75_abs_pct=_rounded(_percentile(magnitudes, 0.75)),
+        p90_abs_pct=_rounded(_percentile(magnitudes, 0.9)),
+        up_days=len(ups),
+        # 방향별 중앙값은 그 방향의 날만 센다. 표본이 비면 `None`이다 — 한쪽으로만
+        # 움직인 창에서 0을 채우면 모델이 "그 방향은 안 움직인다"로 읽는다.
+        up_median_pct=_rounded(_percentile(ups, 0.5)) if ups else None,
+        down_days=len(downs),
+        down_median_pct=_rounded(_percentile(downs, 0.5)) if downs else None,
+    )
+
+
+def _rounded(value: Decimal) -> float:
+    """프롬프트에 실을 자리수. 크기 어림에 소수 셋째 자리는 거짓 정밀도다."""
+    return round(float(value), 2)
 
 
 def flat_base_rates(

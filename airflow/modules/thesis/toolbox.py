@@ -77,7 +77,9 @@ from modules.thesis.domain import (
     BASIS_POINT_KINDS,
     CLOSE_REF_SUFFIX,
     DART_VIEWER_URL,
+    DOMESTIC_COUNTRY,
     DOMESTIC_MAX_DAILY_CHANGE_PCT,
+    DOMESTIC_SESSION_KINDS,
     INDICATOR_KINDS,
     MACRO_KINDS,
     MAX_HISTORY_DAYS,
@@ -125,6 +127,7 @@ from modules.thesis.tools import (
     MarketBreadthRow,
     MarketFlowRow,
     MarketFundsRow,
+    MoveWindow,
     OpinionDetail,
     PendingExpectationDetail,
     ShortCreditRow,
@@ -133,6 +136,7 @@ from modules.thesis.tools import (
     StockFlowPayload,
     StockFlowSettledRow,
     SurpriseDetail,
+    TypicalMovePayload,
     UsCloseDetail,
 )
 from modules.utility import KST_TIMEZONE
@@ -282,6 +286,15 @@ class MarketFundsArgs(ToolArgs):
     )
 
 
+class TypicalMoveArgs(ToolArgs):
+    symbol: str = Field(
+        description=(
+            "이번 실행의 추론 대상 하나(KOSPI, KOSDAQ, 또는 종목 코드 6자리). "
+            "**대상 목록 밖은 거절된다** — 크기 앵커는 추론 대상에만 뜻이 있다."
+        )
+    )
+
+
 class DailyHistoryArgs(ToolArgs):
     symbol: str = Field(
         description=(
@@ -317,8 +330,10 @@ TOOL_DESCRIPTIONS: dict[str, str] = {
     ),
     "recent_disclosures": "추적 종목에 대해 최근 접수된 DART 공시. 회사명, 보고서명, 접수일, 감지 시각을 준다.",
     "macro_changes": (
-        "분석 창 동안 해외 지수·선물·환율이 얼마나 움직였나. 첫 봉 대비 마지막 봉의 변화를 준다. "
-        "금리 계열은 퍼센트가 아니라 bp 차이로 준다. "
+        "분석 창 동안 해외 지수·선물·환율·금리·채권선물·원자재·암호화폐가 얼마나 움직였나. "
+        "첫 봉 대비 마지막 봉의 변화를 준다. 금리 계열은 퍼센트가 아니라 bp 차이로 준다. "
+        "**국내 지수(코스피·코스닥)는 여기 안 나온다** — 창이 당일 09:00부터라 개장 갭이 빠져 "
+        "값이 하루 등락과 어긋난다. 국내 지수는 관측 상태가 전일 종가 기준으로 이미 준다. "
         "**밤사이 미국장이 얼마나 움직였나는 us_market_close로 본다** — 이 툴의 창 변화는 창 첫 봉 "
         "대비라 마감 직전 몇 시간만 쌓이는 현물 지수는 거의 0으로 보인다."
     ),
@@ -362,6 +377,15 @@ TOOL_DESCRIPTIONS: dict[str, str] = {
         "technical_snapshot은 마지막 확정 일봉 기준의 SMA20·SMA60·RSI14·MACD(라인·시그널·히스토그램)와 "
         "직전 20거래일 평균 대비 거래량 비율이다. as_of_date가 그 기준일이고, 표본이 60봉에 못 미치거나 "
         "가격이 하루에 35퍼센트 넘게 튄 구간이 있으면 null이다 — 0으로 채우지 않는다."
+    ),
+    "typical_move": (
+        "이 대상이 최근 하루에 실제로 얼마나 움직였나. **크기(up_return_pct·down_return_pct)를 "
+        "쓰기 전에 부르는 기준선이다.** 오른 날의 등락 중앙값과 내린 날의 등락 중앙값을 나눠 주고 "
+        "|등락|의 p25·중앙값·p75·p90도 함께 준다 — 조건부 크기의 짝이다. 창 둘(최근 20거래일과 "
+        "250거래일)을 나란히 줘서 지금이 평소보다 큰 구간인지 읽는다. "
+        "sample_size가 모자라면 통계가 null이다 — **재지 않았다는 뜻이지 0이 아니다.** "
+        "**장중 잔여 구간(지금 가격에서 마감까지)의 분포는 주지 않는다** — 분봉 이력이 짧아 셀 "
+        "표본이 없다. 값은 하루 전체 등락이고 장중 슬롯은 남은 시간만큼 줄여 쓴다."
     ),
     "short_and_credit": (
         "추적 종목의 최신 공매도 수량·비중, 대차 잔고, 신용융자 잔고. 셋이 서로의 재고라 "
@@ -526,6 +550,12 @@ class ThesisToolbox:
                 name="daily_history",
                 description=TOOL_DESCRIPTIONS["daily_history"],
                 args_schema=DailyHistoryArgs,
+            ),
+            StructuredTool.from_function(
+                func=self._record("typical_move", self._tool_typical_move),
+                name="typical_move",
+                description=TOOL_DESCRIPTIONS["typical_move"],
+                args_schema=TypicalMoveArgs,
             ),
             StructuredTool.from_function(
                 func=self._record("short_and_credit", self._tool_short_and_credit),
@@ -708,6 +738,46 @@ class ThesisToolbox:
                 )
                 for row in rows
             ]
+        )
+
+    def _tool_typical_move(self, symbol: str) -> str:
+        """크기의 기준선. **대상 목록 밖은 거절한다** — `past_theses`와 같은 형태다.
+
+        아무 심볼이나 물어보게 두면 예산만 쓰고 엉뚱한 자산에 앵커링한다. 덤으로
+        "없는 심볼" 분기가 통째로 사라진다.
+
+        **장중 잔여 구간은 안 준다.** `index_bar`의 코스피 분봉이 2026-08-18부터
+        9거래일뿐이라 `MIN_BASE_RATE_SAMPLE`을 못 채운다. 없는 표본으로 숫자를 지어내지
+        않고 그 사실을 `note`가 말한다.
+        """
+        from modules.technical.base_rate import MOVE_SIZE_BARS, RECENT_MOVE_BARS, move_sizes
+
+        self._charge()
+        code = str(symbol).strip()
+        if not self._subject_codes:
+            raise ToolLimitExceeded("이번 실행에는 대상 목록이 없어 typical_move를 쓸 수 없다")
+        if code not in self._subject_codes:
+            raise ToolLimitExceeded(f"대상 목록 밖이다: {code!r}. 쓸 수 있는 것은 {sorted(self._subject_codes)}")
+
+        as_of_date = self._as_of_at.astimezone(KST_TIMEZONE).date()
+        windows = {
+            bars: move_sizes(self._connection, as_of_date=as_of_date, symbols=[code], bars=bars).get(
+                code, MoveWindow(bars=bars, sample_size=0)
+            )
+            for bars in (RECENT_MOVE_BARS, MOVE_SIZE_BARS)
+        }
+        return self._body(
+            TypicalMovePayload(
+                symbol=code,
+                as_of_date=as_of_date,
+                axis="직전 세션 종가 → 그 세션 종가(1거래일)",
+                recent=windows[RECENT_MOVE_BARS],
+                baseline=windows[MOVE_SIZE_BARS],
+                note=(
+                    "하루 전체 등락이다. 장중 잔여 구간(지금 가격에서 마감까지)의 실현 분포는 "
+                    "분봉 이력이 짧아 아직 못 잰다 — 장중 슬롯은 남은 시간만큼 줄여 읽는다."
+                ),
+            )
         )
 
     def _tool_daily_history(self, symbol: str, days: int) -> str:
@@ -1173,7 +1243,16 @@ class ThesisToolbox:
 
     def _macro_changes(self, _arguments: dict[str, Any]) -> list[Evidence]:
         with self._connection.cursor() as cursor:
-            cursor.execute(WINDOW_CHANGES, (self._macro_window_start, self._as_of_at, list(MACRO_KINDS)))
+            cursor.execute(
+                WINDOW_CHANGES,
+                {
+                    "window_start": self._macro_window_start,
+                    "as_of_at": self._as_of_at,
+                    "kinds": list(MACRO_KINDS),
+                    "domestic_country": DOMESTIC_COUNTRY,
+                    "domestic_kinds": list(DOMESTIC_SESSION_KINDS),
+                },
+            )
             rows = cursor.fetchall()
         return [
             Evidence(

@@ -106,15 +106,18 @@ class PreOpenForecast:
             )
             for target in targets
         }
+        # 관측 상태를 두 번 만들지 않는다 — 축은 그 상태에서 파생하므로 값이 갈리면 안 된다.
+        observed = self._run.observed_state(session, targets)
         return self._run.build_and_store(
             try_number=try_number,
             run_kind=LlmRunKind.FORECAST,
             run_slot=RunSlot.PRE_OPEN,
             macro_window_start=self.macro_window_start(),
             targets=targets,
-            observed=self._run.observed_state(session, targets),
+            observed=observed,
             past=past,
             dag_run_id=dag_run_id,
+            baselines=common.session_baselines(observed, session) if session else {},
         )
 
 

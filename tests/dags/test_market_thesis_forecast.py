@@ -7,6 +7,7 @@
 
 import inspect
 from datetime import UTC, date, datetime, timedelta
+from decimal import Decimal
 from typing import Any, Self
 
 import pytest
@@ -14,6 +15,7 @@ from airflow.sdk.exceptions import AirflowFailException, AirflowSkipException
 
 from dags import market_thesis_forecast as dag_module
 from modules.thesis import common, forecast
+from modules.thesis.state import IndexObservation, ObservedState, StockObservation
 
 DAG = dag_module.market_thesis_forecast
 KST_MORNING = datetime(2026, 8, 20, 23, 35, tzinfo=UTC)  # KST 08:35
@@ -221,9 +223,12 @@ def test_run_hands_build_and_store_every_argument_it_requires(monkeypatch):
 
     monkeypatch.setattr(common.ThesisRun, "skip_unless_open", lambda self: None)
     monkeypatch.setattr(common.ThesisRun, "previous_open_day", lambda self: date(2026, 8, 20))
-    monkeypatch.setattr(
-        common.ThesisRun, "observed_state", lambda self, session, targets: {"session": str(session)}
+    observed = ObservedState(
+        session=date(2026, 8, 20),
+        index={"KOSPI": IndexObservation(close=6912.32, return_pct=1.53)},
+        stock={"005930": StockObservation(close=266000.0)},
     )
+    monkeypatch.setattr(common.ThesisRun, "observed_state", lambda self, session, targets: observed)
     monkeypatch.setattr(forecast.PreOpenForecast, "check_ready", lambda self: None)
     monkeypatch.setattr(store, "ThesisStore", FakeStore)
     monkeypatch.setattr(common.ThesisRun, "build_and_store", fake_build_and_store)
@@ -240,3 +245,10 @@ def test_run_hands_build_and_store_every_argument_it_requires(monkeypatch):
     # **장전만 과거 성적을 싣는다.** 리뷰 두 슬롯은 `past={}`다.
     assert received["past"] == {"005930": ()}
     assert pre_open._run.as_of_at == forecast.as_of(RUN_DATE)
+    # 장전의 축은 전 개장일 마감이고 `return_pct`는 정의상 0이다 — 기준가가 곧 그 종가라
+    # 그 사이에 온 것이 없다.
+    baselines = received["baselines"]
+    assert set(baselines) == {"KOSPI", "005930"}
+    assert baselines["KOSPI"].price == Decimal("6912.32")
+    assert baselines["KOSPI"].at == common.close_at(date(2026, 8, 20))
+    assert baselines["KOSPI"].return_pct == Decimal(0)

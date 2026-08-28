@@ -117,7 +117,19 @@ logger = logging.getLogger(__name__)
 #     이하라 그 칸을 매번 버렸다(실측: `intraday_midday` 넷 전부 up=0.0 down=0.0).
 #     확률과 이유는 살아 있었으므로 저장되는 추론 수는 같지만, **조건부 크기가 NULL이 아닌
 #     값으로 저장되기 시작하므로** 판을 가른다.
-PROMPT_VERSION = "12"
+# 13: `macro_changes`가 국내 지수를 안 준다(2026-08-28). 그 툴의 창이 당일 09:00부터라
+#     국내 정규장의 개장 갭이 통째로 빠지는데, 같은 대상을 관측 상태가 전일 종가 기준으로
+#     이미 주고 있어 모델이 한 프롬프트에서 코스피를 두 숫자로 봤다. 2026-08-27 장후
+#     실측이 최악의 모양이었다 — 근거 줄이 "코스피 -1.15퍼센트"인데 그날 실제는
+#     +1.53퍼센트로 **부호가 뒤집혔다.** YAML 문장은 안 바뀌고 툴이 돌려주는 행이
+#     달라진다(`DOMESTIC_SESSION_KINDS`). 모델이 보는 글자가 달라져 판을 가른다.
+# 14: 크기의 기준선이 `daily_history` 눈대중에서 `typical_move` 실측 분포로 옮겼고
+#     브레이크가 대칭이 됐다(2026-08-28). 전에는 "그보다 크게 쓰려면 근거를 대라"만 있어
+#     작게 부르는 데 아무 조건이 없었고, 실측이 그 방향으로 쏠렸다 — 지평 0 크기 채점
+#     3건 전부 과소, `return_error_pct` 평균 +0.50퍼센트포인트. 장전 코스피 예측 0.90에
+#     같은 창의 실현 |등락| 중앙값은 1.53이었다. **같은 판에 오차 폭 두 칸이 붙는다** —
+#     크기의 출발점과 폭의 출발점이 같은 툴의 분위수라 둘을 뗄 수 없다.
+PROMPT_VERSION = "14"
 
 # 채점 지평. KRX 영업일 수이고 달력일이 아니다. 0은 예측일 세션 하나다.
 HORIZON_DAYS: tuple[int, ...] = (0, 1, 3, 5)
@@ -170,7 +182,10 @@ MAX_TOOL_ROUNDS = 5
 # 걸렸는데 그때 누적이 54,555자로 `MAX_TOOL_RESULT_CHARS`의 절반뿐이었다 — 2026-08-26에
 # 문자 상한만 100,000으로 올리고 이 값을 그대로 둬서 호출 수가 먼저 말랐다. 32는 그 실측에
 # 여유를 더한 값이다.
-MAX_TOOL_CALLS = 32
+# **32이던 때 여유가 둘뿐이었다**(2026-08-28). 툴이 15개가 되면서 대상 넷마다
+# `typical_move`를 한 번씩 부르면 실측 26호출에 4가 더해져 30이다. 크기 앵커가 상한에
+# 걸려 못 불리면 이 단계가 고치려던 과소가 그대로 남는다. 36은 26+4에 여유를 더한 값이다.
+MAX_TOOL_CALLS = 36
 
 # 실행당 툴 결과 누적 문자 상한. 넘으면 그 뒤 호출을 거절한다. **폭주만 받는 안전망이다** —
 # 실질 브레이크는 `MAX_TOOL_CALLS`와 호출당 상한(`MAX_TOOL_RESULTS` × `MAX_ITEM_DETAIL_CHARS`)이
@@ -263,6 +278,20 @@ MACRO_KINDS: tuple[str, ...] = (
     "commodity",
     "crypto",
 )
+
+# `macro_changes`가 결과에서 빼는 심볼. **국내 지수만이다.**
+#
+# 장중·장후 슬롯의 창은 당일 09:00부터라(`common.open_at`) 국내 정규장의 개장 갭이 창
+# 밖으로 통째로 빠진다. 2026-08-27 실측: 코스피 창 변화가 -1.15퍼센트인데 전일 종가 대비는
+# +1.53퍼센트였다 — 부호가 뒤집혔고 그 값이 Slack 근거 줄에 그대로 찍혔다. 같은 대상을
+# 관측 상태가 이미 전일 종가 기준으로 주므로 정보 손실은 없다.
+#
+# **국가만으로 거르면 원/달러가 사라진다** — `USDKRW`·`JPYKRW`의 country가 `KR`이고
+# 그쪽은 24시간 호가라 창 변화가 뜻을 갖는다(2026-08-28 운영 DB 확인). 국내 지수선물도
+# 야간 세션이 09:00 개장을 이어 줘 이 왜곡을 안 탄다(같은 날 확인: KOSPI200 선물 봉이
+# 하루 24시간 연속). 그래서 국가와 종류를 **함께** 건다.
+DOMESTIC_COUNTRY = "KR"
+DOMESTIC_SESSION_KINDS: tuple[str, ...] = ("index",)
 
 # 값이 퍼센트라 변화를 bp로 읽어야 하는 종류. 4.65→4.70은 `+1.08%`가 아니라 `+5bp`다.
 BASIS_POINT_KINDS = frozenset({"rate"})
@@ -498,8 +527,11 @@ def return_error(
     outcome: ThesisDirection,
     up_return_pct: Decimal | None,
     down_return_pct: Decimal | None,
-) -> tuple[Decimal, Decimal] | None:
-    """크기 채점. `(predicted_return_pct, return_error_pct)`이고 잴 수 없으면 `None`이다.
+    up_return_band_pct: Decimal | None = None,
+    down_return_band_pct: Decimal | None = None,
+) -> tuple[Decimal, Decimal, Decimal | None] | None:
+    """크기 채점. `(predicted_return_pct, return_error_pct, predicted_band_pct)`이고
+    잴 수 없으면 `None`이다.
 
     **조건부 채점이다.** `up_return_pct`는 "상승한다면 얼마"라는 조건부 추정이므로
     **실현된 방향의 추정만** 실제와 대조한다. 방향을 틀렸는지는 `brier_score`가 이미
@@ -512,6 +544,13 @@ def return_error(
     틀렸나"는 알아도 모델이 늘 크게 부르는지 작게 부르는지를 못 읽는다 — 그것이
     프롬프트를 고칠 방향을 정한다. 실제값에 `abs`를 쓰는 이유는 저장한 추정이 부호 없는
     크기여서다(하락이면 실제는 음수, 추정은 양수).
+
+    **세 번째 값은 그 방향의 오차 폭 스냅샷이다.** 적중 여부를 여기서 계산해 돌려주지
+    않는다 — `abs(return_error_pct) <= predicted_band_pct`가 답이고 두 값이 이미 같은 행에
+    저장되기 때문이다. 파생값을 칸으로 만들면 어긋날 자리가 생긴다.
+
+    폭이 `None`이면 오차를 안 받던 판의 추론이다. **그때도 중심 채점은 그대로 한다** —
+    폭이 없다고 크기 채점까지 버리면 판 7~13의 표본이 통째로 사라진다.
     """
     predicted = {
         ThesisDirection.UP: up_return_pct,
@@ -520,7 +559,12 @@ def return_error(
     }[outcome]
     if predicted is None:
         return None
-    return predicted, abs(actual_return_pct) - predicted
+    band = {
+        ThesisDirection.UP: up_return_band_pct,
+        ThesisDirection.DOWN: down_return_band_pct,
+        ThesisDirection.FLAT: None,
+    }[outcome]
+    return predicted, abs(actual_return_pct) - predicted, band
 
 
 # ---------------------------------------------------------------------------
@@ -570,6 +614,28 @@ class Subject(BaseModel):
     kind: ThesisSubjectKind
     code: str
     label: str
+
+
+class ForecastBaseline(BaseModel):
+    """예측의 축. 이 가격·이 시각에서 그날 정규장 마감까지가 확률과 크기의 창이다.
+
+    **`state.py`가 아니라 여기 있는 이유**는 이 값이 프롬프트에도 `input_state` JSONB에도
+    들어가지 않아서다. 저 모듈은 "모델이 보는 상태의 모양"이고 이것은 `thesis` 행의 칸이다.
+
+    **`at`이 `as_of_at`에서 유도되지 않는다.** 장중 슬롯은 기준 시각 **직전** 봉을 보고,
+    수집이 밀리면 `intraday.BAR_STALENESS`(15분)까지 앞선 봉이다. 그 차이를 버리면
+    "12:35 기준"이라고 적어 놓고 12:20 값을 보여 주는 줄이 생긴다.
+
+    `return_pct`는 **직전 세션 확정 종가에서 `price`까지 이미 온** 등락이다. 예측 크기와
+    축이 다르다 — 이쪽은 "오늘 여기까지"이고 예측은 "여기서 마감까지"다. 둘을 더하면
+    하루 등락이 되고, 그 덧셈이 가능해야 읽는 쪽이 슬롯 규칙 없이 값을 읽는다.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    price: Decimal
+    at: AwareDatetime
+    return_pct: Decimal
 
 
 def _shorten(text: str) -> str:

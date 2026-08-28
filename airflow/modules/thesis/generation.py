@@ -131,6 +131,10 @@ RETURN_BOUNDS = {
     "maximum": float(MAX_EXPECTED_RETURN_PCT),
 }
 
+# 오차 폭의 wire 스키마 경계. **하한이 0 초과다** — 폭이 0이라는 것은 "정확히 맞힌다"는
+# 뜻이라 거짓이고, 크기와 달리 `flat` 임계와는 무관하다(폭 0.1퍼센트포인트는 뜻이 있다).
+BAND_BOUNDS = {"exclusiveMinimum": 0.0, "maximum": float(MAX_EXPECTED_RETURN_PCT)}
+
 
 class ThesisAnswer(BaseModel):
     """모델이 subject 하나에 대해 낸 답. 검증 전 원본이다."""
@@ -153,6 +157,10 @@ class ThesisAnswer(BaseModel):
     # 크기 칸이 매번 비어 있었다. 지키지 않는 제공처면 지금과 같다(`0`이 와서 버려진다).
     up_return_pct: float | None = Field(default=None, ge=0, json_schema_extra=RETURN_BOUNDS)
     down_return_pct: float | None = Field(default=None, ge=0, json_schema_extra=RETURN_BOUNDS)
+    # 위 크기의 ± 폭(퍼센트포인트). 상한이 아니라 폭이다 — 구간이 `크기 ± 이 값`이다.
+    # 여기도 Pydantic 검증은 느슨하고 정합성은 `normalize_band_pct`가 그 칸만 버린다.
+    up_return_band_pct: float | None = Field(default=None, ge=0, json_schema_extra=BAND_BOUNDS)
+    down_return_band_pct: float | None = Field(default=None, ge=0, json_schema_extra=BAND_BOUNDS)
     up_reasoning: str = ""
     down_reasoning: str = ""
     flat_reasoning: str = ""
@@ -208,6 +216,9 @@ class ThesisDraft(BaseModel):
     # 확률만 있던 판(6 이하)과 같은 모양으로 저장된다.
     up_return_pct: Decimal | None = None
     down_return_pct: Decimal | None = None
+    # 그 크기의 ± 폭. 중심값이 없으면 이 값도 없다(`ck_thesis_return_band_needs_center`).
+    up_return_band_pct: Decimal | None = None
+    down_return_band_pct: Decimal | None = None
     up_reasoning: str
     down_reasoning: str
     flat_reasoning: str
@@ -261,6 +272,27 @@ def normalize_return_pct(value: float | None) -> Decimal | None:
         return None
     amount = Decimal(str(value))
     if amount <= FLAT_THRESHOLD_PCT[0] or amount > MAX_EXPECTED_RETURN_PCT:
+        return None
+    return amount.quantize(RETURN_QUANTUM, rounding=ROUND_HALF_UP)
+
+
+def normalize_band_pct(value: float | None, center: Decimal | None) -> Decimal | None:
+    """오차 폭 하나를 검증한다. 규칙을 어기면 `None`이고 **그 칸만** 버린다.
+
+    거르는 것 셋.
+
+    - 중심값이 없다 — 폭만 있는 구간은 읽을 수 없다(`ck_thesis_return_band_needs_center`).
+    - `0` 이하이거나 `MAX_EXPECTED_RETURN_PCT` 초과 — 앞은 "정확히 맞힌다"는 거짓이고
+      뒤는 폭주다. **자르지 않는다** — clamp하면 상한이 거짓 신호가 된다.
+    - **중심값보다 크다** — `mid ± band`의 하한이 0 아래로 내려가 방향이 뒤집힌다.
+      "하락 0.5퍼센트 ±0.9퍼센트포인트"는 상승도 포함하는 구간이라 방향의 크기가 아니다.
+
+    중심은 살리고 폭만 버린다. `normalize_return_pct`와 같은 판단이다.
+    """
+    if value is None or center is None:
+        return None
+    amount = Decimal(str(value))
+    if amount <= 0 or amount > MAX_EXPECTED_RETURN_PCT or amount > center:
         return None
     return amount.quantize(RETURN_QUANTUM, rounding=ROUND_HALF_UP)
 
@@ -510,6 +542,8 @@ class ThesisBuilder:
                 continue
             up_return = normalize_return_pct(answer.up_return_pct)
             down_return = normalize_return_pct(answer.down_return_pct)
+            up_band = normalize_band_pct(answer.up_return_band_pct, up_return)
+            down_band = normalize_band_pct(answer.down_return_band_pct, down_return)
             # 크기 하나가 규칙을 어겨도 추론은 살린다(`normalize_return_pct`). 다만 조용히
             # 버리면 프롬프트가 안 먹히는 것을 못 본다.
             if (answer.up_return_pct is not None and up_return is None) or (
@@ -529,6 +563,8 @@ class ThesisBuilder:
                     prob_flat=probabilities[2],
                     up_return_pct=up_return,
                     down_return_pct=down_return,
+                    up_return_band_pct=up_band,
+                    down_return_band_pct=down_band,
                     up_reasoning=reasonings[0],
                     down_reasoning=reasonings[1],
                     flat_reasoning=reasonings[2],

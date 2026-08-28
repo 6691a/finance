@@ -15,9 +15,22 @@
 -- 센다. 주석 안의 것도 자리 수에 들어가 실행이 거절된다(2026-08-21 실측).
 --
 -- `kind` 목록은 파라미터다. 개별 종목(`equity`)은 여기서 빼고 세션 등락률 SQL이 따로 준다.
+--
+-- **국내 지수는 뺀다.** 장중·장후 슬롯의 창이 당일 09:00부터라 국내 정규장의 개장 갭이
+-- 창 밖으로 통째로 빠진다. 2026-08-27 실측: 코스피 창 변화가 마이너스 1.15인데 전일 종가
+-- 대비는 플러스 1.53이었다 — 부호가 뒤집혔고 그 값이 근거 줄에 그대로 찍혔다. 국내 지수는
+-- 관측 상태가 전일 종가 기준으로 이미 준다.
+--
+-- **국가만으로 거르면 틀린다.** 원/달러와 엔/원의 country가 KR이고 그쪽은 24시간 호가라
+-- 창 변화가 뜻을 갖는다. 국내 지수선물도 야간 세션이 09:00 개장을 이어 줘서 갭이 없다
+-- (2026-08-28 확인: KOSPI200 선물 봉이 하루 24시간 연속). 그래서 국가와 종류를 함께 건다.
+--
+-- **파라미터가 이름 방식이다.** 술어가 늘면서 위치 방식으로는 어느 자리가 무엇인지
+-- 읽히지 않는다. psycopg는 한 문장에서 위치와 이름을 섞지 못하므로 전부 바꾼다
+-- (같은 디렉터리 `select_thesis_us_close.sql`과 같은 형태다).
 WITH bounds AS (
-    SELECT %s::timestamptz AS window_start,
-           %s::timestamptz AS as_of_at
+    SELECT %(window_start)s::timestamptz AS window_start,
+           %(as_of_at)s::timestamptz AS as_of_at
 ),
 windowed AS (
     SELECT bar.provider,
@@ -47,5 +60,6 @@ FROM windowed
 JOIN quote_symbol AS symbol
   ON symbol.provider = windowed.provider
  AND symbol.symbol = windowed.symbol
-WHERE symbol.kind = ANY(%s)
+WHERE symbol.kind = ANY(%(kinds)s)
+  AND NOT (symbol.country = %(domestic_country)s AND symbol.kind = ANY(%(domestic_kinds)s))
 ORDER BY symbol.kind, windowed.symbol

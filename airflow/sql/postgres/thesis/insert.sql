@@ -10,7 +10,12 @@
 -- 채점 컬럼 넷은 여기서 채우지 않는다. `update_outcome.sql`이 나중에 채운다.
 --
 -- `up_return_pct`·`down_return_pct`는 방향별 **조건부** 크기다(판 7부터). 모델이 안 주거나
--- 규칙을 어기면 NULL이고 확률·이유는 그대로 들어간다.
+-- 규칙을 어기면 NULL이고 확률·이유는 그대로 들어간다. `*_return_band_pct` 둘은 그 크기의
+-- 오차 폭이고 같은 규칙을 따른다.
+--
+-- `base_price`·`base_at`·`base_return_pct`는 그 크기와 확률이 **무엇 대비인가**다(15단계).
+-- **예측 슬롯(장전·장중)에만 들어간다** — 장후 둘은 채점 대상이 아니라 예측의 축이 없다.
+-- 셋은 함께 있거나 함께 없다(`ck_thesis_base_all_or_none`).
 --
 -- `llm_run_id`는 이 추론을 만든 대화다(13단계). 원장이 없던 때의 행은 NULL이라 nullable이고,
 -- 원장 쓰기가 실패해도 추론은 들어가야 하므로 여기서 강제하지 않는다.
@@ -30,6 +35,11 @@ INSERT INTO thesis (
     prob_flat,
     up_return_pct,
     down_return_pct,
+    up_return_band_pct,
+    down_return_band_pct,
+    base_price,
+    base_at,
+    base_return_pct,
     up_reasoning,
     down_reasoning,
     flat_reasoning,
@@ -38,6 +48,7 @@ INSERT INTO thesis (
     llm_model,
     prompt_version,
     llm_run_id
-) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
+          %s, %s, %s, %s, %s, %s, %s, %s)
 ON CONFLICT ON CONSTRAINT uq_thesis_natural_key DO NOTHING
 RETURNING id

@@ -8,8 +8,11 @@
 -- 경우가 있다. 채점이 종가 결측으로 실패한 날 해설만 돌면 그렇게 된다. 그때 `DO NOTHING`이면
 -- 그 지평은 영영 채점되지 않는다.
 --
--- **크기 채점 둘은 방향 채점과 같은 트랜잭션·같은 행이다**(판 7부터). 실현이 `flat`이거나
+-- **크기 채점 셋은 방향 채점과 같은 트랜잭션·같은 행이다**(판 7부터). 실현이 `flat`이거나
 -- 그 방향의 추정이 없으면 NULL이고, 그것을 정하는 것은 `thesis.domain.return_error`다.
+--
+-- `predicted_band_pct`는 실현 방향의 오차 폭 스냅샷이다(15단계). **적중 여부 칸은 없다** —
+-- `abs(return_error_pct) <= predicted_band_pct`가 답이고 두 칸이 이미 이 행에 있다.
 INSERT INTO thesis_outcome (
     thesis_id,
     horizon_days,
@@ -20,8 +23,9 @@ INSERT INTO thesis_outcome (
     actual_outcome,
     brier_score,
     predicted_return_pct,
-    return_error_pct
-) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+    return_error_pct,
+    predicted_band_pct
+) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
 ON CONFLICT ON CONSTRAINT uq_thesis_outcome_natural_key DO UPDATE SET
     evaluated_at = EXCLUDED.evaluated_at,
     actual_return_pct = EXCLUDED.actual_return_pct,
@@ -29,5 +33,6 @@ ON CONFLICT ON CONSTRAINT uq_thesis_outcome_natural_key DO UPDATE SET
     brier_score = EXCLUDED.brier_score,
     predicted_return_pct = EXCLUDED.predicted_return_pct,
     return_error_pct = EXCLUDED.return_error_pct,
+    predicted_band_pct = EXCLUDED.predicted_band_pct,
     updated_at = now()
 WHERE thesis_outcome.evaluated_at IS NULL

@@ -17,7 +17,7 @@ from dags import market_thesis_intraday as dag_module
 from modules.technical import base_rate
 from modules.thesis import common, intraday
 from modules.thesis.domain import SLOT_LABELS, ThesisSubjectKind
-from modules.thesis.state import INTRADAY_SLOT_TIMES, IntradayObservation, RunSlot
+from modules.thesis.state import INTRADAY_SLOT_TIMES, IntradayObservation, ObservedState, RunSlot
 
 DAG = dag_module.market_thesis_intraday
 RUN_DATE = date(2026, 8, 26)
@@ -26,6 +26,9 @@ MIDDAY_AS_OF = datetime(2026, 8, 26, 3, 35, tzinfo=UTC)
 # KST 10:35 = UTC 01:35. **더 이상 도는 슬롯이 아니다** — 이 시각은 "그날 앞서 있었던 일"의
 # 자리로만 쓴다(옛 `intraday_morning` 행과 장전 행이 되돌아보기에 실린다).
 MORNING_AS_OF = datetime(2026, 8, 26, 1, 35, tzinfo=UTC)
+# 슬롯이 실제로 본 봉의 시각. **MIDDAY_AS_OF보다 5분 앞이다** — 슬롯은 기준 시각
+# 직전 봉을 보고 수집이 밀리면 더 벌어진다(2026-08-28 실측이 정확히 이 모양이었다).
+BAR_AT = datetime(2026, 8, 26, 3, 30, tzinfo=UTC)
 
 
 # --- DAG ---------------------------------------------------------------------
@@ -418,9 +421,12 @@ def test_run_hands_build_and_store_every_argument_it_requires(monkeypatch):
 
     monkeypatch.setattr(common.ThesisRun, "skip_unless_open", lambda self: None)
     monkeypatch.setattr(intraday.IntradayForecast, "check_ready", lambda self, targets: {})
-    monkeypatch.setattr(
-        intraday.IntradayForecast, "observed_state", lambda self, targets, bars: {"intraday": {}}
+    observed = ObservedState(
+        intraday={
+            "KOSPI": IntradayObservation(price=6825.11, return_pct=-1.26, bar_at=BAR_AT),
+        }
     )
+    monkeypatch.setattr(intraday.IntradayForecast, "observed_state", lambda self, targets, bars: observed)
     monkeypatch.setattr(intraday.IntradayForecast, "same_day", lambda self, targets, bars: {})
     monkeypatch.setattr(store, "ThesisStore", FakeStore)
     monkeypatch.setattr(common.ThesisRun, "build_and_store", fake_build_and_store)
@@ -435,3 +441,9 @@ def test_run_hands_build_and_store_every_argument_it_requires(monkeypatch):
     assert received["macro_window_start"] == common.open_at(RUN_DATE)
     assert received["same_day"] == {}
     assert run._run.as_of_at == intraday.as_of(RUN_DATE, RunSlot.INTRADAY_MIDDAY)
+    # **축의 시각은 `as_of_at`이 아니라 그 슬롯이 실제로 본 봉의 `bar_at`이다.** 수집이
+    # 밀리면 둘이 최대 `BAR_STALENESS`만큼 벌어진다.
+    baseline = received["baselines"]["KOSPI"]
+    assert baseline.at == BAR_AT != run._run.as_of_at
+    assert baseline.price == Decimal("6825.11")
+    assert baseline.return_pct == Decimal("-1.26")

@@ -241,3 +241,88 @@ def test_the_signal_baseline_still_uses_the_whole_history():
 
     assert rates[("KOSPI", "sma_cross", "up")].unconditional[0].sample_size == len(returns)
 
+
+
+# --- 크기 앵커 (`typical_move`의 재료) ----------------------------------------
+
+
+def test_a_thin_window_reports_its_sample_size_and_nothing_else():
+    """**"재지 않았다"와 "0이다"는 다른 뜻이다.** 모델은 숫자가 보이면 쓴다."""
+    returns = [1.0, -1.0] * ((base_rate.MIN_BASE_RATE_SAMPLE - 1) // 2)
+    connection = FakeConnection([], unconditional_rows(returns))
+
+    window = base_rate.move_sizes(connection, as_of_date=AS_OF, symbols=("KOSPI",), bars=250)["KOSPI"]
+
+    assert window.sample_size == len(returns)
+    assert window.median_abs_pct is None
+    assert window.p90_abs_pct is None
+    # 방향별 일수는 표본이 얇아도 온다 — 세는 데 분포가 필요 없다.
+    assert (window.up_days, window.down_days) == (9, 9)
+
+
+def test_the_window_splits_the_median_by_direction():
+    """`up_return_pct`가 "상승한다면 얼마"인 조건부 값이라 앵커도 조건부여야 짝이 맞는다."""
+    # 오른 날 20건(전부 2.0), 내린 날 20건(전부 -1.0).
+    connection = FakeConnection([], unconditional_rows([2.0] * 20 + [-1.0] * 20))
+
+    window = base_rate.move_sizes(connection, as_of_date=AS_OF, symbols=("KOSPI",), bars=250)["KOSPI"]
+
+    assert (window.up_days, window.up_median_pct) == (20, 2.0)
+    # 내린 날 중앙값은 **양수 크기**다. 부호를 남기면 크기 칸과 축이 어긋난다.
+    assert (window.down_days, window.down_median_pct) == (20, 1.0)
+
+
+def test_a_one_sided_window_leaves_the_missing_direction_null():
+    """한쪽으로만 움직인 창에서 0을 채우면 모델이 "그 방향은 안 움직인다"로 읽는다."""
+    connection = FakeConnection([], unconditional_rows([1.0] * 25))
+
+    window = base_rate.move_sizes(connection, as_of_date=AS_OF, symbols=("KOSPI",), bars=250)["KOSPI"]
+
+    assert window.up_median_pct == 1.0
+    assert window.down_days == 0
+    assert window.down_median_pct is None
+
+
+def test_the_percentiles_interpolate_between_neighbours():
+    """분위수가 파이썬에 있는 이유가 이 경계값이다 — DB 없이 확인한다."""
+    # |등락| 1..20. p25는 위치 0.25*(20-1)=4.75 → 5와 6 사이의 0.75 지점 = 5.75.
+    connection = FakeConnection([], unconditional_rows([float(value) for value in range(1, 21)]))
+
+    window = base_rate.move_sizes(connection, as_of_date=AS_OF, symbols=("KOSPI",), bars=250)["KOSPI"]
+
+    assert window.p25_abs_pct == 5.75
+    assert window.median_abs_pct == 10.5
+    assert window.p75_abs_pct == 15.25
+    assert window.p90_abs_pct == 18.1
+
+
+def test_the_recent_window_is_cut_from_the_end():
+    """SQL이 거래일 오름차순으로 주므로 최근 창은 **뒤**에서 자른다."""
+    # 옛 100건은 0.5, 최근 25건은 3.0.
+    connection = FakeConnection([], unconditional_rows([0.5] * 100 + [3.0] * 25))
+
+    window = base_rate.move_sizes(connection, as_of_date=AS_OF, symbols=("KOSPI",), bars=25)["KOSPI"]
+
+    assert window.sample_size == 25
+    assert window.median_abs_pct == 3.0
+
+
+def test_the_anchor_reuses_the_unconditional_query():
+    """**SQL을 복제하지 않는다.** 컷오프와 look-ahead 규칙이 두 벌로 갈리면 한쪽만 고쳐진다."""
+    connection = FakeConnection([], unconditional_rows([1.0] * 30))
+
+    base_rate.move_sizes(connection, as_of_date=AS_OF, symbols=("KOSPI",), bars=250)
+
+    statement, params = next((s, p) for s, p in connection.calls if "무조건 기저" in s)
+    assert statement == base_rate.UNCONDITIONAL_RETURNS
+    # 하루 축이다. 크기의 채점 창이 예측일 세션 하나라 그것과 같아야 한다.
+    assert params["horizons"] == [1]
+    assert params["as_of_date"] == AS_OF
+
+
+def test_the_recent_window_can_actually_produce_statistics():
+    """`RECENT_MOVE_BARS`를 `MIN_BASE_RATE_SAMPLE`보다 좁히면 통계가 늘 null이다.
+
+    그러면 "요즘이 평소보다 큰가"를 묻는 창이 아무 것도 못 말한다.
+    """
+    assert base_rate.RECENT_MOVE_BARS >= base_rate.MIN_BASE_RATE_SAMPLE

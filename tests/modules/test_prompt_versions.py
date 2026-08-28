@@ -64,7 +64,16 @@ PROMPT_HASHES: dict[tuple[str, str], str] = {
     # 실제 13%였다. "창이 짧으면 flat이 잦다"는 문장을 실측으로 뒤집고(장중 12~25%,
     # 하루 13%) 기준선의 두 배를 상한으로 못박았다.
     ("thesis_generation", "12"): "26997dc850158ca01af32d66269b30f74c766e2e62ee70da68ce6d1ece576be1",
+    # 판 13은 **같은 해시다.** YAML 문장은 그대로이고 `macro_changes`가 돌려주는 행에서
+    # 국내 지수가 빠졌다. 모델이 보는 글자가 달라져 판을 가른다.
+    ("thesis_generation", "13"): "26997dc850158ca01af32d66269b30f74c766e2e62ee70da68ce6d1ece576be1",
+    # 판 14는 `## 크기` 절을 통째로 바꿔 해시가 갈린다. 기준선이 `typical_move`로 옮겼고
+    # 브레이크가 대칭이 됐으며 오차 폭 두 칸이 붙었다.
+    ("thesis_generation", "14"): "7146c65c9150ff8fd600792e9a7f4c4c7c57e12de08911562720379de944c6e8",
     ("thesis_narrative", "2"): "1baea1c554c90619576036db58ad42d2a1e24052fc8ab982978e605c6e696b8b",
+    # 판 3은 **같은 해시다.** YAML 문장은 그대로이고 자리표시자에 들어가는 값의 줄 수만
+    # 늘었다(예측의 축, 밴드 적중). 모델이 보는 글자가 달라져 판을 가른다.
+    ("thesis_narrative", "3"): "1baea1c554c90619576036db58ad42d2a1e24052fc8ab982978e605c6e696b8b",
 }
 
 # 현재 판을 어디서 읽는지. 표의 키와 대조하는 데만 쓴다.

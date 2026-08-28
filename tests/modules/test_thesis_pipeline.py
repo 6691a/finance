@@ -26,6 +26,8 @@ from modules.technical import base_rate
 from modules.technical.indicators import TECHNICAL_LOOKBACK_BARS
 from modules.thesis.domain import (
     DART_VIEWER_URL,
+    DOMESTIC_COUNTRY,
+    DOMESTIC_SESSION_KINDS,
     FLAT_THRESHOLD_PCT,
     HORIZON_DAYS,
     MAX_ITEM_DETAIL_CHARS,
@@ -83,6 +85,7 @@ from modules.thesis.store import (
     ThesisStore,
 )
 from modules.thesis.toolbox import (
+    TOOL_DESCRIPTIONS,
     ThesisToolbox,
     ToolLimitExceeded,
     tool_node,
@@ -377,6 +380,19 @@ def test_grading_scan_covers_every_horizon_and_has_no_date_limit():
     assert "thesis.run_date >" not in predicate
 
 
+def test_the_grade_query_still_finds_the_base_price_of_rows_written_before_the_column():
+    """**컬럼이 원본이고 JSONB는 하위 호환 갈래다.**
+
+    이 조회에 날짜 상한이 없어 `base_price` 칸이 생기기 전 장중 행의 미채점 지평 1·3·5가
+    계속 돌아온다. 컬럼만 읽으면 그 행들이 조용히 영영 미채점이 된다.
+    """
+    statement = body(PENDING_GRADES)
+
+    assert "coalesce(" in statement
+    assert "thesis.base_price" in statement
+    assert "ARRAY['intraday', thesis.subject_code, 'price']" in statement
+
+
 def test_the_grade_write_never_overwrites_a_score():
     statement = body(INSERT_GRADE)
 
@@ -576,6 +592,38 @@ def test_macro_tool_excludes_the_boundary_bar_and_reads_only_the_view():
     assert "last_close" in query
 
 
+def test_macro_tool_leaves_domestic_indexes_to_the_observed_state():
+    """**창이 당일 09:00부터라 국내 정규장의 개장 갭이 통째로 빠진다.**
+
+    2026-08-27 실측이 최악의 모양이었다 — 근거 줄이 "코스피 -1.15퍼센트"인데 그날 실제는
+    +1.53퍼센트로 부호가 뒤집혔다(6,808.21 → 갭 상승 6,974.07 → 6,912.12). 같은 대상을
+    관측 상태가 전일 종가 기준으로 이미 주므로 정보 손실은 없다.
+    """
+    query = body(TOOL_WINDOW_CHANGES)
+
+    assert "symbol.country = %(domestic_country)s" in query
+    assert "symbol.kind = ANY(%(domestic_kinds)s)" in query
+    # 종류가 `index` 하나다. **국가만으로 거르면 원/달러가 사라진다** — USDKRW·JPYKRW의
+    # country가 KR이고 24시간 호가라 창 변화가 뜻을 갖는다. 국내 지수선물도 야간 세션이
+    # 09:00 개장을 이어 줘 이 왜곡을 안 탄다.
+    assert DOMESTIC_SESSION_KINDS == ("index",)
+    assert DOMESTIC_COUNTRY == "KR"
+    # 툴 설명이 그 사실을 밝힌다 — 안 밝히면 모델이 "국내 지수는 안 움직였다"로 읽는다.
+    assert "국내 지수" in TOOL_DESCRIPTIONS["macro_changes"]
+
+
+def test_the_macro_tool_binds_its_predicates_by_name():
+    """술어가 늘면서 위치 방식으로는 어느 자리가 무엇인지 읽히지 않는다.
+
+    psycopg는 한 문장에서 위치와 이름을 섞지 못하므로 파일이 통째로 이름 방식이다.
+    """
+    query = body(TOOL_WINDOW_CHANGES)
+
+    assert "%s" not in query
+    for name in ("window_start", "as_of_at", "kinds", "domestic_country", "domestic_kinds"):
+        assert f"%({name})s" in query
+
+
 def test_us_close_tool_reads_the_last_bar_of_us_symbols_only():
     query = body(TOOL_US_CLOSE)
 
@@ -595,6 +643,9 @@ def test_us_close_tool_reads_the_last_bar_of_us_symbols_only():
 # --- Toolbox ----------------------------------------------------------------
 
 AS_OF = datetime(2026, 8, 21, 6, 30, tzinfo=UTC)
+# 예측의 축이 나온 시각. **AS_OF와 일부러 다르다** — 장중은 기준 시각 직전 봉을 보므로
+# 둘을 같은 값으로 두면 `base_at`이 `as_of_at`에서 유도된다는 착각을 테스트가 굳힌다.
+BASE_AT = datetime(2026, 8, 20, 6, 30, tzinfo=UTC)
 MACRO_WINDOW_START = datetime(2026, 8, 20, 6, 30, tzinfo=UTC)
 
 
@@ -1216,6 +1267,7 @@ def test_the_tool_schema_is_derived_from_the_code_not_hand_written():
         "stock_investor_flows",
         "market_funds",
         "daily_history",
+        "typical_move",
         "short_and_credit",
         "analyst_opinions",
         "event_surprises",
@@ -2047,6 +2099,11 @@ def stored_row(thesis_id: int = 1, code: str = "KOSPI") -> tuple:
         PROMPT_VERSION,
         Decimal("0.80"),
         Decimal("1.20"),
+        Decimal("0.30"),
+        Decimal("0.40"),
+        Decimal("6912.32000000"),
+        BASE_AT,
+        Decimal("0.0000"),
     )
 
 
@@ -2431,6 +2488,35 @@ def test_past_theses_refuses_a_subject_outside_this_run():
         box.run("past_theses", {"subject_code": "AAPL", "n": 3})
 
 
+def test_typical_move_refuses_a_symbol_outside_this_run():
+    """크기 앵커는 추론 대상에만 뜻이 있다.
+
+    아무 심볼이나 물어보게 두면 예산만 쓰고 엉뚱한 자산에 앵커링한다.
+    """
+    box = toolbox(FakeConnection(), subject_codes=["KOSPI"])
+
+    with pytest.raises(ToolLimitExceeded, match="대상 목록 밖"):
+        box.run("typical_move", {"symbol": "SP500_FUT"})
+
+
+def test_typical_move_carries_its_axis_and_what_it_cannot_measure():
+    """**축과 못 재는 것을 값과 함께 나른다.**
+
+    값만 주면 하루치인지 장중 잔여 구간인지 모른다. 장중 잔여 구간의 실현 분포는 분봉
+    이력이 짧아(코스피가 2026-08-18부터 9거래일) 표본이 안 돼서 주지 않는다.
+    """
+    connection = FakeConnection({"base_rate": [("KOSPI", 1, Decimal("1.5"))] * 30})
+    box = toolbox(connection, subject_codes=["KOSPI"])
+
+    payload = json.loads(box.run("typical_move", {"symbol": "KOSPI"}))
+
+    assert payload["symbol"] == "KOSPI"
+    assert payload["axis"] == "직전 세션 종가 → 그 세션 종가(1거래일)"
+    assert "장중 잔여 구간" in payload["note"]
+    # 창 둘을 나란히 준다 — 둘이 벌어져 있으면 지금이 평소보다 큰 구간이라는 뜻이다.
+    assert payload["recent"]["bars"] < payload["baseline"]["bars"]
+
+
 def test_past_theses_is_unavailable_without_a_subject_list():
     connection = FakeConnection()
     box = ThesisToolbox(connection, as_of_at=AS_OF, macro_window_start=MACRO_WINDOW_START, watched_codes=["005930"])
@@ -2541,11 +2627,8 @@ def test_pending_narratives_carry_their_slot():
             "u",
             "d",
             "f",
-            None,
-            None,
-            None,
-            None,
-            None,
+            # 채점 셋, 크기 채점 셋, 축 셋. 아직 안 온 지평이라 전부 비어 있다.
+            *(None,) * 9,
         )
 
     connection = FakeConnection({"select_by_run": [row(11, "post_close"), row(12, "pre_open")]})
@@ -3531,7 +3614,26 @@ def test_return_error_grades_only_the_realised_direction():
     )
 
     # 하락이 실현됐으니 down 쪽 추정만 본다. |−1.50| − 1.20 = +0.30 (과소추정)
-    assert graded == (Decimal("1.20"), Decimal("0.30"))
+    # 오차 폭을 안 받던 판의 행이라 셋째 칸은 `None`이다. **중심 채점은 그대로 한다** —
+    # 폭이 없다고 크기 채점까지 버리면 판 7~13의 표본이 통째로 사라진다.
+    assert graded == (Decimal("1.20"), Decimal("0.30"), None)
+
+
+def test_return_error_snapshots_the_band_of_the_realised_direction():
+    """적중 여부를 여기서 계산하지 않는다 — `abs(오차) <= 폭`이고 두 값이 같은 행에 남는다."""
+    from modules.thesis.domain import return_error
+
+    graded = return_error(
+        actual_return_pct=Decimal("-1.50"),
+        outcome=ThesisDirection.DOWN,
+        up_return_pct=Decimal("0.80"),
+        down_return_pct=Decimal("1.20"),
+        up_return_band_pct=Decimal("0.20"),
+        down_return_band_pct=Decimal("0.40"),
+    )
+
+    # 실현이 하락이라 하락 쪽 폭만 스냅샷된다. |+0.30| <= 0.40이니 이 예측은 밴드 적중이다.
+    assert graded == (Decimal("1.20"), Decimal("0.30"), Decimal("0.40"))
 
 
 def test_return_error_keeps_the_sign_so_over_and_under_are_distinguishable():
@@ -3545,7 +3647,7 @@ def test_return_error_keeps_the_sign_so_over_and_under_are_distinguishable():
         down_return_pct=None,
     )
 
-    assert over == (Decimal("2.00"), Decimal("-1.50"))
+    assert over == (Decimal("2.00"), Decimal("-1.50"), None)
 
 
 def test_return_error_skips_flat_and_missing_estimates():
@@ -3626,6 +3728,47 @@ def test_a_bad_size_drops_only_that_column_and_keeps_the_thesis():
     assert drafts[0].prob_up > 0
 
 
+def _parsed(**overrides) -> Any:
+    payload = thesis_payload(refs=[], **overrides)
+    box = toolbox(FakeConnection({}))
+    builder = ThesisBuilder(scripted(answer_message(payload)), box)
+    return builder.parse(json.dumps({"theses": [payload]}), SUBJECTS[:1])[0]
+
+
+def test_the_error_band_survives_when_it_fits_inside_its_centre():
+    draft = _parsed(up_return_pct=1.2, up_return_band_pct=0.4, down_return_pct=1.4, down_return_band_pct=0.5)
+
+    assert draft.up_return_band_pct == Decimal("0.40")
+    assert draft.down_return_band_pct == Decimal("0.50")
+
+
+def test_a_band_wider_than_its_centre_is_dropped_but_the_size_survives():
+    """`mid ± band`의 하한이 0 아래로 내려가면 방향이 뒤집힌다.
+
+    "하락 0.5퍼센트 ±0.9퍼센트포인트"는 상승도 포함하는 구간이라 방향의 크기가 아니다.
+    """
+    draft = _parsed(down_return_pct=0.5, down_return_band_pct=0.9)
+
+    assert draft.down_return_pct == Decimal("0.50")
+    assert draft.down_return_band_pct is None
+
+
+def test_a_zero_band_is_dropped_because_nothing_is_predicted_exactly():
+    draft = _parsed(up_return_pct=1.2, up_return_band_pct=0.0)
+
+    assert draft.up_return_pct == Decimal("1.20")
+    assert draft.up_return_band_pct is None
+
+
+def test_a_band_without_a_centre_is_dropped():
+    """중심이 버려졌으면 폭도 함께 간다 — 폭만 있는 구간은 읽을 수 없다."""
+    # 임계(0.3) 이하라 중심이 버려지는 값이다.
+    draft = _parsed(up_return_pct=0.1, up_return_band_pct=0.05)
+
+    assert draft.up_return_pct is None
+    assert draft.up_return_band_pct is None
+
+
 def test_a_thesis_whose_three_reasonings_are_placeholders_is_dropped():
     """확률·스키마가 멀쩡해도 문장이 자리표시자면 Slack에 근거 없는 결론만 나간다.
 
@@ -3644,28 +3787,29 @@ def test_a_thesis_whose_three_reasonings_are_placeholders_is_dropped():
     assert drafts[0].down_reasoning == "dummy"
 
 
-def _stored_for_render(up=Decimal("0.80"), down=Decimal("1.20")) -> StoredThesis:
-    return StoredThesis(
-        id=1,
-        run_slot=RunSlot.PRE_OPEN,
-        run_date=date(2026, 8, 21),
-        as_of_at=AS_OF,
-        dag_run_id="manual__run",
-        subject_kind=ThesisSubjectKind.INDEX,
-        subject_code="KOSPI",
-        label="코스피",
-        prob_up=Decimal("0.2300"),
-        prob_down=Decimal("0.6200"),
-        prob_flat=Decimal("0.1500"),
-        up_reasoning="오를 이유",
-        down_reasoning="내릴 이유",
-        flat_reasoning="횡보 이유",
-        tool_rounds=1,
-        llm_model="gpt-5.6-luna",
-        prompt_version=PROMPT_VERSION,
-        up_return_pct=up,
-        down_return_pct=down,
-    )
+def _stored_for_render(up=Decimal("0.80"), down=Decimal("1.20"), **overrides) -> StoredThesis:
+    fields: dict[str, Any] = {
+        "id": 1,
+        "run_slot": RunSlot.PRE_OPEN,
+        "run_date": date(2026, 8, 21),
+        "as_of_at": AS_OF,
+        "dag_run_id": "manual__run",
+        "subject_kind": ThesisSubjectKind.INDEX,
+        "subject_code": "KOSPI",
+        "label": "코스피",
+        "prob_up": Decimal("0.2300"),
+        "prob_down": Decimal("0.6200"),
+        "prob_flat": Decimal("0.1500"),
+        "up_reasoning": "오를 이유",
+        "down_reasoning": "내릴 이유",
+        "flat_reasoning": "횡보 이유",
+        "tool_rounds": 1,
+        "llm_model": "gpt-5.6-luna",
+        "prompt_version": PROMPT_VERSION,
+        "up_return_pct": up,
+        "down_return_pct": down,
+    }
+    return StoredThesis(**(fields | overrides))
 
 
 def test_the_conclusion_line_carries_the_size_when_it_is_there():
@@ -3682,6 +3826,67 @@ def test_the_conclusion_line_falls_back_when_the_size_is_missing():
 
     assert "하락 62%" in rendered
     assert "예상" not in rendered
+
+
+def test_the_conclusion_line_carries_the_error_band():
+    """**단위가 퍼센트포인트다.** `±0.4%`로 쓰면 "1.2의 0.4퍼센트"로 읽혀 두 자리 작아진다."""
+    thesis = _stored_for_render(down_return_band_pct=Decimal("0.40"))
+
+    blocks = render_blocks(RunSlot.PRE_OPEN, date(2026, 8, 21), [thesis], {})
+
+    assert "하락 1.2% ±0.4%p 예상 (62%)" in json.dumps(blocks, ensure_ascii=False)
+
+
+def test_a_row_without_a_band_keeps_the_line_it_had():
+    """오차를 요구하기 전 판의 행이다. `±`가 안 붙을 뿐 나머지는 같다."""
+    rendered = json.dumps(
+        render_blocks(RunSlot.PRE_OPEN, date(2026, 8, 21), [_stored_for_render()], {}), ensure_ascii=False
+    )
+
+    assert "하락 1.2% 예상 (62%)" in rendered
+    assert "±" not in rendered
+
+
+def test_an_intraday_row_says_what_the_size_is_measured_against():
+    """**이 줄이 없으면 크기가 하루 등락으로 읽힌다.**
+
+    2026-08-28 실측이 그랬다 — 12:35 슬롯의 `하락 0.7%`는 그 시각 가격 대비인데 그날
+    코스피는 전일 대비 1.79퍼센트 빠졌고, 읽는 쪽에 둘을 가를 단서가 없었다.
+    """
+    thesis = _stored_for_render(
+        run_slot=RunSlot.INTRADAY_MIDDAY,
+        base_price=Decimal("6825.11000000"),
+        base_at=datetime(2026, 8, 28, 3, 30, tzinfo=UTC),
+        base_return_pct=Decimal("-1.2600"),
+    )
+
+    rendered = json.dumps(render_blocks(RunSlot.INTRADAY_MIDDAY, date(2026, 8, 28), [thesis], {}), ensure_ascii=False)
+
+    # 봉의 시각을 KST로 적는다. `as_of_at`(12:35)이 아니라 실제로 본 봉(12:30)이다.
+    assert "12:30 KST 6,825.11 기준 · 오늘 여기까지 -1.26%" in rendered
+
+
+def test_a_pre_open_row_names_the_previous_close_and_no_progress():
+    """장전은 기준가가 곧 전일 종가라 '여기까지'가 정의상 0이다 — 적으면 같은 말을 두 번 한다."""
+    thesis = _stored_for_render(
+        base_price=Decimal("6912.32000000"),
+        base_at=datetime(2026, 8, 20, 6, 30, tzinfo=UTC),
+        base_return_pct=Decimal("0.0000"),
+    )
+
+    rendered = json.dumps(render_blocks(RunSlot.PRE_OPEN, date(2026, 8, 21), [thesis], {}), ensure_ascii=False)
+
+    assert "전일 종가 6,912.32 기준 (08/20 15:30 KST)" in rendered
+    assert "여기까지" not in rendered
+
+
+def test_a_row_without_an_axis_renders_exactly_as_it_did_before():
+    """축이 없는 행(장후 둘, 이 칸이 생기기 전 행)은 그 줄을 통째로 뺀다."""
+    rendered = json.dumps(
+        render_blocks(RunSlot.PRE_OPEN, date(2026, 8, 21), [_stored_for_render()], {}), ensure_ascii=False
+    )
+
+    assert "기준" not in rendered
 
 
 # --- LLM 실행 원장 -------------------------------------------------------------

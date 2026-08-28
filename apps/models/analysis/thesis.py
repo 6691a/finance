@@ -193,6 +193,30 @@ class Thesis(EntityBase):
             " AND (down_return_pct IS NULL OR down_return_pct BETWEEN 0 AND 30)",
             name="ck_thesis_return_pct_range",
         ),
+        # 크기 오차도 폭주만 막는다. "중심값보다 작아야 한다"는 저장 전 검증이 본다.
+        CheckConstraint(
+            "(up_return_band_pct IS NULL OR up_return_band_pct BETWEEN 0 AND 30)"
+            " AND (down_return_band_pct IS NULL OR down_return_band_pct BETWEEN 0 AND 30)",
+            name="ck_thesis_return_band_range",
+        ),
+        # 중심 없는 오차는 읽을 수 없다. 반대(중심만 있고 오차가 없는 것)는 정상이다 —
+        # 이 칸이 생기기 전 행과 모델이 오차만 규칙을 어긴 경우가 그 모양이다.
+        CheckConstraint(
+            "(up_return_band_pct IS NULL OR up_return_pct IS NOT NULL)"
+            " AND (down_return_band_pct IS NULL OR down_return_pct IS NOT NULL)",
+            name="ck_thesis_return_band_needs_center",
+        ),
+        # 축 셋은 함께 있거나 함께 없다. 기준가만 있고 시각이 없으면 "언제의 가격인가"를
+        # 슬롯 규칙으로 되짚어야 하고, 그것이 이 칸들을 만든 이유와 정면으로 어긋난다.
+        CheckConstraint(
+            "(base_price IS NULL AND base_at IS NULL AND base_return_pct IS NULL)"
+            " OR (base_price IS NOT NULL AND base_at IS NOT NULL AND base_return_pct IS NOT NULL)",
+            name="ck_thesis_base_all_or_none",
+        ),
+        CheckConstraint(
+            "base_price IS NULL OR base_price > 0",
+            name="ck_thesis_base_price_positive",
+        ),
         table_options(
             comment="슬롯마다 만든 시장 추론을 불변으로 보존하는 테이블. 채점과 해설은 thesis_outcome이 갖는다",
             database="default",
@@ -263,6 +287,52 @@ class Thesis(EntityBase):
         comment=(
             "하락한다는 조건에서 채점 창의 등락률(퍼센트, **양수 크기**). 확률을 곱하지 않은 "
             "조건부 크기다. 창은 확률과 같은 지평 0이다"
+        ),
+    )
+    # 크기의 ± 폭이다. 하한·상한 두 칸이 아닌 이유는 중심값이 이미 위 두 칸에 있어서다 —
+    # 셋을 두면 `low <= mid <= high`를 지켜야 하는 상태가 생기고 어긋날 자리가 는다.
+    # 대칭이다. 비대칭 오차는 분포를 하나 더 발명하는 것이고 채점법도 새로 정해야 한다.
+    up_return_band_pct: Mapped[Decimal | None] = mapped_column(
+        Numeric(5, 2),
+        nullable=True,
+        comment=(
+            "up_return_pct의 ± 폭(**퍼센트포인트**, 양수). 구간은 up_return_pct ± 이 값이다. "
+            "상한이 아니라 폭이고, 저장 전 검증이 중심값보다 큰 폭을 버린다"
+        ),
+    )
+    down_return_band_pct: Mapped[Decimal | None] = mapped_column(
+        Numeric(5, 2),
+        nullable=True,
+        comment=(
+            "down_return_pct의 ± 폭(**퍼센트포인트**, 양수). 구간은 down_return_pct ± 이 값이다. "
+            "상한이 아니라 폭이고, 저장 전 검증이 중심값보다 큰 폭을 버린다"
+        ),
+    )
+    # 예측의 축이다. 확률 셋과 크기 두 칸이 무엇 대비인지를 이 셋이 행 안에서 닫는다 —
+    # 전에는 장중 기준가가 input_state JSONB에만 있었고 장전 기준가는 아예 없었다.
+    # 축의 끝은 슬롯과 무관하게 그날 정규장 마감 하나라 칸을 두지 않는다.
+    base_price: Mapped[Decimal | None] = mapped_column(
+        Numeric(18, 8),
+        nullable=True,
+        comment=(
+            "확률 셋과 크기 두 칸의 분모(장전·장후는 직전 세션 확정 종가, 장중은 그 슬롯이 실제로 "
+            "본 봉의 종가). 이 가격에서 그날 정규장 마감까지가 채점 창이다"
+        ),
+    )
+    base_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True,
+        comment=(
+            "base_price가 나온 시각(UTC). **as_of_at과 다를 수 있다** — 장중은 기준 시각 직전 봉을 "
+            "보고 수집이 밀리면 최대 15분(BAR_STALENESS) 앞선 봉이다"
+        ),
+    )
+    base_return_pct: Mapped[Decimal | None] = mapped_column(
+        Numeric(8, 4),
+        nullable=True,
+        comment=(
+            "직전 세션 확정 종가에서 base_price까지 **이미 온** 등락률(퍼센트). 장중이면 "
+            "'오늘 여기까지'이고 장전·장후는 정의상 0이다. 예측 크기와 더하면 하루 등락이 된다"
         ),
     )
     up_reasoning: Mapped[str] = mapped_column(
@@ -375,6 +445,12 @@ class ThesisOutcome(EntityBase):
             "predicted_return_pct IS NULL OR evaluated_at IS NOT NULL",
             name="ck_thesis_outcome_return_error_needs_grade",
         ),
+        # 오차 폭 스냅샷은 중심 스냅샷 없이 존재할 수 없다. 반대는 정상이다 — 오차를
+        # 안 받던 판의 추론이 그 모양이다.
+        CheckConstraint(
+            "predicted_band_pct IS NULL OR predicted_return_pct IS NOT NULL",
+            name="ck_thesis_outcome_band_needs_prediction",
+        ),
         table_options(
             comment="추론 하나의 지평별 채점과 사후 해설을 누적하는 테이블",
             database="default",
@@ -451,6 +527,16 @@ class ThesisOutcome(EntityBase):
         comment=(
             "abs(actual_return_pct) - predicted_return_pct(퍼센트포인트). **부호를 유지한다** — "
             "양수면 과소추정, 음수면 과대추정이다. 절댓값 평균(MAE)은 조회가 만든다"
+        ),
+    )
+    # 밴드 적중 여부 칸은 두지 않는다 — `abs(return_error_pct) <= predicted_band_pct`가
+    # 답이고 두 칸이 이미 이 행에 있다. 파생값을 저장하면 어긋날 자리가 생긴다.
+    predicted_band_pct: Mapped[Decimal | None] = mapped_column(
+        Numeric(5, 2),
+        nullable=True,
+        comment=(
+            "실현된 방향에 대응하는 thesis의 크기 오차 폭 스냅샷(퍼센트포인트, 양수). "
+            "적중은 abs(return_error_pct) <= 이 값이다. 오차를 안 받던 판의 추론은 NULL이다"
         ),
     )
     narrative: Mapped[str | None] = mapped_column(

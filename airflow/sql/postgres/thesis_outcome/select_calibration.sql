@@ -21,7 +21,16 @@ SELECT outcome.horizon_days,
        -- 크기 오차. **지평 0에만 있고** flat 실현과 판 7 이전 행은 NULL이라 이 표본 수는
        -- graded와 다르다. 평균은 부호를 살려서 낸다 — 양수면 과소, 음수면 과대다.
        count(outcome.return_error_pct) AS return_graded,
-       avg(outcome.return_error_pct) AS mean_return_error_pct
+       avg(outcome.return_error_pct) AS mean_return_error_pct,
+       -- 밴드 적중. **오차 평균과 다른 것을 잰다** — 저쪽은 중심이 어디로 치우쳤나이고
+       -- 이쪽은 모델이 자기 불확실성을 아는가다. 적중률이 지나치게 높아도 문제다:
+       -- 폭을 너무 넓게 부르면 구간이 아무 것도 말하지 않는다.
+       -- 적중 여부 칸을 저장하지 않으므로 여기서 두 칸으로 센다.
+       count(outcome.predicted_band_pct) AS band_graded,
+       count(*) FILTER (
+           WHERE outcome.predicted_band_pct IS NOT NULL
+             AND abs(outcome.return_error_pct) <= outcome.predicted_band_pct
+       ) AS band_hits
 FROM thesis_outcome AS outcome
 JOIN thesis ON thesis.id = outcome.thesis_id
 WHERE thesis.run_date >= %s

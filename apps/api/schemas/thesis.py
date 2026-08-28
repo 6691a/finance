@@ -52,6 +52,42 @@ class ThesisSummary(ApiModel):
         default=None,
         description="**하락한다는 조건에서의** 등락률(퍼센트, 양수 크기). 위와 같은 규칙이다.",
     )
+    up_return_band_pct: float | None = Field(
+        default=None,
+        description=(
+            "`up_return_pct`의 ± 폭(**퍼센트포인트**, 양수). 구간은 `up_return_pct ± 이 값`이고 "
+            "상한이 아니다. 오차를 받기 전 판의 추론과 모델이 규칙을 어긴 값은 null이다."
+        ),
+    )
+    down_return_band_pct: float | None = Field(
+        default=None,
+        description="`down_return_pct`의 ± 폭(퍼센트포인트, 양수). 위와 같은 규칙이다.",
+    )
+    base_price: float | None = Field(
+        default=None,
+        description=(
+            "**위 확률 셋과 등락률 둘의 분모.** 이 가격에서 그 세션의 KRX 정규장 마감까지가 "
+            "채점 창이다 — 장전은 직전 세션 확정 종가, 장중은 그 슬롯이 실제로 본 봉의 종가다. "
+            "**슬롯 규칙을 몰라도 이 칸 하나로 축을 읽을 수 있다.** "
+            "리뷰 두 슬롯(post_close·post_nxt_close)과 이 칸이 생기기 전 추론은 null이다."
+        ),
+    )
+    base_at: UtcDatetime | None = Field(
+        default=None,
+        description=(
+            "`base_price`가 나온 시각(UTC). **`as_of_at`과 다를 수 있다** — 장중 슬롯은 기준 "
+            "시각 직전 봉을 보고 수집이 밀리면 최대 15분 앞선 봉이다. `base_price`와 함께 "
+            "비거나 함께 찬다."
+        ),
+    )
+    base_return_pct: float | None = Field(
+        default=None,
+        description=(
+            "직전 세션 확정 종가에서 `base_price`까지 **이미 온** 등락률(퍼센트). 장중이면 "
+            "'오늘 여기까지'이고 장전은 정의상 0이다. 예측 등락률과 축이 달라 그대로 더하면 "
+            "하루 등락의 어림이 된다."
+        ),
+    )
     graded_horizons: int = Field(
         default=0,
         description="채점이 끝난 지평 수(0~4). 채점은 예측 슬롯에만 붙는다 — 리뷰 둘은 늘 0이다.",
@@ -223,6 +259,14 @@ class ThesisOutcomeItem(ApiModel):
         description=(
             "`abs(actual_return_pct) - predicted_return_pct`(퍼센트포인트). **부호를 유지한다** — "
             "양수면 과소추정, 음수면 과대추정이다. Brier와 합치지 않는다."
+        ),
+    )
+    predicted_band_pct: float | None = Field(
+        default=None,
+        description=(
+            "실현된 방향의 ± 폭 스냅샷(퍼센트포인트). **밴드 적중은 "
+            "`abs(return_error_pct) <= predicted_band_pct`다** — 적중 여부 칸은 두지 않는다. "
+            "오차를 받기 전 판의 추론은 null이다."
         ),
     )
     narrative: str | None = Field(

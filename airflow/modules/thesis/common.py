@@ -22,6 +22,7 @@ import re
 from collections.abc import Mapping, Sequence
 from contextlib import closing
 from datetime import UTC, date, datetime, time, timedelta
+from decimal import Decimal
 from types import MappingProxyType
 from typing import Any
 
@@ -35,6 +36,7 @@ from modules.slack import SlackClient, SlackError
 from modules.thesis.domain import (
     DOMESTIC_MAX_DAILY_CHANGE_PCT,
     PROMPT_VERSION,
+    ForecastBaseline,
     LlmRunStatus,
     ThesisError,
     ThesisEvidenceKind,
@@ -387,6 +389,7 @@ class ThesisRun:
         try_number: int,
         run_kind: Any,
         same_day: Mapping[str, Sequence[SameDayThesis]] = MappingProxyType({}),
+        baselines: Mapping[str, ForecastBaseline] = MappingProxyType({}),
     ) -> int:
         """추론을 만들고 저장한다. 저장한 행 수를 준다.
 
@@ -401,6 +404,11 @@ class ThesisRun:
 
         **첫 성공본 불변.** 행이 있으면 모델을 부르지 않는다 — LLM은 재호출마다 답이 달라서
         덮어쓰면 최초 판단이 사라진다.
+
+        `baselines`는 subject 코드별 예측의 축(`ForecastBaseline`)이고 `thesis`의
+        `base_price`·`base_at`·`base_return_pct` 셋이 된다. **예측 슬롯만 넘긴다** —
+        장후 둘은 채점 대상이 아니라 예측의 축이 없다. 여기서 슬롯으로 분기하지 않는다:
+        무엇을 넘길지는 이미 부르는 쪽이 정했다.
         """
         # LangChain·LangGraph를 끄는 모듈은 여기서 늦게 import한다(DagBag 30초 타임아웃).
         # `thesis.domain`은 가벼워서 모듈 수준에 있다.
@@ -487,6 +495,7 @@ class ThesisRun:
             tool_rounds=investigation.tool_rounds,
             llm_run_id=llm_run_id,
             precedents={code: [row.id for row in rows] for code, rows in past.items()},
+            baselines=baselines,
         )
         logger.info(
             "stored %s theses for %s %s (%s tool rounds%s)",
@@ -553,6 +562,26 @@ def open_at(day: date) -> datetime:
     DB를 보지 않는다 — 오늘 장이 열렸다는 것은 부르는 쪽의 readiness guard가 이미 확인했다.
     """
     return datetime.combine(day, SESSION_OPEN_TIME, tzinfo=KST_TIMEZONE).astimezone(UTC)
+
+
+def session_baselines(observed: ObservedState, session: date) -> dict[str, ForecastBaseline]:
+    """장전 예측의 축. **이미 조회한 관측 상태에서 파생한다 — 쿼리를 새로 만들지 않는다.**
+
+    새로 조회하면 모델이 본 값과 저장한 값이 갈릴 수 있다(`intraday.check_ready`가 본 봉
+    dict를 그대로 넘기는 것과 같은 이유).
+
+    `return_pct`가 **정의상 0**이다. 기준가가 곧 직전 세션 확정 종가라 그 사이에 온 것이
+    없다. 장중과 달리 "오늘 여기까지"가 비어 있는 것이 맞다.
+
+    감쌀 상태가 없어 함수다. 지수는 `close`, 종목은 `close_price`가 원본이고 둘 다
+    `ThesisRun.observed_state`가 채점과 같은 자리에서 읽어 온 값이다.
+    """
+    moment = close_at(session)
+    baselines = {
+        code: ForecastBaseline(price=Decimal(str(row.close)), at=moment, return_pct=Decimal(0))
+        for code, row in ({**observed.index, **observed.stock}).items()
+    }
+    return baselines
 
 
 def notify_slack(built: dict[str, Any]) -> str:

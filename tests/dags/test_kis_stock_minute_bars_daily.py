@@ -6,13 +6,14 @@
 
 from datetime import UTC, date, datetime
 
+import pendulum
 import pytest
 from airflow.sdk.exceptions import AirflowFailException
 
 from dags import kis_stock_minute_bars_daily
 from modules.utility import KST_TIMEZONE
 
-NOW_KST = datetime(2026, 8, 14, 18, 40, tzinfo=KST_TIMEZONE)
+RUN_DATE = date(2026, 8, 14)
 
 
 def test_the_dag_runs_after_the_daily_flow_dag():
@@ -33,21 +34,57 @@ def test_the_start_date_is_a_kst_midnight():
     assert start.astimezone(UTC) == datetime(2026, 8, 14, 15, 0, tzinfo=UTC)
 
 
+def test_the_business_date_comes_from_the_run(monkeypatch):
+    """벽시계가 아니라 이 run의 시각이다. 해외지수 마감 DAG과 같은 규칙이다."""
+    monkeypatch.setattr(
+        kis_stock_minute_bars_daily,
+        "get_current_context",
+        lambda: {"data_interval_end": pendulum.datetime(2026, 8, 14, 20, 5, tz=KST_TIMEZONE)},
+    )
+
+    assert kis_stock_minute_bars_daily._run_date() == date(2026, 8, 14)
+
+
+def test_the_business_date_falls_back_to_the_run_after(monkeypatch):
+    """수동 run에는 `data_interval_end`가 없다. `datetime.now`로 물러서지 않는다."""
+    run_after = pendulum.datetime(2026, 8, 14, 20, 5, tz=KST_TIMEZONE)
+    monkeypatch.setattr(
+        kis_stock_minute_bars_daily,
+        "get_current_context",
+        lambda: {"data_interval_end": None, "dag_run": type("Run", (), {"run_after": run_after})()},
+    )
+
+    assert kis_stock_minute_bars_daily._run_date() == date(2026, 8, 14)
+
+
+def test_a_cleared_run_keeps_its_own_day(monkeypatch):
+    """며칠 뒤 clear 해도 그 run이 맡은 날을 받는다. `days` 기본이 1이라 덮어 줄 창이 없다."""
+    monkeypatch.setattr(
+        kis_stock_minute_bars_daily,
+        "get_current_context",
+        lambda: {"data_interval_end": pendulum.datetime(2026, 8, 11, 20, 5, tz=KST_TIMEZONE)},
+    )
+
+    assert kis_stock_minute_bars_daily.requested_business_date(kis_stock_minute_bars_daily._run_date(), {}) == date(
+        2026, 8, 11
+    )
+
+
 def test_an_empty_business_date_means_the_run_day():
-    assert kis_stock_minute_bars_daily.requested_business_date(NOW_KST, {}) == date(2026, 8, 14)
+    assert kis_stock_minute_bars_daily.requested_business_date(RUN_DATE, {}) == RUN_DATE
 
 
 def test_a_backfill_date_is_read_as_given():
     given = {"business_date": "2026-07-03"}
 
-    assert kis_stock_minute_bars_daily.requested_business_date(NOW_KST, given) == date(2026, 7, 3)
+    assert kis_stock_minute_bars_daily.requested_business_date(RUN_DATE, given) == date(2026, 7, 3)
 
 
 @pytest.mark.parametrize("given", ["20260814", "2026-W33", "yesterday"])
 def test_a_date_that_is_not_a_calendar_day_fails(given):
     """`date.fromisoformat`은 앞의 둘을 받는다. 주 표기는 그 주 월요일이 되어 조용히 어긋난다."""
     with pytest.raises(AirflowFailException, match="must be YYYY-MM-DD"):
-        kis_stock_minute_bars_daily.requested_business_date(NOW_KST, {"business_date": given})
+        kis_stock_minute_bars_daily.requested_business_date(RUN_DATE, {"business_date": given})
 
 
 @pytest.mark.parametrize(("given", "expected"), [({}, 1), ({"days": 5}, 5), ({"days": None}, 1)])

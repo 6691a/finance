@@ -17,10 +17,9 @@ from typing import Any
 from airflow.providers.postgres.hooks.postgres import PostgresHook
 
 from modules.causal import candidates, domain, store
+from modules.utility import CONNECTION_ID
 
 logger = logging.getLogger(__name__)
-
-CONNECTION_ID = "finance_db"
 
 
 def connection() -> Any:

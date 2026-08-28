@@ -816,9 +816,11 @@ API, 크롤링, 웹소켓 수집 결과의 출처와 상태를 가볍게 보존�
 `bbk_bund_daily`(독일 국채), `ecb_yield_curve_daily`(유로 지역 국채),
 `ecb_convergence_monthly`(유로 회원국 10년물 월평균),
 `policy_rate_weekly`(중앙은행 다섯의 정책금리),
-`central_bank_assets_weekly`(중앙은행 여섯의 대차대조표 잔액)가 채운다.
+`central_bank_assets_weekly`(중앙은행 여섯의 대차대조표 잔액),
+`fred_signal_daily`(미국 실질금리·기대인플레·하이일드 스프레드),
+`kcs_trade_daily`(관세청 10일 단위 수출입 42계열)가 채운다.
 
-- `provider`는 그 값을 준 제공처(`fred`, `ecos`, `mof`, `boe`, `bbk`, `ecb`)이며 같은 수집의
+- `provider`는 그 값을 준 제공처(`fred`, `ecos`, `mof`, `boe`, `bbk`, `ecb`, `kcs`)이며 같은 수집의
   `source_record.source`와 같다.
 - `series_id`는 **제공처 안에서만 고유하다.** 그래서 자연키에 `provider`가 함께 들어간다.
 - **`series_id`는 사람이 읽을 수 있어야 한다.** FRED의 `DGS10`처럼 제공처 ID가 이미 읽히면

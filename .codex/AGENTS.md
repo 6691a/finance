@@ -51,6 +51,7 @@
 | `migrations/routing.py` | 어떤 테이블이 어떤 DB 별칭에 속하는지 판단하는 순수 함수 |
 | `airflow/dags/` | Airflow DAG |
 | `airflow/modules/` | DAG이 쓰는 공유 코드. 도메인 폴더(`collectors/`·`briefing/`·`expectation/`·`technical/`·`thesis/`)로 나누고 최상위에는 공용 잎만 둔다. 하위 패키지 `__init__.py`는 비운다 — 재수출하면 가벼운 모듈 하나를 import해도 LangChain이 딸려 온다. (아래 규칙) |
+| `airflow/modules/collectors/` | 수집기. 도메인 폴더(`market/`·`document/`·`indicator/`·`calendar/`·`analyst/`)로 나눈다. 전환 진행 상황은 [docs/convention/collectors-class-migration.md](../docs/convention/collectors-class-migration.md) |
 | `tests/` | pytest |
 
 `apps/models/`의 모듈은 도메인 단위로 나눈다(`raw.py`, `reference.py`, `content.py`).
@@ -498,13 +499,14 @@ API, 크롤링, 웹소켓 수집 결과의 출처와 상태를 가볍게 보존�
 
 ### `indicator_observation`
 
-여러 제공처에서 추출한 지표 관측값을 날짜와 단위와 함께 조회 가능한 형태로 누적 저장한다. `(provider, series_id, observation_date)`를 고유키로 사용하고 `source_record_id`로 근거 수집 레코드와 연결한다.
+여러 제공처에서 추출한 지표 관측값을 날짜와 단위와 함께 조회 가능한 형태로 누적 저장한다. `(provider, series_id, observation_date)`를 고유키로 사용하고 `source_record_id`로 근거 수집 레코드와 연결한다. 현재 `fred_treasury_daily`(미국 국채), `fred_macro_daily`(미국 물가·소매판매), `fred_signal_daily`(미국 실질금리·기대인플레·하이일드 스프레드), `ecos_market_rate_daily`(국내 시장금리), `mof_jgb_daily`(일본 국채), `boe_gilt_daily`(영국 국채), `bbk_bund_daily`(독일 국채), `ecb_yield_curve_daily`(유로 지역 국채), `ecb_convergence_monthly`(유로 회원국 10년물 월평균), `policy_rate_weekly`(중앙은행 다섯의 정책금리), `central_bank_assets_weekly`(중앙은행 여섯의 대차대조표 잔액), `kcs_trade_daily`(관세청 10일 단위 수출입 42계열)가 채운다.
 
-- `provider`는 그 값을 준 제공처(`fred`, `ecos`, `mof`, `boe`, `bbk`, `ecb`)이며 같은 수집의 `source_record.source`와 같은 값이다.
+- `provider`는 그 값을 준 제공처(`fred`, `ecos`, `mof`, `boe`, `bbk`, `ecb`, `kcs`)이며 같은 수집의 `source_record.source`와 같은 값이다.
 - `series_id`는 **제공처 안에서만 고유하다.** 그래서 자연키에 `provider`가 함께 들어간다.
 - `series_id`는 사람이 읽을 수 있어야 한다. FRED의 `DGS10`처럼 제공처 ID가 이미 읽히면 그대로 쓰고, ECOS 항목코드(`010210000`)처럼 숫자뿐이면 `KTB10Y` 같은 ID를 만들어 저장한다. 제공처의 원본 좌표는 수집기 Enum이 들고 있다가 요청에 쓰고 `source_record.metadata`에 남긴다.
 - 조회하는 쪽도 `provider`를 함께 건다. `series_id` 하나로 거는 쿼리는 제공처가 늘어나면 조용히 틀린다.
 - 국가·만기 같은 시계열의 성격은 여기 두지 않고 `indicator_series`에 둔다.
+- 관측값이 0건이어도 `source_record`는 남긴다. 조회했지만 값이 없는 구간과 아직 조회하지 않은 구간이 구분돼야 한다.
 
 ### `indicator_series`
 
@@ -578,3 +580,13 @@ API, 크롤링, 웹소켓 수집 결과의 출처와 상태를 가볍게 보존�
 - **실제값 주장이 갈리면 판정하지 않는다.** 집계 범위가 다른 숫자가 온다. 조용히 한쪽을 고르는 대신 보류하고 다음 실행이 다시 본다.
 - **숫자 비교에 LLM을 쓰지 않는다.** 대표 기대치 집계와 beat/meet/miss 분류는 순수 함수다(thesis 채점 수식과 같은 이유 — DB 없이 경계값을 테스트한다). LLM은 산문에서 숫자를 꺼내는 추출 단계에만 있다.
 - 주장 0건 문서도 `stock_event_extraction` 원장에 남긴다. "뽑았는데 없었다"와 "아직 안 뽑았다"가 구분돼야 매시간 같은 문서를 다시 뽑지 않는다.
+
+## 마이그레이션 작성
+
+- `just makemigrations "<메시지>"`로 생성하고 **생성된 파일을 반드시 읽어본다.**
+- 리비전 파일은 `migrations/versions` 하나에 모이고 파일 안에서 별칭별로 갈라진다. `upgrade(engine_name)`이 `upgrade_<alias>()`로 디스패치한다. 해당 함수가 없으면 아무 것도 하지 않으므로 별칭을 나중에 추가해도 과거 리비전을 고칠 필요가 없다.
+- `--autogenerate`는 모든 별칭에 실제로 연결한다. 하나라도 접속 불가면 리비전을 만들 수 없다.
+- autogenerate는 모델과 **실제 DB 상태**를 비교한다. 리비전 이력이 아니다. 밀린 리비전이 있으면 이미 만든 테이블을 또 만들려 하므로 `makemigrations` 전에 `just migrate upgrade head`를 먼저 돌린다.
+- autogenerate는 `CREATE SCHEMA`를 절대 만들지 않는다. 새 스키마를 쓰는 리비전은 `op.execute("CREATE SCHEMA IF NOT EXISTS <schema>")`를 해당 별칭 함수 맨 앞에 직접 넣는다.
+- 리비전 파일 형식은 `migrations/script.py.mako`가 정한다. ruff 규칙(`from collections.abc import Sequence`, `X | Y` 어노테이션)에 맞춰 둔 상태다.
+- 마이그레이션 테스트는 `alembic_command.upgrade(config, "head", sql=True)`로 SQL만 뽑아 테이블 단위 사실만 검증한다. 특정 리비전 ID에 고정하거나 전체 문자열을 세지 않는다. 리비전을 다시 만들 때마다 깨진다.

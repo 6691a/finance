@@ -513,6 +513,39 @@ class KisPositioningCollector:
             raise KisPayloadError(f"KIS credit balance row is malformed: {error}") from None
 
         kept = tuple(row for row in parsed if observation_start <= row.trade_date <= observation_end)
+        if not kept:
+            if not parsed:
+                raise KisPayloadError(f"KIS credit balance returned no row for {stock.value}")
+            span_start = min(row.trade_date for row in parsed)
+            span_end = max(row.trade_date for row in parsed)
+            if span_start <= observation_end and span_end >= observation_start:
+                # 반환 구간이 창과 겹치는데도 남은 것이 없다. 30행은 **거래일이 이어져 있어서**
+                # 겹치면 반드시 한 행은 남는다 — 거르기나 날짜 파싱이 깨진 것이다.
+                raise KisPayloadError(
+                    f"KIS credit balance kept no row for {stock.value} in "
+                    f"{observation_start}..{observation_end} although the response covers "
+                    f"{span_start}..{span_end}"
+                )
+            # 창과 반환 구간이 아예 안 겹친다. 창 전체가 아직 결제 전이거나(연휴 등) 30행
+            # 밖이다. 다음 실행이 집는다.
+            logger.warning(
+                "credit balance for %s has no row in %s..%s; the response covers %s..%s",
+                stock.value,
+                observation_start,
+                observation_end,
+                span_start,
+                span_end,
+            )
+        elif (oldest := min(row.trade_date for row in parsed)) > observation_start:
+            # **한 번에 30행뿐이고 `tr_cont`는 안 온다**(2026-08-28 실측). 창이 그보다 길면
+            # 앞부분이 조용히 빈다 — 긴 백필은 구간을 잘라 여러 번 돌려야 한다.
+            logger.warning(
+                "credit balance for %s covers only %s.. of the requested %s..%s (30-row cap)",
+                stock.value,
+                oldest,
+                observation_start,
+                observation_end,
+            )
         return Fetch(
             source_key=CREDIT_BALANCE_SOURCE_KEY,
             stock_code=stock.value,

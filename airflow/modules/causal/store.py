@@ -13,9 +13,8 @@ from collections.abc import Mapping, Sequence
 from datetime import date
 
 from modules.causal.domain import (
-    MAX_NEW_CHANNELS,
-    MAX_NEW_CHANNELS_SEED,
     CausalWindow,
+    StoreOutcome,
     TargetReturns,
     VerifiedPath,
 )
@@ -67,19 +66,23 @@ def store_paths(
     input_hash: str,
     llm_run_id: int | None,
     require_reuse: bool = False,
-) -> int:
-    """경로를 저장하고 실제로 들어간 수를 돌려준다.
+) -> StoreOutcome:
+    """경로를 저장하고 무엇을 했는지 돌려준다.
 
     `require_reuse`는 어휘가 이미 쌓인 주에만 켠다 — 첫 주는 전부 새로 만드는 것이 정상이라
-    그때 켜면 언제나 죽는다. **같은 값이 새 이름 상한도 고른다**: 어휘가 비어 있으면 넉넉히
-    (`MAX_NEW_CHANNELS_SEED`), 쌓인 뒤에는 좁게(`MAX_NEW_CHANNELS`).
+    그때 켜면 언제나 죽는다.
+
+    **새 이름 수에 상한을 두지 않는다**(2026-08-28 제거). 전에는 상한을 넘긴 경로를 통째로
+    버렸는데, 두 번 다 상한이 데이터를 잘랐다 — 개발 첫 주 19개 중 17개, 운영 재실행 20개
+    중 4개다. 어휘 목록은 이미 프롬프트에 **전부** 실리므로(`vocabulary_block`) 모델이 보고도
+    새 이름을 만들면 그건 진짜 새 채널로 봐야 한다. 8주 프로토타입도 상한 없이 8개로
+    수렴했다. 폭주는 아래 `VocabularyDriftError`가 막는다 — 그쪽은 데이터를 버리지 않고
+    태스크를 죽인다.
     """
-    budget = MAX_NEW_CHANNELS if require_reuse else MAX_NEW_CHANNELS_SEED
     new_channels: dict[str, int] = {}
     event_ids: dict[tuple[str, date], int] = {}
     reused_any = False
     stored = 0
-    refused = 0
 
     for path in paths:
         target = returns.get(path.target_code)
@@ -88,7 +91,6 @@ def store_paths(
             continue
 
         channel_ids: list[int] = []
-        over_budget = False
         for choice in path.channels:
             if choice.existing_id:
                 reused_any = True
@@ -97,15 +99,9 @@ def store_paths(
             if choice.new_name in new_channels:
                 channel_ids.append(new_channels[choice.new_name])
                 continue
-            if len(new_channels) >= budget:
-                over_budget = True
-                break
             channel_id = _upsert_channel(connection, choice.new_name, window.week_start)
             new_channels[choice.new_name] = channel_id
             channel_ids.append(channel_id)
-        if over_budget:
-            refused += 1
-            continue
 
         event_id = _resolve_event(connection, path, window, event_ids)
         if event_id is None:
@@ -126,19 +122,16 @@ def store_paths(
         _insert_steps(connection, path_id, channel_ids)
         stored += 1
 
-    if refused:
-        # 조용한 절삭을 만들지 않는다. 몇 건이 왜 빠졌는지 로그가 말해야 한다.
-        logger.warning(
-            "refused %s causal paths: new channel budget %s exhausted",
-            refused,
-            budget,
-        )
+    if new_channels:
+        # 어휘가 수렴하는지는 이 수가 말한다. 매주 늘기만 하면 정규화가 안 되고 있는 것이다.
+        logger.info("causal vocabulary grew by %s channels: %s", len(new_channels),
+                    ", ".join(new_channels))
     if require_reuse and paths and not reused_any:
         raise VocabularyDriftError(
             f"no path reused an existing channel; {len(new_channels)} new names were proposed"
         )
     connection.commit()
-    return stored
+    return StoreOutcome(stored=stored, new_channels=len(new_channels))
 
 
 def _node_id(existing_id: str) -> int:

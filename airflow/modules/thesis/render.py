@@ -65,6 +65,7 @@ from modules.thesis.store import (
     StoredEvidence,
     StoredThesis,
 )
+from modules.utility import KST_TIMEZONE
 
 logger = logging.getLogger(__name__)
 
@@ -146,18 +147,43 @@ def _evidence_lines(items: Sequence[StoredEvidence], directions: Sequence[str]) 
     return "\n".join(lines)
 
 
-def _verdict_label(direction: str, probability: Decimal, size: Decimal | None) -> str:
-    """결론 한 조각. 크기가 있으면 `▼ 하락 1.2% 예상 (40%)`, 없으면 `▼ 하락 40%`.
+def _verdict_label(direction: str, probability: Decimal, size: Decimal | None, band: Decimal | None) -> str:
+    """결론 한 조각. `▼ 하락 1.2% ±0.4%p 예상 (40%)`, 폭이 없으면 `▼ 하락 1.2% 예상 (40%)`,
+    크기도 없으면 `▼ 하락 40%`.
 
     **소수 첫째 자리까지다.** 모델이 대는 크기는 어림이라 둘째 자리는 거짓 정밀도다.
 
+    **폭의 단위는 퍼센트포인트다.** `±0.4%`라고 쓰면 "1.2의 0.4퍼센트"로 읽혀 두 자리
+    작아진다. `%p`가 그것을 가른다.
+
     `flat`에는 크기를 붙이지 않는다 — 정의가 이미 "±임계 안"이라 크기가 정의에 들어 있다.
-    판 7 이전 행은 둘 다 `None`이라 확률만 그리던 모양으로 떨어진다.
+    판 7 이전 행은 크기가 `None`이고 오차를 받기 전 판은 폭이 `None`이라, 각각 그때의
+    모양으로 떨어진다.
     """
     label = f"{DIRECTION_MARKS[direction]} {DIRECTION_NAMES[direction]}"
     if size is None:
         return f"*{label} {probability:.0%}*"
-    return f"*{label} {size:.1f}% 예상 ({probability:.0%})*"
+    spread = f" ±{band:.1f}%p" if band is not None else ""
+    return f"*{label} {size:.1f}%{spread} 예상 ({probability:.0%})*"
+
+
+def _baseline_line(thesis: StoredThesis) -> str | None:
+    """예측의 축 한 줄. 축이 없는 행(장후 둘, 이 칸들이 생기기 전 행)은 `None`이다.
+
+    **이 줄이 없으면 크기가 하루 등락으로 읽힌다.** 2026-08-28 장중 슬롯의 `▼ 하락 0.7%`가
+    그랬다 — 그 0.7은 12:35 가격에서 마감까지인데 그날 코스피는 전일 대비 1.79퍼센트
+    빠졌고, 읽는 쪽에는 둘을 가를 단서가 없었다.
+
+    장중만 "오늘 여기까지"를 함께 적는다. 장전은 기준가가 곧 전일 종가라 그 값이 정의상
+    0이고, 적으면 같은 말을 두 번 하는 것이 된다.
+    """
+    if thesis.base_price is None or thesis.base_at is None or thesis.base_return_pct is None:
+        return None
+    at = thesis.base_at.astimezone(KST_TIMEZONE)
+    price = f"{thesis.base_price:,.2f}".rstrip("0").rstrip(".")
+    if thesis.run_slot in INTRADAY_SLOTS:
+        return f"_{at:%H:%M} KST {price} 기준 · 오늘 여기까지 {thesis.base_return_pct:+.2f}%_"
+    return f"_전일 종가 {price} 기준 ({at:%m/%d %H:%M} KST)_"
 
 
 def _thesis_section(thesis: StoredThesis, verdicts: Sequence[tuple[str, Decimal]]) -> str:
@@ -173,11 +199,17 @@ def _thesis_section(thesis: StoredThesis, verdicts: Sequence[tuple[str, Decimal]
         "flat": thesis.flat_reasoning,
     }
     sizes = {"up": thesis.up_return_pct, "down": thesis.down_return_pct}
+    bands = {"up": thesis.up_return_band_pct, "down": thesis.down_return_band_pct}
     verdict_line = "   ".join(
-        _verdict_label(direction, probability, sizes.get(direction)) for direction, probability in verdicts
+        _verdict_label(direction, probability, sizes.get(direction), bands.get(direction))
+        for direction, probability in verdicts
     )
     # 방향이 하나면 바로 위 줄이 이미 방향을 말했다. 둘 이상일 때만 이유마다 표시를 단다.
     lines = [f"*{thesis.label}*", verdict_line]
+    # 축은 결론 바로 아래다. 이유보다 위여야 "무엇 대비 0.7퍼센트인가"를 먼저 읽는다.
+    baseline = _baseline_line(thesis)
+    if baseline:
+        lines.append(baseline)
     for direction, _ in verdicts:
         prefix = f"*{DIRECTION_MARKS[direction]}* " if len(verdicts) > 1 else ""
         lines.append(f"> {prefix}{reasonings[direction]}")

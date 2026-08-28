@@ -35,7 +35,7 @@ from airflow.sdk.exceptions import AirflowFailException
 from modules.db import Connection
 from modules.sql import read_sql
 from modules.thesis import common
-from modules.thesis.domain import SLOT_LABELS, LlmRunKind, ThesisSubjectKind
+from modules.thesis.domain import SLOT_LABELS, ForecastBaseline, LlmRunKind, ThesisSubjectKind
 from modules.thesis.state import (
     INTRADAY_SLOT_TIMES,
     IntradayObservation,
@@ -338,17 +338,44 @@ class IntradayForecast:
             )
             for target in targets
         }
+        # 관측 상태를 두 번 만들지 않는다 — 축은 그 상태에서 파생하므로 값이 갈리면 안 된다.
+        observed = self.observed_state(targets, bars)
         return self._run.build_and_store(
             try_number=try_number,
             run_kind=LlmRunKind.FORECAST,
             run_slot=self._slot,
             macro_window_start=self.macro_window_start(),
             targets=targets,
-            observed=self.observed_state(targets, bars),
+            observed=observed,
             past=past,
             dag_run_id=dag_run_id,
             same_day=self.same_day(targets, bars),
+            baselines=intraday_baselines(observed),
         )
+
+
+def intraday_baselines(observed: ObservedState) -> dict[str, ForecastBaseline]:
+    """장중 예측의 축. 관측 상태의 `intraday`를 그대로 옮긴다.
+
+    **`at`이 `as_of_at`이 아니라 봉의 `bar_at`이다.** 슬롯은 기준 시각 **직전** 봉을 보고
+    수집이 밀리면 `BAR_STALENESS`(15분)까지 앞선 봉이라, `as_of_at`으로 적으면
+    "12:35 기준"이라 써 놓고 12:20 값을 보여 주는 줄이 생긴다(2026-08-28 실측: `as_of_at`
+    03:35Z, 코스피가 본 봉 03:30Z).
+
+    `return_pct`는 전일 종가 대비 여기까지 온 등락이고 예측 크기와 **축이 다르다.**
+    저장해 두면 읽는 쪽이 둘을 더해 하루 등락으로 읽을 수 있다.
+
+    감쌀 상태가 없어 함수다. `common.session_baselines`의 장중 짝이고, 둘이 다른 모듈에
+    있는 이유는 슬롯마다 다른 것을 슬롯별 모듈이 갖기 때문이다.
+    """
+    return {
+        code: ForecastBaseline(
+            price=Decimal(str(row.price)),
+            at=row.bar_at,
+            return_pct=Decimal(str(row.return_pct)),
+        )
+        for code, row in observed.intraday.items()
+    }
 
 
 def _bar_close(bars: dict[str, Bar] | None, code: str) -> Decimal | None:

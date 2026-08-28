@@ -130,6 +130,32 @@ async def test_the_list_carries_the_expected_return_and_the_grade_summary():
 
 
 @pytest.mark.asyncio
+async def test_the_list_says_what_the_expected_return_is_measured_against():
+    """**목록에도 축을 싣는다.**
+
+    소비자가 목록만 보고도 슬롯 규칙 없이 "이 1.2퍼센트가 무엇 대비인가"를 읽어야 한다.
+    그것이 이 칸들을 만든 이유다 — 전에는 장중 기준가가 `input_state` JSONB에만 있었고
+    장전 기준가는 아예 없었다.
+    """
+    async with client(theses=[thesis_row()]) as http:
+        item = (await http.get("/api/theses")).json()["items"][0]
+
+    assert item["base_price"] == 6825.11
+    assert item["base_return_pct"] == -1.26
+    # 축의 시각은 `as_of_at`이 아니라 그 슬롯이 실제로 본 봉의 시각이다.
+    assert item["base_at"] != item["as_of_at"]
+    assert item["base_at"].endswith("Z")
+
+
+@pytest.mark.asyncio
+async def test_the_list_carries_the_error_band_of_each_direction():
+    async with client(theses=[thesis_row()]) as http:
+        item = (await http.get("/api/theses")).json()["items"][0]
+
+    assert (item["up_return_band_pct"], item["down_return_band_pct"]) == (0.3, 0.4)
+
+
+@pytest.mark.asyncio
 async def test_times_end_with_z_not_an_offset():
     """프로젝트 규칙이 `Z`를 요구한다. Pydantic 기본 직렬화는 `+00:00`이다."""
     async with client(theses=[thesis_row()]) as http:

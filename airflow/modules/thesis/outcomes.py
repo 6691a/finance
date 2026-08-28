@@ -92,6 +92,7 @@ from modules.thesis.toolbox import (
     ThesisToolbox,
     tool_node,
 )
+from modules.utility import KST_TIMEZONE
 
 logger = logging.getLogger(__name__)
 
@@ -103,7 +104,11 @@ logger = logging.getLogger(__name__)
 # 해설 프롬프트를 고치면 올린다. `thesis_outcome.prompt_version`에 변형과 함께 저장된다.
 #
 # 2: 산문의 숫자 표기 규칙(`llm.NUMBER_STYLE`)이 붙었다(2026-08-26).
-NARRATIVE_PROMPT_VERSION = "2"
+# 3: 대상마다 예측의 축(기준가·기준 시각·여기까지 온 등락)과 크기 오차의 밴드 적중 여부가
+#    실린다(2026-08-28, 15단계). **YAML은 안 바뀐다** — 자리표시자에 들어가는 값의 줄 수만
+#    늘었다. 판을 가르는 이유는 모델이 보는 글자가 달라지기 때문이다. 전에는
+#    `- 실제 결과: -0.53퍼센트` 한 줄뿐이라 어느 축의 등락인지 모델도 알 수 없었다.
+NARRATIVE_PROMPT_VERSION = "3"
 
 # 해설 한 편의 상한. 넘으면 그 항목만 자른다.
 MAX_NARRATIVE_CHARS = 1000
@@ -152,6 +157,13 @@ class NarrativeTarget(BaseModel):
     # 과대·과소의 **이유**가 안 남아서, 크게 어긋난 날은 해설이 그것을 다루게 한다.
     predicted_return_pct: Decimal | None = None
     return_error_pct: Decimal | None = None
+    # 그 크기의 ± 폭. 오차가 폭 안에 들었는지가 "빗나갔다"와 "예상 범위였다"를 가른다.
+    predicted_band_pct: Decimal | None = None
+    # 예측의 축(15단계). **없으면 모델이 어느 축의 등락인지 모른다** — 장중 추론의
+    # `-0.53%`는 그 시각 가격 대비이고 장전은 전일 종가 대비다.
+    base_price: Decimal | None = None
+    base_at: datetime | None = None
+    base_return_pct: Decimal | None = None
 
 
 class NarrativeAnswer(BaseModel):
@@ -275,6 +287,16 @@ class FollowupNarrator:
             f"- 하락 이유: {target.down_reasoning}",
             f"- 횡보 이유: {target.flat_reasoning}",
         ]
+        # **축을 이유보다 먼저 적는다.** 아래 "실제 결과"의 등락률이 무엇 대비인지가
+        # 슬롯마다 다르고, 그것을 모르면 모델이 장중 추론의 크기를 하루 등락과 견준다.
+        if target.base_price is not None and target.base_at is not None:
+            at = target.base_at.astimezone(KST_TIMEZONE)
+            progress = (
+                f" (직전 종가 대비 {target.base_return_pct:+.2f}퍼센트)"
+                if target.base_return_pct
+                else ""
+            )
+            lines.append(f"- 기준: {at:%m-%d %H:%M} KST {target.base_price:,.2f}{progress} → 그날 정규장 마감까지")
         if target.cited_titles:
             lines.append("- 그때 인용한 근거: " + " · ".join(target.cited_titles))
         if self._include_outcome and target.actual_outcome is not None:
@@ -285,9 +307,17 @@ class FollowupNarrator:
             if target.return_error_pct is not None:
                 # 부호가 뜻이다 — 양수면 실제가 더 컸다(과소추정), 음수면 과대추정이다.
                 gap = "과소" if target.return_error_pct > 0 else "과대"
+                # 폭이 있으면 적중 여부를 함께 말한다. "0.3퍼센트포인트 빗나갔다"와
+                # "0.3퍼센트포인트 빗나갔는데 그럴 줄 알았다"는 다른 이야기다.
+                if target.predicted_band_pct is None:
+                    band = ""
+                elif abs(target.return_error_pct) <= target.predicted_band_pct:
+                    band = f" (±{target.predicted_band_pct}%p 예상 범위 안)"
+                else:
+                    band = f" (±{target.predicted_band_pct}%p 예상 범위 밖)"
                 lines.append(
                     f"- **크기 예측**: {target.predicted_return_pct}% 예상 → "
-                    f"{target.return_error_pct:+.2f}%p {gap}"
+                    f"{target.return_error_pct:+.2f}%p {gap}{band}"
                 )
         return "\n".join(lines)
 

@@ -27,7 +27,14 @@ SELECT id,
        -- 판 7부터의 방향별 조건부 크기. 그 전 행은 NULL이다. **끝에 붙인다** — 읽는 쪽이
        -- 위치로 매핑해서, 가운데 끼우면 뒤 칸이 전부 한 칸씩 밀린다.
        up_return_pct,
-       down_return_pct
+       down_return_pct,
+       -- 크기의 오차 폭과 예측의 축(15단계). 같은 이유로 끝에 붙인다. 축 셋은 예측 슬롯에만
+       -- 있고 장후 둘은 NULL이라, 렌더가 그 줄을 통째로 뺀다.
+       up_return_band_pct,
+       down_return_band_pct,
+       base_price,
+       base_at,
+       base_return_pct
 FROM thesis
 WHERE run_date = %s
   AND run_slot = %s

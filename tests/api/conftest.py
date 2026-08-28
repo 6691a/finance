@@ -5,7 +5,7 @@
 컨테이너 provider를 바꾸는 것이 `dependency_injector`의 문서화된 형태다.
 """
 
-from datetime import UTC, date, datetime
+from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 from types import SimpleNamespace
 
@@ -59,6 +59,13 @@ def thesis_row(thesis_id: int = 1, code: str = "KOSPI", llm_run_id: int | None =
         prob_flat=Decimal("0.2200"),
         up_return_pct=Decimal("0.80"),
         down_return_pct=Decimal("1.20"),
+        up_return_band_pct=Decimal("0.30"),
+        down_return_band_pct=Decimal("0.40"),
+        # 축이다. `base_at`은 **`as_of_at`과 일부러 다르다** — 장중 슬롯은 기준 시각
+        # 직전 봉을 보므로 둘을 같은 값으로 두면 유도 가능하다는 착각이 굳는다.
+        base_price=Decimal("6825.11000000"),
+        base_at=AS_OF - timedelta(minutes=5),
+        base_return_pct=Decimal("-1.2600"),
         up_reasoning="오를 이유",
         down_reasoning="내릴 이유",
         flat_reasoning="횡보 이유",

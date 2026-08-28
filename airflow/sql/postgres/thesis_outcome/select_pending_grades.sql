@@ -25,13 +25,28 @@ SELECT thesis.id,
        thesis.prob_flat,
        horizon.horizon_days,
        thesis.run_slot,
-       -- 장중 슬롯의 채점 기준가. 모델이 실제로 본 값이라 봉에서 다시 뽑지 않는다
-       -- (`index_bar/select_intraday_horizon_return.sql` 머리말). 장전 슬롯은 이 칸이
-       -- NULL이고 기준가를 전일 종가에서 얻는다.
-       thesis.input_state #>> ARRAY['intraday', thesis.subject_code, 'price'] AS base_price,
+       -- 채점 기준가. 모델이 실제로 본 값이라 봉에서 다시 뽑지 않는다
+       -- (`index_bar/select_intraday_horizon_return.sql` 머리말).
+       --
+       -- **컬럼이 원본이고 JSONB는 하위 호환 갈래다.** 15단계가 `thesis.base_price`를
+       -- 만들기 전에 저장된 장중 행은 그 칸이 NULL이고 기준가가 `input_state`에만 있다.
+       -- 이 조회에 날짜 상한이 없어(위 머리말) 그 행들의 미채점 지평 1·3·5가 계속
+       -- 돌아오므로, 컬럼만 읽으면 그것들이 조용히 영영 미채점이 된다.
+       -- **리비전 전 미채점 행이 다 소진되면 이 갈래를 지운다.**
+       --
+       -- 장전 슬롯도 이제 이 칸이 채워지지만 채점은 여전히 전일 종가를 쓴다
+       -- (`thesis.review._horizon_return`이 슬롯으로 가른다). 잘 돌고 있는 장전 경로를
+       -- 이 변경에 얹지 않는다 — 축을 갈아끼우면 판 경계에서 채점 기준이 갈린다.
+       coalesce(
+           thesis.base_price,
+           (thesis.input_state #>> ARRAY['intraday', thesis.subject_code, 'price'])::numeric
+       ) AS base_price,
        -- 크기 채점(판 7부터)의 입력. 실현된 방향에 대응하는 쪽만 쓰이고 그 전 행은 NULL이다.
+       -- `*_return_band_pct`는 그 크기의 오차 폭이고 스냅샷으로 함께 저장된다(15단계).
        thesis.up_return_pct,
-       thesis.down_return_pct
+       thesis.down_return_pct,
+       thesis.up_return_band_pct,
+       thesis.down_return_band_pct
 FROM thesis
 CROSS JOIN unnest(%s::integer[]) AS horizon(horizon_days)
 WHERE thesis.run_slot = ANY(%s)

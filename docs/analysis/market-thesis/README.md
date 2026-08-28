@@ -89,6 +89,7 @@ requirements) **배포 단위(worktree/PR 하나)마다 문서를 나눴다.** �
 | 12 | [12-api.md](12-api.md) | `apps/api/`(FastAPI 읽기 전용 조회 API 넷), `compose/prod/api`·`compose/local/api`, `justfile` 태스크 여섯, `tests/api/`·`tests/config/test_api_stack.py`, 프로젝트 가이드 문서의 구조 표 | 1, 5 (11은 선택 — 없으면 응답 칸이 빈다) | 없음 |
 | 13 | [13-llm-ledger.md](13-llm-ledger.md) | `thesis_llm_run`·`thesis_tool_call` 테이블과 수기 리비전(+`thesis`·`thesis_outcome`에 연결 칸), `thesis/toolbox.py`의 기록 래퍼, 생성·해설 흐름의 대화 열고 닫기, SQL 넷, 테스트 | 2, 5, 7 | 없음(기록만) |
 | 14 | [14-web-ui.md](14-web-ui.md) | React·TypeScript 실행 추적·추론 상세·주간 품질 화면, Cytoscape.js 관계 그래프, FastAPI 정적 자산 제공, Grafana 로컬 서비스·대시보드·테스트·문서 제거 | 11, 12, 13 | 없음(조회만) |
+| 15 | [15-return-basis.md](15-return-basis.md) | `thesis`에 축 세 칸과 크기 오차 두 칸, `thesis_outcome`에 오차 스냅샷, 수기 리비전, Slack 기준 줄과 `±` 표기, API 다섯 칸, 크기 앵커 툴 `typical_move`, 프롬프트 `## 크기` 절(앵커 + 오차), `select_window_changes.sql`의 국내 지수 제외 | 9, 10, 11, 12 | 있음(크기·오차 추정만 — 채점은 순수 함수) |
 
 **5단계는 1단계의 `thesis` 채점 컬럼을 `thesis_outcome`으로 옮긴다.** 채택했으므로
 (2026-08-21) 그 이동을 1·2단계 코드에 먼저 반영한다. 무엇이 바뀌는지는
@@ -116,6 +117,13 @@ requirements) **배포 단위(worktree/PR 하나)마다 문서를 나눴다.** �
   내고 별도 frontend service는 만들지 않는다. **Grafana는 함께 걷어낸다** — 이 화면이
   대체해서가 아니라 더 안 쓰기로 한 결정이다(2026-08-26). 대시보드 열여덟은 원시 수집을
   보던 것이라 대체 없이 사라진다([14-web-ui.md](14-web-ui.md) 7절).
+- **15는 11이 남긴 자리를 채운다.** 11이 크기 두 칸을 만들면서 축(어느 가격 대비인가)을
+  문서에만 두고 행에 안 남겼고, 기준선을 `daily_history` 눈대중에 맡겼다. 2026-08-28 실측이
+  둘 다 값을 치른다는 것을 보여 줬다 — 장중 0.7퍼센트가 하루 등락으로 읽혔고, 장전 크기는
+  모델이 조회한 재료의 중앙값보다도 낮았다([15-return-basis.md](15-return-basis.md) 0절).
+  같은 문서가 `macro_changes`의 국내 지수 축 오염도 함께 걷고, **크기를 점이 아니라
+  `mid ± band` 구간으로 바꾼다**(사용자 2026-08-28 — "1퍼 2퍼가 정확히 맞지 않을 것
+  같은데 ± 오차 값도 추가해줘").
 - 한 단계가 끝날 때마다 그 단계 문서의 "테스트" 절이 통과해야 다음으로 간다.
 
 **[TUNING.md](TUNING.md)는 단계가 아니다.** 다 만든 뒤에 쓰는 운영 규칙이라 번호가 없다 —

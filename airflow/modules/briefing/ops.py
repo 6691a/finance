@@ -140,6 +140,11 @@ class ThesisHorizon(BaseModel):
     # 평균은 부호를 살린다 — 양수면 과소추정, 음수면 과대추정이고 그것이 프롬프트를 고칠 방향이다.
     return_graded: int = 0
     mean_return_error_pct: float | None = None
+    # 밴드 적중. **오차 평균과 다른 것을 잰다** — 저쪽은 중심의 치우침이고 이쪽은 모델이
+    # 자기 불확실성을 아는가다. **적중률이 지나치게 높아도 문제다**: 95퍼센트면 폭을
+    # 너무 넓게 불러 구간이 아무 것도 말하지 않는다는 뜻이다.
+    band_graded: int = 0
+    band_hits: int = 0
 
     @property
     def beats_uniform(self) -> bool | None:
@@ -278,6 +283,8 @@ class OpsBriefingReader:
                     unresolved=row[7],
                     return_graded=row[8],
                     mean_return_error_pct=float(row[9]) if row[9] is not None else None,
+                    band_graded=row[10],
+                    band_hits=row[11],
                 )
                 for row in rows
             ),
@@ -337,7 +344,7 @@ def _thesis_blocks(health: ThesisHealth) -> list[dict[str, Any]]:
     if health.horizons:
         rendered += blocks.table_section(
             f"추론 품질 · 최근 {health.window_days}일",
-            ("지평", "채점", "Brier", "크기 오차", "판정(지지/반박/보류)"),
+            ("지평", "채점", "Brier", "크기 오차", "밴드 적중", "판정(지지/반박/보류)"),
             [_horizon_row(item) for item in health.horizons],
         )
         # baseline을 매번 다시 설명하지 않도록 한 줄로 붙인다.
@@ -347,6 +354,7 @@ def _thesis_blocks(health: ThesisHealth) -> list[dict[str, Any]]:
                     f"균등 확률 baseline {UNIFORM_BRIER}",
                     "낮을수록 좋다",
                     "판정은 Brier와 다른 것을 잰다 — 저쪽은 방향, 이쪽은 이유",
+                    "밴드 적중은 60~80퍼센트가 목표대 — 너무 높으면 폭을 넓게 부른 것이다",
                 ]
             )
         )
@@ -356,7 +364,7 @@ def _thesis_blocks(health: ThesisHealth) -> list[dict[str, Any]]:
     return rendered
 
 
-def _horizon_row(item: ThesisHorizon) -> tuple[str, str, str, str, str]:
+def _horizon_row(item: ThesisHorizon) -> tuple[str, str, str, str, str, str]:
     if item.mean_brier is None:
         brier = "-"
     else:
@@ -370,11 +378,17 @@ def _horizon_row(item: ThesisHorizon) -> tuple[str, str, str, str, str]:
         # 부호가 뜻이다. 표본 수를 함께 적는다 — flat과 미채점이 빠져 Brier의 n과 다르다.
         gap = "과소" if item.mean_return_error_pct > 0 else "과대"
         sizing = f"{item.mean_return_error_pct:+.2f}%p {gap} (n={item.return_graded})"
+    if not item.band_graded:
+        # 오차 폭을 받기 전 판의 추론이다. 0/0을 0퍼센트로 그리면 "한 번도 못 맞혔다"로 읽힌다.
+        band = "-"
+    else:
+        band = f"{item.band_hits}/{item.band_graded} ({item.band_hits / item.band_graded:.0%})"
     return (
         f"T+{item.horizon_days}",
         str(item.graded),
         brier,
         sizing,
+        band,
         f"{item.supported}/{item.contradicted}/{item.unresolved}",
     )
 

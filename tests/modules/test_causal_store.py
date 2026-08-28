@@ -206,6 +206,48 @@ class TestStorePaths:
             )
 
 
+class TestEvidenceIsStored:
+    """모델이 낸 근거를 남긴다. **없으면 `confidence` 판정을 되짚을 수 없다.**
+
+    2026-08-28까지 `verify_paths`가 목록 밖 ref를 버리는 검사까지 하고도 통과한 값을 그대로
+    버렸다. 한 실행이 경로 서른넷을 전부 `plausible`로 냈을 때 원인을 가릴 근거가 없었다.
+    """
+
+    def test_each_ref_becomes_a_row(self) -> None:
+        connection = _connection()
+
+        store.store_paths(
+            connection,
+            window=WINDOW,
+            paths=(_path(evidence_refs=("document:1", "disclosure:2")),),
+            returns=_returns(),
+            input_hash="abc",
+            llm_run_id=None,
+        )
+
+        rows = [
+            call for call in connection.calls if "INSERT INTO market_causal_evidence" in call[0]
+        ]
+        assert [call[1][1] for call in rows] == ["document:1", "disclosure:2"]
+
+    def test_a_path_without_evidence_writes_nothing(self) -> None:
+        """근거 없는 경로가 정상이다 — 그 주에 평가된 문서가 하나도 없을 수 있다."""
+        connection = _connection()
+
+        store.store_paths(
+            connection,
+            window=WINDOW,
+            paths=(_path(evidence_refs=()),),
+            returns=_returns(),
+            input_hash="abc",
+            llm_run_id=None,
+        )
+
+        assert not [
+            call for call in connection.calls if "INSERT INTO market_causal_evidence" in call[0]
+        ]
+
+
 class TestWeekHasPaths:
     """재실행 판정. 그 주에 행이 있으면 LLM을 다시 부르지 않는다(설계 §5.4)."""
 

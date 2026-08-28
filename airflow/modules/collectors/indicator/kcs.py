@@ -222,12 +222,23 @@ ALL_SERIES: tuple[str, ...] = tuple(
 
 
 class KcsHTTPError(RuntimeError):
-    """게이트웨이가 2xx가 아닌 상태로 응답했다. 재시도 가능 여부는 호출자가 `status`로 판단한다."""
+    """게이트웨이가 2xx가 아닌 상태로 응답했다. 재시도 가능 여부는 호출자가 `status`로 판단한다.
 
-    def __init__(self, status: int, retry_after: str | None = None) -> None:
-        super().__init__(f"KCS request failed with HTTP {status}")
+    **상태 코드만으로는 무엇이 틀렸는지 알 수 없다.** 이 게이트웨이는 2xx가 아닌 응답에도
+    사유를 XML 본문에 담는다(`SERVICE_KEY_IS_NOT_REGISTERED_ERROR`, `NO_OPENAPI_SERVICE_ERROR`
+    처럼). 초판은 그 본문을 버려서 운영 로그에 "HTTP 400"만 남았고, 키 문제인지 주소 문제인지를
+    가릴 수 없었다. 그래서 `reason`을 함께 든다.
+
+    **본문만 담고 URL은 담지 않는다.** `HTTPError`가 URL을 `filename`에 들고 있는데 거기에는
+    서비스키가 들어 있다.
+    """
+
+    def __init__(self, status: int, retry_after: str | None = None, reason: str | None = None) -> None:
+        detail = f" ({reason})" if reason else ""
+        super().__init__(f"KCS request failed with HTTP {status}{detail}")
         self.status = status
         self.retry_after = retry_after
+        self.reason = reason
 
 
 class KcsResultError(RuntimeError):
@@ -330,6 +341,46 @@ class KcsResponse(BaseModel):
     def normalize_to_utc(cls, moment: datetime) -> datetime:
         # 저장·비교용 시각은 UTC로 정규화한다. naive datetime은 AwareDatetime이 이미 막는다.
         return moment.astimezone(UTC)
+
+
+# 2xx가 아닌 응답의 본문에서 사유가 들어 있는 칸. 게이트웨이가 형식을 둘로 쓴다 —
+# 인증 계열은 `errMsg`/`returnAuthMsg`, 서비스 계열은 `resultMsg`다. **키는 어디에도 없다.**
+FAILURE_REASON_TAGS = ("errMsg", "returnAuthMsg", "resultMsg", "returnReasonCode")
+
+# 사유 문자열의 상한. 게이트웨이가 HTML 오류 페이지를 돌려주는 경우가 있어 로그를 덮지 않게 자른다.
+MAX_REASON_CHARS = 200
+
+
+def _failure_reason(error: HTTPError) -> str | None:
+    """오류 응답 본문에서 사유를 뽑는다. 못 읽으면 `None`이다.
+
+    본문을 읽는 것 자체가 실패해도 원래의 HTTP 오류를 잃지 않아야 하므로 여기서는 넓게 잡는다.
+    """
+    try:
+        body = error.read().decode("utf-8", "replace")
+    except OSError:
+        # 이미 닫힌 응답이거나 읽는 중 끊겼다. 상태 코드만으로 올린다.
+        return None
+
+    reasons = [
+        found.strip()
+        for tag in FAILURE_REASON_TAGS
+        if (found := _tag_text(body, tag)) is not None and found.strip()
+    ]
+    if not reasons:
+        return " ".join(body.split())[:MAX_REASON_CHARS] or None
+    return " ".join(reasons)[:MAX_REASON_CHARS]
+
+
+def _tag_text(body: str, tag: str) -> str | None:
+    opening, closing = f"<{tag}>", f"</{tag}>"
+    start = body.find(opening)
+    if start == -1:
+        return None
+    end = body.find(closing, start)
+    if end == -1:
+        return None
+    return body[start + len(opening) : end]
 
 
 def _require_result_code(root: ElementTree.Element) -> None:
@@ -473,7 +524,7 @@ class KcsTradeCollector:
         # `filename`에 담는다. 체인을 남기면 Sentry나 Airflow 로그가 원인 예외를 붙잡을 때 키가
         # 함께 실린다. `fred.py`가 같은 이유로 같은 형태다.
         except HTTPError as error:
-            raise KcsHTTPError(error.code, error.headers.get("Retry-After")) from None
+            raise KcsHTTPError(error.code, error.headers.get("Retry-After"), _failure_reason(error)) from None
         except URLError as error:
             # 타임아웃과 DNS·연결 실패는 재시도 가능한 오류로 올린다.
             raise ConnectionError(f"KCS request failed: {error.reason}") from None

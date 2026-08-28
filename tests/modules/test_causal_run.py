@@ -22,7 +22,7 @@ class FakeStore:
 
     def store_paths(self, connection, **kwargs):
         self.stored.append(kwargs)
-        return len(kwargs["paths"])
+        return domain.StoreOutcome(stored=len(kwargs["paths"]), new_channels=2)
 
 
 @pytest.fixture
@@ -95,6 +95,7 @@ def test_a_fresh_week_stores_what_the_model_returned(
     assert result["skipped"] is False
     assert result["week_start"] == "2026-08-10"
     assert result["stored"] == 1
+    assert result["new_channels"] == 2
 
 
 def test_the_first_week_does_not_require_reuse(

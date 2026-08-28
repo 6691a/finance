@@ -1,0 +1,7 @@
+interface:
+  display_name: "Writing Collectors"
+  short_description: "airflow/modules/collectors/ 수집기 작성 규칙"
+  default_prompt: "Use $writing-collectors before adding or changing a collector under airflow/modules/collectors/."
+
+policy:
+  allow_implicit_invocation: true

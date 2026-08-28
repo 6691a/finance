@@ -1,0 +1,7 @@
+interface:
+  display_name: "Table Conventions"
+  short_description: "핵심 테이블의 자연키와 저장 규칙"
+  default_prompt: "Use $table-conventions before reading from or writing to source_record, indicator_observation, indicator_series, the bar tables, instrument, document, or stock_event_*."
+
+policy:
+  allow_implicit_invocation: true

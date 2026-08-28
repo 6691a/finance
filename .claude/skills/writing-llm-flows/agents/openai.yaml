@@ -1,0 +1,7 @@
+interface:
+  display_name: "Writing LLM Flows"
+  short_description: "LangChain/LangGraph 흐름과 프롬프트 YAML 규칙"
+  default_prompt: "Use $writing-llm-flows before writing code that calls an LLM or editing a prompt under airflow/modules/prompts/."
+
+policy:
+  allow_implicit_invocation: true

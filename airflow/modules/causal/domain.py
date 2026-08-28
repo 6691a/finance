@@ -42,16 +42,6 @@ MAX_PATHS = 40
 # 경로 설명 한 문장의 길이 상한.
 MAX_REASONING_CHARS = 200
 
-# 실행 하나가 새로 만들 수 있는 경로 이름 수. 어휘 폭주 가드다(설계 §6).
-# 8주 프로토타입에서 둘째 주 이후 새 이름이 주당 0~2개였다.
-MAX_NEW_CHANNELS = 3
-
-# **어휘가 비어 있는 주는 다른 상한을 쓴다.** 첫 주는 전부 새로 만들 수밖에 없어서, 위 값을
-# 걸면 경로가 거의 다 버려진다 — 2026-08-27 개발 DB 실행에서 19개 중 17개가 그렇게 사라졌다.
-# 상한은 **어휘가 이미 있는데 새로 만드는 것**에 걸려야 한다. 그래도 무제한은 아니다:
-# 모델이 경로마다 새 이름을 내면 막을 것이 없어진다. 프로토타입 첫 주가 6~8개였다.
-MAX_NEW_CHANNELS_SEED = 12
-
 # 사건 후보를 몇 주까지 거슬러 보여 주는가. 사건은 수렴하지 않으므로 날짜로 좁힌다(설계 §4).
 EVENT_LOOKBACK_WEEKS = 4
 
@@ -83,6 +73,21 @@ def resolve_week(logical_date: datetime, param: str | None) -> date:
     kst_day = logical_date.astimezone(KST_TIMEZONE).date()
     run_monday = kst_day - timedelta(days=kst_day.weekday())
     return run_monday - timedelta(weeks=RUN_LAG_WEEKS)
+
+
+class StoreOutcome(BaseModel):
+    """저장이 무엇을 했는지. **새 채널 수가 어휘 수렴의 유일한 관측이다**(2026-08-28).
+
+    새 이름에 상한을 두지 않기로 하면서 그 자리를 이 값이 받았다. 매주 늘기만 하면
+    정규화가 안 되고 있는 것이고, 그때 좁힐 자리는 상한이 아니라 프롬프트다.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    stored: int
+    """실제로 들어간 경로 수. 자연키 충돌로 빠진 것은 세지 않는다."""
+    new_channels: int
+    """이 실행이 새로 만든 채널 이름 수."""
 
 
 class CausalWindow(BaseModel):

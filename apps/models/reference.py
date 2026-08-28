@@ -29,11 +29,17 @@ class SeriesKind(StrEnum):
     (`balance_sheet`)과 그 안의 한 항목(`balance_sheet_item`)을 다시 가른다 — 영란은행은
     총자산을 분기로만 고시하고 주간으로는 준비금잔액 같은 항목만 준다. 한 종류로 두면
     "중앙은행 총자산 전부"를 묻는 쿼리가 영국의 준비금을 총자산으로 읽는다.
+
+    **`tips_rate`도 `government_bond`가 아니다.** 실질금리와 기대인플레는 명목 국채 금리를
+    분해한 값이라 만기가 같다. 국채에 넣으면 미국 10년물이 두 개로 보인다. 둘을 한 종류로
+    두는 이유는 반대로 **더하면 명목이 되기 때문**이다 — 따로 보면 뜻이 없다.
     """
 
     GOVERNMENT_BOND = "government_bond"
     MONEY_MARKET = "money_market"
     POLICY_RATE = "policy_rate"
+    TIPS_RATE = "tips_rate"
+    CREDIT_SPREAD = "credit_spread"
     PRICE_INDEX = "price_index"
     ACTIVITY = "activity"
     BALANCE_SHEET = "balance_sheet"
@@ -61,8 +67,8 @@ class IndicatorSeries(EntityBase):
             name="uq_indicator_series_natural_key",
         ),
         CheckConstraint(
-            "kind IN ('government_bond', 'money_market', 'policy_rate', 'price_index', 'activity', "
-            "'balance_sheet', 'balance_sheet_item')",
+            "kind IN ('government_bond', 'money_market', 'policy_rate', 'tips_rate', "
+            "'credit_spread', 'price_index', 'activity', 'balance_sheet', 'balance_sheet_item')",
             name="ck_indicator_series_kind",
         ),
         # 만기가 없는 지표는 NULL이다. 0으로 채우지 않는다. 0을 넣으면 만기별 비교 쿼리가
@@ -114,9 +120,10 @@ class IndicatorSeries(EntityBase):
         ),
         nullable=False,
         comment=(
-            "시계열의 종류(government_bond, money_market, policy_rate, price_index, activity, "
-            "balance_sheet 또는 balance_sheet_item). 국채 곡선에서 단기 자금시장 금리와 중앙은행 정책금리를 "
-            "가르고, 단위가 다른 거시지표와 대차대조표 잔액을 그 곡선에서 뺀다"
+            "시계열의 종류(government_bond, money_market, policy_rate, tips_rate, credit_spread, "
+            "price_index, activity, balance_sheet 또는 balance_sheet_item). 국채 곡선에서 단기 자금시장 "
+            "금리·정책금리·실질금리·신용스프레드를 가르고, 단위가 다른 거시지표와 대차대조표 잔액을 "
+            "그 곡선에서 뺀다"
         ),
     )
     label: Mapped[str] = mapped_column(

@@ -59,6 +59,12 @@ xAI의 프롬프트 캐시는 **서버마다 따로** 저장된다. 같은 대�
 `LANGSMITH_TRACING`, `LANGSMITH_API_KEY`, `LANGSMITH_PROJECT`를 환경에 준다. 비우면 아무 것도
 보내지 않고 호출 경로도 그대로다. **켜면 프롬프트 전문과 문서 본문이 LangSmith로 나간다.**
 저장 위치가 문제가 되면 `LANGSMITH_ENDPOINT`로 다른 인스턴스를 가리킨다.
+
+**`LANGSMITH_TRACING_BACKGROUND=false`도 함께 준다**(2026-08-28). 기본값은 백그라운드 스레드가
+run을 모아 배치로 보내는데, Airflow 태스크 프로세스가 큐를 비우기 전에 끝나면 **시작 이벤트만
+남고 종료가 안 간다.** 트레이스가 `status: pending`에 `outputs: null`로 영원히 멈춰 있으면
+그것이다. 호출이 적고 금방 끝나는 흐름(`causal`)이 먼저 걸렸다. 동기 전송은 왕복이 하나
+늘지만 LLM 호출 자체가 수십 초라 묻힌다.
 """
 
 import logging

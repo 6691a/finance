@@ -16,15 +16,16 @@ from airflow.sdk.exceptions import AirflowFailException
 from dags import market_thesis_intraday as dag_module
 from modules.technical import base_rate
 from modules.thesis import common, intraday
-from modules.thesis.domain import ThesisSubjectKind
+from modules.thesis.domain import SLOT_LABELS, ThesisSubjectKind
 from modules.thesis.state import INTRADAY_SLOT_TIMES, IntradayObservation, RunSlot
 
 DAG = dag_module.market_thesis_intraday
 RUN_DATE = date(2026, 8, 26)
-# KST 10:35 = UTC 01:35
-MORNING_AS_OF = datetime(2026, 8, 26, 1, 35, tzinfo=UTC)
-# KST 12:35 = UTC 03:35
+# KST 12:35 = UTC 03:35. 지금 도는 유일한 장중 슬롯이다.
 MIDDAY_AS_OF = datetime(2026, 8, 26, 3, 35, tzinfo=UTC)
+# KST 10:35 = UTC 01:35. **더 이상 도는 슬롯이 아니다** — 이 시각은 "그날 앞서 있었던 일"의
+# 자리로만 쓴다(옛 `intraday_morning` 행과 장전 행이 되돌아보기에 실린다).
+MORNING_AS_OF = datetime(2026, 8, 26, 1, 35, tzinfo=UTC)
 
 
 # --- DAG ---------------------------------------------------------------------
@@ -63,17 +64,20 @@ def test_every_slot_can_see_the_last_document_assessment():
         assert gap + timedelta(hours=1) > intraday.ASSESSMENT_LAG, slot
 
 
-def test_the_slot_table_is_the_three_the_user_asked_for():
-    """`intraday_afternoon`(14:35)은 `pre_close`(15:00)와 25분 차이라 2026-08-27에 뺐다.
+def test_the_slot_table_is_the_one_that_beat_the_coin_flip():
+    """넷이던 장중 슬롯이 하나로 줄었다.
+
+    채점 84건(2026-08-21~28)에서 균등 추측(Brier 0.667)보다 나은 것은 `intraday_midday`
+    (0.595)뿐이었다. `intraday_afternoon`(0.719)은 `pre_close`와 25분 차이라 08-27에,
+    `intraday_morning`(0.721)과 `pre_close`(0.798)는 08-28에 뺐다.
 
     값 자체는 `RunSlot`에 남는다 — 이미 저장된 행을 채점·해설하는 쪽이 그것을 읽는다.
     """
-    assert INTRADAY_SLOT_TIMES == {
-        RunSlot.INTRADAY_MORNING: time(10, 35),
-        RunSlot.INTRADAY_MIDDAY: time(12, 35),
-        RunSlot.PRE_CLOSE: time(15, 0),
-    }
-    assert RunSlot.INTRADAY_AFTERNOON not in INTRADAY_SLOT_TIMES
+    assert INTRADAY_SLOT_TIMES == {RunSlot.INTRADAY_MIDDAY: time(12, 35)}
+    for retired in (RunSlot.INTRADAY_MORNING, RunSlot.INTRADAY_AFTERNOON, RunSlot.PRE_CLOSE):
+        assert retired not in INTRADAY_SLOT_TIMES
+        # 라벨은 남는다. 없으면 옛 행을 렌더하는 자리가 KeyError로 죽는다.
+        assert SLOT_LABELS[retired]
 
 
 def test_the_tasks_run_in_one_line():
@@ -118,10 +122,16 @@ def test_the_scheduled_time_picks_the_slot():
 
 
 def test_a_param_beats_the_scheduled_time():
-    """수동 실행의 정식 경로다. 스케줄 시각이 있어도 Param이 이긴다."""
-    context = {"logical_date": MIDDAY_AS_OF, "params": {"run_slot": "pre_close"}}
+    """수동 실행의 정식 경로다. 스케줄 시각이 아니어도 Param이 이긴다.
 
-    assert intraday.resolve_slot(context) is RunSlot.PRE_CLOSE
+    Param이 없으면 같은 `logical_date`가 `not an intraday slot`으로 죽는 자리다.
+    """
+    context = {
+        "logical_date": datetime(2026, 8, 26, 2, 0, tzinfo=UTC),
+        "params": {"run_slot": "intraday_midday"},
+    }
+
+    assert intraday.resolve_slot(context) is RunSlot.INTRADAY_MIDDAY
 
 
 def test_a_manual_run_without_a_param_fails_instead_of_guessing():
@@ -140,15 +150,21 @@ def test_an_off_schedule_logical_time_fails_too():
         intraday.resolve_slot({"logical_date": datetime(2026, 8, 26, 2, 0, tzinfo=UTC)})
 
 
-@pytest.mark.parametrize("given", ["post_close", "pre_open", "nonsense"])
+@pytest.mark.parametrize("given", ["post_close", "pre_open", "pre_close", "nonsense"])
 def test_a_non_intraday_slot_is_refused(given):
+    """은퇴한 장중 슬롯(`pre_close`)도 여기서 막힌다. 표에 없으면 돌 시각이 없다."""
     with pytest.raises(AirflowFailException):
         intraday.resolve_slot({"params": {"run_slot": given}})
 
 
 def test_the_as_of_time_is_the_slot_time_not_the_wall_clock():
-    assert intraday.as_of(RUN_DATE, RunSlot.INTRADAY_MORNING) == MORNING_AS_OF
-    assert intraday.as_of(RUN_DATE, RunSlot.PRE_CLOSE) == datetime(2026, 8, 26, 6, 0, tzinfo=UTC)
+    assert intraday.as_of(RUN_DATE, RunSlot.INTRADAY_MIDDAY) == MIDDAY_AS_OF
+
+
+def test_a_retired_slot_has_no_as_of_time():
+    """표에서 빠진 슬롯은 기준 시각을 만들 수 없다. 옛 행은 저장된 `as_of_at`을 쓴다."""
+    with pytest.raises(AirflowFailException, match="not an intraday slot"):
+        intraday.as_of(RUN_DATE, RunSlot.PRE_CLOSE)
 
 
 def test_the_param_offers_exactly_the_intraday_slots():
@@ -158,7 +174,6 @@ def test_the_param_offers_exactly_the_intraday_slots():
 
 
 # --- 대역 --------------------------------------------------------------------
-
 
 
 # 기저율 조회 둘. 관측 상태를 만들 때마다 불리므로 가짜 커서가 순번 큐 밖으로 뺀다.
@@ -211,11 +226,11 @@ STOCK = FakeSubject("005930", ThesisSubjectKind.STOCK)
 TARGETS = (INDEX, STOCK)
 
 
-def bar(minutes_before: int, close: str, previous: str, as_of: datetime = MORNING_AS_OF) -> tuple:
+def bar(minutes_before: int, close: str, previous: str, as_of: datetime = MIDDAY_AS_OF) -> tuple:
     return (as_of - timedelta(minutes=minutes_before), Decimal(close), Decimal(previous))
 
 
-def forecast(connection: Any, slot: RunSlot = RunSlot.INTRADAY_MORNING) -> intraday.IntradayForecast:
+def forecast(connection: Any, slot: RunSlot = RunSlot.INTRADAY_MIDDAY) -> intraday.IntradayForecast:
     return intraday.IntradayForecast(connection, run_date=RUN_DATE, run_slot=slot)
 
 
@@ -254,7 +269,7 @@ def test_the_guard_hands_back_the_bars_it_checked():
         [
             [("KOSPI", *bar(5, "3150", "3125"))],
             [("005930", *bar(1, "71500", "70000"))],
-            (MORNING_AS_OF - timedelta(minutes=10),),
+            (MIDDAY_AS_OF - timedelta(minutes=10),),
         ]
     )
 
@@ -268,7 +283,7 @@ def test_a_dead_document_collector_does_not_pass_the_guard():
         [
             [("KOSPI", *bar(5, "3150", "3125"))],
             [("005930", *bar(1, "71500", "70000"))],
-            (MORNING_AS_OF - timedelta(days=3),),
+            (MIDDAY_AS_OF - timedelta(days=3),),
             (0, 0),
         ]
     )

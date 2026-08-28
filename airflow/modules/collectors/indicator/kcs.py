@@ -35,10 +35,11 @@ from calendar import monthrange
 from datetime import UTC, date, datetime
 from decimal import Decimal
 from enum import StrEnum
+from http.client import HTTPSConnection
 from typing import Self
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlencode
-from urllib.request import urlopen
+from urllib.request import HTTPSHandler, build_opener
 from xml.etree import ElementTree
 
 from pydantic import (
@@ -82,6 +83,43 @@ REQUEST_TIMEOUT_SECONDS = 30
 
 # 제공처가 정상으로 답할 때의 코드. 나머지는 전부 실패다.
 SUCCESS_CODE = "00"
+
+# 보내지 않는 요청 헤더.
+#
+# **이 게이트웨이는 `baggage` 헤더가 붙으면 HTTP 400 `INVALID_REQUEST_PARAMETER_ERROR`로
+# 거절한다**(2026-08-28 실측). Sentry SDK의 stdlib 통합이 켜져 있으면 urllib 요청마다
+# `sentry-trace`와 `baggage`를 자동으로 끼워 넣는데, Airflow는 그 통합을 켠 채로 돈다. 그래서
+# 태스크에서만 400이 나고 `docker exec python`으로 같은 URL을 부르면 200이 나왔다.
+#
+# `sentry-trace` 하나만 붙는 것은 통과하지만 **둘 다 뺀다.** 우리 추적 문맥을 외부 제공처에
+# 흘려 보낼 이유가 없고, 남겨 두면 제공처가 규칙을 좁힐 때 같은 사고가 되풀이된다.
+#
+# 다른 수집기(FRED·DART·ECOS)는 지금 이 헤더를 그대로 보내고도 멀쩡하다. 그쪽이 무시할 뿐이라
+# 언젠가 같은 일이 날 수 있지만, 관측된 곳만 고친다.
+DROPPED_REQUEST_HEADERS = frozenset({"baggage", "sentry-trace"})
+
+
+class _NoTracingConnection(HTTPSConnection):
+    """추적 헤더를 빼고 보내는 연결.
+
+    Sentry는 `HTTPConnection.putrequest`를 감싸 헤더를 `putheader`로 밀어 넣는다. 그래서 우리가
+    `Request(headers=...)`로 무엇을 주든 그 뒤에 덧붙는다. 막을 수 있는 자리가 `putheader`다.
+    """
+
+    def putheader(self, header: str, *values: object) -> None:
+        if header.lower() in DROPPED_REQUEST_HEADERS:
+            return
+        super().putheader(header, *values)
+
+
+class _NoTracingHandler(HTTPSHandler):
+    def https_open(self, request: object):
+        return self.do_open(_NoTracingConnection, request, context=self._context)
+
+
+# 이 수집기만 쓰는 opener다. **전역 opener를 갈아 끼우지 않는다** — 그러면 같은 프로세스의
+# 다른 수집기까지 조용히 따라 바뀐다.
+_OPENER = build_opener(_NoTracingHandler)
 
 
 class KcsSeries(BaseModel):
@@ -222,12 +260,23 @@ ALL_SERIES: tuple[str, ...] = tuple(
 
 
 class KcsHTTPError(RuntimeError):
-    """게이트웨이가 2xx가 아닌 상태로 응답했다. 재시도 가능 여부는 호출자가 `status`로 판단한다."""
+    """게이트웨이가 2xx가 아닌 상태로 응답했다. 재시도 가능 여부는 호출자가 `status`로 판단한다.
 
-    def __init__(self, status: int, retry_after: str | None = None) -> None:
-        super().__init__(f"KCS request failed with HTTP {status}")
+    **상태 코드만으로는 무엇이 틀렸는지 알 수 없다.** 이 게이트웨이는 2xx가 아닌 응답에도
+    사유를 XML 본문에 담는다(`SERVICE_KEY_IS_NOT_REGISTERED_ERROR`, `NO_OPENAPI_SERVICE_ERROR`
+    처럼). 초판은 그 본문을 버려서 운영 로그에 "HTTP 400"만 남았고, 키 문제인지 주소 문제인지를
+    가릴 수 없었다. 그래서 `reason`을 함께 든다.
+
+    **본문만 담고 URL은 담지 않는다.** `HTTPError`가 URL을 `filename`에 들고 있는데 거기에는
+    서비스키가 들어 있다.
+    """
+
+    def __init__(self, status: int, retry_after: str | None = None, reason: str | None = None) -> None:
+        detail = f" ({reason})" if reason else ""
+        super().__init__(f"KCS request failed with HTTP {status}{detail}")
         self.status = status
         self.retry_after = retry_after
+        self.reason = reason
 
 
 class KcsResultError(RuntimeError):
@@ -330,6 +379,46 @@ class KcsResponse(BaseModel):
     def normalize_to_utc(cls, moment: datetime) -> datetime:
         # 저장·비교용 시각은 UTC로 정규화한다. naive datetime은 AwareDatetime이 이미 막는다.
         return moment.astimezone(UTC)
+
+
+# 2xx가 아닌 응답의 본문에서 사유가 들어 있는 칸. 게이트웨이가 형식을 둘로 쓴다 —
+# 인증 계열은 `errMsg`/`returnAuthMsg`, 서비스 계열은 `resultMsg`다. **키는 어디에도 없다.**
+FAILURE_REASON_TAGS = ("errMsg", "returnAuthMsg", "resultMsg", "returnReasonCode")
+
+# 사유 문자열의 상한. 게이트웨이가 HTML 오류 페이지를 돌려주는 경우가 있어 로그를 덮지 않게 자른다.
+MAX_REASON_CHARS = 200
+
+
+def _failure_reason(error: HTTPError) -> str | None:
+    """오류 응답 본문에서 사유를 뽑는다. 못 읽으면 `None`이다.
+
+    본문을 읽는 것 자체가 실패해도 원래의 HTTP 오류를 잃지 않아야 하므로 여기서는 넓게 잡는다.
+    """
+    try:
+        body = error.read().decode("utf-8", "replace")
+    except OSError:
+        # 이미 닫힌 응답이거나 읽는 중 끊겼다. 상태 코드만으로 올린다.
+        return None
+
+    reasons = [
+        found.strip()
+        for tag in FAILURE_REASON_TAGS
+        if (found := _tag_text(body, tag)) is not None and found.strip()
+    ]
+    if not reasons:
+        return " ".join(body.split())[:MAX_REASON_CHARS] or None
+    return " ".join(reasons)[:MAX_REASON_CHARS]
+
+
+def _tag_text(body: str, tag: str) -> str | None:
+    opening, closing = f"<{tag}>", f"</{tag}>"
+    start = body.find(opening)
+    if start == -1:
+        return None
+    end = body.find(closing, start)
+    if end == -1:
+        return None
+    return body[start + len(opening) : end]
 
 
 def _require_result_code(root: ElementTree.Element) -> None:
@@ -466,14 +555,14 @@ class KcsTradeCollector:
         url = self.build_url(request)
         started_at = datetime.now(UTC)
         try:
-            with urlopen(url, timeout=REQUEST_TIMEOUT_SECONDS) as response:
+            with _OPENER.open(url, timeout=REQUEST_TIMEOUT_SECONDS) as response:
                 body = response.read()
                 status = response.status
         # `from None`은 여기서 의도적이다. URL에 서비스키가 들어 있고 `HTTPError`는 그 URL을
         # `filename`에 담는다. 체인을 남기면 Sentry나 Airflow 로그가 원인 예외를 붙잡을 때 키가
         # 함께 실린다. `fred.py`가 같은 이유로 같은 형태다.
         except HTTPError as error:
-            raise KcsHTTPError(error.code, error.headers.get("Retry-After")) from None
+            raise KcsHTTPError(error.code, error.headers.get("Retry-After"), _failure_reason(error)) from None
         except URLError as error:
             # 타임아웃과 DNS·연결 실패는 재시도 가능한 오류로 올린다.
             raise ConnectionError(f"KCS request failed: {error.reason}") from None

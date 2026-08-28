@@ -434,3 +434,13 @@ def test_causal_tables_live_in_the_default_alias():
     for model in (MarketEvent, MarketChannel, MarketCausalPath, MarketCausalStep):
         assert model.__table__.schema is None
         assert model.__table__.info == {"database": "default", "managed": True}
+
+
+def test_the_causal_evidence_keeps_its_ref_as_text() -> None:
+    """`ref`는 `<kind>:<id>` 문자열이다. 마스터 셋에 흩어져 있어 FK를 걸 수 없다."""
+    from apps.models.analysis import MarketCausalEvidence
+
+    table = MarketCausalEvidence.__table__
+
+    assert not table.c.ref.foreign_keys
+    assert table.c.path_id.nullable is False

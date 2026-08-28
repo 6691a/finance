@@ -19,7 +19,27 @@ from modules.utility import KST_TIMEZONE
 
 # 프롬프트 판. `modules/prompts/causal_graph.yaml`의 문장을 고치면 이 값을 올리고
 # `tests/modules/test_prompt_versions.py`의 해시를 같은 커밋에서 갱신한다.
-PROMPT_VERSION = "1"
+#
+# 판 2는 문장이 아니라 **자리표시자에 들어가는 값의 모양**이 바뀐 것이다(2026-08-28).
+# 근거 후보를 대상 코드로 안 좁히게 되면서 문서 줄이 `(대상, 시각, score…)`에서
+# `(태그 목록, 시각, score…)`으로 바뀌었다. 모델이 보는 입력이 달라지므로 판을 가르지만
+# YAML은 그대로라 해시가 1과 같다.
+#
+# 판 3은 어휘 재사용에 조건을 달았다(2026-08-28). 8/03을 씨앗으로 두 주를 돌리자 채널이
+# 6개로 굳었는데, 그 대가로 사슬이 `reasoning`을 배신했다 — "반도체 호황이 이익 기대에
+# 반영됐다"고 쓰면서 사슬은 `위험선호 > 금리 기대 > 밸류에이션`이었다. 목록에 `이익 기대`가
+# 없어 있는 것에 욱여넣은 것이다. 판정 기준(사슬과 `reasoning`이 같은 말을 하는가)을
+# 프롬프트에 싣는다.
+#
+# 판 4는 사건을 고르는 규칙을 더했다(2026-08-28). 판 3이 채널 어휘를 고쳤더니 남은 결함이
+# 사건 쪽이었다 — 지난주 사건이 이번 주 경로 넷을 먹었고, 같은 일이 날짜만 달리해 노드 둘로
+# 갈렸다. 후보 창을 `EVENT_LOOKBACK_WEEKS`로 좁히는 것과 함께 간다.
+#
+# 판 5는 `confidence`를 가르는 기준을 밝혔다(2026-08-28). 판 4 실행이 경로 서른넷을 전부
+# `plausible`로 냈다. 정의가 "같은 기간에 함께 관찰됨"이라 등락만 봐도 참으로 읽혔고,
+# "확실하지 않으면 `plausible`"이 기본값을 눌러 두고 있었다. 가르는 것은 확신의 세기가
+# 아니라 근거가 그 방향을 말했는가 하나다.
+PROMPT_VERSION = "5"
 
 # 대상 주 `W`와 실행 주 `W+2`의 거리. 설계 §2.
 RUN_LAG_WEEKS = 2
@@ -37,18 +57,16 @@ MAX_PATHS = 40
 # 경로 설명 한 문장의 길이 상한.
 MAX_REASONING_CHARS = 200
 
-# 실행 하나가 새로 만들 수 있는 경로 이름 수. 어휘 폭주 가드다(설계 §6).
-# 8주 프로토타입에서 둘째 주 이후 새 이름이 주당 0~2개였다.
-MAX_NEW_CHANNELS = 3
-
-# **어휘가 비어 있는 주는 다른 상한을 쓴다.** 첫 주는 전부 새로 만들 수밖에 없어서, 위 값을
-# 걸면 경로가 거의 다 버려진다 — 2026-08-27 개발 DB 실행에서 19개 중 17개가 그렇게 사라졌다.
-# 상한은 **어휘가 이미 있는데 새로 만드는 것**에 걸려야 한다. 그래도 무제한은 아니다:
-# 모델이 경로마다 새 이름을 내면 막을 것이 없어진다. 프로토타입 첫 주가 6~8개였다.
-MAX_NEW_CHANNELS_SEED = 12
-
 # 사건 후보를 몇 주까지 거슬러 보여 주는가. 사건은 수렴하지 않으므로 날짜로 좁힌다(설계 §4).
-EVENT_LOOKBACK_WEEKS = 4
+#
+# **4에서 1로 좁혔다**(2026-08-28). 채널과 달리 **사건은 재사용이 미덕이 아니다** — 날짜가
+# 붙은 일회성이라, 지난달 사건이 이번 주 등락을 만들었다고 적히면 그건 대개 틀린 것이다.
+# 4주로 두자 `미국 고용 둔화 확인`(8/07)이 경로 열둘에 쓰였고 그중 넷이 8/10 주 것이었다.
+# 그 주에 CPI라는 자기 사건이 있는데도 지난주 것을 끌어왔다.
+#
+# **0이 아니라 1인 이유**는 주 경계에 걸린 반응이 실재하기 때문이다. 금요일 밤 미국 지표는
+# 그 주 사건이지만 다음 주 월요일 국내 시장이 처음 반응한다.
+EVENT_LOOKBACK_WEEKS = 1
 
 # event-time cutoff의 시각(KST). KRX 정규장 종가가 확정된 뒤다.
 #
@@ -78,6 +96,21 @@ def resolve_week(logical_date: datetime, param: str | None) -> date:
     kst_day = logical_date.astimezone(KST_TIMEZONE).date()
     run_monday = kst_day - timedelta(days=kst_day.weekday())
     return run_monday - timedelta(weeks=RUN_LAG_WEEKS)
+
+
+class StoreOutcome(BaseModel):
+    """저장이 무엇을 했는지. **새 채널 수가 어휘 수렴의 유일한 관측이다**(2026-08-28).
+
+    새 이름에 상한을 두지 않기로 하면서 그 자리를 이 값이 받았다. 매주 늘기만 하면
+    정규화가 안 되고 있는 것이고, 그때 좁힐 자리는 상한이 아니라 프롬프트다.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    stored: int
+    """실제로 들어간 경로 수. 자연키 충돌로 빠진 것은 세지 않는다."""
+    new_channels: int
+    """이 실행이 새로 만든 채널 이름 수."""
 
 
 class CausalWindow(BaseModel):
@@ -238,7 +271,9 @@ class DocumentCandidate(BaseModel):
     model_config = ConfigDict(frozen=True)
 
     ref: str
-    target_code: str
+    tags: tuple[str, ...] = ()
+    """이 문서에 붙은 종목·지표 태그 전부. **대상 목록 밖 값도 그대로 싣는다** —
+    어느 대상에 닿았는지는 모델이 판단한다. 태그가 없는 문서(시황·경제)도 후보가 된다."""
     title: str
     summary: str
     source_slug: str

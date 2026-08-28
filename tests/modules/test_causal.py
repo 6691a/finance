@@ -299,9 +299,8 @@ class TestFetchCandidates:
     def _connection(self) -> FakeConnection:
         return FakeConnection(
             results={
-                "document_instrument": [
+                "FROM document": [
                     (
-                        "005930",
                         84026,
                         "삼성전자 반도체 수출 급증",
                         "요약",
@@ -309,7 +308,18 @@ class TestFetchCandidates:
                         datetime(2026, 8, 14, 1, 0, tzinfo=UTC),
                         8,
                         "up",
-                    )
+                        ["005930", "KOSPI"],
+                    ),
+                    (
+                        84100,
+                        "미국 7월 소비자물가 둔화",
+                        "요약",
+                        "cnbc",
+                        datetime(2026, 8, 12, 22, 0, tzinfo=UTC),
+                        8,
+                        "up",
+                        ["CPI_M"],  # 대상 목록 밖 태그뿐이다
+                    ),
                 ],
                 "FROM disclosure_event": [
                     (
@@ -331,14 +341,24 @@ class TestFetchCandidates:
         assert found.refs == (
             "disclosure:20260819000123",
             "document:84026",
+            "document:84100",
             "technical_signal:12",
         )
 
-    def test_documents_keep_the_target_they_were_tagged_to(self) -> None:
+    def test_documents_carry_every_tag_they_have(self) -> None:
+        """태그는 표시용이다. 어느 대상에 붙었는지를 모델이 알아야 사건을 정확히 만든다."""
         found = candidates.fetch_candidates(self._connection(), self._targets(), self.WINDOW)
 
-        assert found.documents[0].target_code == "005930"
+        assert found.documents[0].tags == ("005930", "KOSPI")
         assert found.documents[0].value_score == 8
+
+    def test_a_document_tagged_only_outside_the_targets_is_still_a_candidate(self) -> None:
+        """**대상 코드로 좁히지 않는다.** 좁히면 `CPI_M`에만 태그된 미국 물가 기사가 통째로
+        빠지는데, 모델은 그 사건을 경로의 출발점으로 쓴다 — 2026-08-28 운영 실행에서 경로
+        14개 중 8개가 그 사건이었고 근거는 우연히 딸려 온 것뿐이었다."""
+        found = candidates.fetch_candidates(self._connection(), self._targets(), self.WINDOW)
+
+        assert "document:84100" in found.refs
 
     def test_refs_are_sorted_so_the_input_hash_is_stable(self) -> None:
         """`input_hash`가 후보 ref를 접는다. 조회 순서가 흔들려도 같은 입력이면 같은 해시여야
@@ -383,6 +403,15 @@ class TestVocabularyOptions:
         assert call[1]["since"] == self.WINDOW.week_start - timedelta(
             weeks=domain.EVENT_LOOKBACK_WEEKS
         )
+
+    def test_the_event_window_is_one_week(self) -> None:
+        """**사건은 채널과 달리 재사용이 미덕이 아니다**(2026-08-28).
+
+        4주로 두자 `미국 고용 둔화 확인`(8/07)이 경로 열둘에 쓰였고 그중 넷이 8/10 주
+        것이었다 — 그 주에 CPI라는 자기 사건이 있는데도 지난주 것을 끌어왔다. 직전 주까지만
+        남기는 이유는 금요일 밤 미국 지표처럼 주 경계에 걸린 반응이 실재하기 때문이다.
+        """
+        assert domain.EVENT_LOOKBACK_WEEKS == 1
 
     def test_node_ids_are_prefixed_so_the_model_can_tell_them_apart(self) -> None:
         """`e:`와 `c:`가 없으면 모델이 사건 id를 경로 칸에 넣는다."""

@@ -1,11 +1,16 @@
 import re
 from datetime import UTC, date, datetime
 from decimal import Decimal
+from http.client import HTTPSConnection
+from io import BytesIO
 from typing import Self
+from unittest import mock
+from urllib.error import HTTPError
 
 import pytest
 from pydantic import SecretStr, ValidationError
 
+from modules.collectors.indicator import kcs as kcs_module
 from modules.collectors.indicator.kcs import (
     ALL_SERIES,
     COLUMN_COUNT,
@@ -17,6 +22,7 @@ from modules.collectors.indicator.kcs import (
     SOURCE_RECORD_INSERT,
     UNIT,
     KcsDataset,
+    KcsHTTPError,
     KcsPayloadError,
     KcsRequest,
     KcsResponse,
@@ -242,6 +248,66 @@ def test_a_body_that_is_not_xml_fails():
         parse_items(b"<not-xml", request_for())
 
 
+def gateway_error_xml(message: str, auth_message: str, code: str) -> bytes:
+    """게이트웨이가 2xx가 아닌 응답에 담아 보내는 본문. 2026-08-28 실측 형태다."""
+    return (
+        "<OpenAPI_ServiceResponse><cmmMsgHeader>"
+        f"<errMsg>{message}</errMsg><returnAuthMsg>{auth_message}</returnAuthMsg>"
+        f"<returnReasonCode>{code}</returnReasonCode>"
+        "</cmmMsgHeader></OpenAPI_ServiceResponse>"
+    ).encode()
+
+
+def http_error(status: int, body: bytes) -> HTTPError:
+    return HTTPError("https://apis.data.go.kr/...?serviceKey=SECRET", status, "", {}, BytesIO(body))
+
+
+@pytest.mark.parametrize(
+    ("body", "expected"),
+    [
+        (
+            gateway_error_xml("SERVICE_KEY_IS_NOT_REGISTERED_ERROR", "서비스 접근거부", "30"),
+            "SERVICE_KEY_IS_NOT_REGISTERED_ERROR",
+        ),
+        (
+            gateway_error_xml("NO_OPENAPI_SERVICE_ERROR", "해당 오픈API 서비스가 없거나 폐기됨", "12"),
+            "NO_OPENAPI_SERVICE_ERROR",
+        ),
+        (b"<html><body>Bad Request</body></html>", "Bad Request"),
+    ],
+)
+def test_an_http_failure_carries_the_reason_from_the_body(body, expected):
+    """게이트웨이는 2xx가 아닌 응답에도 사유를 본문에 담는다.
+
+    상태 코드만 올리면 운영 로그에 "HTTP 400"만 남아 키 문제인지 주소 문제인지 가릴 수 없다.
+    """
+    collector = KcsTradeCollector(SecretStr("secret-key"))
+
+    with (
+        mock.patch.object(kcs_module._OPENER, "open", side_effect=http_error(400, body)),
+        pytest.raises(KcsHTTPError) as failure,
+    ):
+        collector.fetch_trade(request_for())
+
+    assert failure.value.status == 400
+    assert expected in str(failure.value)
+
+
+def test_the_service_key_never_reaches_the_error_message():
+    """`HTTPError`는 URL을 `filename`에 든다. 그 URL에 키가 들어 있다."""
+    collector = KcsTradeCollector(SecretStr("SECRET"))
+    error = http_error(403, b"<errMsg>SERVICE_KEY_IS_NOT_REGISTERED_ERROR</errMsg>")
+
+    with (
+        mock.patch.object(kcs_module._OPENER, "open", side_effect=error),
+        pytest.raises(KcsHTTPError) as failure,
+    ):
+        collector.fetch_trade(request_for())
+
+    assert "SECRET" not in str(failure.value)
+    assert failure.value.__cause__ is None
+
+
 def test_store_writes_one_source_record_and_every_observation():
     connection = FakeConnection()
 
@@ -351,3 +417,20 @@ def test_the_dag_maps_over_every_dataset():
 def test_the_first_month_the_provider_serves_is_recorded():
     # 2015-12는 정상 응답에 0건으로 답한다(2026-08-28 실측). 백필 구간의 시작이 이 값이다.
     assert FIRST_MONTH == "201601"
+
+
+def test_tracing_headers_never_reach_the_provider():
+    """게이트웨이가 `baggage` 헤더를 HTTP 400으로 거절한다(2026-08-28 실측).
+
+    Sentry의 stdlib 통합이 켜져 있으면 urllib 요청마다 그 헤더가 자동으로 붙는다. Airflow는
+    그 통합을 켠 채로 돌아서 태스크에서만 400이 났다. 막는 자리가 `putheader`다.
+    """
+    sent: list[tuple[str, tuple]] = []
+    connection = kcs_module._NoTracingConnection.__new__(kcs_module._NoTracingConnection)
+
+    with mock.patch.object(HTTPSConnection, "putheader", lambda _, header, *values: sent.append((header, values))):
+        connection.putheader("baggage", "sentry-trace_id=abc,sentry-environment=production")
+        connection.putheader("Sentry-Trace", "abc-def-1")
+        connection.putheader("Accept", "*/*")
+
+    assert sent == [("Accept", ("*/*",))]

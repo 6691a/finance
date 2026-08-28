@@ -146,9 +146,14 @@ class FakeModel:
         self._replies = list(replies)
         self.calls: list[list] = []
         self.bound_with: list[dict] = []
+        self.configured_with: list[dict] = []
 
     def bind(self, **kwargs):
         self.bound_with.append(kwargs)
+        return self
+
+    def with_config(self, config):
+        self.configured_with.append(config)
         return self
 
     def invoke(self, messages, **kwargs):
@@ -172,35 +177,115 @@ ONE_PATH = """
 NO_PATHS = '{"paths": []}'
 
 
+WINDOW = domain.window_for(date(2026, 8, 10))
+
+
+def _returns() -> dict[str, domain.TargetReturns]:
+    return {
+        "005930": domain.TargetReturns(
+            week=19.35, t1=-2.18, t5=-6.37, unit=domain.CausalReturnUnit.PERCENT
+        ),
+        "KTB10Y": domain.TargetReturns(
+            week=7.4, t1=6.9, t5=2.2, unit=domain.CausalReturnUnit.BASIS_POINT
+        ),
+    }
+
+
+def _build(model: FakeModel) -> tuple[generation.VerifiedPath, ...]:
+    return _build_with(generation.CausalBuilder(model))
+
+
+def _build_with(builder: generation.CausalBuilder) -> tuple[generation.VerifiedPath, ...]:
+    return builder.build(
+        window=WINDOW,
+        returns=_returns(),
+        found=_candidates(),
+        events=(),
+        channels=(),
+        targets=(
+            domain.CausalTarget(kind=domain.CausalTargetKind.INSTRUMENT, code="005930"),
+            domain.CausalTarget(kind=domain.CausalTargetKind.INDICATOR, code="KTB10Y"),
+            domain.CausalTarget(kind=domain.CausalTargetKind.INDEX, code="KOSPI"),
+        ),
+    )
+
+
+class TestTheVocabularyBlockSaysHowToPickEvents:
+    """사건 후보를 그냥 나열하면 모델이 지난주 것을 이번 주 등락에 갖다 쓴다."""
+
+    def test_the_block_tells_the_model_to_prefer_this_week(self) -> None:
+        block = generation.vocabulary_block(
+            events=(
+                domain.EventOption(
+                    node_id="e:1", title="미국 고용 둔화 확인", occurred_on=date(2026, 8, 7)
+                ),
+            ),
+            channels=(domain.ChannelOption(node_id="c:1", name="금리 기대"),),
+        )
+
+        assert "대상 주" in block
+        assert "e:1" in block
+
+
+class TestTheFlowIsAGraph:
+    """흐름 제어는 LangGraph다(CLAUDE.md). `if`로 교정을 재요청하지 않는다.
+
+    2026-08-28 운영 실행의 LangSmith run이 이름 `ChatOpenAI`에 `tags` 빈 목록이었다.
+    노드 이름이 트레이스에 남는 것이 이 규칙의 목적이고, 저장소의 다른 흐름 여섯이
+    이미 같은 모양(`call` → 조건부 `repair` → `call`)이다.
+    """
+
+    def test_the_flow_is_a_compiled_graph(self) -> None:
+        builder = generation.CausalBuilder(FakeModel([]))
+
+        nodes = set(builder._graph.get_graph().nodes)
+
+        assert {"call", "repair"} <= nodes
+
+    def test_the_graph_run_carries_the_week(self) -> None:
+        """이름은 그래프 실행 하나에만 붙인다. 호출마다 손으로 붙이면 그래프가 없다는 뜻이다."""
+        model = FakeModel([ONE_PATH])
+        seen: list[dict] = []
+        builder = generation.CausalBuilder(model)
+        original = builder._graph.invoke
+        builder._graph = _Spy(original, seen)
+
+        _build_with(builder)
+
+        config = seen[0]
+        assert config["run_name"] == "causal 2026-08-10"
+        assert "causal" in config["tags"]
+        assert config["metadata"]["week_start"] == "2026-08-10"
+        assert config["metadata"]["prompt_version"] == domain.PROMPT_VERSION
+
+    def test_a_repaired_run_calls_the_model_twice(self) -> None:
+        model = FakeModel([NO_PATHS, ONE_PATH])
+
+        paths = _build(model)
+
+        assert len(model.calls) == 2
+        assert len(paths) == 1
+
+
+class _Spy:
+    """그래프 실행에 어떤 config가 갔는지만 본다."""
+
+    def __init__(self, invoke, seen: list[dict]) -> None:
+        self._invoke = invoke
+        self._seen = seen
+
+    def invoke(self, state, config=None):
+        self._seen.append(config)
+        return self._invoke(state, config=config)
+
+
 class TestCausalBuilder:
     """한 대화가 한 주를 되짚는다. 대상 아홉을 한 번에 본다(설계 §2)."""
 
-    WINDOW = domain.window_for(date(2026, 8, 10))
+    WINDOW = WINDOW
 
-    def _returns(self) -> dict[str, domain.TargetReturns]:
-        return {
-            "005930": domain.TargetReturns(
-                week=19.35, t1=-2.18, t5=-6.37, unit=domain.CausalReturnUnit.PERCENT
-            ),
-            "KTB10Y": domain.TargetReturns(
-                week=7.4, t1=6.9, t5=2.2, unit=domain.CausalReturnUnit.BASIS_POINT
-            ),
-        }
-
-    def _build(self, model: FakeModel) -> tuple[generation.VerifiedPath, ...]:
-        builder = generation.CausalBuilder(model)
-        return builder.build(
-            window=self.WINDOW,
-            returns=self._returns(),
-            found=_candidates(),
-            events=(),
-            channels=(),
-            targets=(
-                domain.CausalTarget(kind=domain.CausalTargetKind.INSTRUMENT, code="005930"),
-                domain.CausalTarget(kind=domain.CausalTargetKind.INDICATOR, code="KTB10Y"),
-                domain.CausalTarget(kind=domain.CausalTargetKind.INDEX, code="KOSPI"),
-            ),
-        )
+    _returns = staticmethod(_returns)
+    _build = staticmethod(_build)
 
     def test_a_verified_chain_survives_the_round_trip(self) -> None:
         paths = self._build(FakeModel([ONE_PATH]))

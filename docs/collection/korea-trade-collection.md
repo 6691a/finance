@@ -181,6 +181,12 @@ GET https://apis.data.go.kr/1220000/prlstMmUtPrviExpAcrs/getPrlstMmUtPrviExpAcrs
   바뀐 것이다. 다만 칸 수는 그대로인 채 **순서만 바뀌는 것은 이 검사로 못 잡는다.**
 - **파싱은 표준 라이브러리 `xml.etree.ElementTree`다.** Airflow 환경에 이미 있고, 외부 엔티티를
   처리하지 않아 XXE 경로가 없다. 새 의존성을 넣지 않는다.
+- **추적 헤더를 보내지 않는다.** 이 게이트웨이는 `baggage` 헤더가 붙으면 HTTP 400
+  `INVALID_REQUEST_PARAMETER_ERROR`로 거절한다(2026-08-28 실측). Sentry SDK의 stdlib 통합이
+  urllib 요청마다 `sentry-trace`·`baggage`를 자동으로 끼워 넣는데 Airflow는 그 통합을 켠 채로
+  돈다. 그래서 **태스크에서만 400이 나고 같은 컨테이너에서 `docker exec python`으로 같은 URL을
+  부르면 200이 나왔다.** 이 수집기 전용 opener가 `putheader`에서 그 둘을 뺀다. 전역 opener를
+  갈아 끼우지 않는다 — 같은 프로세스의 다른 수집기까지 조용히 따라 바뀐다.
 - **서비스키는 `SecretStr`이다.** 질의 문자열에 들어가므로 예외 메시지와 로그에 URL을 넣지
   않는다. 포털이 키를 Encoding/Decoding 두 형태로 발급하는데, **환경변수에는 Decoding 값을
   두고 인코딩은 `urlencode`에 맡긴다.** 인코딩된 값을 다시 인코딩해 `%25`가 되는 것이 이
@@ -281,3 +287,7 @@ GET https://apis.data.go.kr/1220000/prlstMmUtPrviExpAcrs/getPrlstMmUtPrviExpAcrs
   있던 국가별·수입 두 항목이 범위 안으로 들어왔고, DAG는 단일 요청에서 **태스크 매핑**으로
   바뀌었다(활용신청이 데이터셋마다 따로라 하나가 빠져도 나머지가 살아야 한다).
   국가별 나라 순서가 수출·수입에서 다르다는 것도 이때 확인했다.
+- 2026-08-28: 운영에서 네 태스크가 전부 HTTP 400으로 죽었다. **키도 URL도 아니었다** — Sentry가
+  붙이는 `baggage` 헤더를 게이트웨이가 거절한다. 같은 컨테이너에서 같은 URL이 수동 호출로는
+  200이라 진단이 오래 걸렸고, 그 사이 상태 코드만 올리고 응답 본문을 버리던 것도 함께 고쳤다.
+  **로컬에서 200이라고 운영에서 200이 아니다** — 프로세스에 무엇이 끼어 있는지가 다르다.

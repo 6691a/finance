@@ -322,3 +322,37 @@ class MarketCausalStep(EntityBase):
         nullable=False,
         comment="이 단계의 전달 경로. 지우면 그래프가 끊기므로 RESTRICT다",
     )
+
+
+class MarketCausalEvidence(EntityBase):
+    """한 경로가 근거로 든 후보 하나.
+
+    **`ref`는 `<kind>:<id>` 문자열이고 외래키를 걸지 않는다.** 근거가 `document`·
+    `disclosure_event`·`technical_signal` 셋에 흩어져 있어 걸 대상이 하나가 아니고,
+    걸면 마스터에 없는 근거 하나가 경로 전체를 죽인다 — `document_instrument`가 종목
+    마스터를 참조하지 않는 것과 같은 판단이다. 목록 밖 값은 저장 전에 버려진다
+    (`causal.generation.verify_paths`).
+
+    이 테이블이 없던 동안 `confidence` 판정이 옳은지 볼 방법이 없었다(2026-08-28에 더했다).
+    """
+
+    __tablename__ = "market_causal_evidence"
+    __table_args__ = (
+        UniqueConstraint("path_id", "ref", name="uq_market_causal_evidence_natural_key"),
+        table_options(
+            comment="주간 인과 그래프 경로가 인용한 근거. 판정을 되짚는 자리다",
+            database="default",
+        ),
+    )
+
+    path_id: Mapped[int] = mapped_column(
+        BigInteger,
+        ForeignKey("market_causal_path.id", ondelete="CASCADE"),
+        nullable=False,
+        comment="이 근거가 붙은 경로. 헤더가 지워지면 함께 지운다",
+    )
+    ref: Mapped[str] = mapped_column(
+        Text,
+        nullable=False,
+        comment="후보 식별자. `document:84026`처럼 `<kind>:<id>` 규약이다",
+    )

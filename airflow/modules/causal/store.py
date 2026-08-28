@@ -27,6 +27,7 @@ EVENT_UPSERT = read_sql("postgres", "market_event", "upsert.sql")
 CHANNEL_UPSERT = read_sql("postgres", "market_channel", "upsert.sql")
 PATH_INSERT = read_sql("postgres", "market_causal_path", "insert.sql")
 STEP_INSERT = read_sql("postgres", "market_causal_step", "insert.sql")
+EVIDENCE_INSERT = read_sql("postgres", "market_causal_evidence", "insert.sql")
 WEEK_EXISTS = read_sql("postgres", "market_causal_path", "exists_by_week.sql")
 
 
@@ -120,6 +121,7 @@ def store_paths(
         if path_id is None:
             continue  # 같은 자연키가 이미 있다. 첫 성공본이 불변이다.
         _insert_steps(connection, path_id, channel_ids)
+        _insert_evidence(connection, path_id, path.evidence_refs)
         stored += 1
 
     if new_channels:
@@ -225,3 +227,17 @@ def _insert_steps(
     with connection.cursor() as cursor:
         for position, channel_id in enumerate(channel_ids, start=1):
             cursor.execute(STEP_INSERT, (path_id, position, channel_id))
+
+
+def _insert_evidence(
+    connection: TransactionalConnection,
+    path_id: int,
+    refs: Sequence[str],
+) -> None:
+    """근거를 남긴다. **비어 있는 것이 정상 흐름이다** — 그 주에 평가된 문서가 하나도
+    없으면 프롬프트가 `evidence_refs`를 빈 목록으로 두라고 시킨다."""
+    if not refs:
+        return
+    with connection.cursor() as cursor:
+        for ref in refs:
+            cursor.execute(EVIDENCE_INSERT, (path_id, ref))

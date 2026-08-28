@@ -27,6 +27,19 @@ def connection() -> Any:
     return PostgresHook(postgres_conn_id=CONNECTION_ID).get_conn()
 
 
+class IncompleteReturnsError(RuntimeError):
+    """대상 하나라도 실현 등락이 없다. **반쪽짜리 주를 굳히지 않는다**(2026-08-28).
+
+    8/17 주를 T+5 일봉이 들어오기 전에 돌렸더니 대상 열 중 둘만 남고 경로 여섯이 저장됐는데
+    태스크는 성공이었다. 이 DAG은 같은 창을 자동으로 다시 보는 실행이 없어서 그 주가 그대로
+    굳는다(CLAUDE.md의 "하루 한 번 도는 확정 수집은 하나라도 실패하면 죽인다"와 같은 자리다).
+
+    **휴장은 이 판정에 안 섞인다.** 실현 등락 SQL이 달력이 아니라 거래일을 세고
+    `RETURNS_SCAN_DAYS`가 그 여유를 준다. 그래서 등락이 비었다는 것은 아직 그날이 안 왔거나
+    수집이 밀렸다는 뜻이고, 둘 다 지금 돌리면 안 되는 상태다.
+    """
+
+
 def build_weekly_graph(
     *,
     logical_date: datetime,
@@ -49,10 +62,13 @@ def build_weekly_graph(
         found = candidates.fetch_candidates(conn, targets, window)
         events, channels = candidates.fetch_vocabulary(conn, window)
 
-    if not returns:
-        # 실현 등락이 하나도 없으면 저장할 수 있는 경로가 없다. 모델을 부를 이유도 없다.
-        logger.warning("week %s has no target with realised returns", week_start)
-        return _summary(window, outcome=_NOTHING, paths=0, skipped=False)
+    missing = [target.code for target in targets if target.code not in returns]
+    if missing:
+        # **모델을 부르기 전에 죽는다.** 저장 단계에서 버리면 비용만 쓰고 반쪽을 남긴다.
+        raise IncompleteReturnsError(
+            f"{len(missing)}/{len(targets)} targets have no realised returns for week "
+            f"{week_start} (T+5 falls on {window.reaction_end}): {', '.join(sorted(missing))}"
+        )
 
     paths = _build_paths(
         window=window,
@@ -80,7 +96,14 @@ def build_weekly_graph(
             # 첫 주가 언제나 죽는다.
             require_reuse=bool(channels),
         )
-    return _summary(window, outcome=outcome, paths=len(paths), skipped=False)
+    return _summary(
+        window,
+        outcome=outcome,
+        paths=len(paths),
+        skipped=False,
+        targets=len(targets),
+        documents=len(found.documents),
+    )
 
 
 def _build_paths(**kwargs: Any) -> tuple[Any, ...]:
@@ -101,12 +124,16 @@ def _summary(
     outcome: domain.StoreOutcome,
     paths: int,
     skipped: bool,
+    targets: int = 0,
+    documents: int = 0,
 ) -> dict[str, Any]:
     # XCom 경계다. Airflow가 Pydantic 모델을 어떻게 직렬화하는지에 기대지 않는다.
     return {
         "week_start": window.week_start.isoformat(),
         "week_end": window.week_end.isoformat(),
         "as_of_at": window.as_of_at.isoformat(),
+        "targets": targets,
+        "documents": documents,
         "paths": paths,
         "stored": outcome.stored,
         "new_channels": outcome.new_channels,

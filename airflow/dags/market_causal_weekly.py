@@ -25,9 +25,10 @@
 **단일 요청 형태다**(저장소의 세 형태 중 하나). 대상 열한 개를 대화 하나가 한 번에 보므로
 항목별로 나눌 것이 없고, 모듈이 올린 예외 종류를 여기서 가른다.
 
-- `LlmError`·`PromptError`·`VocabularyDriftError`는 다시 불러도 같은 결과라
-  `AirflowFailException`이다. 특히 어휘 드리프트는 **정규화가 깨졌다는 신호**라 조용히
-  넘어가면 다음 주에 어휘가 두 배가 된다.
+- `LlmError`·`PromptError`·`VocabularyDriftError`·`IncompleteReturnsError`는 다시 불러도
+  같은 결과라 `AirflowFailException`이다. 어휘 드리프트는 **정규화가 깨졌다는 신호**라
+  조용히 넘어가면 다음 주에 어휘가 두 배가 된다. 실현 등락 누락은 **아직 돌 때가 아니라는
+  신호**다 — T+5 일봉이 들어온 뒤(KST 18:20 이후) 손으로 다시 돌린다.
 - `ConnectionError`는 그대로 올려 Airflow가 재시도하게 둔다.
 
 **그 주에 경로가 이미 있으면 skip이 아니라 성공이다.** 재실행이 정상 흐름이라 매번 노란
@@ -79,6 +80,7 @@ def market_causal_weekly():
     @task(task_display_name="인과 그래프 생성", execution_timeout=BUILD_TIMEOUT)
     def build_causal_graph(**context: Any) -> dict[str, Any]:
         from modules.causal import run
+        from modules.causal.run import IncompleteReturnsError
         from modules.causal.store import VocabularyDriftError
         from modules.llm import LlmError
         from modules.prompt import PromptError
@@ -94,7 +96,13 @@ def market_causal_weekly():
                 week_start_param=(context.get("params") or {}).get(WEEK_START_PARAM),
                 dag_run_id=getattr(dag_run, "run_id", ""),
             )
-        except (LlmError, PromptError, VocabularyDriftError, ValueError) as error:
+        except (
+            LlmError,
+            PromptError,
+            VocabularyDriftError,
+            IncompleteReturnsError,
+            ValueError,
+        ) as error:
             # 설정·프롬프트·정규화 문제다. 다시 불러도 같은 답이 온다.
             raise AirflowFailException(str(error)) from error
 

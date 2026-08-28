@@ -438,12 +438,22 @@ def issue_token(app_key: SecretStr, app_secret: SecretStr) -> tuple[SecretStr, d
         # 시각 제한 문구가 올 자리가 아니므로 `result_error()`를 거치지 않는다.
         raise KisResultError(payload.get("error_code", ""), payload.get("error_description", "no access_token"))
 
-    # `access_token_token_expired`는 "YYYY-MM-DD HH:MM:SS" KST다. 없으면 24시간으로 둔다.
+    # `access_token_token_expired`는 "YYYY-MM-DD HH:MM:SS" KST다. 그게 안 읽히면
+    # 제공처가 함께 주는 `expires_in`(초)을 쓴다.
+    #
+    # **둘 다 없으면 실패시킨다.** 전에는 24시간을 지어냈는데, 그건 만료를 아는 척하는
+    # 것이라 실제 만료가 더 짧으면 죽은 토큰으로 계속 요청하고 401을 만난 뒤에야
+    # `force=True`로 회수된다. 조회 실패가 인증 문제로 보이지 않아 되짚기가 길어진다.
     expires_raw = payload.get("access_token_token_expired", "")
     try:
         expires_at = datetime.strptime(expires_raw, "%Y-%m-%d %H:%M:%S").replace(tzinfo=KST)
     except ValueError:
-        expires_at = datetime.now(UTC) + timedelta(seconds=int(payload.get("expires_in", 86400)))
+        seconds = payload.get("expires_in")
+        if seconds is None:
+            raise KisPayloadError(
+                "KIS token response has neither access_token_token_expired nor expires_in"
+            ) from None
+        expires_at = datetime.now(UTC) + timedelta(seconds=int(seconds))
     return SecretStr(token), expires_at.astimezone(UTC)
 
 

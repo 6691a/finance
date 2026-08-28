@@ -18,6 +18,7 @@ matplotlib은 **함수 안에서** import한다. 운영 Airflow 이미지에 없
 import io
 from collections.abc import Sequence
 from datetime import date, datetime
+from decimal import Decimal
 from itertools import pairwise
 from typing import TYPE_CHECKING
 
@@ -79,6 +80,19 @@ DISPLAY_BARS = 60
 
 class ChartError(RuntimeError):
     """차트를 그릴 수 없고 다시 그려도 같은 결과다."""
+
+
+
+def histogram_bars(histogram: Sequence[Decimal | None]) -> tuple[list[float], list[str]]:
+    """MACD 히스토그램을 막대 높이와 색으로 편다.
+
+    **값 없음을 0으로 그리지 않는다.** 창 앞쪽은 MACD가 아직 안 서서 `None`인데, 0으로
+    그리면 **실제 0**(MACD와 시그널이 만난 날)과 같은 막대가 되고 상승색까지 붙는다.
+    NaN은 matplotlib이 막대 자체를 안 그린다.
+    """
+    heights = [float("nan") if value is None else float(value) for value in histogram]
+    colors = [FALL_COLOR if value is not None and value < 0 else RISE_COLOR for value in histogram]
+    return heights, colors
 
 
 def render_series_png(series: "ChartSeries") -> bytes:
@@ -255,8 +269,8 @@ def render_daily_png(series: "DailyChartSeries") -> bytes:
             None if macd is None or signal is None else macd - signal
             for macd, signal in zip(computed.macd[window], computed.macd_signal[window], strict=True)
         ]
-        bar_colors = [RISE_COLOR if (value or 0) >= 0 else FALL_COLOR for value in histogram]
-        trend.bar(spots, [value or 0 for value in histogram], color=bar_colors, width=CANDLE_WIDTH, label="OSC")
+        heights, bar_colors = histogram_bars(histogram)
+        trend.bar(spots, heights, color=bar_colors, width=CANDLE_WIDTH, label="OSC")
         trend.plot(
             spots,
             computed.macd[window],

@@ -95,3 +95,23 @@ def test_the_bar_interval_is_read_from_the_bars():
     assert chart.interval_minutes(five) == 5
     assert chart.interval_minutes(with_gap) == 1
     assert chart.interval_minutes([MIDDAY]) == 0
+
+
+# MACD 히스토그램의 값 없음. 창 앞쪽은 MACD가 아직 안 서서 `None`인데, 0으로 그리면
+# 실제 0(MACD와 시그널이 만난 날)과 같은 막대가 되고 상승색까지 붙는다.
+
+
+def test_a_missing_histogram_value_is_not_drawn_as_a_zero_bar():
+    heights, _ = chart.histogram_bars([None, Decimal(0), Decimal("-1.5")])
+
+    assert heights[0] != heights[1]
+    assert heights[0] != heights[0]  # NaN. matplotlib이 막대를 안 그린다
+    assert heights[1] == 0.0
+
+
+def test_only_a_real_negative_value_gets_the_fall_color():
+    _, colors = chart.histogram_bars([None, Decimal(0), Decimal("-1.5")])
+
+    assert colors[2] == chart.FALL_COLOR
+    assert colors[0] == chart.RISE_COLOR
+    assert colors[1] == chart.RISE_COLOR

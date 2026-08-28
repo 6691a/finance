@@ -159,10 +159,16 @@ class TestStorePaths:
         assert not any("INSERT INTO market_causal_path" in call[0] for call in connection.calls)
 
     def test_too_many_new_channels_are_refused(self) -> None:
-        """어휘 폭주 가드. 초과분 경로는 저장하지 않는다(설계 §6)."""
+        """어휘 폭주 가드. 초과분 경로는 저장하지 않는다(설계 §6).
+
+        상한이 걸리는 것은 **어휘가 이미 쌓인 주**다 — 첫 주는 `TestSeedingWeek`가 덮는다.
+        """
         connection = _connection()
         many = tuple(
-            _path(channels=(NodeChoice(new_name=f"경로{n}"),), sign="up" if n % 2 else "down")
+            _path(
+                channels=(NodeChoice(existing_id="c:9"), NodeChoice(new_name=f"경로{n}")),
+                sign="up" if n % 2 else "down",
+            )
             for n in range(domain.MAX_NEW_CHANNELS + 2)
         )
 
@@ -173,6 +179,7 @@ class TestStorePaths:
             returns=_returns(),
             input_hash="abc",
             llm_run_id=None,
+            require_reuse=True,
         )
 
         assert stored == domain.MAX_NEW_CHANNELS
@@ -272,3 +279,57 @@ class TestSqlMatchesTheModel:
             assert "DO UPDATE" in statement
             # first_seen_week은 최초 주가 원본이라 덮지 않는다.
             assert "first_seen_week = EXCLUDED" not in statement
+
+
+class TestSeedingWeek:
+    """어휘가 비어 있는 주는 전부 새로 만들 수밖에 없다.
+
+    2026-08-27 개발 DB 실행에서 첫 주 경로 19개 중 17개가 `MAX_NEW_CHANNELS = 3`에 걸려
+    버려졌다. 상한은 **어휘가 이미 있는데 새로 만드는 것**에 걸려야 한다.
+    """
+
+    def test_the_first_week_gets_a_wider_budget(self) -> None:
+        connection = _connection()
+        many = tuple(
+            _path(channels=(NodeChoice(new_name=f"경로{n}"),))
+            for n in range(domain.MAX_NEW_CHANNELS + 3)
+        )
+
+        stored = store.store_paths(
+            connection,
+            window=WINDOW,
+            paths=many,
+            returns=_returns(),
+            input_hash="abc",
+            llm_run_id=None,
+            require_reuse=False,  # 어휘가 비어 있다
+        )
+
+        assert stored == len(many)
+
+    def test_a_week_with_vocabulary_keeps_the_tight_budget(self) -> None:
+        """어휘가 쌓인 뒤에는 새 이름이 주당 0~2개였다(8주 프로토타입). 상한이 그것을 지킨다."""
+        connection = _connection()
+        many = tuple(
+            _path(
+                channels=(NodeChoice(existing_id="c:1"), NodeChoice(new_name=f"경로{n}")),
+            )
+            for n in range(domain.MAX_NEW_CHANNELS + 2)
+        )
+
+        stored = store.store_paths(
+            connection,
+            window=WINDOW,
+            paths=many,
+            returns=_returns(),
+            input_hash="abc",
+            llm_run_id=None,
+            require_reuse=True,
+        )
+
+        assert stored == domain.MAX_NEW_CHANNELS
+
+    def test_the_seed_budget_still_has_a_ceiling(self) -> None:
+        """무제한이면 모델이 경로마다 새 이름을 내도 막을 것이 없다."""
+        assert domain.MAX_NEW_CHANNELS_SEED > domain.MAX_NEW_CHANNELS
+        assert domain.MAX_NEW_CHANNELS_SEED < domain.MAX_PATHS

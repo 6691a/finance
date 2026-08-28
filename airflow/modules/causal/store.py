@@ -14,6 +14,7 @@ from datetime import date
 
 from modules.causal.domain import (
     MAX_NEW_CHANNELS,
+    MAX_NEW_CHANNELS_SEED,
     CausalWindow,
     TargetReturns,
     VerifiedPath,
@@ -70,8 +71,10 @@ def store_paths(
     """경로를 저장하고 실제로 들어간 수를 돌려준다.
 
     `require_reuse`는 어휘가 이미 쌓인 주에만 켠다 — 첫 주는 전부 새로 만드는 것이 정상이라
-    그때 켜면 언제나 죽는다.
+    그때 켜면 언제나 죽는다. **같은 값이 새 이름 상한도 고른다**: 어휘가 비어 있으면 넉넉히
+    (`MAX_NEW_CHANNELS_SEED`), 쌓인 뒤에는 좁게(`MAX_NEW_CHANNELS`).
     """
+    budget = MAX_NEW_CHANNELS if require_reuse else MAX_NEW_CHANNELS_SEED
     new_channels: dict[str, int] = {}
     event_ids: dict[tuple[str, date], int] = {}
     reused_any = False
@@ -94,7 +97,7 @@ def store_paths(
             if choice.new_name in new_channels:
                 channel_ids.append(new_channels[choice.new_name])
                 continue
-            if len(new_channels) >= MAX_NEW_CHANNELS:
+            if len(new_channels) >= budget:
                 over_budget = True
                 break
             channel_id = _upsert_channel(connection, choice.new_name, window.week_start)
@@ -128,7 +131,7 @@ def store_paths(
         logger.warning(
             "refused %s causal paths: new channel budget %s exhausted",
             refused,
-            MAX_NEW_CHANNELS,
+            budget,
         )
     if require_reuse and paths and not reused_any:
         raise VocabularyDriftError(

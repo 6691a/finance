@@ -249,3 +249,29 @@ class TestCausalBuilder:
 
         assert self._build(model) == ()
         assert len(model.calls) == 2
+
+
+def test_the_response_schema_never_puts_description_next_to_a_ref():
+    """중첩 모델에 `Field(description=...)`을 붙이면 스키마가 `$ref` 옆에 `description`을
+    두는데 OpenAI가 그것을 거절한다.
+
+        Invalid schema for response_format: $ref cannot have keywords {'description'}
+
+    **가짜 모델로는 절대 안 잡힌다.** 2026-08-27 개발 DB 실행에서 실제로 터졌다.
+    """
+
+    def offenders(node, path=""):
+        found = []
+        if isinstance(node, dict):
+            if "$ref" in node and len(node) > 1:
+                found.append(f"{path}: {sorted(set(node) - {'$ref'})}")
+            for key, value in node.items():
+                found += offenders(value, f"{path}/{key}")
+        elif isinstance(node, list):
+            for index, value in enumerate(node):
+                found += offenders(value, f"{path}[{index}]")
+        return found
+
+    schema = generation.response_format(generation.CausalAnswer, "market_causal_paths")
+
+    assert not offenders(schema), offenders(schema)

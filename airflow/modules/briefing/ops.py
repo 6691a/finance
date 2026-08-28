@@ -37,6 +37,15 @@ from modules.sql import read_sql
 from modules.thesis.state import FORECAST_SLOTS, NARRATED_SLOTS
 from modules.utility import KST_TIMEZONE
 
+
+class OpsQueryError(RuntimeError):
+    """감시 조회가 계약을 안 지켰다. 재시도해도 같은 결과다.
+
+    **0으로 메우지 않는 이유가 이 예외의 존재 이유다.** 이 리포트는 "무엇이 밀렸나"를
+    보는 화면이라, 조회가 비었을 때 0을 찍으면 초록으로 보이고 아무도 안 본다.
+    """
+
+
 BRIEFING_WINDOW = read_sql("postgres", "source_record", "select_briefing_window.sql")
 RECENT_FAILURES = read_sql("postgres", "source_record", "select_recent_failures.sql")
 THESIS_CALIBRATION = read_sql("postgres", "thesis_outcome", "select_calibration.sql")
@@ -205,6 +214,10 @@ class OpsBriefingReader:
             # 문서 평가는 source_record를 안 남긴다. 2부와 같은 질문이라 같은 쿼리를 쓴다.
             cursor.execute(documents.BRIEFING_SUMMARY, (since,))
             document_counts = cursor.fetchone()
+            if document_counts is None:
+                # GROUP BY 없는 집계라 한 행이 반드시 온다. 안 오면 쿼리나 스키마가 깨진
+                # 것이고, 그때 적체 0을 찍으면 **감시 리포트가 초록으로 위장한다.**
+                raise OpsQueryError("document briefing summary returned no row")
             thesis = self._thesis_health(cursor)
 
         activity = tuple(
@@ -227,7 +240,7 @@ class OpsBriefingReader:
                 FailureDetail(source=row[0], source_key=row[1], started_at=row[2], detail=row[3])
                 for row in failure_rows
             ),
-            assessment_backlog=document_counts[5] if document_counts else 0,
+            assessment_backlog=document_counts[5],
             thesis=thesis,
         )
 
@@ -249,6 +262,9 @@ class OpsBriefingReader:
             (list(THESIS_HORIZONS), since, list(FORECAST_SLOTS), list(NARRATED_SLOTS), today),
         )
         backlog = cursor.fetchone()
+        if backlog is None:
+            # 위와 같은 이유다. 밀린 건수가 0으로 보이는 것이 가장 나쁜 거짓말이다.
+            raise OpsQueryError("thesis backlog query returned no row")
         return ThesisHealth(
             horizons=tuple(
                 ThesisHorizon(
@@ -265,8 +281,8 @@ class OpsBriefingReader:
                 )
                 for row in rows
             ),
-            ungraded=backlog[0] if backlog else 0,
-            unnarrated=backlog[1] if backlog else 0,
+            ungraded=backlog[0],
+            unnarrated=backlog[1],
         )
 
 

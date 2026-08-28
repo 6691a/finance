@@ -9,11 +9,13 @@
 
 import logging
 from collections.abc import Iterable, Mapping, Sequence
-from typing import Any, Literal, TypedDict
+from typing import Annotated, Any, Literal, TypedDict
 
 from langchain_core.language_models import BaseChatModel
 from langchain_core.messages import BaseMessage, HumanMessage, SystemMessage
 from langgraph.graph import END, START, StateGraph
+from langgraph.graph.message import add_messages
+from langgraph.prebuilt import ToolNode
 from pydantic import BaseModel, Field
 
 from modules import llm
@@ -22,6 +24,7 @@ from modules.causal.domain import (
     MAX_CHAIN,
     MAX_PATHS,
     MAX_REASONING_CHARS,
+    MAX_TOOL_ROUNDS,
     PROMPT_VERSION,
     CandidateSet,
     CausalTarget,
@@ -32,6 +35,7 @@ from modules.causal.domain import (
     TargetReturns,
     VerifiedPath,
 )
+from modules.causal.toolbox import CausalToolbox, ToolLimitExceeded
 from modules.prompt import read_prompt
 from modules.schema import json_object, response_format
 
@@ -177,6 +181,24 @@ def returns_block(returns: Mapping[str, TargetReturns]) -> str:
     return "\n".join(lines) or "  (없음)"
 
 
+def reply_text(reply: Any) -> str:
+    """응답 본문. **Responses API는 `content`가 블록 리스트다.**
+
+    `use_responses_api=True`로 옮긴 뒤(툴을 쓰려면 그래야 한다 — `llm.causal_model` 주석)
+    `content`가 `[{"type": "reasoning", …}, {"type": "text", "text": "…"}]` 모양으로 온다.
+    `str()`을 씌우면 파이썬 repr가 되어 JSON 파싱이 `key must be a string`으로 죽는다.
+
+    `briefing/disclosure_picks._text`가 같은 일을 한다 — 제공처에 따라 조각 리스트로 오는
+    것을 이미 겪은 자리다.
+    """
+    content = reply.content
+    if isinstance(content, str):
+        return content
+    return "".join(
+        part if isinstance(part, str) else part.get("text", "") for part in content
+    )
+
+
 def target_block(targets: Iterable[CausalTarget]) -> str:
     """대상 목록. 모델이 `target_code`로 쓸 수 있는 것이 이것뿐이다."""
     return "\n".join(f"  - {target.code} ({target.kind})" for target in targets)
@@ -186,13 +208,17 @@ class CausalState(TypedDict):
     """되짚기 한 번의 상태. **설정 객체를 넣지 않는다** — 상태는 트레이스 입력으로 나간다.
 
     `found`와 `target_codes`는 노드가 답을 거를 때 쓰므로 상태에 있어야 한다.
+
+    **`messages`에 `add_messages` 리듀서를 단다.** 노드는 새로 생긴 메시지만 돌려주고 병합은
+    리듀서가 한다 — `ToolNode`가 그 형태로 반환하므로 맞출 쪽은 우리다.
     """
 
-    messages: list[BaseMessage]
+    messages: Annotated[list[BaseMessage], add_messages]
     found: CandidateSet
     target_codes: frozenset[str]
     paths: tuple[VerifiedPath, ...] | None
     attempts: int
+    tool_rounds: int
 
 
 class CausalBuilder:
@@ -205,9 +231,13 @@ class CausalBuilder:
     **재시도는 Airflow가 한다.** 여기서 도는 것은 교정 한 번뿐이고, 그것도 답이 비었을 때다.
     """
 
-    def __init__(self, model: BaseChatModel) -> None:
+    def __init__(self, model: BaseChatModel, toolbox: CausalToolbox | None = None) -> None:
         self._model = model
         self._schema = response_format(CausalAnswer, "market_causal_paths")
+        self._toolbox = toolbox
+        tools = toolbox.tools if toolbox else []
+        # **타입을 준다.** 기본값(`True`)은 DB 연결 끊김을 "결과 없음"으로 위장한다.
+        self._tool_node = ToolNode(tools, handle_tool_errors=(ToolLimitExceeded,))
         self._graph = self._build_graph()
 
     def build(
@@ -242,6 +272,7 @@ class CausalBuilder:
             "target_codes": target_codes,
             "paths": None,
             "attempts": 0,
+            "tool_rounds": 0,
         }
         final = self._graph.invoke(
             state,
@@ -274,6 +305,7 @@ class CausalBuilder:
                     max_chain=MAX_CHAIN,
                     max_paths=MAX_PATHS,
                     max_reasoning_chars=MAX_REASONING_CHARS,
+                    max_tool_rounds=MAX_TOOL_ROUNDS,
                     targets=target_block(targets),
                 )
             ),
@@ -290,30 +322,70 @@ class CausalBuilder:
         ]
 
     def _build_graph(self):
+        """`investigate` → 조건부 `tools` → `answer` → 조건부 `repair`.
+
+        저장소의 툴 붙은 흐름 둘(`thesis/generation`·`thesis/outcomes`)과 같은 모양이다.
+        뒤쪽 둘은 툴 없는 다섯과 글자 그대로 같다.
+        """
         graph = StateGraph(CausalState)
-        graph.add_node("call", self._call)
+        graph.add_node("investigate", self._investigate)
+        graph.add_node("tools", self._tools)
+        graph.add_node("answer", self._answer)
         graph.add_node("repair", self._repair)
-        graph.add_edge(START, "call")
-        graph.add_conditional_edges("call", self._next, {"repair": "repair", END: END})
-        graph.add_edge("repair", "call")
+        graph.add_edge(START, "investigate")
+        graph.add_conditional_edges(
+            "investigate", self._after_investigate, {"tools": "tools", "answer": "answer"}
+        )
+        graph.add_edge("tools", "investigate")
+        graph.add_conditional_edges("answer", self._next, {"repair": "repair", END: END})
+        graph.add_edge("repair", "answer")
         return graph.compile()
 
-    def _call(self, state: CausalState) -> dict[str, Any]:
-        """한 번 묻고 검증한다. 남은 것이 없으면 `paths`가 빈 튜플이다."""
+    def _investigate(self, state: CausalState) -> dict[str, Any]:
+        """툴만 바인딩해 부른다. **스키마는 넣지 않는다**(`llm.invoke`가 막는다).
+
+        툴이 없으면(`toolbox=None`) 부르지 않고 바로 답변으로 넘어간다 — 테스트와 툴을 안 쓰는
+        경로가 그 형태다.
+        """
+        if not self._toolbox:
+            return {}
+        reply = llm.invoke(self._model, state["messages"], tools=self._toolbox.tools)
+        return {"messages": [reply]}
+
+    def _tools(self, state: CausalState) -> dict[str, Any]:
+        """`ToolNode`가 tool_call을 돌리고 `tool_call_id`마다 `ToolMessage` 하나를 보장한다."""
+        update = self._tool_node.invoke(state)
+        return {"messages": update["messages"], "tool_rounds": state["tool_rounds"] + 1}
+
+    @staticmethod
+    def _after_investigate(state: CausalState) -> str:
+        """툴을 부르자고 했고 왕복 상한이 남았으면 조사를 잇는다."""
+        messages = state["messages"]
+        reply = messages[-1] if messages else None
+        if getattr(reply, "tool_calls", None) and state["tool_rounds"] < MAX_TOOL_ROUNDS:
+            return "tools"
+        if getattr(reply, "tool_calls", None):
+            logger.warning(
+                "causal investigation truncated: the model asked for more tools after %s rounds",
+                state["tool_rounds"],
+            )
+        return "answer"
+
+    def _answer(self, state: CausalState) -> dict[str, Any]:
+        """스키마를 강제해 답을 받고 검증한다. 남은 것이 없으면 `paths`가 빈 튜플이다."""
         messages = state["messages"]
         reply = llm.invoke(self._model, messages, schema=self._schema)
-        answer = CausalAnswer.model_validate_json(json_object(str(reply.content)))
+        answer = CausalAnswer.model_validate_json(json_object(reply_text(reply)))
         verified = verify_paths(
             tuple(answer.paths[:MAX_PATHS]), state["found"], state["target_codes"]
         )
-        return {"messages": [*messages, reply], "paths": verified}
+        return {"messages": [reply], "paths": verified}
 
     def _repair(self, state: CausalState) -> dict[str, Any]:
         """무엇이 잘못됐는지를 실어 한 번만 다시 묻는다(thesis 판 11의 교훈)."""
         logger.warning("causal answer had no usable 경로; asking once more")
         return {
             "messages": [
-                *state["messages"],
                 HumanMessage(
                     PROMPTS.render(
                         "repair",

@@ -34,7 +34,7 @@
 태스크를 만들 이유가 없다.
 """
 
-from datetime import timedelta
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 import pendulum
@@ -83,11 +83,16 @@ def market_causal_weekly():
         from modules.llm import LlmError
         from modules.prompt import PromptError
 
+        # **`logical_date`는 스케줄된 실행에만 붙는다.** `airflow dags trigger`로 부르면
+        # context에 아예 없어서 직접 인덱싱하면 태스크가 시작하자마자 죽는다. 없으면 벽시계를
+        # 쓰고, 그 값은 Param이 있으면 어차피 안 본다(`domain.resolve_week`).
+        logical_date = context.get("logical_date") or datetime.now(UTC)
+        dag_run = context.get("dag_run")
         try:
             return run.build_weekly_graph(
-                logical_date=context["logical_date"],
-                week_start_param=context["params"].get(WEEK_START_PARAM),
-                dag_run_id=context["dag_run"].run_id,
+                logical_date=logical_date,
+                week_start_param=(context.get("params") or {}).get(WEEK_START_PARAM),
+                dag_run_id=getattr(dag_run, "run_id", ""),
             )
         except (LlmError, PromptError, VocabularyDriftError, ValueError) as error:
             # 설정·프롬프트·정규화 문제다. 다시 불러도 같은 답이 온다.

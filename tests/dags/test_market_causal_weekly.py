@@ -51,6 +51,33 @@ def test_there_is_exactly_one_task():
     assert [task.task_id for task in DAG.tasks] == ["build_causal_graph"]
 
 
+def test_a_manual_trigger_without_logical_date_still_runs(monkeypatch: pytest.MonkeyPatch):
+    """`airflow dags trigger`로 부른 실행은 **context에 `logical_date`가 없다**.
+
+    Airflow 3에서 그 값은 스케줄된 실행에만 붙는다. 직접 인덱싱하면 태스크가 시작하자마자
+    KeyError로 죽는다 — 2026-08-28 운영 첫 트리거에서 실제로 그랬다. 기존 DAG들은
+    `context.get(...) or 벽시계` 형태를 쓴다.
+    """
+    from modules.causal import run
+
+    seen = {}
+
+    def record(**kwargs):
+        seen.update(kwargs)
+        return {"week_start": "2026-08-10", "stored": 0, "skipped": False}
+
+    monkeypatch.setattr(run, "build_weekly_graph", record)
+    task = DAG.get_task("build_causal_graph")
+
+    task.python_callable(
+        params={"week_start": "2026-08-10"},
+        dag_run=type("Run", (), {"run_id": "manual__2026-08-28"})(),
+    )
+
+    assert seen["week_start_param"] == "2026-08-10"
+    assert seen["logical_date"] is not None
+
+
 class TestFailureClassification:
     """되돌릴 수 없는 오류는 즉시 죽이고, 재시도할 값어치가 있는 것은 그대로 올린다."""
 

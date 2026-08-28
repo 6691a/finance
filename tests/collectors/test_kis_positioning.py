@@ -575,3 +575,77 @@ def test_ranking_can_ask_for_each_universe(monkeypatch, universe, label):
     # 저장하는 모집단은 우리가 보낸 값이다. 응답 헤더의 bstp_cls_code 는 다른 체계다.
     assert fetch.metadata["universe_code"] == universe
     assert label
+
+
+# 신용잔고의 0행. 되돌렸던 가드를 2026-08-28 KIS 실조회로 다시 세웠다 — 요청 결제일이
+# 지켜지고(1년 전·2년 전 요청도 그 구간을 준다) 한 번에 30행이며 `tr_cont`는 안 온다.
+# 그래서 "겹치는데 0행"은 결함이고 "안 겹쳐서 0행"은 정상이다.
+
+
+def warnings_of(name: str):
+    """그 로거의 WARNING을 모은다. `caplog`는 `tests/migrations`의 Alembic `fileConfig`가
+    로거를 꺼서 전체 실행에서 조용히 실패한다(`test_briefing_disclosures.py` 참고)."""
+    import contextlib
+    import logging
+
+    @contextlib.contextmanager
+    def capture():
+        records: list[logging.LogRecord] = []
+
+        class Capture(logging.Handler):
+            def emit(self, record: logging.LogRecord) -> None:
+                records.append(record)
+
+        handler = Capture(level=logging.WARNING)
+        logger = logging.getLogger(name)
+        logger.addHandler(handler)
+        previous_level, previously_disabled = logger.level, logger.disabled
+        logger.setLevel(logging.WARNING)
+        logger.disabled = False
+        try:
+            yield records
+        finally:
+            logger.removeHandler(handler)
+            logger.setLevel(previous_level)
+            logger.disabled = previously_disabled
+
+    return capture()
+
+
+def test_credit_balance_with_an_overlapping_response_but_no_kept_row_is_an_error(monkeypatch):
+    """30행은 거래일이 이어져 있어 겹치면 반드시 한 행은 남는다. 안 남으면 거르기가 깨진 것이다."""
+    below = CREDIT_ROW | {"deal_date": "20260731", "stlm_date": "20260804"}
+    above = CREDIT_ROW | {"deal_date": "20260813", "stlm_date": "20260817"}
+    monkeypatch.setattr(kis_positioning, "send_get", fake_send_get(body(output=[above, below])))
+
+    with pytest.raises(KisPayloadError, match="kept no row"):
+        COLLECTOR.fetch_credit_balance(SAMSUNG, date(2026, 8, 1), date(2026, 8, 12))
+
+
+def test_credit_balance_that_misses_the_window_entirely_only_warns(monkeypatch):
+    """창 전체가 아직 결제 전이면(연휴 등) 0행이 정상이다. 죽이면 경보만 는다."""
+    monkeypatch.setattr(kis_positioning, "send_get", fake_send_get(body(output=[CREDIT_ROW])))
+
+    with warnings_of(kis_positioning.logger.name) as records:
+        fetch = COLLECTOR.fetch_credit_balance(SAMSUNG, date(2026, 1, 2), date(2026, 1, 31))
+
+    assert fetch.rows == ()
+    assert any("has no row" in record.getMessage() for record in records)
+
+
+def test_an_empty_credit_balance_response_is_an_error(monkeypatch):
+    monkeypatch.setattr(kis_positioning, "send_get", fake_send_get(body(output=[])))
+
+    with pytest.raises(KisPayloadError, match="returned no row"):
+        COLLECTOR.fetch_credit_balance(SAMSUNG, date(2026, 8, 1), date(2026, 8, 12))
+
+
+def test_a_window_longer_than_the_thirty_row_cap_warns_about_the_missing_head(monkeypatch):
+    """한 번에 30행뿐이라 긴 백필 창은 앞부분이 조용히 빈다."""
+    monkeypatch.setattr(kis_positioning, "send_get", fake_send_get(body(output=[CREDIT_ROW])))
+
+    with warnings_of(kis_positioning.logger.name) as records:
+        fetch = COLLECTOR.fetch_credit_balance(SAMSUNG, date(2026, 1, 2), date(2026, 8, 12))
+
+    assert len(fetch.rows) == 1
+    assert any("30-row cap" in record.getMessage() for record in records)

@@ -31,6 +31,9 @@ from modules.thesis.outcomes import NARRATIVE_PROMPT_VERSION
 PROMPT_HASHES: dict[tuple[str, str], str] = {
     ("assessment", "3"): "98ca6e74ed7f241abeb7b4b459a86a3c22a459ff8189af6c063d92bc92ea8a79",
     ("causal_graph", "1"): "6d5516c5ee2d1140cf5abd044100738b1a2b25fd5db430598b6b077aa66639f1",
+    # 판 2는 자리표시자에 들어가는 값의 모양이 바뀐 것이다(2026-08-28). 근거 후보를 대상
+    # 코드로 안 좁히면서 문서 줄이 태그 목록을 싣게 됐다. YAML은 그대로라 해시가 1과 같다.
+    ("causal_graph", "2"): "6d5516c5ee2d1140cf5abd044100738b1a2b25fd5db430598b6b077aa66639f1",
     ("expectation_extraction", "1"): "7108eab56e598ff642aeb7269f0f07ab9ef21707798202447db6a6b0a3b52a41",
     # 판 8은 문장이 아니라 **자리표시자에 들어가는 값의 모양**이 바뀐 것이다(2026-08-27).
     # 관측 상태·과거 추론 JSON에서 들여쓰기를 뺐다 — 모델이 보는 입력이 달라지므로 판을

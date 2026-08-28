@@ -105,8 +105,9 @@ def candidate_block(found: CandidateSet) -> str:
     모델이 ref를 지어내므로 없다는 것을 명시하고 빈 목록을 쓰라고 말한다.
     """
     lines = [
-        f"[{item.ref}] ({item.target_code}, {item.published_at:%Y-%m-%d %H:%M}, "
-        f"score {item.value_score}, 평가방향 {item.assessed_direction}) {item.title}\n"
+        f"[{item.ref}] ({', '.join(item.tags) or '태그 없음'}, "
+        f"{item.published_at:%Y-%m-%d %H:%M}, score {item.value_score}, "
+        f"평가방향 {item.assessed_direction}) {item.title}\n"
         f"    {item.summary[:220]}"
         for item in found.documents
     ]

@@ -19,7 +19,12 @@ from modules.utility import KST_TIMEZONE
 
 # 프롬프트 판. `modules/prompts/causal_graph.yaml`의 문장을 고치면 이 값을 올리고
 # `tests/modules/test_prompt_versions.py`의 해시를 같은 커밋에서 갱신한다.
-PROMPT_VERSION = "1"
+#
+# 판 2는 문장이 아니라 **자리표시자에 들어가는 값의 모양**이 바뀐 것이다(2026-08-28).
+# 근거 후보를 대상 코드로 안 좁히게 되면서 문서 줄이 `(대상, 시각, score…)`에서
+# `(태그 목록, 시각, score…)`으로 바뀌었다. 모델이 보는 입력이 달라지므로 판을 가르지만
+# YAML은 그대로라 해시가 1과 같다.
+PROMPT_VERSION = "2"
 
 # 대상 주 `W`와 실행 주 `W+2`의 거리. 설계 §2.
 RUN_LAG_WEEKS = 2
@@ -238,7 +243,9 @@ class DocumentCandidate(BaseModel):
     model_config = ConfigDict(frozen=True)
 
     ref: str
-    target_code: str
+    tags: tuple[str, ...] = ()
+    """이 문서에 붙은 종목·지표 태그 전부. **대상 목록 밖 값도 그대로 싣는다** —
+    어느 대상에 닿았는지는 모델이 판단한다. 태그가 없는 문서(시황·경제)도 후보가 된다."""
     title: str
     summary: str
     source_slug: str

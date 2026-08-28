@@ -23,11 +23,17 @@ class SeriesKind(StrEnum):
 
     **정책금리는 `money_market`이 아니다.** CD 91일은 시장이 만드는 값이고 정책금리는
     중앙은행이 정하는 값이다. 한 축에 섞으면 시장금리 패널이 정책금리 계단을 함께 그린다.
+
+    **`tips_rate`도 `government_bond`가 아니다.** 실질금리와 기대인플레는 명목 국채 금리를
+    분해한 값이라 만기가 같다. 국채에 넣으면 미국 10년물이 두 개로 보인다. 둘을 한 종류로
+    두는 이유는 반대로 **더하면 명목이 되기 때문**이다 — 따로 보면 뜻이 없다.
     """
 
     GOVERNMENT_BOND = "government_bond"
     MONEY_MARKET = "money_market"
     POLICY_RATE = "policy_rate"
+    TIPS_RATE = "tips_rate"
+    CREDIT_SPREAD = "credit_spread"
     PRICE_INDEX = "price_index"
     ACTIVITY = "activity"
 
@@ -53,7 +59,8 @@ class IndicatorSeries(EntityBase):
             name="uq_indicator_series_natural_key",
         ),
         CheckConstraint(
-            "kind IN ('government_bond', 'money_market', 'policy_rate', 'price_index', 'activity')",
+            "kind IN ('government_bond', 'money_market', 'policy_rate', 'tips_rate', "
+            "'credit_spread', 'price_index', 'activity')",
             name="ck_indicator_series_kind",
         ),
         # 만기가 없는 지표는 NULL이다. 0으로 채우지 않는다. 0을 넣으면 만기별 비교 쿼리가
@@ -105,8 +112,9 @@ class IndicatorSeries(EntityBase):
         ),
         nullable=False,
         comment=(
-            "시계열의 종류(government_bond, money_market, policy_rate, price_index 또는 activity). "
-            "국채 곡선에서 단기 자금시장 금리와 중앙은행 정책금리를 가르고, 단위가 다른 거시지표를 그 곡선에서 뺀다"
+            "시계열의 종류(government_bond, money_market, policy_rate, tips_rate, credit_spread, "
+            "price_index 또는 activity). 국채 곡선에서 단기 자금시장 금리·정책금리·실질금리·신용스프레드를 "
+            "가르고, 단위가 다른 거시지표를 그 곡선에서 뺀다"
         ),
     )
     label: Mapped[str] = mapped_column(

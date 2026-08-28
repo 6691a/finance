@@ -121,8 +121,11 @@ def contract_code(future: DomesticFuture, year: int, month: int) -> str:
     받아 **지금 거래되는** 계약 하나를 주고, 여기는 연·월을 받아 **아무 계약이나** 만든다.
     과거 구간을 조회하려면 뒤엣것이 필요하다.
 
-    **연도가 한 자리다.** 10년을 넘기면 `A01609`가 2016년 9월물과 겹친다. 지금 백필 범위
-    (2025년~)에서는 문제가 아니고, 넘길 때는 여기 한 줄만 바뀐다.
+    **연도가 한 자리라 10년마다 겹치지만**(`A01609` = 2016년 9월물 = 2026년 9월물) 그 충돌은
+    실무에서 드러나지 않는다. KIS가 만기된 월물을 얼마 뒤 지워서 **보관 한계가 훨씬 먼저
+    오기 때문이다** — 2026-08-28 실측에서 살아 있는 것은 최근 분기물 셋뿐이고 그보다 오래된
+    코드는 `rt_cd=0`에 빈 `output2`로 답했다. 겹치는 상대인 10년 전 계약은 이미 없다.
+    백필 하한과 실측 표는 `dags/kis_future_daily.py`의 "이력 백필" 절에 있다.
     """
     if month not in CONTRACT_MONTHS:
         raise ValueError(f"{month} is not a quarterly contract month for {future.value}")

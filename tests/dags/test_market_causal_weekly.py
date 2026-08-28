@@ -108,6 +108,15 @@ class TestFailureClassification:
         with pytest.raises(AirflowFailException):
             self._run(monkeypatch, VocabularyDriftError("no reuse"))
 
+    def test_incomplete_returns_fail_the_task(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """**반쪽짜리 주는 재시도해도 같다.** T+5 일봉이 들어오기를 기다려 다시 돌린다."""
+        from modules.causal.run import IncompleteReturnsError
+
+        with pytest.raises(AirflowFailException) as error:
+            self._run(monkeypatch, IncompleteReturnsError("8/10 targets have no returns"))
+
+        assert "no returns" in str(error.value)
+
     def test_a_connection_error_is_left_for_airflow_to_retry(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
@@ -119,3 +128,4 @@ class TestFailureClassification:
 def test_the_run_lag_matches_the_schedule():
     """스케줄이 월요일이고 `RUN_LAG_WEEKS`가 2라야 `W+2` 규칙이 성립한다."""
     assert domain.RUN_LAG_WEEKS == 2
+

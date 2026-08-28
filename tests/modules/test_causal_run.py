@@ -187,6 +187,19 @@ def test_no_target_with_returns_fails_too(
     assert called == []
 
 
+def test_the_builder_gets_a_toolbox(wiring: FakeStore, monkeypatch: pytest.MonkeyPatch) -> None:
+    """**툴은 연결과 창과 대상 목록을 봐야 한다.** 그것을 쥔 것이 여기뿐이다."""
+    seen: list[dict] = []
+    monkeypatch.setattr(run, "_build_paths", lambda **kwargs: seen.append(kwargs) or ())
+
+    run.build_weekly_graph(
+        logical_date=datetime(2026, 8, 23, 22, 0, tzinfo=UTC), week_start_param=None
+    )
+
+    assert seen[0]["toolbox"] is not None
+    assert seen[0]["toolbox"].tools
+
+
 def test_the_summary_counts_what_the_run_saw(
     wiring: FakeStore, monkeypatch: pytest.MonkeyPatch
 ) -> None:

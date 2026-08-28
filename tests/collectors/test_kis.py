@@ -1002,3 +1002,47 @@ def test_store_stock_bars_records_the_call_count(monkeypatch):
     assert metadata["business_date"] == "2026-08-14"
     assert metadata["call_count"] == 2
     assert metadata["interval"] == "1m"
+
+
+# 토큰 만료 시각. 없는 값을 24시간으로 지어내면 죽은 토큰으로 계속 요청하고 401을 만난
+# 뒤에야 회수된다. 조회 실패가 인증 문제로 보이지 않아 되짚기가 길어진다.
+
+
+class FakeResponse:
+    def __init__(self, payload: dict) -> None:
+        self.payload = payload
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *args: object) -> bool:
+        return False
+
+    def read(self) -> bytes:
+        return json.dumps(self.payload).encode()
+
+
+def issue_with(monkeypatch, payload: dict):
+    monkeypatch.setattr(kis, "urlopen", lambda request, timeout=None: FakeResponse(payload))
+    return kis.issue_token(SecretStr("key"), SecretStr("secret"))
+
+
+def test_the_expiry_timestamp_is_used_when_the_provider_sends_it(monkeypatch):
+    _, expires_at = issue_with(
+        monkeypatch, {"access_token": "t", "access_token_token_expired": "2026-08-29 09:00:00"}
+    )
+
+    assert expires_at == datetime(2026, 8, 29, 0, 0, tzinfo=UTC)
+
+
+def test_expires_in_is_the_fallback_when_the_timestamp_is_unreadable(monkeypatch):
+    _, expires_at = issue_with(
+        monkeypatch, {"access_token": "t", "access_token_token_expired": "언젠가", "expires_in": 3600}
+    )
+
+    assert timedelta(minutes=59) < expires_at - datetime.now(UTC) <= timedelta(hours=1)
+
+
+def test_a_token_without_any_expiry_is_an_error_not_a_guessed_day(monkeypatch):
+    with pytest.raises(kis.KisPayloadError):
+        issue_with(monkeypatch, {"access_token": "t"})

@@ -303,3 +303,17 @@ def _block_text(blocks) -> str:
 def _activity_table(blocks) -> dict:
     """수집 현황 표 블록. 렌더에는 추론 지평 표도 있어 첫 table 만 집는다."""
     return next(block for block in blocks if block.get("type") == "table")
+
+
+# 감시 리포트의 빈 조회. 둘 다 GROUP BY 없는 집계라 한 행이 반드시 오고, 안 오면 쿼리나
+# 스키마가 깨진 것이다. 그때 0을 찍으면 적체 없음(=초록)으로 위장한다.
+
+
+def test_a_document_summary_without_a_row_is_an_error_not_zero_backlog():
+    with pytest.raises(ops.OpsQueryError):
+        summary(backlog=None)
+
+
+def test_a_thesis_backlog_without_a_row_is_an_error_not_zero_backlog():
+    with pytest.raises(ops.OpsQueryError):
+        summary(thesis_backlog=None)

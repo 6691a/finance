@@ -24,6 +24,7 @@ from airflow.sdk.exceptions import AirflowFailException
 from modules.thesis import common
 from modules.thesis.domain import LlmRunKind, ThesisSubjectKind
 from modules.thesis.state import INTRADAY_SLOTS, RunSlot, ThesisRunResult
+from modules.utility import KST_TIMEZONE
 
 if TYPE_CHECKING:
     # 런타임 import는 안 한다 — 타입 이름 하나 때문에 모듈을 끌고 올 이유가 없다.
@@ -129,11 +130,26 @@ def grade_followups() -> int:
 
     **`ThesisRun`을 쓰지 않는다.** 채점은 이 실행의 세션이 아니라 *지난* 추론의 날짜를 돌기
     때문에, 세션 날짜를 쥔 객체에 담으면 그 값이 항목마다 거짓이 된다. 연결만 상태다.
+
+    ## 실패와 재시도
+
+    **전건 스킵이어도 죽이지 않는다.** `select_pending_grades.sql`에 날짜 상한이 없어
+    오늘 만든 T+5 조합까지 전부 이 목록에 들어온다 — 아침 실행이 "0건 채점"으로 끝나는
+    것이 정상 흐름이고, 그걸로 죽이면 경보만 늘고 고쳐지는 것은 없다.
+
+    **대신 스킵 사유를 갈라 센다.** 전에는 `graded 0 of 50` 한 줄이라 "아직 안 온 날짜"와
+    "종가가 안 들어온 결함"이 같아 보였다. 셋 중 마지막(`목표일이 지났는데 종가가 없다`)만
+    사람이 볼 일이라 그때만 경고를 남긴다. 그 누적 건수는 ops 브리핑의 `ungraded`가
+    이미 목표일 지난 것만 세어 화면에 올린다.
     """
     from modules.thesis.store import ThesisStore
 
     dag_run_id = str(get_current_context()["dag_run"].run_id)
+    today = datetime.now(UTC).astimezone(KST_TIMEZONE).date()
     graded = 0
+    no_calendar = 0
+    not_due = 0
+    missing_close = 0
     with closing(common.connection()) as conn:
         store = ThesisStore(conn)
         pending = store.pending_grades()
@@ -141,10 +157,16 @@ def grade_followups() -> int:
             target_day = store.nth_open_day(item.run_date, item.horizon_days)
             if target_day is None:
                 # 달력이 그날까지 안 채워졌다. 다음 실행이 다시 집는다.
+                no_calendar += 1
                 continue
             value = _horizon_return(store, item, target_day)
             if value is None:
-                # 종가가 없다. 0으로 꾸미지 않고 미채점으로 남긴다.
+                # 종가가 없다. 0으로 꾸미지 않고 미채점으로 남긴다. 목표일이 아직 안 왔으면
+                # 당연한 일이고, 지났으면 봉이 안 들어온 것이라 사람이 볼 일이다.
+                if target_day >= today:
+                    not_due += 1
+                else:
+                    missing_close += 1
                 continue
             store.store_grade(
                 pending=item,
@@ -155,7 +177,18 @@ def grade_followups() -> int:
             )
             conn.commit()
             graded += 1
-    logger.info("graded %s of %s pending (thesis, horizon) pairs", graded, len(pending))
+    logger.info(
+        "graded %s of %s pending (thesis, horizon) pairs; skipped: not_due=%s missing_close=%s no_calendar=%s",
+        graded,
+        len(pending),
+        not_due,
+        missing_close,
+        no_calendar,
+    )
+    if missing_close:
+        logger.warning(
+            "%s pending (thesis, horizon) pairs are past their target day but have no close", missing_close
+        )
     return graded
 
 

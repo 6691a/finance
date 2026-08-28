@@ -43,6 +43,8 @@ PROMPT_HASHES: dict[tuple[str, str], str] = {
     # 판 5는 `confidence`를 가르는 기준이 근거를 읽었는지라고 밝혔다(2026-08-28).
     # 판 4 실행이 경로 서른넷을 전부 `plausible`로 냈다.
     ("causal_graph", "5"): "0711c09f0eef35133b476949efccdbe8e47af45b980f776046f68854c6a5547d",
+    # 판 6은 툴 셋을 붙였다(2026-08-28). 프롬프트가 언제 무엇을 부를지 안내한다.
+    ("causal_graph", "6"): "a3c835998eb65bfa4ed4449e7f4989daf451d3985eaded84e2f1bad6bb3d0886",
     ("expectation_extraction", "1"): "7108eab56e598ff642aeb7269f0f07ab9ef21707798202447db6a6b0a3b52a41",
     # 판 8은 문장이 아니라 **자리표시자에 들어가는 값의 모양**이 바뀐 것이다(2026-08-27).
     # 관측 상태·과거 추론 JSON에서 들여쓰기를 뺐다 — 모델이 보는 입력이 달라지므로 판을

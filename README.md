@@ -407,6 +407,10 @@ airflow dags trigger mof_jgb_daily --conf '{\"source_file\": \"all\", \"observat
 
 ## Grafana
 
+> **2026-08-26에 사용 종료를 결정했습니다.** 아래는 아직 로컬에 남아 있는 구성 설명이고,
+> 대시보드 JSON·compose 서비스·`tests/dashboards/`는 웹 화면(market-thesis 14단계) 배포와
+> 함께 제거합니다. 지금 새 대시보드를 늘리지 않습니다.
+
 수집한 지수를 차트와 대시보드로 확인하는 용도입니다. `just dev`로 PostgreSQL, Redis와 함께 올라갑니다.
 
 ```powershell

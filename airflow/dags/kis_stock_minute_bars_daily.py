@@ -32,7 +32,7 @@ KIS에는 종목 분봉 조회가 둘이다. 장중 조회(`FHKST03010200`)와 �
 
 | 이름 | 기본값 | 뜻 |
 | --- | --- | --- |
-| `business_date` | `null` | 받을 거래일(YYYY-MM-DD). 비우면 실행일(KST) |
+| `business_date` | `null` | 받을 거래일(YYYY-MM-DD). 비우면 이 run의 날짜(KST) |
 | `days` | `1` | 그 날짜부터 과거로 며칠을 받을지. 백필에만 쓴다. 한 run에 최대 31일 |
 
     airflow dags trigger kis_stock_minute_bars_daily \\
@@ -73,7 +73,7 @@ WebSocket 쪽 `KIS_ENABLE_NXT_WEBSOCKET`도 기본값과 허용 값이 같다. �
 import logging
 import os
 import re
-from datetime import UTC, date, datetime, timedelta
+from datetime import date, timedelta
 from typing import Any
 
 import pendulum
@@ -125,7 +125,19 @@ def _connection() -> Any:
     return PostgresHook(postgres_conn_id=CONNECTION_ID).get_conn()
 
 
-def requested_business_date(now_kst: datetime, params: dict[str, Any]) -> date:
+def _run_date() -> date:
+    """이 run이 기대하는 거래일(KST). 기준 시각은 벽시계가 아니라 이 run의 시각이다.
+
+    `kis_overseas_index_daily._session_date`와 같은 규칙이다. `datetime.now`를 쓰면 지난
+    run을 clear했을 때 그날이 아니라 오늘 봉을 다시 받고 성공으로 끝난다. `days` 기본값이
+    1이라 그 하루를 덮어 줄 창이 없어서, 빠진 날은 빠진 채로 남고 아무도 모른다.
+    """
+    context = get_current_context()
+    reference = context.get("data_interval_end") or context["dag_run"].run_after
+    return reference.astimezone(KST_TIMEZONE).date()
+
+
+def requested_business_date(run_date: date, params: dict[str, Any]) -> date:
     """받을 거래일.
 
     **모양을 먼저 본다.** `date.fromisoformat`은 `20260814`와 `2026-W33`도 받는다. 주 표기는
@@ -133,7 +145,7 @@ def requested_business_date(now_kst: datetime, params: dict[str, Any]) -> date:
     """
     given = params.get(BUSINESS_DATE_PARAM)
     if not given:
-        return now_kst.date()
+        return run_date
     text = str(given).strip()
     if not CALENDAR_DAY_PATTERN.fullmatch(text):
         raise AirflowFailException(f"{BUSINESS_DATE_PARAM} must be YYYY-MM-DD, got {given!r}")
@@ -178,7 +190,7 @@ def requested_days(params: dict[str, Any]) -> int:
             None,
             type=["null", "string"],
             title="거래일",
-            description="YYYY-MM-DD. 비우면 실행일(KST).",
+            description="YYYY-MM-DD. 비우면 이 run의 날짜(KST).",
         ),
         DAYS_PARAM: Param(
             1,
@@ -202,8 +214,7 @@ def kis_stock_minute_bars_daily():
         context = get_current_context()
         params = dict(context.get("params") or {})
 
-        now_kst = datetime.now(UTC).astimezone(KST_TIMEZONE)
-        business_date = requested_business_date(now_kst, params)
+        business_date = requested_business_date(_run_date(), params)
         days = requested_days(params)
 
         app_key, app_secret = _credentials()

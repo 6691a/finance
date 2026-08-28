@@ -167,3 +167,14 @@ def test_the_input_hash_is_recorded(wiring: FakeStore, monkeypatch: pytest.Monke
         week_start=date(2026, 8, 10), target_codes=["005930"], candidate_refs=[]
     )
     assert wiring.stored[0]["input_hash"] == expected
+
+
+def test_it_uses_the_shared_connection_id():
+    """연결 id를 새로 만들지 않는다. 저장소 전체가 `modules/utility.py`의 상수 하나를 쓴다.
+
+    2026-08-28 운영 트리거가 `AirflowNotFoundException: conn_id 'finance_db' isn't defined`로
+    죽었다 — 이름을 지어냈고 그 이름의 Connection이 운영에 없었다.
+    """
+    from modules.utility import CONNECTION_ID
+
+    assert run.CONNECTION_ID is CONNECTION_ID

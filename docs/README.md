@@ -14,7 +14,7 @@
 | [kis-market-data-collection.md](collection/kis-market-data-collection.md) | KIS 수급·포지션·캘린더 다섯 DAG | 구현 완료 |
 | [kis-semiconductor-minute-bars.md](collection/kis-semiconductor-minute-bars.md) | 삼성전자·SK하이닉스 KRX·NXT 1분봉. KIS REST·WebSocket 계약의 원본 | 구현 완료. 9절 백필은 코드 없이 해소(2026-08-27) |
 | [kis-overseas-index-close.md](collection/kis-overseas-index-close.md) | 미국 현물 지수 마감 분봉과 미국장 브리핑 섹션 분리 | 구현 완료 |
-| [kis-index-daily-collection.md](collection/kis-index-daily-collection.md) | 빠진 국내지수·국내선물·미국 현물지수 다섯 개의 KIS 일봉 수집 | 코드 구현 완료(2026-08-27). **운영에는 미국지수만 들어온다** — `KOSPI200`·국내선물 둘은 0행(2026-08-28 실측) |
+| [kis-index-daily-collection.md](collection/kis-index-daily-collection.md) | 빠진 국내지수·국내선물·미국 현물지수 다섯 개의 KIS 일봉 수집 | 구현 완료. 운영 백필까지 끝났다(2026-08-28). 선물 백필 하한 2025-12-12은 KIS 만기물 보관 한계다 |
 | [kis-program-trading.md](collection/kis-program-trading.md) | 프로그램매매 수급. TR ID·필드 매핑표가 값어치다 | **미구현.** 착수 게이트는 누적/증분 프로브 |
 | [dart-disclosure-earnings.md](collection/dart-disclosure-earnings.md) | DART 공시와 잠정실적 숫자 추출 | 구현 완료 |
 | [ecb-convergence-monthly.md](collection/ecb-convergence-monthly.md) | 유로 회원국 10년물 월평균 | 구현 완료 |

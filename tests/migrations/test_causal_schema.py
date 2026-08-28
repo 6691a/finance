@@ -75,3 +75,30 @@ def test_the_llm_ledger_slot_becomes_optional_only_for_causal(capsys):
 
     assert "ALTER TABLE thesis_llm_run ALTER COLUMN run_slot DROP NOT NULL" in sql
     assert "ck_thesis_llm_run_slot_shape" in sql
+
+
+def test_the_evidence_table_is_created(capsys):
+    """`evidence_refs`를 저장할 자리. **없으면 confidence 판정을 검증할 수 없다.**
+
+    2026-08-28까지 모델이 낸 `evidence_refs`를 `verify_paths`가 검사만 하고 버렸다. 그래서
+    `observed` 판정이 옳은지, 어느 기사를 근거로 삼았는지 DB로 알 수 없었다.
+    """
+    sql = head_sql(capsys)
+
+    assert "CREATE TABLE market_causal_evidence" in sql
+    assert (
+        "CONSTRAINT uq_market_causal_evidence_natural_key UNIQUE (path_id, ref)" in sql
+    )
+
+
+def test_the_evidence_dies_with_its_path(capsys):
+    """경로가 지워지면 근거도 간다. 고아 근거는 뜻이 없다."""
+    sql = head_sql(capsys)
+
+    body = sql[sql.index("CREATE TABLE market_causal_evidence") :]
+    body = body[: body.index(";")]
+
+    assert "REFERENCES market_causal_path (id) ON DELETE CASCADE" in body
+    # `ref`는 document·disclosure·signal 셋을 담는다. 마스터가 셋이라 FK를 걸 수 없고,
+    # 걸면 마스터에 없는 근거 하나가 경로 전체를 죽인다.
+    assert "REFERENCES document" not in body

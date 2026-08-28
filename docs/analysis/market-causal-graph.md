@@ -31,7 +31,7 @@
 | 어휘 정규화 | **자라는 어휘** — 쓰기 시점에 후보 목록을 프롬프트에 주고 고르거나 새로 만들게 한다 |
 | 저장 단위 | 경로 하나가 헤더 한 행 + 단계 N행. 그래프에서는 엣지 N+1개가 된다 |
 | 근거 조립 | 코드가 후보를 좁히고(≈50건) 모델이 툴로 더 판다 |
-| 실현값 | `return_week_pct`·`return_t1_pct`·`return_t5_pct`는 **SQL이 계산한다.** 모델이 만들지 않는다 |
+| 실현값 | `return_week_change`·`return_t1_change`·`return_t5_change`는 **SQL이 계산한다.** 단위는 `return_unit`이 담는다(가격 percent, 금리 basis_point) |
 | 대상 | 국내 넷(`KOSPI`·`KOSDAQ`·`005930`·`000660`)과 **매크로 다섯**(`USDKRW`·`US10Y`·`SOX`·`VIX`·`NASDAQ100_FUT`). 아홉을 **대화 하나**로 본다. 종류는 §3.2.1 |
 | 그래프 DB | 쓰지 않는다. Postgres가 원본이고 API가 투영한다(§7) |
 
@@ -214,11 +214,17 @@ W+2      월                ← 여기서 분석한다. 반응이 확정돼 있�
 | `sign` | `up` / `down`. 모델이 주장한 방향 |
 | `confidence` | `observed` / `plausible` |
 | `reasoning` | 이 경로 한 문장 |
-| `return_week_pct` | **그 주** 대상 등락. 경로가 작용했다고 주장하는 창이다 |
-| `return_t1_pct` | 주 종료 다음 KRX 거래일까지의 등락 |
-| `return_t5_pct` | 주 종료 +5 KRX 거래일까지의 등락 |
+| `return_week_change` | **그 주** 대상 변화. 경로가 작용했다고 주장하는 창이다 |
+| `return_t1_change` | 주 종료 다음 KRX 거래일까지의 변화 |
+| `return_t5_change` | 주 종료 +5 KRX 거래일까지의 변화 |
+| `return_unit` | 위 셋의 단위. 가격·지수·환율은 `percent`, 금리는 `basis_point` |
 | `input_hash` | 이 경로를 만든 실행의 입력 해시(§5.4). 경로마다 같은 값이 반복된다 |
 | `llm_run_id` | FK → `thesis_llm_run` |
+
+**이름이 `_pct`가 아니라 `_change`인 이유가 단위다.** `KTB10Y` 4.239 → 4.313은 +1.75%가
+아니라 +7.4bp인데, 퍼센트로 저장하면 KOSPI의 +10.77%와 한 칸에 들어가 크기 비교가 조용히
+무의미해진다. 퍼센트에서 bp를 역산할 수도 없어(원값이 없으면) 표시 층에 미룰 수도 없다.
+**이름이 단위를 주장하면 그 이름이 거짓이 된다.** 조회하는 쪽은 `return_unit`을 반드시 건다.
 
 **`input_hash`는 자연키에 넣지 않는다.** 넣으면 후보가 조금 달라진 재실행이 같은 주에
 행을 한 벌 더 만든다. 재실행 판정은 §5.4대로 **"그 주에 행이 있나"**이고 `input_hash`는
@@ -458,7 +464,7 @@ input_hash = sha256(
   `down`이라 한 경로가 +5%로 끝났으면 그 사실이 그대로 남는다. 틀린 추론을 고치지 않는 것과
   같은 이유다 — 판을 비교할 재료가 그것이다.
 - **실현값은 저장할 때 함께 채운다. 나중에 채우는 태스크를 두지 않는다.** `W+2` 월요일이면
-  `return_week_pct`·`return_t1_pct`·`return_t5_pct`가 전부 확정돼 있다(§2). `thesis_outcome`이
+  `return_week_change`·`return_t1_change`·`return_t5_change`가 전부 확정돼 있다(§2). `thesis_outcome`이
   지평마다 나중에 채우는 것과 다른 점이 이것이고, **그래서 채점 DAG가 필요 없다.**
   값이 하나라도 없으면(휴장으로 T+5가 안 참 등) 그 대상의 경로를 저장하지 않고 건수를
   실패 메시지에 싣는다 — NULL로 두면 나중에 "안 쟀다"와 "잴 수 없었다"가 구분되지 않는다.

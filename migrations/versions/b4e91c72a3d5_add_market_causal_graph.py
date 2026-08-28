@@ -1,7 +1,7 @@
 """add market causal graph tables
 
 Revision ID: b4e91c72a3d5
-Revises: b7f4c2a91d38
+Revises: c9f1e4b70a25
 Create Date: 2026-08-27 17:20:00.000000
 
 주간 사후 인과 그래프 — 사건, 전달 경로, 그 둘을 대상에 잇는 경로와 단계.
@@ -35,7 +35,7 @@ from alembic import op
 
 # revision identifiers, used by Alembic.
 revision: str = "b4e91c72a3d5"
-down_revision: str | Sequence[str] | None = "b7f4c2a91d38"
+down_revision: str | Sequence[str] | None = "c9f1e4b70a25"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 

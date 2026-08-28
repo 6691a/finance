@@ -12,6 +12,7 @@ from sqlalchemy import Table
 from apps.models.market import IndicatorObservation
 from apps.models.raw import SourceRecord
 from modules.collectors.indicator.fred import (
+    BALANCE_SHEET_SERIES,
     MACRO_SERIES,
     OBSERVATION_UPSERT,
     POLICY_RATE_SERIES,
@@ -141,13 +142,14 @@ def test_treasury_series_cover_short_and_long_maturities():
     assert len(set(TREASURY_SERIES)) == len(TREASURY_SERIES)
 
 
-def test_the_three_series_groups_do_not_overlap():
-    """DAG이 셋으로 나뉘어 각각 목록을 돈다. 겹치면 같은 계열을 하루에 두 번 받는다.
+def test_the_series_groups_do_not_overlap():
+    """DAG이 넷으로 나뉘어 각각 목록을 돈다. 겹치면 같은 계열을 하루에 두 번 받는다.
 
-    **덮는지도 함께 본다.** 국채는 `kind`로, 거시는 `is_monthly`로 걸러서 어느 쪽에도 안 맞는
-    계열(일별 정책금리가 그렇다)이 조용히 어느 DAG에도 안 실릴 수 있다.
+    **덮는지도 함께 본다.** 목록이 전부 `kind`로 걸러지므로, 새 종류를 더하면서 목록을
+    안 만들면 그 계열이 조용히 어느 DAG에도 안 실린다. 전에 거시 목록이 `is_monthly`로
+    걸렀는데 월간 잔액(`JPASSETS_M`)이 들어오면서 그 필터가 거짓이 됐다.
     """
-    groups = (set(TREASURY_SERIES), set(MACRO_SERIES), set(POLICY_RATE_SERIES))
+    groups = (set(TREASURY_SERIES), set(MACRO_SERIES), set(POLICY_RATE_SERIES), set(BALANCE_SHEET_SERIES))
 
     assert set.intersection(*groups) == set()
     assert sum(len(group) for group in groups) == len(set.union(*groups))
@@ -360,3 +362,28 @@ def test_store_repeats_the_same_upsert_for_a_rerun_of_the_same_period():
     assert [statement for statement, _ in first.recorded_cursor.calls] == [
         statement for statement, _ in second.recorded_cursor.calls
     ]
+
+
+def test_balance_sheet_series_carry_their_own_currency_unit():
+    """한 통화로 환산하지 않는다. 환산하면 환율 변동이 자산 증감으로 위장한다."""
+    units = {series.value: series.unit for series in FredSeries if series.kind == "balance_sheet"}
+
+    assert units == {
+        "FEDASSETS_W": "Millions of Dollars",
+        "EAASSETS_W": "Millions of Euros",
+        "JPASSETS_M": "Hundred Millions of Yen",
+    }
+    # 단위가 셋이라 잔액을 한 축에 놓을 수 없다. 비교는 증가율로 한다.
+    assert len(set(units.values())) == len(units)
+
+
+def test_balance_sheet_series_declare_their_frequency_in_the_id():
+    # 한 테이블에 일별·주간·월간이 섞여 있어 표시가 없으면 조회하는 쪽이 주기를 구분할 수 없다.
+    assert set(BALANCE_SHEET_SERIES) == {"FEDASSETS_W", "EAASSETS_W", "JPASSETS_M"}
+    assert FredSeries.JP_ASSETS_M.is_monthly
+    assert not FredSeries.FED_ASSETS_W.is_monthly
+
+
+def test_the_monthly_balance_sheet_series_is_not_in_the_macro_dag():
+    """거시 목록을 `is_monthly`로 거르던 때는 월간 잔액이 그 DAG에 조용히 실렸다."""
+    assert "JPASSETS_M" not in MACRO_SERIES

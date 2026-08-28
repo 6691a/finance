@@ -59,9 +59,15 @@ SOURCE = "ecos"
 MARKET_RATE_STAT_CODE = "817Y002"  # 1.3.2.1. 시장금리(일별)
 POLICY_RATE_STAT_CODE = "722Y001"  # 1.3.1. 한국은행 기준금리 및 여수신금리
 FOREIGN_POLICY_RATE_STAT_CODE = "902Y006"  # 9.1.1.3. 국제 주요국 중앙은행 정책금리
+BALANCE_SHEET_STAT_CODE = "103Y002"  # 1.4.1. 한국은행 주요계정(말잔)
 
 DAILY_CYCLE = "D"
 MONTHLY_CYCLE = "M"
+
+# 저장 표기. 금리는 FRED와 맞춘다 — 두 나라 금리를 한 쿼리로 비교하려면 단위 문자열이
+# 같아야 한다. 잔액은 통화별로 다르므로 계열이 들고 간다.
+SERIES_UNIT = "Percent"
+BALANCE_SHEET_UNIT = "Billions of Won"
 
 
 class EcosSeries(StrEnum):
@@ -80,6 +86,10 @@ class EcosSeries(StrEnum):
     정책금리가 다른 통계표에 있고 일본은 월별이라 그 상수들이 거짓이 됐다. `fred.py`의
     `FredSeries`가 단위를 계열마다 다는 것과 같은 이유다.
 
+    **저장 단위(`unit`)도 계열이 든다.** 금리가 전부 `Percent`이던 때는 모듈 상수 하나가
+    맞았지만 한국은행 총자산이 십억원으로 들어오면서 거짓이 됐다. `source_unit_name`은
+    ECOS가 쓰는 표기(`연%`·`십억원`)이고 `unit`은 우리가 정규화한 표기다. 둘은 다르다.
+
     **월간 계열은 `_M`으로 끝난다.** 한 테이블에 일별과 월간이 섞여 있어 표시가 없으면
     조회하는 쪽이 주기를 구분할 수 없다.
 
@@ -92,6 +102,7 @@ class EcosSeries(StrEnum):
     item_code: str
     cycle: str
     source_unit_name: str
+    unit: str
     kind: str
     label: str
 
@@ -102,6 +113,7 @@ class EcosSeries(StrEnum):
         item_code: str,
         cycle: str,
         source_unit_name: str,
+        unit: str,
         kind: str,
         label: str,
     ) -> Self:
@@ -111,6 +123,7 @@ class EcosSeries(StrEnum):
         member.item_code = item_code
         member.cycle = cycle
         member.source_unit_name = source_unit_name
+        member.unit = unit
         member.kind = kind
         member.label = label
         return member
@@ -120,11 +133,11 @@ class EcosSeries(StrEnum):
         return self.cycle == MONTHLY_CYCLE
 
     # 시장이 만드는 값. 통계표 하나에 주기 D, 단위 `연%`다.
-    KTB_2Y = ("KTB2Y", MARKET_RATE_STAT_CODE, "010195000", DAILY_CYCLE, "연%", "government_bond", "국고채 2년")
-    KTB_3Y = ("KTB3Y", MARKET_RATE_STAT_CODE, "010200000", DAILY_CYCLE, "연%", "government_bond", "국고채 3년")
-    KTB_10Y = ("KTB10Y", MARKET_RATE_STAT_CODE, "010210000", DAILY_CYCLE, "연%", "government_bond", "국고채 10년")
-    KTB_30Y = ("KTB30Y", MARKET_RATE_STAT_CODE, "010230000", DAILY_CYCLE, "연%", "government_bond", "국고채 30년")
-    CD_91D = ("CD91D", MARKET_RATE_STAT_CODE, "010502000", DAILY_CYCLE, "연%", "money_market", "CD 91일")
+    KTB_2Y = ("KTB2Y", MARKET_RATE_STAT_CODE, "010195000", DAILY_CYCLE, "연%", SERIES_UNIT, "government_bond", "국고채 2년")
+    KTB_3Y = ("KTB3Y", MARKET_RATE_STAT_CODE, "010200000", DAILY_CYCLE, "연%", SERIES_UNIT, "government_bond", "국고채 3년")
+    KTB_10Y = ("KTB10Y", MARKET_RATE_STAT_CODE, "010210000", DAILY_CYCLE, "연%", SERIES_UNIT, "government_bond", "국고채 10년")
+    KTB_30Y = ("KTB30Y", MARKET_RATE_STAT_CODE, "010230000", DAILY_CYCLE, "연%", SERIES_UNIT, "government_bond", "국고채 30년")
+    CD_91D = ("CD91D", MARKET_RATE_STAT_CODE, "010502000", DAILY_CYCLE, "연%", SERIES_UNIT, "money_market", "CD 91일")
 
     # 중앙은행이 정하는 값. 좌표·주기·단위는 2026-08-27에 `StatisticItemList`로 확인했다.
     #
@@ -134,24 +147,44 @@ class EcosSeries(StrEnum):
     # **일본은 월별뿐이다.** 국제 정책금리 통계표(`902Y006`)에 국가 코드가 항목코드로 들어 있고
     # 주기는 M이다. FRED의 일별 대안(`IRSTCB01JPM156N`)은 2023-12에 끊겼다. 월별이라 일본에
     # 대해서는 발표일 전후 며칠을 보는 선반영 분석이 성립하지 않는다.
-    KR_BASE = ("KRBASE", POLICY_RATE_STAT_CODE, "0101000", DAILY_CYCLE, "연%", "policy_rate", "한국은행 기준금리")
+    KR_BASE = ("KRBASE", POLICY_RATE_STAT_CODE, "0101000", DAILY_CYCLE, "연%", SERIES_UNIT, "policy_rate", "한국은행 기준금리")
     JP_BASE_M = (
         "JPBASE_M",
         FOREIGN_POLICY_RATE_STAT_CODE,
         "JP",
         MONTHLY_CYCLE,
         "%",
+        SERIES_UNIT,
         "policy_rate",
         "일본은행 정책금리(월별)",
     )
 
+    # 한국은행 대차대조표 총자산. 좌표·주기·단위는 2026-08-27에 `StatisticItemList`로 확인했다.
+    # 통계표는 한국은행 주요계정(말잔)이고 항목 `BCAA1`이 `자산합계`다. 1970-01부터 있고
+    # 2026-08-27 시점 최신이 2026-06이라 두 달 지연이다.
+    #
+    # **원(KRW)으로 그대로 저장한다.** 달러로 환산하면 환율 변동이 자산 증감으로 위장한다.
+    KR_ASSETS_M = (
+        "KRASSETS_M",
+        BALANCE_SHEET_STAT_CODE,
+        "BCAA1",
+        MONTHLY_CYCLE,
+        "십억원",
+        BALANCE_SHEET_UNIT,
+        "balance_sheet",
+        "한국은행 총자산(월별)",
+    )
 
-# DAG이 태스크를 매핑하는 단위. 시장금리는 일별로, 정책금리는 주별로 돈다.
-MARKET_RATE_SERIES: tuple[str, ...] = tuple(series.value for series in EcosSeries if series.kind != "policy_rate")
+
+# DAG이 태스크를 매핑하는 단위. 시장금리는 일별로, 정책금리와 잔액은 주별로 돈다.
+#
+# **시장금리 목록을 "정책금리가 아닌 것"으로 만들지 않는다.** 총자산이 들어오면서 그 필터가
+# 거짓이 됐다 — 월간 잔액이 일별 시장금리 DAG에 조용히 실릴 뻔했다. 종류를 직접 적는다.
+MARKET_RATE_KINDS = frozenset({"government_bond", "money_market"})
+
+MARKET_RATE_SERIES: tuple[str, ...] = tuple(series.value for series in EcosSeries if series.kind in MARKET_RATE_KINDS)
 POLICY_RATE_SERIES: tuple[str, ...] = tuple(series.value for series in EcosSeries if series.kind == "policy_rate")
-
-# 저장 표기는 FRED와 맞춘다. 두 나라 금리를 한 쿼리로 비교하려면 단위 문자열이 같아야 한다.
-SERIES_UNIT = "Percent"
+BALANCE_SHEET_SERIES: tuple[str, ...] = tuple(series.value for series in EcosSeries if series.kind == "balance_sheet")
 
 # 데이터가 없다는 정상 응답. 휴장일만 걸린 구간이거나 아직 발표 전이다.
 NO_DATA_CODE = "INFO-200"
@@ -507,7 +540,7 @@ class EcosCollector:
                         response.series_id,
                         observation.observation_date,
                         observation.value,
-                        SERIES_UNIT,
+                        response.request.series.unit,
                         source_record_id,
                     ),
                 )

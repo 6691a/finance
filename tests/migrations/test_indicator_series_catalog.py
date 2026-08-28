@@ -1,13 +1,17 @@
 import pytest
 
 from modules.collectors.indicator.bbk import BundSeries
+from modules.collectors.indicator.bbk_statement import BALANCE_SHEET_SERIES as BBK_ASSET_SERIES
+from modules.collectors.indicator.boe import BALANCE_SHEET_SERIES as BOE_ASSET_SERIES
 from modules.collectors.indicator.boe import GILT_DATASET, BoeSeries
 from modules.collectors.indicator.boe import POLICY_RATE_SERIES as BOE_POLICY_SERIES
 from modules.collectors.indicator.ecb import EuroYieldSeries
 from modules.collectors.indicator.ecb_irs import MATURITY_MONTHS as CONVERGENCE_MATURITY_MONTHS
 from modules.collectors.indicator.ecb_irs import ConvergenceSeries
+from modules.collectors.indicator.ecos import BALANCE_SHEET_SERIES as ECOS_ASSET_SERIES
 from modules.collectors.indicator.ecos import POLICY_RATE_SERIES as ECOS_POLICY_SERIES
 from modules.collectors.indicator.ecos import EcosSeries
+from modules.collectors.indicator.fred import BALANCE_SHEET_SERIES as FRED_ASSET_SERIES
 from modules.collectors.indicator.fred import MACRO_SERIES, TREASURY_SERIES
 from modules.collectors.indicator.fred import POLICY_RATE_SERIES as FRED_POLICY_SERIES
 from modules.collectors.indicator.mof import JgbSeries
@@ -43,6 +47,45 @@ def test_the_master_takes_kinds_that_are_not_interest_rates(capsys):
     latest = sql.rindex("ck_indicator_series_kind")
     assert "'price_index'" in sql[latest : latest + 200]
     assert "'activity'" in sql[latest : latest + 200]
+
+
+def test_the_master_tells_a_balance_sheet_from_one_of_its_items(capsys):
+    """총자산과 그 안의 한 항목은 다른 `kind`다.
+
+    영란은행은 총자산을 분기로만 고시하고 주간으로는 준비금잔액 같은 항목만 준다. 한 종류로
+    두면 "중앙은행 총자산 전부"를 묻는 쿼리가 영국의 준비금을 총자산으로 읽어 영국만 값이
+    작게 나온다.
+    """
+    sql = head_sql(capsys)
+
+    latest = sql.rindex("ck_indicator_series_kind")
+    assert "'balance_sheet'" in sql[latest : latest + 250]
+    assert "'balance_sheet_item'" in sql[latest : latest + 250]
+
+
+@pytest.mark.parametrize(
+    ("provider", "series_id", "kind"),
+    [
+        *[("fred", series_id, "balance_sheet") for series_id in FRED_ASSET_SERIES],
+        *[("ecos", series_id, "balance_sheet") for series_id in ECOS_ASSET_SERIES],
+        *[("bbk", series_id, "balance_sheet") for series_id in BBK_ASSET_SERIES],
+        # 영국만 둘이다. 총자산은 분기, 준비금잔액은 주간이고 종류가 갈린다.
+        ("boe", "GBASSETS_Q", "balance_sheet"),
+        ("boe", "GBRESERVES_W", "balance_sheet_item"),
+    ],
+)
+def test_every_balance_sheet_series_has_a_master_row_without_a_maturity(provider, series_id, kind, capsys):
+    # 대차대조표 잔액에는 만기 개념이 없다. 0으로 채우면 만기별 비교 쿼리가 "0개월물"로 그린다.
+    sql = head_sql(capsys)
+
+    assert f"'{provider}', '{series_id}'" in sql
+    row_start = sql.index(f"'{provider}', '{series_id}'")
+    assert f"NULL, '{kind}'" in sql[row_start : row_start + 200]
+
+
+def test_the_british_balance_sheet_series_are_both_seeded(capsys):
+    # 수집기 목록과 시드가 어긋나면 DAG는 살아 있고 대시보드만 조용히 빈다.
+    assert set(BOE_ASSET_SERIES) == {"GBASSETS_Q", "GBRESERVES_W"}
 
 
 def test_the_master_tells_policy_rates_from_market_rates(capsys):

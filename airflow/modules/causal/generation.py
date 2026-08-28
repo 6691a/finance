@@ -21,6 +21,7 @@ from modules.causal.domain import (
     MAX_CHAIN,
     MAX_PATHS,
     MAX_REASONING_CHARS,
+    PROMPT_VERSION,
     CandidateSet,
     CausalTarget,
     CausalWindow,
@@ -232,7 +233,7 @@ class CausalBuilder:
         )
 
         messages = [system, human]
-        paths = self._ask(messages)
+        paths = self._ask(messages, window, "answer")
         verified = verify_paths(paths, found, target_codes)
         if verified:
             return verified
@@ -252,10 +253,33 @@ class CausalBuilder:
                 )
             ),
         ]
-        return verify_paths(self._ask(messages), found, target_codes)
+        return verify_paths(self._ask(messages, window, "repair"), found, target_codes)
 
-    def _ask(self, messages: Sequence[object]) -> tuple[CausalPathAnswer, ...]:
-        reply = llm.invoke(self._model, messages, schema=self._schema)
+    def _ask(
+        self,
+        messages: Sequence[object],
+        window: CausalWindow,
+        step: str,
+    ) -> tuple[CausalPathAnswer, ...]:
+        """한 번 묻는다. **어느 주의 무슨 단계였는지를 호출에 새긴다.**
+
+        `causal`은 LangGraph를 안 쓰므로 트레이스에 노드 이름이 붙지 않는다. 아무 것도
+        안 하면 LangSmith에 `ChatOpenAI` 하나가 덩그러니 남아, 어느 주인지도 첫 답변인지
+        교정인지도 알 수 없다(2026-08-28 운영 실행에서 실제로 그랬다). `with_config`는
+        LangChain 표준이라 추적이 꺼져 있으면 아무 일도 하지 않는다.
+        """
+        named = self._model.with_config(
+            {
+                "run_name": f"causal {window.week_start.isoformat()} {step}",
+                "tags": ["causal", f"prompt_v{PROMPT_VERSION}"],
+                "metadata": {
+                    "week_start": window.week_start.isoformat(),
+                    "prompt_version": PROMPT_VERSION,
+                    "step": step,
+                },
+            }
+        )
+        reply = llm.invoke(named, messages, schema=self._schema)
         answer = CausalAnswer.model_validate_json(json_object(str(reply.content)))
         return tuple(answer.paths[:MAX_PATHS])
 

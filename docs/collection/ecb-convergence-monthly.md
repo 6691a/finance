@@ -70,6 +70,6 @@ ECB CSV 헤더 전체와 열 순서를 검증한 뒤 `KEY`, `REF_AREA`, `TIME_PE
 ## 구현과 검증 위치
 
 - DAG: `airflow/dags/ecb_convergence_monthly.py`
-- 수집·파싱: `airflow/modules/collectors/ecb_irs.py`
+- 수집·파싱: `airflow/modules/collectors/indicator/ecb_irs.py`
 - SQL: `airflow/sql/postgres/indicator_observation/upsert.sql`
 - 테스트: `tests/collectors/test_ecb_irs.py`

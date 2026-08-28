@@ -2,6 +2,9 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
+- 상태: **구현 완료(2026-08-27, 커밋 `5a19d9f`).** 아래 체크박스는 계획 시점 그대로 둔다.
+  `airflow/dags/kis_index_daily.py:213`이 `DomesticIndex`를 순회한다.
+
 **Goal:** Add `KOSPI200` to the existing KIS domestic-index daily collection without changing its API, schedule, storage, or failure behavior.
 
 **Architecture:** `KisIndexDailyCollector` already accepts every `DomesticIndex`. The DAG accidentally iterates the market-movement subset, so the fix is to iterate the enum itself. This is one line of production code and the task list stays that size.

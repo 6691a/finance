@@ -1,15 +1,18 @@
 # MarketCausalGraph — 주간 사후 인과 그래프 설계
 
 - 날짜: 2026-08-27
-- 상태: **§1~§8 구현 완료. 아직 운영에 배포되지 않았다**(2026-08-27). 리비전 `b4e91c72a3d5`가
-  운영 DB에 안 올라갔고 DAG도 배포 전이라 **한 번도 실제로 돈 적이 없다.** 구현 중에 설계가
+- 상태: **§1~§8 구현 완료. 운영에 반영됐고 한 번 돌았다**(2026-08-28 읽기 전용 실측 —
+  리비전 `b4e91c72a3d5`와 근거 저장분 `a7c4e1b93f28`이 올라갔고 `market_causal_path` 16행,
+  `market_causal_evidence` 27행, 기준 주는 2026-08-10 하나). 구현 중에 설계가
   넷 바뀌었고 그 자리마다 근거를 적어 뒀다(§2·§3.2·§5.2·§6).
+  **§7 조회와 §9 선반영은 미구현**이고 문서가 그렇게 적어 뒀다.
   선반영 표현(§9)은 [정책금리 수집](../collection/policy-rate-collection.md)이 선행 조건이다.
 - 목표: 한 주에 일어난 사건이 어떤 경로로 어떤 대상에 닿았는지를 LLM이 사후에 정리해
   **노드와 엣지로 누적**한다. 주가 쌓이면서 같은 노드를 공유해 다중 홉 탐색이 가능해진다.
-- 산출물: `apps/models/analysis/causal.py`, 수기 리비전 `b4e91c72a3d5`,
+- 산출물: `apps/models/analysis/causal.py`, 수기 리비전 `b4e91c72a3d5`와
+  `a7c4e1b93f28`(근거 저장, 2026-08-28),
   `airflow/modules/causal/`(`domain`·`candidates`·`generation`·`store`·`run`),
-  `airflow/modules/prompts/causal_graph.yaml`, `airflow/sql/postgres/`의 SQL 열다섯,
+  `airflow/modules/prompts/causal_graph.yaml`, `airflow/sql/postgres/`의 SQL 열여섯,
   `airflow/dags/market_causal_weekly.py`, `modules/llm.py`의 `causal_model()`,
   테스트 파일 여섯. 자리와 이유는 §10
 - 관련 원본:
@@ -202,7 +205,7 @@ W+2      월                ← 여기서 분석한다. 반응이 확정돼 있�
   API 응답과 화면은 이 구분을 표시해야 한다 — 한 `path_id` 안의 연속과 여러 경로를 이어
   붙인 사슬은 다른 것이다.
 
-### 3.2 테이블 넷
+### 3.2 테이블 다섯
 
 | 테이블 | 무엇 |
 | --- | --- |
@@ -210,6 +213,7 @@ W+2      월                ← 여기서 분석한다. 반응이 확정돼 있�
 | `market_channel` | 전달 경로 마스터. 자라는 어휘 |
 | `market_causal_path` | 경로 하나의 헤더. 사건·대상·방향·실현값 |
 | `market_causal_step` | 그 경로의 단계 하나. `(path_id, position, channel_id)` |
+| `market_causal_evidence` | 그 경로가 인용한 근거 하나(2026-08-28, 리비전 `a7c4e1b93f28`) |
 
 **`market_event`** — 자연키 `(title, occurred_on)`
 
@@ -792,7 +796,7 @@ post_move = 대상 변화 [D,   D+5]
 
 ### 10.1 모델과 마이그레이션
 
-**`apps/models/analysis/causal.py`** 하나에 넷을 둔다. `thesis.py`가 이미 그 크기이고
+**`apps/models/analysis/causal.py`** 하나에 다섯을 둔다. `thesis.py`가 이미 그 크기이고
 (`Thesis`·`ThesisOutcome`·`ThesisEvidence`·`ThesisPrecedent`·원장 둘), 인과 그래프도 같은
 aggregate 하나다.
 
@@ -802,13 +806,14 @@ aggregate 하나다.
 | `MarketChannel` | `market_channel` |
 | `MarketCausalPath` | `market_causal_path` |
 | `MarketCausalStep` | `market_causal_step` |
+| `MarketCausalEvidence` | `market_causal_evidence` |
 
 `StrEnum` 셋도 같은 파일이다: `CausalSign`(`up`·`down`), `CausalConfidence`
 (`observed`·`plausible`), `CausalTargetKind`(`instrument`·`index`·`quote`·`indicator`).
 컬럼은 `_columns._enum_column`으로 내리고 **허용 값 `CHECK`를 함께 건다** — 저장소 규칙이다.
 
 - `table_options(comment="…", database="default")`를 `__table_args__` 마지막에 둔다.
-  넷 다 `default` 별칭이다(`thesis`와 같은 곳을 본다).
+  다섯 다 `default` 별칭이다(`thesis`와 같은 곳을 본다).
 - **모든 컬럼에 `comment=`를 단다.** `id`·`created_at`·`updated_at`은 `EntityBase`가 이미 갖는다.
 - **등록은 두 곳이다.** `apps/models/analysis/__init__.py`와 `apps/models/__init__.py`의
   `__all__`. 한 단계만 빠져도 `Base.metadata`에서 테이블이 사라지고 autogenerate가 `DROP`을
@@ -821,11 +826,12 @@ DB다 — 워크트리에서 돌리지 않는다. 한 리비전에 셋이 들어
 2026-08-27에 실제로 둘이 같은 부모를 가리켜 Alembic이 `upgrade head`를 거절할 상태가 됐다.
 다른 브랜치를 머지한 뒤에는 head가 하나인지 확인한다.
 
-1. 테이블 넷 `CREATE`(모델과 같은 테이블·컬럼 주석 포함)
+1. 테이블 넷 `CREATE`(모델과 같은 테이블·컬럼 주석 포함).
+   다섯째 `market_causal_evidence`는 뒤에 붙인 리비전 `a7c4e1b93f28`이 만든다
 2. `thesis_llm_run.kind` CHECK에 `causal` 추가
 3. `thesis_llm_run.run_slot`을 nullable로 풀고 조합 CHECK 추가(§3.5)
 
-`downgrade`는 테이블 넷을 `DROP`하고 CHECK 둘을 되돌린다. 검증은 오프라인 SQL이다
+`downgrade`는 그 리비전이 만든 테이블 넷을 `DROP`하고 CHECK 둘을 되돌린다. 검증은 오프라인 SQL이다
 (`alembic_command.upgrade(config, "head", sql=True)`) — 특정 리비전 ID에 고정하지 않고
 테이블 단위 사실만 본다.
 
@@ -865,6 +871,7 @@ airflow/sql/postgres/
   market_channel/        upsert.sql          select_all.sql
   market_causal_path/    insert.sql          exists_by_week.sql
   market_causal_step/    insert.sql
+  market_causal_evidence/ insert.sql
   causal/                select_watched_stocks.sql
                          select_index_returns.sql     select_stock_returns.sql
                          select_quote_returns.sql     select_indicator_returns.sql
@@ -914,14 +921,14 @@ airflow/sql/postgres/
 | --- | --- |
 | `tests/modules/test_causal.py` | 주 경계, `input_hash` 정렬 불변성, 대상 해석, 실현 등락(종류별 테이블·단위·결측 제외), 어휘 후보 |
 | `tests/modules/test_causal_generation.py` | 프롬프트 블록 조립, 답변 검증(목록 밖 ref·마스터 밖 대상·체인 상한), `CausalBuilder` 왕복과 교정 한 번 |
-| `tests/modules/test_causal_store.py` | `chain_key` 순서, 어휘 중복 upsert 안 함, 단위 저장, `MAX_NEW_CHANNELS` 초과, 어휘 드리프트, 재실행 판정, **저장 SQL 넷 vs 모델 metadata 대조** |
+| `tests/modules/test_causal_store.py` | `chain_key` 순서, 어휘 중복 upsert 안 함, 단위 저장, `MAX_NEW_CHANNELS` 초과, 어휘 드리프트, 재실행 판정, **저장 SQL 다섯 vs 모델 metadata 대조** |
 | `tests/modules/test_causal_run.py` | 조립 순서, 재실행 시 모델 미호출, `require_reuse`가 첫 주에 꺼지는지 |
 | `tests/dags/test_market_causal_weekly.py` | cron과 `start_date` tz, 화면 메타데이터, Param 계약, 태스크 하나, 실패 분류 |
-| `tests/migrations/test_causal_schema.py` | 오프라인 SQL에 테이블 넷과 CHECK, `run_slot` nullable 전환 |
+| `tests/migrations/test_causal_schema.py` | 오프라인 SQL에 테이블과 CHECK, `run_slot` nullable 전환 |
 | `tests/modules/test_prompt_versions.py` | `causal_graph.yaml` 해시와 `PROMPT_VERSION` 잠금 |
 | `tests/modules/test_import_weight.py` | `causal.domain`·`candidates`·`store`·`run`이 LangChain을 안 끌고 오고, `generation`은 끌고 오는지 |
 | `tests/modules/test_sql_placeholders.py` | SQL에 psycopg가 오해할 맨 `%`가 없는지(저장소 전체) |
-| `tests/models/test_analysis_models.py` | 자연키 넷, CHECK, 컬럼 주석, 원장의 `causal` 종류 |
+| `tests/models/test_analysis_models.py` | 자연키, CHECK, 컬럼 주석, 원장의 `causal` 종류 |
 
 가짜 연결·가짜 모델을 쓴다. **실제 LLM과 운영 DB를 부르지 않는다.** 대신 SQL은 §10.3대로
 운영 DB에 읽기 전용으로 한 번 돌려 확인한다 — 그 둘이 서로를 대신하지 못한다.

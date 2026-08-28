@@ -7,6 +7,13 @@
   `compose/local` Neo4j 서비스, requirements, `pyproject.toml` dev 의존성,
   `tests/modules/test_graph.py`
 - **선행 조건: prod Neo4j 인스턴스.** 이 저장소 코드만으로 끝나지 않는다(5절).
+- 상태: **미착수.** 산출물 전부가 저장소에 없다(2026-08-28 확인) — `airflow/modules/graph.py`,
+  `tests/modules/test_graph.py`, `sync_graph` 태스크, `sync_only` Param, compose의 neo4j 서비스
+  모두 히트 0건이다.
+- **보류 판단에 쓸 실측이 나왔다(2026-08-27).** 지금 그래프는 **137노드·514엣지**이고
+  근거 허브 둘이 추론의 절반씩을 물고 있어 **2홉이면 거의 전체가 돌아온다.** 다중 홉 탐색이
+  값어치를 내려면 노드가 먼저 쪼개져야 하고, 그 일을 [인과 그래프](../market-causal-graph.md)가
+  §7에서 Neo4j 없이 하고 있다. 유지 여부는 그 노드가 쌓인 뒤에 다시 본다
 
 ## 1. 왜 Neo4j인가, 왜 지금인가
 

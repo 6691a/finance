@@ -2,8 +2,8 @@
 
 - 상위: [README.md](README.md)
 - 날짜: 2026-08-26
-- 상태: **구현 완료**(2026-08-26). 리비전 `f4b19c6ea283`은 **운영 반영 전**이고 올릴 시각은
-  7절이다. 검증은 `uv run pytest tests -q`(2,027건)와 `uv run ruff check`.
+- 상태: **구현 완료**(2026-08-26). 리비전 `f4b19c6ea283`은 **운영에 반영됐다**(2026-08-28 실측).
+  검증은 `uv run pytest tests -q`와 `uv run ruff check`.
 - 의존: [1-storage.md](1-storage.md)(`thesis` 테이블과 불변 원칙),
   [2-agent.md](2-agent.md)(프롬프트와 출력 스키마), [3-dag-slack.md](3-dag-slack.md)(Slack 렌더),
   [9-intraday.md](9-intraday.md)(장중 슬롯의 기준가). [12-api.md](12-api.md)가 이 두 칸을

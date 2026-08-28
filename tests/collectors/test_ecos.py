@@ -12,6 +12,7 @@ from sqlalchemy import Table
 from apps.models.market import IndicatorObservation
 from apps.models.raw import SourceRecord
 from modules.collectors.indicator.ecos import (
+    BALANCE_SHEET_STAT_CODE,
     FOREIGN_POLICY_RATE_STAT_CODE,
     MARKET_RATE_SERIES,
     OBSERVATION_UPSERT,
@@ -183,10 +184,10 @@ def test_stored_series_id_is_readable_and_keeps_the_item_code_beside_it():
 def test_every_series_declares_a_distinct_item_code_and_label():
     assert len({(series.stat_code, series.item_code) for series in EcosSeries}) == len(EcosSeries)
     assert len({series.label for series in EcosSeries}) == len(EcosSeries)
-    # 항목코드는 통계표 안에서만 뜻이 있다. 국제 정책금리 통계표만 국가 코드를 항목으로 쓴다.
-    assert all(
-        series.item_code.isdigit() for series in EcosSeries if series.stat_code != FOREIGN_POLICY_RATE_STAT_CODE
-    )
+    # 항목코드는 통계표 안에서만 뜻이 있다. 금리 통계표는 숫자 코드를 쓰지만 국제 정책금리
+    # 통계표는 국가 코드(`JP`)를, 한국은행 주요계정은 계정 코드(`BCAA1`)를 쓴다.
+    lettered_tables = (FOREIGN_POLICY_RATE_STAT_CODE, BALANCE_SHEET_STAT_CODE)
+    assert all(series.item_code.isdigit() for series in EcosSeries if series.stat_code not in lettered_tables)
 
 
 def test_policy_rate_series_are_separate_from_market_rate_series():
@@ -480,3 +481,21 @@ def test_store_repeats_the_same_upsert_for_a_rerun_of_the_same_period():
     assert [statement for statement, _ in first.recorded_cursor.calls] == [
         statement for statement, _ in second.recorded_cursor.calls
     ]
+
+
+def test_the_balance_sheet_series_is_stored_in_won_not_percent():
+    """단위가 계열마다 다르다. 모듈 상수 하나로 두면 잔액에 `Percent`가 실린다."""
+    from modules.collectors.indicator.ecos import BALANCE_SHEET_SERIES, BALANCE_SHEET_UNIT
+
+    assert set(BALANCE_SHEET_SERIES) == {EcosSeries.KR_ASSETS_M.value}
+    assert EcosSeries.KR_ASSETS_M.unit == BALANCE_SHEET_UNIT != SERIES_UNIT
+    assert EcosSeries.KR_ASSETS_M.source_unit_name == "십억원"
+    assert EcosSeries.KTB_10Y.unit == SERIES_UNIT
+
+
+def test_the_balance_sheet_series_is_in_no_other_dag_list():
+    """목록이 겹치면 같은 계열을 두 DAG이 다른 주기로 받는다."""
+    from modules.collectors.indicator.ecos import BALANCE_SHEET_SERIES
+
+    assert not set(BALANCE_SHEET_SERIES) & set(MARKET_RATE_SERIES)
+    assert not set(BALANCE_SHEET_SERIES) & set(POLICY_RATE_SERIES)

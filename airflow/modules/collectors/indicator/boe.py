@@ -80,6 +80,7 @@ SOURCE = "boe"
 # 조회 이름. `source_record.source_key`에 들어가 어느 묶음을 받은 것인지 가른다.
 SOURCE_KEY = "gilt_nominal_par_yields"
 POLICY_SOURCE_KEY = "bank_rate"
+BALANCE_SHEET_SOURCE_KEY = "bank_balance_sheet"
 
 ENCODING = "utf-8"
 
@@ -93,6 +94,10 @@ REQUEST_TIMEOUT_SECONDS = 30
 # 단위 문자열이 같아야 한다.
 SOURCE_UNIT_NAME = "%"
 SERIES_UNIT = "Percent"
+
+# 대차대조표 잔액의 표기. 금리와 단위가 다르므로 계열과 묶음이 각각 들고 간다.
+BALANCE_SHEET_SOURCE_UNIT_NAME = "sterling millions"
+BALANCE_SHEET_UNIT = "Millions of Pounds"
 
 # 조회 구간 앞에 붙여 받는 일수. 값이 없는 구간과 잘못된 시계열 코드를 응답만으로 가를 수
 # 없기 때문에, 영업일이 반드시 들어가도록 넉넉히 앞에서부터 받는다. 크리스마스 연휴가
@@ -118,23 +123,55 @@ class BoeSeries(StrEnum):
 
     boe_code: str
     maturity_months: int | None
+    unit: str
+    kind: str
     label: str
 
-    def __new__(cls, series_id: str, boe_code: str, maturity_months: int | None, label: str) -> Self:
+    def __new__(
+        cls,
+        series_id: str,
+        boe_code: str,
+        maturity_months: int | None,
+        unit: str,
+        kind: str,
+        label: str,
+    ) -> Self:
         member = str.__new__(cls, series_id)
         member._value_ = series_id
         member.boe_code = boe_code
         member.maturity_months = maturity_months
+        member.unit = unit
+        member.kind = kind
         member.label = label
         return member
 
-    GILT_5Y = ("GILT5Y", "IUDSNPY", 60, "영국 5년물")
-    GILT_10Y = ("GILT10Y", "IUDMNPY", 120, "영국 10년물")
-    GILT_20Y = ("GILT20Y", "IUDLNPY", 240, "영국 20년물")
+    GILT_5Y = ("GILT5Y", "IUDSNPY", 60, SERIES_UNIT, "government_bond", "영국 5년물")
+    GILT_10Y = ("GILT10Y", "IUDMNPY", 120, SERIES_UNIT, "government_bond", "영국 10년물")
+    GILT_20Y = ("GILT20Y", "IUDLNPY", 240, SERIES_UNIT, "government_bond", "영국 20년물")
 
     # 영란은행 기준금리. 통화정책위원회가 정하고 영업일마다 같은 값이 채워져 온다.
     # 코드와 이력은 2026-08-27에 IADB로 확인했다.
-    BANK_RATE = ("GBBASE", "IUDBEDR", None, "영란은행 기준금리")
+    BANK_RATE = ("GBBASE", "IUDBEDR", None, SERIES_UNIT, "policy_rate", "영란은행 기준금리")
+
+    # 대차대조표. 코드·주기·이력은 2026-08-27에 IADB로 확인했다.
+    #
+    # **BoE는 총자산을 주간으로 고시하지 않는다.** 주간 Weekly Report(`RPW*`)는 발행권·준비금·
+    # repo·채권보유·APF 대출·외환보유를 항목으로만 주고 총계 줄이 없다. 총자산(`RPQB75A`)은
+    # 분기이고 2026-08-27 시점 최신이 2025-03-31이라 17개월 지연이다.
+    #
+    # **주간 항목을 더해 총자산을 만들지 않는다.** 그 값은 BoE가 고시한 값이 아니고, 주간
+    # 보고가 대차대조표의 90%만 담고 있어 다른 나라 총자산과 같은 자로 비교하면 조용히 적게
+    # 나온다. 대신 둘을 따로 저장하고 `kind`로 가른다 — 총자산만 보는 쿼리가 준비금을
+    # 집어삼키면 영국만 값이 작게 나오는데 그 사고는 화면에서 안 보인다.
+    BANK_ASSETS_Q = ("GBASSETS_Q", "RPQB75A", None, BALANCE_SHEET_UNIT, "balance_sheet", "영란은행 총자산(분기)")
+    BANK_RESERVES_W = (
+        "GBRESERVES_W",
+        "RPWB56A",
+        None,
+        BALANCE_SHEET_UNIT,
+        "balance_sheet_item",
+        "영란은행 준비금잔액(주간)",
+    )
 
 
 class BoeDataset(BaseModel):
@@ -146,11 +183,15 @@ class BoeDataset(BaseModel):
 
     `source_key`는 `source_record`가 그 조회를 가리키는 이름이다. 둘이 같은 이름을 쓰면
     어느 묶음을 실제로 받았는지 되짚을 수 없다.
+
+    `source_unit_name`은 IADB가 그 묶음에 쓰는 표기다. 금리는 `%`, 잔액은 `sterling millions`라
+    묶음마다 다르다. `metadata`에만 들어가고 저장 단위는 계열의 `unit`이다.
     """
 
     model_config = ConfigDict(frozen=True)
 
     source_key: str
+    source_unit_name: str
     series: tuple[BoeSeries, ...]
 
     @field_validator("series")
@@ -177,12 +218,27 @@ class BoeDataset(BaseModel):
 
 GILT_DATASET = BoeDataset(
     source_key=SOURCE_KEY,
+    source_unit_name=SOURCE_UNIT_NAME,
     series=(BoeSeries.GILT_5Y, BoeSeries.GILT_10Y, BoeSeries.GILT_20Y),
 )
-POLICY_DATASET = BoeDataset(source_key=POLICY_SOURCE_KEY, series=(BoeSeries.BANK_RATE,))
+POLICY_DATASET = BoeDataset(
+    source_key=POLICY_SOURCE_KEY,
+    source_unit_name=SOURCE_UNIT_NAME,
+    series=(BoeSeries.BANK_RATE,),
+)
+
+# 총자산(분기)과 준비금잔액(주간)을 한 조회로 받는다. IADB의 세로 CSV는 행마다 시계열
+# 코드를 달고 오므로 주기가 섞여도 파싱이 갈리지 않는다. 조회가 하나면 `source_record`도
+# 하나다.
+BALANCE_SHEET_DATASET = BoeDataset(
+    source_key=BALANCE_SHEET_SOURCE_KEY,
+    source_unit_name=BALANCE_SHEET_SOURCE_UNIT_NAME,
+    series=(BoeSeries.BANK_ASSETS_Q, BoeSeries.BANK_RESERVES_W),
+)
 
 GILT_SERIES: tuple[str, ...] = GILT_DATASET.series_ids
 POLICY_RATE_SERIES: tuple[str, ...] = POLICY_DATASET.series_ids
+BALANCE_SHEET_SERIES: tuple[str, ...] = BALANCE_SHEET_DATASET.series_ids
 
 # `CSVF=CN`이 주는 세로 형식의 헤더. 열을 위치로 읽으므로 매번 대조한다. BoE가 열을
 # 추가하거나 순서를 바꾸면 값이 조용히 옆 칸으로 밀린다.
@@ -493,7 +549,7 @@ def store_observations(connection: Connection, response: BoeResponse) -> int:
         {
             "http_status": response.status,
             "url": build_url(request.fetch_start, request.fetch_end, request.dataset.codes),
-            "source_unit_name": SOURCE_UNIT_NAME,
+            "source_unit_name": request.dataset.source_unit_name,
             "observation_start": request.observation_start.isoformat(),
             "observation_end": request.observation_end.isoformat(),
             # 저장 구간이 아니라 실제로 요청한 구간. 앞에 붙인 패딩이 여기 드러난다.
@@ -533,7 +589,7 @@ def store_observations(connection: Connection, response: BoeResponse) -> int:
                     observation.series_id,
                     observation.observation_date,
                     observation.value,
-                    SERIES_UNIT,
+                    observation.series.unit,
                     source_record_id,
                 ),
             )

@@ -140,20 +140,85 @@ def test_the_param_decides_the_week(wiring: FakeStore, monkeypatch: pytest.Monke
     assert result["week_start"] == "2026-07-06"
 
 
-def test_no_target_with_returns_is_reported_not_crashed(
+def test_a_target_without_returns_fails_the_task(
     wiring: FakeStore, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """실현 등락이 하나도 없으면 LLM을 부를 이유가 없다. 정상 흐름이라 죽이지 않는다."""
+    """**대상 하나라도 실현 등락이 없으면 죽인다**(2026-08-28).
+
+    8/17 주를 T+5 일봉이 들어오기 전에 돌렸더니 대상 열 중 둘만 남고 경로 여섯이
+    저장됐는데 태스크는 성공이었다. 이 DAG은 같은 창을 자동으로 다시 보는 실행이 없어서,
+    반쪽짜리 주가 그대로 굳는다. 휴장은 이 판정에 안 섞인다 — SQL이 달력이 아니라
+    거래일을 세고 `RETURNS_SCAN_DAYS`가 그 여유를 준다.
+    """
+    monkeypatch.setattr(
+        run.candidates,
+        "resolve_targets",
+        lambda conn: (
+            domain.CausalTarget(kind=domain.CausalTargetKind.INSTRUMENT, code="005930"),
+            domain.CausalTarget(kind=domain.CausalTargetKind.INDEX, code="KOSPI"),
+        ),
+    )
+    called = []
+    monkeypatch.setattr(run, "_build_paths", lambda **kwargs: called.append(1) or ())
+
+    with pytest.raises(run.IncompleteReturnsError) as error:
+        run.build_weekly_graph(
+            logical_date=datetime(2026, 8, 23, 22, 0, tzinfo=UTC), week_start_param=None
+        )
+
+    assert "KOSPI" in str(error.value)
+    # **모델을 부르기 전에 죽는다.** 저장 단계에서 버리면 비용만 쓰고 반쪽을 남긴다.
+    assert called == []
+
+
+def test_no_target_with_returns_fails_too(
+    wiring: FakeStore, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """전부 없는 것도 같은 실패다. 전에는 조용히 0건 성공이었다."""
     monkeypatch.setattr(run.candidates, "fetch_returns", lambda conn, targets, window: {})
     called = []
     monkeypatch.setattr(run, "_build_paths", lambda **kwargs: called.append(1) or ())
+
+    with pytest.raises(run.IncompleteReturnsError):
+        run.build_weekly_graph(
+            logical_date=datetime(2026, 8, 23, 22, 0, tzinfo=UTC), week_start_param=None
+        )
+
+    assert called == []
+
+
+def test_the_summary_counts_what_the_run_saw(
+    wiring: FakeStore, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """반쪽 실행을 실패로 만들었어도 **무엇을 보고 돌았는지는 남아야 한다.**
+
+    8/03 주가 근거 0건으로 돌아간 것을 알아채는 데 후보 조립을 손으로 재현해야 했다.
+    """
+    monkeypatch.setattr(run, "_build_paths", lambda **kwargs: ("path",))
+    monkeypatch.setattr(
+        run.candidates,
+        "fetch_candidates",
+        lambda conn, targets, window: domain.CandidateSet(
+            documents=(
+                domain.DocumentCandidate(
+                    ref="document:1",
+                    title="제목",
+                    summary="",
+                    source_slug="src",
+                    published_at=datetime(2026, 8, 11, 1, 0, tzinfo=UTC),
+                    value_score=7,
+                    assessed_direction="up",
+                ),
+            )
+        ),
+    )
 
     result = run.build_weekly_graph(
         logical_date=datetime(2026, 8, 23, 22, 0, tzinfo=UTC), week_start_param=None
     )
 
-    assert result["stored"] == 0
-    assert called == []
+    assert result["targets"] == 1
+    assert result["documents"] == 1
 
 
 def test_the_input_hash_is_recorded(wiring: FakeStore, monkeypatch: pytest.MonkeyPatch) -> None:

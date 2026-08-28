@@ -35,10 +35,11 @@ from calendar import monthrange
 from datetime import UTC, date, datetime
 from decimal import Decimal
 from enum import StrEnum
+from http.client import HTTPSConnection
 from typing import Self
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlencode
-from urllib.request import urlopen
+from urllib.request import HTTPSHandler, build_opener
 from xml.etree import ElementTree
 
 from pydantic import (
@@ -82,6 +83,43 @@ REQUEST_TIMEOUT_SECONDS = 30
 
 # 제공처가 정상으로 답할 때의 코드. 나머지는 전부 실패다.
 SUCCESS_CODE = "00"
+
+# 보내지 않는 요청 헤더.
+#
+# **이 게이트웨이는 `baggage` 헤더가 붙으면 HTTP 400 `INVALID_REQUEST_PARAMETER_ERROR`로
+# 거절한다**(2026-08-28 실측). Sentry SDK의 stdlib 통합이 켜져 있으면 urllib 요청마다
+# `sentry-trace`와 `baggage`를 자동으로 끼워 넣는데, Airflow는 그 통합을 켠 채로 돈다. 그래서
+# 태스크에서만 400이 나고 `docker exec python`으로 같은 URL을 부르면 200이 나왔다.
+#
+# `sentry-trace` 하나만 붙는 것은 통과하지만 **둘 다 뺀다.** 우리 추적 문맥을 외부 제공처에
+# 흘려 보낼 이유가 없고, 남겨 두면 제공처가 규칙을 좁힐 때 같은 사고가 되풀이된다.
+#
+# 다른 수집기(FRED·DART·ECOS)는 지금 이 헤더를 그대로 보내고도 멀쩡하다. 그쪽이 무시할 뿐이라
+# 언젠가 같은 일이 날 수 있지만, 관측된 곳만 고친다.
+DROPPED_REQUEST_HEADERS = frozenset({"baggage", "sentry-trace"})
+
+
+class _NoTracingConnection(HTTPSConnection):
+    """추적 헤더를 빼고 보내는 연결.
+
+    Sentry는 `HTTPConnection.putrequest`를 감싸 헤더를 `putheader`로 밀어 넣는다. 그래서 우리가
+    `Request(headers=...)`로 무엇을 주든 그 뒤에 덧붙는다. 막을 수 있는 자리가 `putheader`다.
+    """
+
+    def putheader(self, header: str, *values: object) -> None:
+        if header.lower() in DROPPED_REQUEST_HEADERS:
+            return
+        super().putheader(header, *values)
+
+
+class _NoTracingHandler(HTTPSHandler):
+    def https_open(self, request: object):
+        return self.do_open(_NoTracingConnection, request, context=self._context)
+
+
+# 이 수집기만 쓰는 opener다. **전역 opener를 갈아 끼우지 않는다** — 그러면 같은 프로세스의
+# 다른 수집기까지 조용히 따라 바뀐다.
+_OPENER = build_opener(_NoTracingHandler)
 
 
 class KcsSeries(BaseModel):
@@ -517,7 +555,7 @@ class KcsTradeCollector:
         url = self.build_url(request)
         started_at = datetime.now(UTC)
         try:
-            with urlopen(url, timeout=REQUEST_TIMEOUT_SECONDS) as response:
+            with _OPENER.open(url, timeout=REQUEST_TIMEOUT_SECONDS) as response:
                 body = response.read()
                 status = response.status
         # `from None`은 여기서 의도적이다. URL에 서비스키가 들어 있고 `HTTPError`는 그 URL을

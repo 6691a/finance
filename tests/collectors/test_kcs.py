@@ -1,6 +1,7 @@
 import re
 from datetime import UTC, date, datetime
 from decimal import Decimal
+from http.client import HTTPSConnection
 from io import BytesIO
 from typing import Self
 from unittest import mock
@@ -9,6 +10,7 @@ from urllib.error import HTTPError
 import pytest
 from pydantic import SecretStr, ValidationError
 
+from modules.collectors.indicator import kcs as kcs_module
 from modules.collectors.indicator.kcs import (
     ALL_SERIES,
     COLUMN_COUNT,
@@ -282,7 +284,7 @@ def test_an_http_failure_carries_the_reason_from_the_body(body, expected):
     collector = KcsTradeCollector(SecretStr("secret-key"))
 
     with (
-        mock.patch("modules.collectors.indicator.kcs.urlopen", side_effect=http_error(400, body)),
+        mock.patch.object(kcs_module._OPENER, "open", side_effect=http_error(400, body)),
         pytest.raises(KcsHTTPError) as failure,
     ):
         collector.fetch_trade(request_for())
@@ -297,7 +299,7 @@ def test_the_service_key_never_reaches_the_error_message():
     error = http_error(403, b"<errMsg>SERVICE_KEY_IS_NOT_REGISTERED_ERROR</errMsg>")
 
     with (
-        mock.patch("modules.collectors.indicator.kcs.urlopen", side_effect=error),
+        mock.patch.object(kcs_module._OPENER, "open", side_effect=error),
         pytest.raises(KcsHTTPError) as failure,
     ):
         collector.fetch_trade(request_for())
@@ -415,3 +417,20 @@ def test_the_dag_maps_over_every_dataset():
 def test_the_first_month_the_provider_serves_is_recorded():
     # 2015-12는 정상 응답에 0건으로 답한다(2026-08-28 실측). 백필 구간의 시작이 이 값이다.
     assert FIRST_MONTH == "201601"
+
+
+def test_tracing_headers_never_reach_the_provider():
+    """게이트웨이가 `baggage` 헤더를 HTTP 400으로 거절한다(2026-08-28 실측).
+
+    Sentry의 stdlib 통합이 켜져 있으면 urllib 요청마다 그 헤더가 자동으로 붙는다. Airflow는
+    그 통합을 켠 채로 돌아서 태스크에서만 400이 났다. 막는 자리가 `putheader`다.
+    """
+    sent: list[tuple[str, tuple]] = []
+    connection = kcs_module._NoTracingConnection.__new__(kcs_module._NoTracingConnection)
+
+    with mock.patch.object(HTTPSConnection, "putheader", lambda _, header, *values: sent.append((header, values))):
+        connection.putheader("baggage", "sentry-trace_id=abc,sentry-environment=production")
+        connection.putheader("Sentry-Trace", "abc-def-1")
+        connection.putheader("Accept", "*/*")
+
+    assert sent == [("Accept", ("*/*",))]

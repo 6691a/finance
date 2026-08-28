@@ -58,8 +58,8 @@ class FredSeries(StrEnum):
     FRED 좌표는 요청과 `source_record.metadata`에만 쓴다. `ecos.py`의 `EcosSeries`가
     항목코드를 다루는 방식과 같다.
 
-    **월간 계열은 `M`으로 끝난다.** 한 테이블에 일별과 월간이 섞여 있어 표시가 없으면 조회하는
-    쪽이 주기를 구분할 수 없다. `ecb_irs.py`가 먼저 쓴 규칙이다.
+    **월간 계열은 `M`으로, 주간 계열은 `W`로 끝난다.** 한 테이블에 일별·주간·월간이 섞여 있어
+    표시가 없으면 조회하는 쪽이 주기를 구분할 수 없다. `ecb_irs.py`가 먼저 쓴 규칙이다.
     """
 
     fred_id: str
@@ -91,6 +91,11 @@ class FredSeries(StrEnum):
     # 단위와 기준연도는 2026-08-16에 `series` 엔드포인트로 확인했다.
     CPI_M = ("CPI_M", "CPIAUCSL", "Index 1982-1984=100", "price_index", "미국 소비자물가지수")
     PPI_M = ("PPI_M", "PPIFIS", "Index Nov 2009=100", "price_index", "미국 생산자물가지수(최종수요)")
+    # 근원(식품·에너지 제외) 둘. 헤드라인만 있으면 유가 하락이 디스인플레로 읽힌다.
+    # **연준이 보는 값은 근원 PCE다.** CPI는 시장이 먼저 보는 값이고 타깃이 아니다.
+    # 단위와 기준연도는 2026-08-27에 `series` 페이지로 확인했다. 둘 다 계절조정 값이다.
+    CORE_CPI_M = ("CORE_CPI_M", "CPILFESL", "Index 1982-1984=100", "price_index", "미국 근원 소비자물가지수")
+    CORE_PCE_M = ("CORE_PCE_M", "PCEPILFE", "Index 2017=100", "price_index", "미국 근원 PCE 물가지수")
     RETAIL_SALES_M = ("RETAIL_SALES_M", "RSAFS", "Millions of Dollars", "activity", "미국 소매판매")
     # 고용 둘은 2026-08-18에 `series` 엔드포인트로 확인했다. 레벨만 저장한다. 변화율은 계산된다.
     UNEMPLOYMENT_M = ("UNEMPLOYMENT_M", "UNRATE", "Percent", "activity", "미국 실업률")
@@ -109,15 +114,40 @@ class FredSeries(StrEnum):
     DFEDTARU = ("DFEDTARU", "DFEDTARU", "Percent", "policy_rate", "미국 연방기금 목표범위 상단")
     EADFR = ("EADFR", "ECBDFR", "Percent", "policy_rate", "ECB 예금금리")
 
+    # 명목 국채 금리만으로는 못 가르는 값들. 좌표·단위·주기는 2026-08-27에 `series` 페이지로 확인했다.
+    #
+    # **`REAL10Y`와 `BREAKEVEN10Y`는 한 종류(`tips_rate`)다.** 물가연동국채 시장이 만드는 값이고
+    # 둘을 더하면 `DGS10`이다. 따로 두면 한 번에 하나만 보는 조회가 분해된 두 조각을 못 맞춘다.
+    # `government_bond`에 넣지 않는 이유는 만기가 같아서다 — 미국 10년물이 두 개로 보인다.
+    #
+    # **`HY_OAS`는 VIX의 대체가 아니다.** 저쪽은 주식 옵션이고 이쪽은 신용이라 서로 다른 날에
+    # 움직인다. IG 스프레드를 붙이면 여기 한 줄이다.
+    REAL10Y = ("REAL10Y", "DFII10", "Percent", "tips_rate", "미국 10년 실질금리(TIPS)")
+    BREAKEVEN10Y = ("BREAKEVEN10Y", "T10YIE", "Percent", "tips_rate", "미국 10년 기대인플레(BEI)")
+    HY_OAS = ("HY_OAS", "BAMLH0A0HYM2", "Percent", "credit_spread", "미국 하이일드 신용스프레드(OAS)")
+
+    # 주간 고용. 비농업고용은 월 1회라 그 사이 4주가 비고, 침체 진입은 여기서 먼저 보인다.
+    # 관측일은 그 주의 토요일이다(`Weekly, Ending Saturday`).
+    INITIAL_CLAIMS_W = ("INITIAL_CLAIMS_W", "ICSA", "Number", "activity", "미국 주간 신규 실업수당 청구")
+
 
 # DAG이 태스크를 매핑하는 단위. 국채와 거시는 발표 주기가 달라 되돌아볼 구간이 다르고,
 # 그래서 DAG도 나뉜다.
 #
-# **세 목록이 계열 전부를 덮는지 테스트가 본다.** 국채는 `kind`로, 거시는 `is_monthly`로
+# **네 목록이 계열 전부를 덮는지 테스트가 본다.** 국채는 `kind`로, 거시는 `is_monthly`로
 # 걸러서 어느 쪽에도 안 맞는 계열(일별 정책금리가 그렇다)이 조용히 어느 DAG에도 안 실린다.
 TREASURY_SERIES: tuple[str, ...] = tuple(series.value for series in FredSeries if series.kind == "government_bond")
 MACRO_SERIES: tuple[str, ...] = tuple(series.value for series in FredSeries if series.is_monthly)
 POLICY_RATE_SERIES: tuple[str, ...] = tuple(series.value for series in FredSeries if series.kind == "policy_rate")
+
+# 일별·주간으로 갱신되는 시장·고용 신호. **멤버를 손으로 적는다.** `kind`나 접미사로 걸면
+# 어느 목록에도 안 맞는 새 계열이 여기로 조용히 흘러들어와 커버리지 테스트가 뜻을 잃는다.
+SIGNAL_SERIES: tuple[str, ...] = (
+    FredSeries.REAL10Y.value,
+    FredSeries.BREAKEVEN10Y.value,
+    FredSeries.HY_OAS.value,
+    FredSeries.INITIAL_CLAIMS_W.value,
+)
 
 # FRED가 휴장일과 미발표일에 값 대신 넣는 표시.
 MISSING_VALUE = "."

@@ -275,11 +275,19 @@ CLOSE_REF_SUFFIX = "@close"
 
 # `macro_indicators`가 고를 수 있는 `indicator_series.kind`. 단위가 달라 **반드시 걸어야 한다** —
 # 안 걸면 국채 금리(Percent)와 물가지수(Index 1982-1984=100)가 한 표에 섞인다.
-INDICATOR_KINDS: tuple[str, ...] = ("government_bond", "money_market", "price_index", "activity")
+INDICATOR_KINDS: tuple[str, ...] = (
+    "government_bond",
+    "money_market",
+    "policy_rate",
+    "tips_rate",
+    "credit_spread",
+    "price_index",
+    "activity",
+)
 
 # 값이 연이율 퍼센트라 변화를 bp로 읽어야 하는 지표 종류. 위 `BASIS_POINT_KINDS`와 뜻은
 # 같지만 대상이 다르다 — 저쪽은 `quote_symbol.kind`, 이쪽은 `indicator_series.kind`다.
-BASIS_POINT_INDICATOR_KINDS = frozenset({"government_bond", "money_market"})
+BASIS_POINT_INDICATOR_KINDS = frozenset({"government_bond", "money_market", "tips_rate", "credit_spread"})
 
 # `macro_indicators` 한 번이 돌려줄 계열 수 상한. 국채만 40계열이라 안 걸면 한 호출이
 # 결과 예산(`MAX_TOOL_RESULT_CHARS`)을 혼자 다 쓴다.

@@ -132,8 +132,9 @@ def test_indicator_series_documents_table_and_column_purposes():
             "물가지수처럼 만기 개념이 없는 지표는 NULL이다"
         ),
         "kind": (
-            "시계열의 종류(government_bond, money_market, policy_rate, price_index 또는 activity). "
-            "국채 곡선에서 단기 자금시장 금리와 중앙은행 정책금리를 가르고, 단위가 다른 거시지표를 그 곡선에서 뺀다"
+            "시계열의 종류(government_bond, money_market, policy_rate, tips_rate, credit_spread, "
+            "price_index 또는 activity). 국채 곡선에서 단기 자금시장 금리·정책금리·실질금리·신용스프레드를 "
+            "가르고, 단위가 다른 거시지표를 그 곡선에서 뺀다"
         ),
         "label": "차트와 표에 쓰는 표시 이름(예: 미국 10년물)",
     }

@@ -404,6 +404,15 @@ class TestVocabularyOptions:
             weeks=domain.EVENT_LOOKBACK_WEEKS
         )
 
+    def test_the_event_window_is_one_week(self) -> None:
+        """**사건은 채널과 달리 재사용이 미덕이 아니다**(2026-08-28).
+
+        4주로 두자 `미국 고용 둔화 확인`(8/07)이 경로 열둘에 쓰였고 그중 넷이 8/10 주
+        것이었다 — 그 주에 CPI라는 자기 사건이 있는데도 지난주 것을 끌어왔다. 직전 주까지만
+        남기는 이유는 금요일 밤 미국 지표처럼 주 경계에 걸린 반응이 실재하기 때문이다.
+        """
+        assert domain.EVENT_LOOKBACK_WEEKS == 1
+
     def test_node_ids_are_prefixed_so_the_model_can_tell_them_apart(self) -> None:
         """`e:`와 `c:`가 없으면 모델이 사건 id를 경로 칸에 넣는다."""
         connection = FakeConnection(

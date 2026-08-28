@@ -210,6 +210,23 @@ def _build_with(builder: generation.CausalBuilder) -> tuple[generation.VerifiedP
     )
 
 
+class TestTheVocabularyBlockSaysHowToPickEvents:
+    """사건 후보를 그냥 나열하면 모델이 지난주 것을 이번 주 등락에 갖다 쓴다."""
+
+    def test_the_block_tells_the_model_to_prefer_this_week(self) -> None:
+        block = generation.vocabulary_block(
+            events=(
+                domain.EventOption(
+                    node_id="e:1", title="미국 고용 둔화 확인", occurred_on=date(2026, 8, 7)
+                ),
+            ),
+            channels=(domain.ChannelOption(node_id="c:1", name="금리 기대"),),
+        )
+
+        assert "대상 주" in block
+        assert "e:1" in block
+
+
 class TestTheFlowIsAGraph:
     """흐름 제어는 LangGraph다(CLAUDE.md). `if`로 교정을 재요청하지 않는다.
 

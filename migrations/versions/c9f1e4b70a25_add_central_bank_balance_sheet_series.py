@@ -1,7 +1,7 @@
 """add central bank balance sheet series
 
 Revision ID: c9f1e4b70a25
-Revises: b7f4c2a91d38
+Revises: f8a2c6d9e104
 Create Date: 2026-08-28 10:20:00.000000
 
 """
@@ -13,7 +13,7 @@ from alembic import op
 
 # revision identifiers, used by Alembic.
 revision: str = "c9f1e4b70a25"
-down_revision: str | Sequence[str] | None = "b7f4c2a91d38"
+down_revision: str | Sequence[str] | None = "f8a2c6d9e104"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 

@@ -58,9 +58,10 @@ DOCUMENTS = read_sql("postgres", "causal", "select_documents.sql")
 DISCLOSURES = read_sql("postgres", "causal", "select_disclosures.sql")
 SIGNALS = read_sql("postgres", "causal", "select_signals.sql")
 
-# 대상당 문서 몇 건까지 프롬프트에 싣는가. 대상 열한 개면 최대 88건이고, 8주 프로토타입은
-# 대상당 8건으로 32~50건이 실려 잘 돌았다.
-DOCUMENTS_PER_TARGET = 8
+# 문서 후보 상한. **대상별이 아니라 그 주 전체에서 상위 몇 건이다**(2026-08-28 정정).
+# 대상별로 뽑으면 대상 목록 밖 지표에만 태그된 문서가 통째로 빠진다.
+# 8주 프로토타입이 32~50건, 운영 첫 실행이 61건으로 잘 돌았다.
+MAX_DOCUMENTS = 60
 
 
 def resolve_targets(connection: Connection) -> tuple[CausalTarget, ...]:
@@ -154,19 +155,19 @@ def fetch_candidates(
                 "week_start_at": week_start_at,
                 "week_after_at": week_after_at,
                 "as_of_at": window.as_of_at,
-                "per_target": DOCUMENTS_PER_TARGET,
+                "limit": MAX_DOCUMENTS,
             },
         )
         documents = tuple(
             DocumentCandidate(
-                ref=f"document:{row[1]}",
-                target_code=row[0],
-                title=row[2],
-                summary=row[3] or "",
-                source_slug=row[4],
-                published_at=row[5],
-                value_score=row[6],
-                assessed_direction=row[7],
+                ref=f"document:{row[0]}",
+                title=row[1],
+                summary=row[2] or "",
+                source_slug=row[3],
+                published_at=row[4],
+                value_score=row[5],
+                assessed_direction=row[6],
+                tags=tuple(row[7] or ()),
             )
             for row in cursor.fetchall()
         )

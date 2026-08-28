@@ -138,6 +138,11 @@ class FredSeries(StrEnum):
     #
     # **`HY_OAS`는 VIX의 대체가 아니다.** 저쪽은 주식 옵션이고 이쪽은 신용이라 서로 다른 날에
     # 움직인다. IG 스프레드를 붙이면 여기 한 줄이다.
+    #
+    # **`HY_OAS`는 3년치만 받을 수 있다.** ICE BofA 지수라 FRED가 최근 3년만 공개한다 —
+    # 1996-12-31부터 요청해도 787건(2023-08-28~)이 오고, FRED 웹 차트도 같은 구간만 그린다
+    # (2026-08-28 실측). 백필해도 앞이 안 채워지므로 다시 시도하지 않는다. 이력이 필요하면
+    # 지금부터 쌓이는 값을 쓰거나 다른 제공처를 찾아야 한다.
     REAL10Y = ("REAL10Y", "DFII10", "Percent", "tips_rate", "미국 10년 실질금리(TIPS)")
     BREAKEVEN10Y = ("BREAKEVEN10Y", "T10YIE", "Percent", "tips_rate", "미국 10년 기대인플레(BEI)")
     HY_OAS = ("HY_OAS", "BAMLH0A0HYM2", "Percent", "credit_spread", "미국 하이일드 신용스프레드(OAS)")

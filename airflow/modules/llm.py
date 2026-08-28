@@ -146,6 +146,12 @@ def causal_model() -> BaseChatModel:
     return ChatOpenAI(
         model="gpt-5.6-luna",
         timeout=REQUEST_TIMEOUT_SECONDS,
+        # **툴을 쓰므로 Responses API로 간다**(2026-08-28). Chat Completions에서는 이 모델이
+        # 함수 툴과 reasoning을 같이 못 받는다 — `Function tools with reasoning_effort are
+        # not supported for gpt-5.6-luna in /v1/chat/completions`. `reasoning_effort="none"`
+        # 으로 낮추는 대신 API를 옮긴다. 인과 추론이 이 흐름의 값어치이고 그것을 끄면
+        # 툴을 붙인 이유가 사라진다.
+        use_responses_api=True,
         # 재시도는 Airflow가 한다. 위 모듈 docstring 참고.
         max_retries=0,
     )

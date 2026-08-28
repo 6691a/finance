@@ -70,14 +70,18 @@ def build_weekly_graph(
             f"{week_start} (T+5 falls on {window.reaction_end}): {', '.join(sorted(missing))}"
         )
 
-    paths = _build_paths(
-        window=window,
-        returns=returns,
-        found=found,
-        events=events,
-        channels=channels,
-        targets=targets,
-    )
+    # **툴은 연결을 쥔다.** 조사 왕복 동안 살아 있어야 하므로 이 블록이 답을 받을 때까지
+    # 열려 있다. 저장은 아래에서 연결을 새로 연다 — 트랜잭션을 조사와 섞지 않는다.
+    with closing(connection()) as conn:
+        paths = _build_paths(
+            window=window,
+            returns=returns,
+            found=found,
+            events=events,
+            channels=channels,
+            targets=targets,
+            toolbox=_toolbox(conn, window, targets),
+        )
 
     input_hash = domain.input_hash(
         week_start=week_start,
@@ -106,12 +110,19 @@ def build_weekly_graph(
     )
 
 
-def _build_paths(**kwargs: Any) -> tuple[Any, ...]:
+def _toolbox(connection: Any, window: domain.CausalWindow, targets: Any) -> Any:
+    """툴박스를 만드는 자리. **LangChain을 여기서 늦게 import한다.**"""
+    from modules.causal.toolbox import CausalToolbox
+
+    return CausalToolbox(connection=connection, window=window, targets=targets)
+
+
+def _build_paths(toolbox: Any = None, **kwargs: Any) -> tuple[Any, ...]:
     """모델을 부르는 자리. **LangChain을 여기서 늦게 import한다.**"""
     from modules.causal.generation import CausalBuilder
     from modules.llm import causal_model
 
-    return CausalBuilder(causal_model()).build(**kwargs)
+    return CausalBuilder(causal_model(), toolbox).build(**kwargs)
 
 
 # 저장까지 못 간 실행(재실행 skip, 경로 0건)이 쓰는 값.

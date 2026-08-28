@@ -55,11 +55,12 @@ class FredSeries(StrEnum):
 
     **FRED id를 저장 식별자로 쓰지 않는 계열이 있다.** `DGS10`은 사람이 읽으니 그대로 두지만
     `CPIAUCSL`은 DB만 보고 무슨 값인지 알 수 없다. 그런 계열은 읽히는 이름을 만들어 저장하고
-    FRED 좌표는 요청과 `source_record.metadata`에만 쓴다. `ecos.py`의 `MarketRateSeries`가
+    FRED 좌표는 요청과 `source_record.metadata`에만 쓴다. `ecos.py`의 `EcosSeries`가
     항목코드를 다루는 방식과 같다.
 
     **월간 계열은 `M`으로 끝난다.** 한 테이블에 일별과 월간이 섞여 있어 표시가 없으면 조회하는
-    쪽이 주기를 구분할 수 없다. `ecb_irs.py`가 먼저 쓴 규칙이다.
+    쪽이 주기를 구분할 수 없다. `ecb_irs.py`가 먼저 쓴 규칙이다. 주간 계열은 같은 이유로 `_W`로
+    끝낸다 — 대차대조표 잔액이 들어오면서 한 테이블에 일별·주간·월간이 함께 놓였다.
     """
 
     fred_id: str
@@ -91,16 +92,81 @@ class FredSeries(StrEnum):
     # 단위와 기준연도는 2026-08-16에 `series` 엔드포인트로 확인했다.
     CPI_M = ("CPI_M", "CPIAUCSL", "Index 1982-1984=100", "price_index", "미국 소비자물가지수")
     PPI_M = ("PPI_M", "PPIFIS", "Index Nov 2009=100", "price_index", "미국 생산자물가지수(최종수요)")
+    # 근원(식품·에너지 제외) 둘. 헤드라인만 있으면 유가 하락이 디스인플레로 읽힌다.
+    # **연준이 보는 값은 근원 PCE다.** CPI는 시장이 먼저 보는 값이고 타깃이 아니다.
+    # 단위와 기준연도는 2026-08-27에 `series` 페이지로 확인했다. 둘 다 계절조정 값이다.
+    CORE_CPI_M = ("CORE_CPI_M", "CPILFESL", "Index 1982-1984=100", "price_index", "미국 근원 소비자물가지수")
+    CORE_PCE_M = ("CORE_PCE_M", "PCEPILFE", "Index 2017=100", "price_index", "미국 근원 PCE 물가지수")
     RETAIL_SALES_M = ("RETAIL_SALES_M", "RSAFS", "Millions of Dollars", "activity", "미국 소매판매")
     # 고용 둘은 2026-08-18에 `series` 엔드포인트로 확인했다. 레벨만 저장한다. 변화율은 계산된다.
     UNEMPLOYMENT_M = ("UNEMPLOYMENT_M", "UNRATE", "Percent", "activity", "미국 실업률")
     NONFARM_PAYROLL_M = ("NONFARM_PAYROLL_M", "PAYEMS", "Thousands of Persons", "activity", "미국 비농업고용")
 
+    # 중앙은행이 정하는 값. 위의 국채·거시가 전부 시장이나 통계청이 만드는 값이라 여기 없었다.
+    # 둘 다 `Daily, 7-Day`라 주말에도 값이 있고, 계단이 매일 채워져 국채와 날짜 축이 맞는다.
+    # 좌표·단위·이력은 2026-08-27에 `series` 엔드포인트로 확인했다.
+    #
+    # **연준은 목표범위 상단 하나만 받는다.** 하단과 실효금리(EFFR)는 "정책금리가 언제 얼마나
+    # 바뀌었나"에 값을 더하지 않는다. 필요해지면 여기 한 줄이다.
+    #
+    # **유로 지역은 ECB 원본이 아니라 FRED를 경유한다.** ECB Data Portal의 같은 값(dataflow
+    # `FM`)과 대조해 일치를 확인했고, 하루 늦게 갱신된다. 주 1회 도는 수집이라 그 지연이
+    # 보이지 않고, 대신 ECB dataflow 하나를 위한 모듈이 늘지 않는다.
+    DFEDTARU = ("DFEDTARU", "DFEDTARU", "Percent", "policy_rate", "미국 연방기금 목표범위 상단")
+    EADFR = ("EADFR", "ECBDFR", "Percent", "policy_rate", "ECB 예금금리")
+
+    # 중앙은행 대차대조표 총자산. 정책금리가 0에 붙어 있던 구간에서 통화정책의 강도를 가른
+    # 것은 금리가 아니라 이 잔액이다. 좌표·주기·단위·이력은 2026-08-27에 `series` 엔드포인트로
+    # 확인했다.
+    #
+    # **단위를 통화별로 그대로 둔다.** 한 통화로 환산하면 환율 변동이 자산 증감으로 위장한다.
+    # 2022년 엔 약세 구간에서 달러 환산 BOJ 자산은 줄고 엔화 잔액은 늘었다. 비교는 잔액이
+    # 아니라 증가율로 한다.
+    #
+    # **유로 지역은 분데스방크 API(`BBBK11`의 `D.TTA082`)도 같은 값을 준다.** 2026-08-21에
+    # 둘이 5,913,041로 글자 그대로 같은 것을 확인했다. FRED로 받는 쪽을 고른 이유는 `provider`가
+    # `bbk`가 되면 "유로 지역 값인데 제공처가 독일"로 읽히기 때문이다.
+    FED_ASSETS_W = ("FEDASSETS_W", "WALCL", "Millions of Dollars", "balance_sheet", "연준 총자산(주간)")
+    EA_ASSETS_W = ("EAASSETS_W", "ECBASSETSW", "Millions of Euros", "balance_sheet", "유로시스템 총자산(주간)")
+    JP_ASSETS_M = ("JPASSETS_M", "JPNASSETS", "Hundred Millions of Yen", "balance_sheet", "일본은행 총자산(월별)")
+
+    # 명목 국채 금리만으로는 못 가르는 값들. 좌표·단위·주기는 2026-08-27에 `series` 페이지로 확인했다.
+    #
+    # **`REAL10Y`와 `BREAKEVEN10Y`는 한 종류(`tips_rate`)다.** 물가연동국채 시장이 만드는 값이고
+    # 둘을 더하면 `DGS10`이다. 따로 두면 한 번에 하나만 보는 조회가 분해된 두 조각을 못 맞춘다.
+    # `government_bond`에 넣지 않는 이유는 만기가 같아서다 — 미국 10년물이 두 개로 보인다.
+    #
+    # **`HY_OAS`는 VIX의 대체가 아니다.** 저쪽은 주식 옵션이고 이쪽은 신용이라 서로 다른 날에
+    # 움직인다. IG 스프레드를 붙이면 여기 한 줄이다.
+    REAL10Y = ("REAL10Y", "DFII10", "Percent", "tips_rate", "미국 10년 실질금리(TIPS)")
+    BREAKEVEN10Y = ("BREAKEVEN10Y", "T10YIE", "Percent", "tips_rate", "미국 10년 기대인플레(BEI)")
+    HY_OAS = ("HY_OAS", "BAMLH0A0HYM2", "Percent", "credit_spread", "미국 하이일드 신용스프레드(OAS)")
+
+    # 주간 고용. 비농업고용은 월 1회라 그 사이 4주가 비고, 침체 진입은 여기서 먼저 보인다.
+    # 관측일은 그 주의 토요일이다(`Weekly, Ending Saturday`).
+    INITIAL_CLAIMS_W = ("INITIAL_CLAIMS_W", "ICSA", "Number", "activity", "미국 주간 신규 실업수당 청구")
+
 
 # DAG이 태스크를 매핑하는 단위. 국채와 거시는 발표 주기가 달라 되돌아볼 구간이 다르고,
 # 그래서 DAG도 나뉜다.
+#
+# **다섯 목록이 계열 전부를 덮는지 테스트가 본다.** 어느 쪽에도 안 맞는 계열이 조용히 어느
+# DAG에도 안 실리는 것을 막는다.
+#
+# **목록을 발표 주기로 거르지 않는다.** 월간 계열이라는 사실은 발표 주기일 뿐이고 어느 DAG이
+# 받을지를 정하지 않는다. 일본은행 총자산이 월간으로 들어오면서 `is_monthly` 필터가 거짓이 됐다
+# — 자산 잔액이 `fred_macro_daily`에 조용히 실릴 뻔했다. 종류로 거른다.
+MACRO_KINDS = frozenset({"price_index", "activity"})
+
+# 시장이 매일 새로 매기는 값. 물가연동국채가 만드는 실질금리·기대인플레와 회사채 스프레드다.
+# 국채와 달리 되돌아볼 구간이 짧아 `fred_signal_daily`가 따로 받는다.
+SIGNAL_KINDS = frozenset({"tips_rate", "credit_spread"})
+
 TREASURY_SERIES: tuple[str, ...] = tuple(series.value for series in FredSeries if series.kind == "government_bond")
-MACRO_SERIES: tuple[str, ...] = tuple(series.value for series in FredSeries if series.is_monthly)
+MACRO_SERIES: tuple[str, ...] = tuple(series.value for series in FredSeries if series.kind in MACRO_KINDS)
+POLICY_RATE_SERIES: tuple[str, ...] = tuple(series.value for series in FredSeries if series.kind == "policy_rate")
+BALANCE_SHEET_SERIES: tuple[str, ...] = tuple(series.value for series in FredSeries if series.kind == "balance_sheet")
+SIGNAL_SERIES: tuple[str, ...] = tuple(series.value for series in FredSeries if series.kind in SIGNAL_KINDS)
 
 # FRED가 휴장일과 미발표일에 값 대신 넣는 표시.
 MISSING_VALUE = "."

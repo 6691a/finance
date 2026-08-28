@@ -57,6 +57,18 @@ def test_the_contract_code_lives_only_in_the_future_table(capsys):
     assert "contract_code" not in create_index
 
 
+def test_the_future_daily_table_gains_the_contract_code(capsys):
+    """KIS 국내선물 일봉이 실제 월물을 행마다 남긴다. Yahoo 연속 심볼은 NULL이다."""
+    sql = head_sql(capsys)
+
+    assert "ALTER TABLE index_future_daily ADD COLUMN contract_code TEXT" in sql
+    # 현물 일봉에는 없다. 월물 개념이 없는 테이블에 칸을 늘리지 않는다.
+    create_index_daily = sql.split("CREATE TABLE index_daily")[1].split(";")[0]
+    assert "contract_code" not in create_index_daily
+    # 뷰는 공통 읽기 모양이라 이 칸을 노출하지 않는다. 월물은 물리 테이블에서 본다.
+    assert "CREATE VIEW quote_daily" in sql
+
+
 def test_the_old_tables_become_compatibility_views(capsys):
     sql = head_sql(capsys)
 

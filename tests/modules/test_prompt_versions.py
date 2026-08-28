@@ -20,6 +20,7 @@ import hashlib
 import pytest
 
 from modules.assessment import PROMPT_VERSION as ASSESSMENT_PROMPT_VERSION
+from modules.causal.domain import PROMPT_VERSION as CAUSAL_PROMPT_VERSION
 from modules.expectation.domain import PROMPT_VERSION as EXPECTATION_PROMPT_VERSION
 from modules.prompt import PROMPT_ROOT
 from modules.thesis.domain import PROMPT_VERSION as THESIS_PROMPT_VERSION
@@ -29,18 +30,33 @@ from modules.thesis.outcomes import NARRATIVE_PROMPT_VERSION
 # **문장을 고쳤으면 판을 올리고 이 해시도 같이 바꾼다. 둘을 같은 커밋에서 만진다.**
 PROMPT_HASHES: dict[tuple[str, str], str] = {
     ("assessment", "3"): "98ca6e74ed7f241abeb7b4b459a86a3c22a459ff8189af6c063d92bc92ea8a79",
+    ("causal_graph", "1"): "6d5516c5ee2d1140cf5abd044100738b1a2b25fd5db430598b6b077aa66639f1",
     ("expectation_extraction", "1"): "7108eab56e598ff642aeb7269f0f07ab9ef21707798202447db6a6b0a3b52a41",
     # 판 8은 문장이 아니라 **자리표시자에 들어가는 값의 모양**이 바뀐 것이다(2026-08-27).
     # 관측 상태·과거 추론 JSON에서 들여쓰기를 뺐다 — 모델이 보는 입력이 달라지므로 판을
     # 가르지만 YAML은 그대로라 해시가 7과 같다. **같은 해시가 두 판에 걸린 것이 정상이다.**
     ("thesis_generation", "7"): "ba0a741a06869b16aa3a439ebe56c33cdfa8b4084366c3d6ec183e8d5c426154",
     ("thesis_generation", "8"): "ba0a741a06869b16aa3a439ebe56c33cdfa8b4084366c3d6ec183e8d5c426154",
+    # 판 9는 교정 문구 하나(`variants.repair_short_answer`)가 늘어 해시가 갈린다.
+    # 문장보다 결과가 달라진 판이다 — 대상이 모자란 답을 한 번 다시 묻는다.
+    ("thesis_generation", "9"): "09339dfae4c0ea0c32fe751b0b29d5b5becd9d431e5cefe158df59935879043f",
+    # 판 10은 출력 형식 스켈레톤의 크기 자리표시자가 `0.0`에서 `null`로 바뀌어 해시가 갈린다.
+    # `0.0`을 그대로 베낀 답이 매번 임계에서 버려지고 있었다.
+    ("thesis_generation", "10"): "0c6aae2d149ccc8845d521cb87c8d60c633a8cc98104f8d7525d4dd13be01e91",
+    # 판 11은 교정 문구가 **버린 사유**를 싣는다(2026-08-27 intraday: 세 이유가 모두 비어
+    # 전부 버려졌는데, 사유 없는 교정을 받은 모델이 같은 답을 다시 냈다).
+    ("thesis_generation", "11"): "91166bc5f5e98244b1759f031763ba2828b2fc7afd0ed50ae364ef8fc3da6672",
+    # 판 12는 `prob_flat` 캘리브레이션이다(2026-08-28). 채점 84건에서 모델 평균 0.31,
+    # 실제 13%였다. "창이 짧으면 flat이 잦다"는 문장을 실측으로 뒤집고(장중 12~25%,
+    # 하루 13%) 기준선의 두 배를 상한으로 못박았다.
+    ("thesis_generation", "12"): "26997dc850158ca01af32d66269b30f74c766e2e62ee70da68ce6d1ece576be1",
     ("thesis_narrative", "2"): "1baea1c554c90619576036db58ad42d2a1e24052fc8ab982978e605c6e696b8b",
 }
 
 # 현재 판을 어디서 읽는지. 표의 키와 대조하는 데만 쓴다.
 PROMPT_VERSIONS: dict[str, str] = {
     "assessment": ASSESSMENT_PROMPT_VERSION,
+    "causal_graph": CAUSAL_PROMPT_VERSION,
     "expectation_extraction": EXPECTATION_PROMPT_VERSION,
     "thesis_generation": THESIS_PROMPT_VERSION,
     "thesis_narrative": NARRATIVE_PROMPT_VERSION,

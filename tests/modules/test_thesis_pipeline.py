@@ -10,6 +10,7 @@
 
 import json
 import re
+from collections.abc import Sequence
 from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 from typing import Any, Self
@@ -19,6 +20,7 @@ from langchain_core.messages import AIMessage, ToolMessage
 from sqlalchemy import Table
 
 from apps.models.analysis import Thesis, ThesisEvidence, ThesisOutcome, ThesisPrecedent
+from modules.llm import TokenUsage
 from modules.sql import read_sql
 from modules.technical import base_rate
 from modules.technical.indicators import TECHNICAL_LOOKBACK_BARS
@@ -39,6 +41,7 @@ from modules.thesis.domain import (
     PREFETCHED_PAST_THESES,
     PROMPT_VERSION,
     Evidence,
+    LlmRunStatus,
     Subject,
     ThesisDirection,
     ThesisError,
@@ -1127,11 +1130,17 @@ def build(model: ScriptedModel, connection: FakeConnection) -> ThesisBuilder:
     return ThesisBuilder(model, toolbox(connection))
 
 
-def run_builder(builder: ThesisBuilder) -> Investigation:
+# 대상 하나만 요청한다. 답이 모자라면 교정이 한 번 도는 것이 정상 동작이라
+# (`test_a_missing_subject_is_re_requested_once`), 그것을 재지 않는 테스트는 요청과 답의
+# 개수를 맞춰 두어야 스크립트한 응답이 어긋나지 않는다.
+ONE_SUBJECT = SUBJECTS[:1]
+
+
+def run_builder(builder: ThesisBuilder, subjects: Sequence[Subject] = ONE_SUBJECT) -> Investigation:
     return builder.run(
         run_slot=RunSlot.PRE_OPEN,
         as_of_at=AS_OF,
-        subjects=SUBJECTS,
+        subjects=subjects,
         observed_state=OBSERVED,
         past_theses={},
     )
@@ -1157,6 +1166,37 @@ def test_the_builder_investigates_with_tools_then_answers_with_a_schema():
     assert "response_format" in model.bound
     # 툴 결과가 그 사이 대화에 들어가 있다.
     assert any(isinstance(message, ToolMessage) for message in model.calls[-1])
+
+
+def test_an_investigation_that_already_answered_is_not_asked_again():
+    """조사 단계 답이 `parse`를 통과하면 스키마 재요청을 건너뛴다.
+
+    재요청은 값을 잃는다 — 2026-08-27 장중 트레이스에서 조사 단계 답의 크기 0.42·0.48이
+    전부 `0`으로 돌아왔고 확률·이유는 글자 그대로 같았다. 같은 답을 두 번 사기도 한다.
+    """
+    connection = FakeConnection({"documents": [document_row(7)]})
+    # 조사 단계가 툴 없이 답을 통째로 낸다. 뒤에 올 응답은 없다 — 부르면 IndexError로 죽는다.
+    model = ScriptedModel(answer_message(thesis_payload(refs=["document:7"], up_return_pct=0.42)))
+    builder = build(model, connection)
+
+    investigation = run_builder(builder)
+
+    assert len(model.calls) == 1
+    assert "response_format" not in model.bound
+    assert investigation.drafts[0].up_return_pct == Decimal("0.42")
+
+
+def test_an_unusable_investigation_answer_still_gets_the_schema_ask():
+    """조사 단계가 답이 아닌 말을 하면 지금까지처럼 스키마를 걸어 다시 묻는다."""
+    connection = FakeConnection({"documents": [document_row(7)]})
+    model = scripted(answer_message(thesis_payload(refs=["document:7"])))
+    builder = build(model, connection)
+
+    investigation = run_builder(builder)
+
+    assert len(model.calls) == 2
+    assert "response_format" in model.bound
+    assert len(investigation.drafts) == 1
 
 
 def test_the_tool_schema_is_derived_from_the_code_not_hand_written():
@@ -1816,35 +1856,107 @@ def test_a_subject_answered_twice_is_refused_entirely():
     )
     builder = build(model, connection)
 
-    drafts = run_builder(builder).drafts
+    drafts = run_builder(builder, SUBJECTS).drafts
 
     # 어느 쪽이 진짜인지 알 수 없다. 먼저 넣은 것도 함께 뺀다.
     assert [draft.subject.code for draft in drafts] == ["000660"]
 
 
-def test_a_missing_subject_is_left_out_and_never_re_requested():
+def test_a_missing_subject_is_re_requested_once():
+    """**대상 넷을 요청했으면 넷이 와야 한다.** 모자란 답을 형식 실패와 같게 다룬다.
+
+    2026-08-27 `intraday_midday`가 대상 넷을 조사해 놓고 하나만 답했고, 그때는 그것이
+    `written=1`로 성공이었다. 전에는 "빠진 subject를 다시 묻지 않는다"가 계약이었다.
+    """
     connection = FakeConnection()
-    model = scripted(answer_message(thesis_payload("KOSPI")))
+    model = ScriptedModel(
+        AIMessage(DONE_INVESTIGATING),
+        answer_message(thesis_payload("KOSPI")),
+        answer_message(thesis_payload("KOSPI"), thesis_payload("000660")),
+    )
     builder = build(model, connection)
 
-    drafts = run_builder(builder).drafts
+    drafts = run_builder(builder, SUBJECTS).drafts
+
+    assert [draft.subject.code for draft in drafts] == ["KOSPI", "000660"]
+    # 조사 한 번, 첫 답, 교정 뒤 답. 교정은 한 번뿐이다.
+    assert len(model.calls) == 3
+
+
+def test_the_short_answer_repair_asks_for_the_missing_subjects_by_name():
+    """형식 교정 문구를 그대로 주면 모델이 "JSON 하나만 내라"를 듣고 또 하나만 낸다."""
+    connection = FakeConnection()
+    model = ScriptedModel(
+        AIMessage(DONE_INVESTIGATING),
+        answer_message(thesis_payload("KOSPI")),
+        answer_message(thesis_payload("KOSPI"), thesis_payload("000660")),
+    )
+    builder = build(model, connection)
+
+    run_builder(builder, SUBJECTS)
+
+    repair = model.calls[-1][-1].content
+    assert "000660" in repair
+    assert "KOSPI" not in repair
+
+
+def test_a_repair_that_answers_fewer_falls_back_to_the_first_answer():
+    """교정본이 더 나쁘면 첫 답을 쓴다. 다시 물어서 잃는 일은 없어야 한다."""
+    connection = FakeConnection()
+    model = ScriptedModel(
+        AIMessage(DONE_INVESTIGATING),
+        answer_message(thesis_payload("KOSPI")),
+        answer_message(),
+    )
+    builder = build(model, connection)
+
+    drafts = run_builder(builder, SUBJECTS).drafts
 
     assert [draft.subject.code for draft in drafts] == ["KOSPI"]
-    # 조사 한 번, 답변 한 번. 빠진 subject를 다시 묻지 않는다.
-    assert len(model.calls) == 2
+
+
+def test_an_unreadable_repair_falls_back_to_the_first_answer():
+    """교정 답을 못 읽어도 첫 답은 이미 검증을 통과한 것이다. 태스크를 죽이지 않는다."""
+    connection = FakeConnection()
+    model = ScriptedModel(
+        AIMessage(DONE_INVESTIGATING),
+        answer_message(thesis_payload("KOSPI")),
+        AIMessage("이건 JSON이 아니다"),
+    )
+    builder = build(model, connection)
+
+    drafts = run_builder(builder, SUBJECTS).drafts
+
+    assert [draft.subject.code for draft in drafts] == ["KOSPI"]
+
+
+def test_the_requested_subject_count_reaches_the_ledger():
+    """요청과 응답의 수가 원장에 남아야 "넷 중 하나만"이 SQL로 보인다."""
+    connection = FakeConnection()
+    model = ScriptedModel(
+        AIMessage(DONE_INVESTIGATING),
+        answer_message(thesis_payload("KOSPI")),
+        answer_message(thesis_payload("KOSPI")),
+    )
+    builder = build(model, connection)
+
+    investigation = run_builder(builder, SUBJECTS)
+
+    assert investigation.subjects_requested == 2
+    assert len(investigation.drafts) == 1
 
 
 def test_a_subject_whose_probabilities_do_not_sum_to_one_is_dropped():
     connection = FakeConnection()
-    model = scripted(
-        answer_message(
-            thesis_payload("KOSPI", prob_up=0.3, prob_down=0.3, prob_flat=0.3),
-            thesis_payload("000660"),
-        )
+    bad_kospi = answer_message(
+        thesis_payload("KOSPI", prob_up=0.3, prob_down=0.3, prob_flat=0.3),
+        thesis_payload("000660"),
     )
+    # KOSPI가 빠져 교정이 한 번 돈다. 모델이 같은 답을 다시 내면 그대로 받는다.
+    model = scripted(bad_kospi, bad_kospi)
     builder = build(model, connection)
 
-    drafts = run_builder(builder).drafts
+    drafts = run_builder(builder, SUBJECTS).drafts
 
     assert [draft.subject.code for draft in drafts] == ["000660"]
 
@@ -1947,7 +2059,7 @@ def draft_for(builder_connection: FakeConnection) -> Any:
     drafts = builder.run(
         run_slot=RunSlot.PRE_OPEN,
         as_of_at=AS_OF,
-        subjects=SUBJECTS,
+        subjects=ONE_SUBJECT,
         observed_state=OBSERVED,
         past_theses={},
     ).drafts
@@ -2060,7 +2172,7 @@ def test_evidence_ranks_follow_the_citation_order():
     model = scripted(answer_message(thesis_payload(refs=["macro_change:SP500_FUT", "document:9"])))
     builder = ThesisBuilder(model, box)
     drafts = builder.run(
-        run_slot=RunSlot.PRE_OPEN, as_of_at=AS_OF, subjects=SUBJECTS, observed_state=OBSERVED, past_theses={}
+        run_slot=RunSlot.PRE_OPEN, as_of_at=AS_OF, subjects=ONE_SUBJECT, observed_state=OBSERVED, past_theses={}
     ).drafts
 
     writer = FakeConnection({"thesis_insert": [(11,)], "select_by_run": [stored_row(11)]})
@@ -3468,6 +3580,29 @@ def test_a_size_below_the_flat_threshold_is_dropped_not_stored():
     assert normalize_return_pct(0.31) == Decimal("0.31")
 
 
+def test_the_wire_schema_forbids_a_zero_size_but_validation_still_accepts_one():
+    """제공처에 보내는 스키마만 조인다. Pydantic까지 조이면 답 전체가 사라진다.
+
+    2026-08-27 장중 트레이스: 조사 단계가 낸 0.42·0.48이 스키마 강제 재요청에서 전부 `0`으로
+    돌아왔다. `0`은 임계 이하라 버려지고 크기 칸이 매번 비었다. 스키마가 그 값을 애초에
+    못 내게 한다 — 지키지 않는 제공처면 `normalize_return_pct`가 지금처럼 그 칸만 버린다.
+    """
+    from modules.schema import strict_json_schema
+    from modules.thesis.domain import MAX_EXPECTED_RETURN_PCT
+    from modules.thesis.generation import Answers, ThesisAnswer
+
+    field = strict_json_schema(Answers)["$defs"]["ThesisAnswer"]["properties"]["up_return_pct"]
+
+    assert field["exclusiveMinimum"] == float(FLAT_THRESHOLD_PCT[0])
+    assert field["maximum"] == float(MAX_EXPECTED_RETURN_PCT)
+    # `null`은 그대로 낼 수 있다. 크기를 못 대겠으면 비우는 것이 맞다.
+    assert {"type": "null"} in field["anyOf"]
+
+    # 검증은 느슨하다. 규칙을 어긴 크기 하나가 확률과 이유까지 지우면 안 된다.
+    answer = ThesisAnswer(subject_code="KOSPI", prob_up=0.4, prob_down=0.3, prob_flat=0.3, up_return_pct=0)
+    assert answer.up_return_pct == 0
+
+
 def test_a_runaway_size_is_dropped_not_clamped():
     """상한으로 자르면 모델이 부르지 않은 숫자를 우리가 지어내는 것이 된다."""
     from modules.thesis.generation import normalize_return_pct
@@ -3692,6 +3827,71 @@ def test_finishing_a_run_never_reopens_a_closed_one():
     # 같은 대화를 두 번 닫는 경로는 없어야 하고, 생기면 조용히 덮는 것보다 0행이 낫다.
     assert "WHERE id = %s" in LLM_RUN_FINISH
     assert "AND status = 'running'" in LLM_RUN_FINISH
+
+
+def _updated_columns(statement: str) -> tuple[str, ...]:
+    """`SET a = %s, b = %s`의 컬럼 이름들. `updated_at = now()`처럼 리터럴인 칸도 센다."""
+    assignments = re.search(r"SET (.+?)\nWHERE", body(statement), re.DOTALL)
+    assert assignments is not None
+    return tuple(part.strip().split("=")[0].strip() for part in assignments.group(1).split(","))
+
+
+def test_the_ledger_finish_matches_its_model():
+    """UPDATE 컬럼과 모델 metadata를 대조한다. 가짜 연결은 컬럼 이름이 틀려도 통과한다."""
+    from apps.models.analysis import ThesisLlmRun
+
+    columns = _updated_columns(LLM_RUN_FINISH)
+
+    assert set(columns) <= {column.name for column in ThesisLlmRun.__table__.columns}
+    # `updated_at`만 리터럴이고 나머지는 자리표시자다. 마지막 하나는 WHERE의 id다.
+    assert body(LLM_RUN_FINISH).count("%s") == len(columns) - 1 + 1
+
+
+def test_finishing_a_run_writes_the_token_counts():
+    """토큰 셋이 원장에 실린다. 이게 없으면 비용 추이를 트레이스로만 볼 수 있다."""
+    connection = FakeConnection()
+
+    ThesisStore(connection).finish_llm_run(
+        7,
+        status=LlmRunStatus.SUCCEEDED,
+        records=(),
+        tool_rounds=4,
+        usage=TokenUsage(prompt=224970, cached=52992, completion=17593, reasoning=13975),
+    )
+
+    (statement, params) = next(call for call in connection.calls if "UPDATE thesis_llm_run" in body(call[0]))
+    columns = _updated_columns(statement)
+    values = dict(zip((name for name in columns if name != "updated_at"), params, strict=False))
+
+    assert values["prompt_tokens"] == 224970
+    # 캐시 몫은 prompt_tokens 안에 든 값이다. 청구 단가가 달라 따로 센다.
+    assert values["cached_prompt_tokens"] == 52992
+    assert values["completion_tokens"] == 17593
+    assert values["reasoning_tokens"] == 13975
+    # 마지막 자리표시자는 WHERE의 id다.
+    assert params[-1] == 7
+
+
+def test_finishing_a_run_without_a_measurement_leaves_the_tokens_null():
+    """안 준 것은 NULL이다. 0으로 메우면 "안 쟀다"와 "안 썼다"가 같아진다."""
+    connection = FakeConnection()
+
+    ThesisStore(connection).finish_llm_run(
+        7,
+        status=LlmRunStatus.FAILED,
+        records=(),
+        tool_rounds=0,
+        error="ThesisError: boom",
+    )
+
+    (statement, params) = next(call for call in connection.calls if "UPDATE thesis_llm_run" in body(call[0]))
+    columns = _updated_columns(statement)
+    values = dict(zip((name for name in columns if name != "updated_at"), params, strict=False))
+
+    assert values["prompt_tokens"] is None
+    assert values["cached_prompt_tokens"] is None
+    assert values["completion_tokens"] is None
+    assert values["reasoning_tokens"] is None
 
 
 def test_a_tool_call_insert_refuses_to_swallow_a_duplicate():

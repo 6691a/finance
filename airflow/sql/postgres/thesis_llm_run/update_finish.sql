@@ -13,6 +13,17 @@
 -- `investigation_truncated`는 모델이 툴을 더 부르겠다고 했는데 `MAX_TOOL_ROUNDS`에서
 -- 끊긴 실행인지다. 끊기면 조용히 답변으로 넘어가므로 `tool_rounds`만으로는 스스로 끝낸
 -- 실행과 구분되지 않는다. 해설 경로는 왕복 상한이 없어 언제나 false다.
+--
+-- `subjects_requested`·`subjects_answered`는 **요청한 대상과 실제로 답이 온 대상의 수다.**
+-- 둘이 다르면 모델이 일부만 답한 것이고, 그 사실은 그 전까지 어디에도 안 남았다
+-- (2026-08-27 실측: 넷을 조사하고 하나만 답한 실행이 `written=1`로 성공했다).
+-- 해설 경로는 대상 개념이 달라 NULL을 넣는다.
+--
+-- 토큰 넷은 **콜백이 누적한 값이라 실패한 대화에도 있다**(`modules/llm.token_usage`).
+-- `completion_tokens`는 `reasoning_tokens`를 포함하고 `cached_prompt_tokens`는
+-- `prompt_tokens`에 포함된다 — 제공처가 사고 토큰도 출력 단가로 청구하고 캐시에서 읽은
+-- 입력은 훨씬 싸게 청구한다. 모델을 한 번도 못 부르고 죽었으면 넷 다 0이다. NULL은 이 칸이
+-- 생기기 전 행뿐이다.
 UPDATE thesis_llm_run
 SET status = %s,
     finished_at = %s,
@@ -21,6 +32,12 @@ SET status = %s,
     tool_calls = %s,
     tool_result_chars = %s,
     investigation_truncated = %s,
+    subjects_requested = %s,
+    subjects_answered = %s,
+    prompt_tokens = %s,
+    cached_prompt_tokens = %s,
+    completion_tokens = %s,
+    reasoning_tokens = %s,
     updated_at = now()
 WHERE id = %s
   AND status = 'running'

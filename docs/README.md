@@ -13,10 +13,12 @@
 | [kis-market-data-collection.md](collection/kis-market-data-collection.md) | KIS 수급·포지션·캘린더 다섯 DAG | 구현 완료 |
 | [kis-semiconductor-minute-bars.md](collection/kis-semiconductor-minute-bars.md) | 삼성전자·SK하이닉스 KRX·NXT 1분봉. KIS REST·WebSocket 계약의 원본 | 구현 완료. 9절 백필 DAG만 미구현 |
 | [kis-overseas-index-close.md](collection/kis-overseas-index-close.md) | 미국 현물 지수 마감 분봉과 미국장 브리핑 섹션 분리 | 구현 완료 |
+| [kis-index-daily-collection.md](collection/kis-index-daily-collection.md) | 빠진 국내지수·국내선물·미국 현물지수 다섯 개의 KIS 일봉 수집 | **미구현. 구현 계약.** 선물 단축코드·과거 만기물 프로브가 착수 게이트 |
 | [kis-program-trading.md](collection/kis-program-trading.md) | 프로그램매매 수급. TR ID·필드 매핑표가 값어치다 | **미구현.** 착수 게이트는 누적/증분 프로브 |
 | [dart-disclosure-earnings.md](collection/dart-disclosure-earnings.md) | DART 공시와 잠정실적 숫자 추출 | 구현 완료 |
 | [ecb-convergence-monthly.md](collection/ecb-convergence-monthly.md) | 유로 회원국 10년물 월평균 | 구현 완료 |
 | [us-macro-indicators.md](collection/us-macro-indicators.md) | FRED 물가·실물 다섯 계열. `indicator_series`가 금리 전용에서 벗어난 경위 | 구현 완료 |
+| [policy-rate-collection.md](collection/policy-rate-collection.md) | 국채 수집국 중앙은행 다섯의 정책금리. `kind='policy_rate'`를 더한다 | **미구현. 구현 계약.** 계열 ID 실측이 선행 |
 
 ## `analysis/` — LLM 평가·기술지표·시장 추론
 
@@ -26,7 +28,8 @@
 | [document-assessment-workflow.md](analysis/document-assessment-workflow.md) | `document_assessment_hourly`의 LangGraph 흐름도 | 구현 완료 |
 | [market-technical-indicators.md](analysis/market-technical-indicators.md) | SMA·RSI·MACD 관측값과 매매 신호 검출·채점 | 구현 완료. 남은 것은 적중률 관측 |
 | [market-episode-analysis.md](analysis/market-episode-analysis.md) | 일봉 변화·추정 매물대·시장 근거를 연결하는 `MarketEpisode` 설계 | **미구현. 구현 계약** |
-| [market-thesis/](analysis/market-thesis/README.md) | 시장 추론 기록. 단계마다 문서 하나 | 1~3·5~15단계 완료(15가 테이블 49개를 전부 화면에 올렸다), 4(그래프 DB)만 미착수 — 그 README가 원본 |
+| [market-causal-graph.md](analysis/market-causal-graph.md) | 주간 사후 인과 그래프. 사건 → 경로 체인 → 대상을 누적해 다중 홉을 만든다 | 코드 완료. **운영 배포 전이라 한 번도 안 돌았다** |
+| [market-thesis/](analysis/market-thesis/README.md) | 시장 추론 기록. 단계마다 문서 하나 | 1~3·5~15단계 완료(15가 저장소의 테이블을 전부 화면에 올렸다), 4(그래프 DB)만 미착수 — 그 README가 원본 |
 
 ## `briefing/` — 읽어서 내보내기만 하는 DAG
 

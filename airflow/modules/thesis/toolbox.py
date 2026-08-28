@@ -256,7 +256,9 @@ class MacroIndicatorsArgs(ToolArgs):
         default="government_bond",
         description=(
             "볼 지표 종류. government_bond(각국 국채 금리), money_market(단기 자금시장 금리), "
-            "price_index(물가지수), activity(소매판매 등 실물활동). "
+            "policy_rate(중앙은행 정책금리), tips_rate(미국 10년 실질금리와 기대인플레), "
+            "credit_spread(하이일드 신용스프레드), "
+            "price_index(물가지수), activity(소매판매·고용 등 실물활동). "
             "**단위가 달라 한 번에 하나만 본다.** 모르는 값은 government_bond로 읽는다."
         ),
     )

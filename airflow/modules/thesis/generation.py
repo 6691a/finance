@@ -62,6 +62,7 @@ from decimal import ROUND_HALF_UP, Decimal
 from types import MappingProxyType
 from typing import Annotated, Any, Literal, TypedDict
 
+from langchain_core.callbacks import UsageMetadataCallbackHandler
 from langchain_core.language_models import BaseChatModel
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, SystemMessage
 from langgraph.graph import END, START, StateGraph
@@ -124,6 +125,13 @@ class ClaimAnswer(BaseModel):
     mechanism: str = ""
 
 
+# 크기 칸의 wire 스키마 경계. Pydantic 검증이 아니라 제공처에 보내는 JSON Schema에만 나간다.
+RETURN_BOUNDS = {
+    "exclusiveMinimum": float(FLAT_THRESHOLD_PCT[0]),
+    "maximum": float(MAX_EXPECTED_RETURN_PCT),
+}
+
+
 class ThesisAnswer(BaseModel):
     """모델이 subject 하나에 대해 낸 답. 검증 전 원본이다."""
 
@@ -133,10 +141,18 @@ class ThesisAnswer(BaseModel):
     prob_up: float = Field(ge=0, le=1)
     prob_down: float = Field(ge=0, le=1)
     prob_flat: float = Field(ge=0, le=1)
-    # 방향별 **조건부** 크기다. 확률을 곱한 기대값이 아니다. 상한은 폭주만 막고 정합성
-    # (임계보다 커야 한다)은 저장 전 검증이 본다 — 스키마로 막으면 답 전체가 사라진다.
-    up_return_pct: float | None = Field(default=None, ge=0)
-    down_return_pct: float | None = Field(default=None, ge=0)
+    # 방향별 **조건부** 크기다. 확률을 곱한 기대값이 아니다.
+    #
+    # **Pydantic 검증은 느슨하게 두고 제공처에 보내는 스키마만 조인다.** 여기서 `gt=`로
+    # 막으면 크기 하나가 규칙을 어긴 순간 답 전체가 `ValidationError`가 되어 확률과 이유까지
+    # 사라진다. 정합성은 `normalize_return_pct`가 그 칸만 버리는 것으로 본다.
+    #
+    # `json_schema_extra`는 **wire 스키마에만** 나가고 검증에는 안 걸린다. 제약 디코딩이
+    # 이것을 지키면 모델이 `0`을 낼 수 없다 — 2026-08-27 장중 트레이스에서 조사 단계가 낸
+    # 0.42·0.48이 스키마 강제 재요청에서 전부 `0`으로 돌아왔고, 그 값이 임계 이하라 버려져
+    # 크기 칸이 매번 비어 있었다. 지키지 않는 제공처면 지금과 같다(`0`이 와서 버려진다).
+    up_return_pct: float | None = Field(default=None, ge=0, json_schema_extra=RETURN_BOUNDS)
+    down_return_pct: float | None = Field(default=None, ge=0, json_schema_extra=RETURN_BOUNDS)
     up_reasoning: str = ""
     down_reasoning: str = ""
     flat_reasoning: str = ""
@@ -174,6 +190,9 @@ class Investigation(BaseModel):
     drafts: tuple["ThesisDraft", ...]
     tool_rounds: int
     truncated: bool
+    # 요청한 대상 수. `len(drafts)`와 다르면 모델이 일부만 답한 것이다 — 원장이 그 둘을
+    # 함께 세야 "넷 중 하나만 저장됐다"가 SQL로 보인다.
+    subjects_requested: int
 
 
 class ThesisDraft(BaseModel):
@@ -275,7 +294,6 @@ SLOT_INSTRUCTION = {
     RunSlot.POST_NXT_CLOSE: PROMPTS.variants["post_nxt_close"],
 }
 
-REPAIR_INSTRUCTION = PROMPTS.repair
 
 
 # 과거 추론이 없을 때 그 절에 넣는 말. 절 자체를 빼면 프롬프트 모양이 날마다 달라진다.
@@ -298,6 +316,16 @@ def _json_section(rows: Mapping[str, Sequence[BaseModel]]) -> str:
 # ---------------------------------------------------------------------------
 
 
+def missing_subjects(subjects: Sequence[Subject], drafts: Sequence[ThesisDraft]) -> tuple[str, ...]:
+    """요청했는데 답이 안 온 대상 코드. 요청 순서를 지킨다.
+
+    **`parse`가 버린 것과 다른 수다.** 그쪽은 온 것 중 못 쓸 것을 세고, 이 함수는 아예
+    안 온 것을 센다. 둘을 합쳐야 "요청 넷 중 하나만 저장됐다"가 설명된다.
+    """
+    answered = {draft.subject.code for draft in drafts}
+    return tuple(subject.code for subject in subjects if subject.code not in answered)
+
+
 class ThesisState(TypedDict):
     """추론 한 번의 상태.
 
@@ -311,6 +339,10 @@ class ThesisState(TypedDict):
     # 요청한 대상. 답변을 거를 때 노드가 읽으므로 상태에 있어야 한다.
     subjects: tuple[Subject, ...]
     tool_rounds: int
+    # 첫 답에서 빠진 대상. 비어 있지 않으면 교정이 "형식"이 아니라 "개수"를 요구한다.
+    missing_subjects: tuple[str, ...]
+    # 첫 답에 담겨 온 것. 교정본이 더 나쁘거나 못 읽힐 때 이쪽으로 되돌아간다.
+    partial_drafts: tuple[ThesisDraft, ...]
     # 모델이 툴을 더 부르겠다고 했는데 왕복 상한에서 끊긴 실행이다. **조용히 답변으로
     # 넘어가는 자리라 이 칸이 없으면 DB에서 "3왕복에 스스로 끝낸 것"과 구분되지 않는다.**
     investigation_truncated: bool
@@ -334,7 +366,17 @@ class ThesisBuilder:
         self._toolbox = toolbox
         self._schema = response_format(Answers, "market_theses")
         self._tool_node = tool_node(toolbox)
+        self._usage = UsageMetadataCallbackHandler()
         self._graph = self._build_graph()
+
+    @property
+    def usage(self) -> llm.TokenUsage:
+        """그래프가 지금까지 청구된 토큰. **예외가 나도 읽을 수 있다.**
+
+        `toolbox.round_count`와 같은 자리다 — 실패한 대화는 최종 상태를 못 받으므로
+        원장에 실을 값은 그래프 밖에 살아야 한다(`modules/llm.py`).
+        """
+        return llm.token_usage(self._usage)
 
     @staticmethod
     def build_messages(
@@ -384,7 +426,7 @@ class ThesisBuilder:
     ) -> "Investigation":
         """추론들과 조사 결과. 두 번째도 실패하면 `ThesisError`를 올린다."""
         if not subjects:
-            return Investigation(drafts=(), tool_rounds=0, truncated=False)
+            return Investigation(drafts=(), tool_rounds=0, truncated=False, subjects_requested=0)
         state: ThesisState = {
             "messages": self.build_messages(
                 run_slot=run_slot,
@@ -396,6 +438,8 @@ class ThesisBuilder:
             ),
             "subjects": tuple(subjects),
             "tool_rounds": 0,
+            "missing_subjects": (),
+            "partial_drafts": (),
             "investigation_truncated": False,
             "drafts": None,
             "error": None,
@@ -406,6 +450,7 @@ class ThesisBuilder:
             config={
                 "run_name": "build_theses",
                 "metadata": {"run_slot": run_slot.value, "subjects": len(subjects)},
+                "callbacks": [self._usage],
             },
         )
         drafts = final.get("drafts")
@@ -415,6 +460,7 @@ class ThesisBuilder:
             drafts=drafts,
             tool_rounds=final["tool_rounds"],
             truncated=bool(final.get("investigation_truncated")),
+            subjects_requested=len(subjects),
         )
 
     def parse(self, raw: str, subjects: Sequence[Subject]) -> tuple[ThesisDraft, ...]:
@@ -494,7 +540,11 @@ class ThesisBuilder:
         if dropped:
             logger.warning("dropped %s theses: %s", len(dropped), dropped)
         if parsed.theses and not kept:
-            raise ThesisError(f"Model returned {len(parsed.theses)} theses, none of them usable")
+            # 교정 문구가 이 사유를 그대로 싣는다. 사유가 없으면 모델은 "형식이 틀렸나"만
+            # 보고 같은 답을 다시 낸다(2026-08-27 intraday: 이유 없음으로 두 번 연속 실패).
+            raise ThesisError(
+                f"Model returned {len(parsed.theses)} theses, none of them usable: {', '.join(dropped)}"
+            )
         return kept
 
     def _known_claims(self, answer: ThesisAnswer) -> tuple[Claim, ...]:
@@ -565,8 +615,33 @@ class ThesisBuilder:
         return {"messages": update["messages"], "tool_rounds": state["tool_rounds"] + 1}
 
     def _answer(self, state: ThesisState) -> dict[str, Any]:
-        """툴을 빼고 스키마를 강제한다. 제공처가 스키마를 안 받으면 그때만 한 번 더."""
+        """툴을 빼고 스키마를 강제한다. **조사 단계가 이미 답을 냈으면 다시 묻지 않는다.**
+
+        조사 루프의 마지막 응답은 툴을 더 안 부르겠다는 뜻이고, 모델이 거기서 답 JSON을
+        통째로 내는 경우가 많다. 그것이 `parse`를 통과하면 그대로 쓴다.
+
+        **재요청이 값을 잃는 것을 봤다**(2026-08-27 장중 트레이스). 조사 단계 답의
+        크기 0.42·0.48이 스키마 강제 재요청에서 전부 `0`으로 돌아왔고 확률·이유·claims는
+        글자 그대로 같았다. 같은 답을 두 번 사는 자리이기도 하다 — 그 응답이 5,800자였다.
+
+        스키마 강제는 조사 단계 답이 못 쓸 때의 안전망으로 남는다. 제공처가 스키마를
+        안 받으면 그때만 한 번 더.
+        """
         messages = state["messages"]
+        previous = state["partial_drafts"]
+
+        reply = messages[-1]
+        # 교정 경로에서는 마지막이 교정 지시(HumanMessage)라 재사용 대상이 아니다.
+        # 툴을 부르자고 한 응답도 답이 아니다(왕복 상한에서 끊긴 경우).
+        if isinstance(reply, AIMessage) and not getattr(reply, "tool_calls", None):
+            try:
+                drafts = self.parse(_text(reply), state["subjects"])
+            except ThesisError as error:
+                logger.info("조사 단계 답을 그대로 쓰지 못해 스키마로 다시 묻는다: %s", error)
+            else:
+                # 그 응답은 이미 상태에 있다. 다시 넣으면 대화가 한 번 더 늘어난다.
+                return self._resolve(state, drafts=drafts, messages=[])
+
         try:
             reply = llm.invoke(self._model, messages, schema=self._schema)
         except UnsupportedResponseFormat as error:
@@ -576,13 +651,70 @@ class ThesisBuilder:
         try:
             drafts = self.parse(_text(reply), state["subjects"])
         except ThesisError as error:
+            # 교정본을 못 읽었는데 첫 답이 있으면 그것을 쓴다. 하나라도 남기는 편이
+            # 태스크를 죽이는 것보다 낫다 — 첫 답은 이미 검증을 통과한 것이다.
+            if previous:
+                logger.warning("교정 답을 읽지 못해 첫 답 %s건을 그대로 쓴다: %s", len(previous), error)
+                return {"messages": [reply], "drafts": previous, "error": None}
             return {"messages": [reply], "drafts": None, "error": str(error)}
-        return {"messages": [reply], "drafts": drafts, "error": None}
+
+        return self._resolve(state, drafts=drafts, messages=[reply])
+
+    def _resolve(
+        self,
+        state: ThesisState,
+        *,
+        drafts: tuple[ThesisDraft, ...],
+        messages: list[BaseMessage],
+    ) -> dict[str, Any]:
+        """읽어 낸 답을 어떻게 다룰지 정한다. 조사 단계 답과 스키마 답이 같은 판정을 받는다.
+
+        `messages`는 대화에 **더할** 것이다. 조사 단계 답을 재사용할 때는 그 응답이 이미
+        상태에 있으므로 빈 리스트다.
+        """
+        previous = state["partial_drafts"]
+        missing = missing_subjects(state["subjects"], drafts)
+        if missing:
+            # **요청한 대상이 안 온 것을 여기서 처음 센다.** `parse`는 온 것 중 버린 것만
+            # 세므로, 모델이 넷 중 하나만 답해도 지금까지는 아무 데도 남지 않았다
+            # (2026-08-27 `intraday_midday` 실측: 넷을 조사하고 하나만 답했다).
+            logger.warning(
+                "모델이 대상 %s개 중 %s개만 답했다. 빠진 것: %s",
+                len(state["subjects"]),
+                len(drafts),
+                list(missing),
+            )
+
+        # 모자란 첫 답은 형식 실패와 같게 다룬다 — 대상 넷을 요청했으면 넷이 와야 한다.
+        # 교정은 한 번뿐이고, 그 답이 더 적으면 첫 답으로 되돌아간다.
+        if missing and state["attempts"] == 0:
+            return {
+                "messages": messages,
+                "drafts": None,
+                "error": f"대상 {len(missing)}개가 빠졌다: {', '.join(missing)}",
+                "missing_subjects": missing,
+                "partial_drafts": drafts,
+            }
+        if len(drafts) < len(previous):
+            logger.warning("교정 답이 %s건으로 더 적어 첫 답 %s건을 쓴다", len(drafts), len(previous))
+            return {"messages": messages, "drafts": previous, "error": None}
+        return {"messages": messages, "drafts": drafts, "error": None}
 
     def _repair(self, state: ThesisState) -> dict[str, Any]:
+        """한 번만 다시 묻는다. **무엇이 잘못됐는지에 따라 문구가 다르다.**
+
+        형식이 깨진 것과 대상이 모자란 것은 모델이 고쳐야 할 것이 다르다. 같은 문구를
+        주면 "JSON 하나만 내라"는 말을 듣고 다시 하나만 낸다.
+        """
+        missing = state["missing_subjects"]
+        instruction = (
+            PROMPTS.render_variant("repair_short_answer", missing=", ".join(missing))
+            if missing
+            else PROMPTS.render("repair", reason=state["error"] or "")
+        )
         logger.warning("retrying the theses once after %s", state["error"])
         return {
-            "messages": [HumanMessage(REPAIR_INSTRUCTION)],
+            "messages": [HumanMessage(instruction)],
             "attempts": state["attempts"] + 1,
         }
 

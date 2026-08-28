@@ -106,7 +106,18 @@ logger = logging.getLogger(__name__)
 #    32,000 입력 토큰이었다(docs/analysis/market-thesis/TUNING.md 2026-08-27 항목).
 #    **YAML 해시는 7과 같다** — `tests/modules/test_prompt_versions.py`가 두 판에 같은
 #    해시를 걸고 있고 그게 정상이다.
-PROMPT_VERSION = "8"
+# 9: 대상이 모자란 답을 **한 번 다시 묻는다**(2026-08-27). 교정 문구가 하나 늘었고
+#    (`variants.repair_short_answer`), 그보다 결과가 달라진다 — 전에는 대상 넷을 요청하고
+#    하나만 답해도 그대로 저장했다. 실측이 그 판의 근거다: `intraday_midday`가 넷을
+#    조사해 놓고 하나만 답했고 태스크는 `written=1`로 성공이었다. 같은 실행이 이 판에서는
+#    넷을 채우거나, 못 채우면 그 사실이 원장(`subjects_requested`·`subjects_answered`)에
+#    남는다. **저장되는 추론 수가 달라지므로 판을 가른다.**
+# 10: 출력 형식 스켈레톤의 크기 자리표시자를 `0.0`에서 `null`로 바꿨다(2026-08-27).
+#     `0.0`은 유효한 숫자처럼 보여 모델이 그대로 베꼈고, `normalize_return_pct`가 임계
+#     이하라 그 칸을 매번 버렸다(실측: `intraday_midday` 넷 전부 up=0.0 down=0.0).
+#     확률과 이유는 살아 있었으므로 저장되는 추론 수는 같지만, **조건부 크기가 NULL이 아닌
+#     값으로 저장되기 시작하므로** 판을 가른다.
+PROMPT_VERSION = "12"
 
 # 채점 지평. KRX 영업일 수이고 달력일이 아니다. 0은 예측일 세션 하나다.
 HORIZON_DAYS: tuple[int, ...] = (0, 1, 3, 5)
@@ -264,11 +275,19 @@ CLOSE_REF_SUFFIX = "@close"
 
 # `macro_indicators`가 고를 수 있는 `indicator_series.kind`. 단위가 달라 **반드시 걸어야 한다** —
 # 안 걸면 국채 금리(Percent)와 물가지수(Index 1982-1984=100)가 한 표에 섞인다.
-INDICATOR_KINDS: tuple[str, ...] = ("government_bond", "money_market", "price_index", "activity")
+INDICATOR_KINDS: tuple[str, ...] = (
+    "government_bond",
+    "money_market",
+    "policy_rate",
+    "tips_rate",
+    "credit_spread",
+    "price_index",
+    "activity",
+)
 
 # 값이 연이율 퍼센트라 변화를 bp로 읽어야 하는 지표 종류. 위 `BASIS_POINT_KINDS`와 뜻은
 # 같지만 대상이 다르다 — 저쪽은 `quote_symbol.kind`, 이쪽은 `indicator_series.kind`다.
-BASIS_POINT_INDICATOR_KINDS = frozenset({"government_bond", "money_market"})
+BASIS_POINT_INDICATOR_KINDS = frozenset({"government_bond", "money_market", "tips_rate", "credit_spread"})
 
 # `macro_indicators` 한 번이 돌려줄 계열 수 상한. 국채만 40계열이라 안 걸면 한 호출이
 # 결과 예산(`MAX_TOOL_RESULT_CHARS`)을 혼자 다 쓴다.
@@ -569,8 +588,15 @@ def _shorten_to(text: str, limit: int) -> str:
 # 장중 라벨에는 시각이 들어간다. **enum 값과 반대다** — 저쪽은 스케줄이 바뀌어도 거짓이
 # 되면 안 돼서 뜻으로 짓고, 이쪽은 하루 다섯 건이 Slack에 쌓일 때 사람이 구분해야 해서
 # 시각을 적는다. 표에서 만들어 스케줄을 옮길 때 라벨이 따라오게 한다.
+#
+# **은퇴한 슬롯도 라벨을 갖는다.** 셋이 표에서 빠졌지만(2026-08-27 `intraday_afternoon`,
+# 08-28 `intraday_morning`·`pre_close`) 저장된 행이 남아 있어 되돌아보기와 조회가 그 값을
+# 렌더한다. 시각은 돌던 때의 것이다. 아래 표 순회가 이 셋을 덮지 않는다 — 표에 없다.
 SLOT_LABELS = {
     RunSlot.PRE_OPEN: "장전 전망",
+    RunSlot.INTRADAY_MORNING: "장중 전망(10:35)",
+    RunSlot.INTRADAY_AFTERNOON: "장중 전망(14:35)",
+    RunSlot.PRE_CLOSE: "마감 전 전망(15:00)",
     **{
         slot: f"{'마감 전' if slot is RunSlot.PRE_CLOSE else '장중'} 전망({at:%H:%M})"
         for slot, at in INTRADAY_SLOT_TIMES.items()

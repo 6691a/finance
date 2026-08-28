@@ -238,6 +238,38 @@ def test_the_ledger_records_a_truncated_investigation(capsys):
     assert "DEFAULT false" in sql
 
 
+def test_the_ledger_counts_requested_and_answered_subjects(capsys):
+    """모델이 넷 중 하나만 답해도 태스크는 성공이었다. 그 사실이 어디에도 안 남았다."""
+    sql = head_sql(capsys)
+
+    assert "ALTER TABLE thesis_llm_run ADD COLUMN subjects_requested INTEGER" in sql
+    assert "ALTER TABLE thesis_llm_run ADD COLUMN subjects_answered INTEGER" in sql
+    # NULL을 허용한다. 해설 대화는 대상 개념이 달라 0으로 메우면 "전부 실패"와 같아진다.
+    assert "subjects_requested INTEGER NOT NULL" not in sql
+    assert "subjects_answered INTEGER NOT NULL" not in sql
+
+
+def test_the_ledger_splits_out_the_cached_prompt_tokens(capsys):
+    """캐시 몫이 없으면 prompt_tokens만으로는 실제 비용을 모른다. 단가가 다르다."""
+    sql = head_sql(capsys)
+
+    assert "ALTER TABLE thesis_llm_run ADD COLUMN cached_prompt_tokens INTEGER" in sql
+    assert "cached_prompt_tokens INTEGER NOT NULL" not in sql
+    assert "cached_prompt_tokens INTEGER DEFAULT" not in sql
+
+
+def test_the_ledger_counts_tokens(capsys):
+    """비용은 그 전까지 LangSmith 트레이스에만 있었다. 슬롯별 추이를 SQL로 못 봤다."""
+    sql = head_sql(capsys)
+
+    for column in ("prompt_tokens", "completion_tokens", "reasoning_tokens"):
+        assert f"ALTER TABLE thesis_llm_run ADD COLUMN {column} INTEGER" in sql
+        # NULL을 허용하고 server_default를 두지 않는다. 기존 행은 잰 적이 없어 NULL이고,
+        # 앞으로는 모델을 못 부르고 죽은 대화도 0이 들어간다. 0으로 메우면 둘이 같아진다.
+        assert f"{column} INTEGER NOT NULL" not in sql
+        assert f"{column} INTEGER DEFAULT" not in sql
+
+
 def test_the_llm_run_status_shape_is_constrained(capsys):
     sql = head_sql(capsys)
 

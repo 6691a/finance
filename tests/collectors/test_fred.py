@@ -12,8 +12,11 @@ from sqlalchemy import Table
 from apps.models.market import IndicatorObservation
 from apps.models.raw import SourceRecord
 from modules.collectors.indicator.fred import (
+    BALANCE_SHEET_SERIES,
     MACRO_SERIES,
     OBSERVATION_UPSERT,
+    POLICY_RATE_SERIES,
+    SIGNAL_SERIES,
     SOURCE_RECORD_INSERT,
     TREASURY_SERIES,
     FredCollector,
@@ -140,10 +143,33 @@ def test_treasury_series_cover_short_and_long_maturities():
     assert len(set(TREASURY_SERIES)) == len(TREASURY_SERIES)
 
 
-def test_the_two_series_groups_do_not_overlap():
-    # DAG이 둘로 나뉘어 각각 매핑한다. 겹치면 같은 계열을 하루에 두 번 받는다.
-    assert set(TREASURY_SERIES) & set(MACRO_SERIES) == set()
-    assert set(TREASURY_SERIES) | set(MACRO_SERIES) == {series.value for series in FredSeries}
+def test_the_series_groups_do_not_overlap():
+    """DAG이 다섯으로 나뉘어 각각 목록을 돈다. 겹치면 같은 계열을 하루에 두 번 받는다.
+
+    **덮는지도 함께 본다.** 목록이 전부 `kind`로 걸러지므로, 새 종류를 더하면서 목록을
+    안 만들면 그 계열이 조용히 어느 DAG에도 안 실린다. 전에 거시 목록이 `is_monthly`로
+    걸렀는데 월간 잔액(`JPASSETS_M`)이 들어오면서 그 필터가 거짓이 됐다.
+    """
+    groups = (
+        set(TREASURY_SERIES),
+        set(MACRO_SERIES),
+        set(POLICY_RATE_SERIES),
+        set(BALANCE_SHEET_SERIES),
+        set(SIGNAL_SERIES),
+    )
+
+    assert set.intersection(*groups) == set()
+    assert sum(len(group) for group in groups) == len(set.union(*groups))
+    assert set.union(*groups) == {series.value for series in FredSeries}
+
+
+def test_policy_rate_series_are_daily_and_marked_as_such():
+    # 정책금리는 중앙은행이 정하는 값이다. 시장이 만드는 값과 한 `kind`에 두면 시장금리 패널이
+    # 정책금리 계단을 함께 그린다.
+    assert set(POLICY_RATE_SERIES) == {"DFEDTARU", "EADFR"}
+    assert all(not FredSeries(series).is_monthly for series in POLICY_RATE_SERIES)
+    assert FredSeries.EADFR.fred_id == "ECBDFR"
+    assert FredSeries.DFEDTARU.unit == "Percent"
 
 
 def test_each_series_declares_its_own_unit():
@@ -156,6 +182,25 @@ def test_each_series_declares_its_own_unit():
     assert FredSeries.CPI_M.unit == "Index 1982-1984=100"
     assert FredSeries.RETAIL_SALES_M.unit == "Millions of Dollars"
     assert FredSeries.UNEMPLOYMENT_M.unit == "Percent"
+    # 근원 PCE는 CPI와 기준연도가 다르다. 한 단위 상수로 두면 이 계열에 거짓이 실린다.
+    assert FredSeries.CORE_PCE_M.unit == "Index 2017=100"
+    assert FredSeries.INITIAL_CLAIMS_W.unit == "Number"
+
+
+def test_the_tips_pair_shares_one_kind_apart_from_nominal_bonds():
+    """실질금리와 기대인플레를 더하면 명목 10년물이다. 따로 두면 조회가 조각을 못 맞춘다.
+
+    반대로 `government_bond`에 넣으면 만기가 같아서 미국 10년물이 세 개로 보인다.
+    """
+    assert FredSeries.REAL10Y.kind == FredSeries.BREAKEVEN10Y.kind == "tips_rate"
+    assert FredSeries.DGS10.kind == "government_bond"
+    assert FredSeries.HY_OAS.kind == "credit_spread"
+
+
+def test_the_weekly_series_is_not_mistaken_for_a_monthly_one():
+    # `is_monthly`가 참이면 수집기가 관측일이 그 달 1일인지 본다. 주간 계열은 토요일로 온다.
+    assert not FredSeries.INITIAL_CLAIMS_W.is_monthly
+    assert FredSeries.CORE_CPI_M.is_monthly
     assert FredSeries.NONFARM_PAYROLL_M.unit == "Thousands of Persons"
     # 단위가 계열마다 다르다는 것 자체가 계약이다.
     assert len({series.unit for series in FredSeries}) > 1
@@ -343,3 +388,28 @@ def test_store_repeats_the_same_upsert_for_a_rerun_of_the_same_period():
     assert [statement for statement, _ in first.recorded_cursor.calls] == [
         statement for statement, _ in second.recorded_cursor.calls
     ]
+
+
+def test_balance_sheet_series_carry_their_own_currency_unit():
+    """한 통화로 환산하지 않는다. 환산하면 환율 변동이 자산 증감으로 위장한다."""
+    units = {series.value: series.unit for series in FredSeries if series.kind == "balance_sheet"}
+
+    assert units == {
+        "FEDASSETS_W": "Millions of Dollars",
+        "EAASSETS_W": "Millions of Euros",
+        "JPASSETS_M": "Hundred Millions of Yen",
+    }
+    # 단위가 셋이라 잔액을 한 축에 놓을 수 없다. 비교는 증가율로 한다.
+    assert len(set(units.values())) == len(units)
+
+
+def test_balance_sheet_series_declare_their_frequency_in_the_id():
+    # 한 테이블에 일별·주간·월간이 섞여 있어 표시가 없으면 조회하는 쪽이 주기를 구분할 수 없다.
+    assert set(BALANCE_SHEET_SERIES) == {"FEDASSETS_W", "EAASSETS_W", "JPASSETS_M"}
+    assert FredSeries.JP_ASSETS_M.is_monthly
+    assert not FredSeries.FED_ASSETS_W.is_monthly
+
+
+def test_the_monthly_balance_sheet_series_is_not_in_the_macro_dag():
+    """거시 목록을 `is_monthly`로 거르던 때는 월간 잔액이 그 DAG에 조용히 실렸다."""
+    assert "JPASSETS_M" not in MACRO_SERIES

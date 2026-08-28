@@ -12,24 +12,29 @@ from sqlalchemy import Table
 from apps.models.market import IndicatorObservation
 from apps.models.raw import SourceRecord
 from modules.collectors.indicator.ecos import (
+    BALANCE_SHEET_STAT_CODE,
+    FOREIGN_POLICY_RATE_STAT_CODE,
     MARKET_RATE_SERIES,
     OBSERVATION_UPSERT,
+    POLICY_RATE_SERIES,
     SERIES_UNIT,
     SOURCE_RECORD_INSERT,
-    SOURCE_UNIT_NAME,
-    STAT_CODE,
     EcosCollector,
     EcosHTTPError,
     EcosPayloadError,
     EcosRequest,
     EcosResponse,
     EcosResultError,
-    MarketRateSeries,
+    EcosSeries,
     parse_observations,
 )
 
-SERIES = MarketRateSeries.KTB_10Y
+SERIES = EcosSeries.KTB_10Y
 SERIES_ID = SERIES.value
+STAT_CODE = SERIES.stat_code
+SOURCE_UNIT_NAME = SERIES.source_unit_name
+
+MONTHLY_SERIES = EcosSeries.JP_BASE_M
 
 
 def row(time: str = "20260731", value: str | None = "4.261", **overrides: object) -> dict:
@@ -67,7 +72,7 @@ STARTED_AT = datetime(2026, 8, 6, 23, 0, tzinfo=UTC)
 COMPLETED_AT = datetime(2026, 8, 6, 23, 0, 1, tzinfo=UTC)
 
 
-def request_for(series: MarketRateSeries | str = SERIES) -> EcosRequest:
+def request_for(series: EcosSeries | str = SERIES) -> EcosRequest:
     return EcosRequest(
         series=series,
         observation_start=date(2026, 7, 31),
@@ -75,7 +80,7 @@ def request_for(series: MarketRateSeries | str = SERIES) -> EcosRequest:
     )
 
 
-def response_for(series: MarketRateSeries | str = SERIES, body: bytes = PAYLOAD) -> EcosResponse:
+def response_for(series: EcosSeries | str = SERIES, body: bytes = PAYLOAD) -> EcosResponse:
     return EcosResponse(
         request=request_for(series),
         body=body,
@@ -162,8 +167,8 @@ def test_observation_upsert_matches_the_model_and_its_natural_key():
 
 
 def test_market_rate_series_cover_short_and_long_maturities():
-    assert MarketRateSeries.KTB_10Y.value in MARKET_RATE_SERIES
-    assert MarketRateSeries.CD_91D.value in MARKET_RATE_SERIES
+    assert EcosSeries.KTB_10Y.value in MARKET_RATE_SERIES
+    assert EcosSeries.CD_91D.value in MARKET_RATE_SERIES
     assert len(set(MARKET_RATE_SERIES)) == len(MARKET_RATE_SERIES)
 
 
@@ -177,9 +182,33 @@ def test_stored_series_id_is_readable_and_keeps_the_item_code_beside_it():
 
 
 def test_every_series_declares_a_distinct_item_code_and_label():
-    assert len({series.item_code for series in MarketRateSeries}) == len(MarketRateSeries)
-    assert len({series.label for series in MarketRateSeries}) == len(MarketRateSeries)
-    assert all(series.item_code.isdigit() for series in MarketRateSeries)
+    assert len({(series.stat_code, series.item_code) for series in EcosSeries}) == len(EcosSeries)
+    assert len({series.label for series in EcosSeries}) == len(EcosSeries)
+    # 항목코드는 통계표 안에서만 뜻이 있다. 금리 통계표는 숫자 코드를 쓰지만 국제 정책금리
+    # 통계표는 국가 코드(`JP`)를, 한국은행 주요계정은 계정 코드(`BCAA1`)를 쓴다.
+    lettered_tables = (FOREIGN_POLICY_RATE_STAT_CODE, BALANCE_SHEET_STAT_CODE)
+    assert all(series.item_code.isdigit() for series in EcosSeries if series.stat_code not in lettered_tables)
+
+
+def test_policy_rate_series_are_separate_from_market_rate_series():
+    # 시장금리 DAG는 일별로, 정책금리 DAG는 주별로 돈다. 한 목록에 섞이면 한쪽이 남의 주기로 돈다.
+    assert set(POLICY_RATE_SERIES) == {EcosSeries.KR_BASE.value, EcosSeries.JP_BASE_M.value}
+    assert not set(POLICY_RATE_SERIES) & set(MARKET_RATE_SERIES)
+    assert all(series.kind == "policy_rate" for series in EcosSeries if series.value in POLICY_RATE_SERIES)
+
+
+def test_the_base_rate_comes_from_another_statistic_table():
+    # 기준금리는 시장금리(817Y002)와 다른 통계표에 있다. 모듈 상수 하나로 묶으면 못 받는다.
+    assert EcosSeries.KR_BASE.stat_code != EcosSeries.KTB_10Y.stat_code
+    assert EcosSeries.KR_BASE.cycle == "D"
+    assert EcosSeries.KR_BASE.source_unit_name == "연%"
+
+
+def test_monthly_series_are_marked_in_the_stored_identifier():
+    # 한 테이블에 일별과 월별이 섞여 있다. 표시가 없으면 조회하는 쪽이 주기를 구분할 수 없다.
+    assert MONTHLY_SERIES.is_monthly
+    assert MONTHLY_SERIES.value.endswith("_M")
+    assert not EcosSeries.KR_BASE.is_monthly
 
 
 def test_build_url_puts_every_argument_in_the_path_in_order():
@@ -213,7 +242,7 @@ def test_request_and_response_are_frozen_so_a_retry_cannot_mutate_them():
     response = response_for()
 
     with pytest.raises(ValidationError):
-        response.request.series = MarketRateSeries.KTB_3Y
+        response.request.series = EcosSeries.KTB_3Y
     with pytest.raises(ValidationError):
         response.status = 500
 
@@ -240,6 +269,46 @@ def test_response_rejects_naive_timestamps():
             started_at=datetime(2026, 8, 6, 23, 0),  # noqa: DTZ001
             completed_at=COMPLETED_AT,
         )
+
+
+def test_build_url_asks_a_monthly_series_in_months():
+    # 월별 통계표에 YYYYMMDD를 넘기면 ECOS는 오류가 아니라 데이터 없음으로 답한다.
+    url = COLLECTOR.build_url(request_for(MONTHLY_SERIES))
+    segments = url.removeprefix("https://ecos.bok.or.kr/api/StatisticSearch/").split("/")
+
+    assert segments[5:] == [MONTHLY_SERIES.stat_code, "M", "202607", "202608", MONTHLY_SERIES.item_code]
+
+
+def test_parse_observations_reads_a_monthly_time_as_the_first_of_the_month():
+    body = search_payload(
+        row(
+            time="202607",
+            value="0.5",
+            STAT_CODE=MONTHLY_SERIES.stat_code,
+            ITEM_CODE1=MONTHLY_SERIES.item_code,
+            UNIT_NAME=MONTHLY_SERIES.source_unit_name,
+        )
+    )
+
+    observations = parse_observations(body, request_for(MONTHLY_SERIES))
+
+    assert observations[0].observation_date == date(2026, 7, 1)
+    assert observations[0].value == Decimal("0.5")
+
+
+def test_parse_observations_rejects_a_daily_time_for_a_monthly_series():
+    # 주기를 잘못 요청한 결과가 월별 값으로 저장되면 되짚을 수 없다.
+    body = search_payload(
+        row(
+            time="20260731",
+            STAT_CODE=MONTHLY_SERIES.stat_code,
+            ITEM_CODE1=MONTHLY_SERIES.item_code,
+            UNIT_NAME=MONTHLY_SERIES.source_unit_name,
+        )
+    )
+
+    with pytest.raises(EcosPayloadError, match="monthly TIME"):
+        parse_observations(body, request_for(MONTHLY_SERIES))
 
 
 def test_parse_observations_reads_the_compact_daily_time():
@@ -271,7 +340,7 @@ def test_parse_observations_rejects_a_truncated_page():
 
 def test_parse_observations_rejects_rows_of_another_item():
     with pytest.raises(EcosPayloadError, match="010200000"):
-        parse_observations(search_payload(row(ITEM_CODE1=MarketRateSeries.KTB_3Y.item_code)), request_for())
+        parse_observations(search_payload(row(ITEM_CODE1=EcosSeries.KTB_3Y.item_code)), request_for())
 
 
 def test_parse_observations_rejects_a_changed_unit():
@@ -412,3 +481,21 @@ def test_store_repeats_the_same_upsert_for_a_rerun_of_the_same_period():
     assert [statement for statement, _ in first.recorded_cursor.calls] == [
         statement for statement, _ in second.recorded_cursor.calls
     ]
+
+
+def test_the_balance_sheet_series_is_stored_in_won_not_percent():
+    """단위가 계열마다 다르다. 모듈 상수 하나로 두면 잔액에 `Percent`가 실린다."""
+    from modules.collectors.indicator.ecos import BALANCE_SHEET_SERIES, BALANCE_SHEET_UNIT
+
+    assert set(BALANCE_SHEET_SERIES) == {EcosSeries.KR_ASSETS_M.value}
+    assert EcosSeries.KR_ASSETS_M.unit == BALANCE_SHEET_UNIT != SERIES_UNIT
+    assert EcosSeries.KR_ASSETS_M.source_unit_name == "십억원"
+    assert EcosSeries.KTB_10Y.unit == SERIES_UNIT
+
+
+def test_the_balance_sheet_series_is_in_no_other_dag_list():
+    """목록이 겹치면 같은 계열을 두 DAG이 다른 주기로 받는다."""
+    from modules.collectors.indicator.ecos import BALANCE_SHEET_SERIES
+
+    assert not set(BALANCE_SHEET_SERIES) & set(MARKET_RATE_SERIES)
+    assert not set(BALANCE_SHEET_SERIES) & set(POLICY_RATE_SERIES)

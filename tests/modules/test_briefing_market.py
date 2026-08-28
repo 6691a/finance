@@ -607,6 +607,27 @@ def test_header_is_written_in_korean_time():
     assert "08/18(화)" in header
 
 
+def test_krx_close_scope_labels_the_slack_message_as_closed():
+    result = summary(datetime(2026, 8, 18, 6, 35, tzinfo=UTC))
+
+    header = market.render_blocks(result, MarketScope.KRX_CLOSE)[0]["text"]["text"]
+
+    assert header == "📈 KRX 장 마감 브리핑 · 08/18(화) 15:35 KST"
+    assert market.render_text(result, MarketScope.KRX_CLOSE).startswith("KRX 장 마감 브리핑 · ")
+
+
+@pytest.mark.parametrize("exchanges", [("KRX",), ("KRX", "NXT")])
+def test_reader_exchange_scope_applies_to_stock_quotes_and_charts(exchanges):
+    connection = FakeConnection(*([[]] * 12))
+    reader = market_data.MarketBriefingReader(connection, MIDDAY, exchanges=exchanges)
+
+    reader.summary()
+    reader.chart_series()
+
+    assert connection.cursors[1].calls[0][1][-1] == list(exchanges)
+    assert connection.cursors[-1].calls[1][1][-1] == list(exchanges)
+
+
 def test_fallback_text_is_one_line():
     text = market.render_text(summary(), MarketScope.KOREA)
 

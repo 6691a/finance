@@ -106,6 +106,8 @@ class LlmRunKind(StrEnum):
     REVIEW = "review"
     NXT_REVIEW = "nxt_review"
     NARRATION = "narration"
+    CAUSAL = "causal"
+    """주간 사후 인과 그래프(`docs/analysis/market-causal-graph.md`). 슬롯이 없는 유일한 종류다."""
 
 
 class LlmRunStatus(StrEnum):
@@ -664,8 +666,14 @@ class ThesisLlmRun(EntityBase):
     __tablename__ = "thesis_llm_run"
     __table_args__ = (
         CheckConstraint(
-            "kind IN ('forecast', 'review', 'nxt_review', 'narration')",
+            "kind IN ('forecast', 'review', 'nxt_review', 'narration', 'causal')",
             name="ck_thesis_llm_run_kind",
+        ),
+        # 주간 인과 그래프에는 슬롯이 없다. 나머지 종류가 슬롯을 빠뜨리는 것은 그대로 막는다.
+        CheckConstraint(
+            "(kind = 'causal' AND run_slot IS NULL)"
+            " OR (kind <> 'causal' AND run_slot IS NOT NULL)",
+            name="ck_thesis_llm_run_slot_shape",
         ),
         CheckConstraint(
             "status IN ('running', 'succeeded', 'failed')",
@@ -704,10 +712,13 @@ class ThesisLlmRun(EntityBase):
             "thesis와 같은 축으로 조인하기 위해서다. 실행일은 as_of_at과 dag_run_id가 말한다"
         ),
     )
-    run_slot: Mapped[RunSlot] = mapped_column(
+    run_slot: Mapped[RunSlot | None] = mapped_column(
         _enum_column(RunSlot),
-        nullable=False,
-        comment="대상 슬롯. 해설이면 원 추론의 슬롯이다",
+        nullable=True,
+        comment=(
+            "대상 슬롯. 해설이면 원 추론의 슬롯이다. "
+            "주간 인과 그래프(kind='causal')만 슬롯이 없어 NULL이고 CHECK가 그것을 강제한다"
+        ),
     )
     horizon_days: Mapped[int | None] = mapped_column(
         Integer,
@@ -785,6 +796,22 @@ class ThesisLlmRun(EntityBase):
             "다른 수다** — 그쪽은 버려진 결과도 센다. MAX_TOOL_RESULT_CHARS와 직접 비교하지 않는다"
         ),
     )
+    subjects_requested: Mapped[int | None] = mapped_column(
+        Integer,
+        nullable=True,
+        comment=(
+            "이 대화에 요청한 추론 대상 수. answered와 다르면 모델이 일부만 답한 것이다. "
+            "해설(narration) 대화는 대상 개념이 달라 NULL이다 — 0으로 메우면 '전부 실패'와 같아진다"
+        ),
+    )
+    subjects_answered: Mapped[int | None] = mapped_column(
+        Integer,
+        nullable=True,
+        comment=(
+            "그중 실제로 저장된 추론 수. 요청보다 적으면 모델이 대상을 빠뜨린 것이고, "
+            "교정을 한 번 돌린 뒤의 최종값이다. 해설 대화는 NULL이다"
+        ),
+    )
     investigation_truncated: Mapped[bool] = mapped_column(
         Boolean,
         nullable=False,
@@ -794,6 +821,40 @@ class ThesisLlmRun(EntityBase):
             "모델이 툴을 더 부르겠다고 했는데 MAX_TOOL_ROUNDS에서 끊긴 실행인지. "
             "끊긴 실행은 조용히 답변으로 넘어가므로 이 칸이 없으면 스스로 끝낸 실행과 "
             "tool_rounds 하나로는 구분되지 않는다. 상한을 올릴지 판단하는 근거다"
+        ),
+    )
+    prompt_tokens: Mapped[int | None] = mapped_column(
+        Integer,
+        nullable=True,
+        comment=(
+            "이 대화가 청구된 입력 토큰의 합(왕복 전부). **왕복마다 대화 전체를 다시 내므로 "
+            "왕복 수가 아니라 이 값이 비용이다.** 이 칸이 생기기 전 행은 NULL이다"
+        ),
+    )
+    cached_prompt_tokens: Mapped[int | None] = mapped_column(
+        Integer,
+        nullable=True,
+        comment=(
+            "그중 프롬프트 캐시에서 읽은 입력 토큰. **prompt_tokens에 포함된다** — 제공처가 "
+            "이 부분을 훨씬 싸게 청구하므로 이 칸이 없으면 prompt_tokens만으로는 실제 비용을 "
+            "알 수 없다. 제공처가 안 알려 주면 0이다. 이 칸이 생기기 전 행은 NULL이다"
+        ),
+    )
+    completion_tokens: Mapped[int | None] = mapped_column(
+        Integer,
+        nullable=True,
+        comment=(
+            "출력 토큰의 합. **reasoning_tokens를 포함한다** — 제공처가 사고 토큰도 출력 "
+            "단가로 청구한다. 이 칸이 생기기 전 행은 NULL이다"
+        ),
+    )
+    reasoning_tokens: Mapped[int | None] = mapped_column(
+        Integer,
+        nullable=True,
+        comment=(
+            "그중 모델이 속으로 생각한 토큰. 대화에 남지 않아 다음 왕복에 재전송되지 않고 "
+            "프롬프트 캐시와도 무관하다. 제공처가 안 알려 주면 0이다. "
+            "이 칸이 생기기 전 행은 NULL이다"
         ),
     )
 

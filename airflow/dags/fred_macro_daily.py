@@ -1,7 +1,16 @@
 """FRED 미국 월간 거시지표 수집 DAG.
 
-`fred_treasury_daily`와 같은 수집기를 쓰고 대상만 다르다. 소비자물가지수, 생산자물가지수,
-소매판매, 실업률, 비농업고용 다섯이며 `modules.collectors.indicator.fred.MACRO_SERIES`가 정한다.
+`fred_treasury_daily`와 같은 수집기를 쓰고 대상만 다르다. 소비자물가지수(헤드라인·근원),
+생산자물가지수, 근원 PCE 물가지수, 소매판매, 실업률, 비농업고용, 주간 신규 실업수당 여덟이며
+`modules.collectors.indicator.fred.MACRO_SERIES`(`kind`가 `price_index`·`activity`인 계열)가 정한다.
+
+**주간 계열 하나가 섞여 있다.** 신규 실업수당(`INITIAL_CLAIMS_W`)은 주간이지만 재는 것이
+실물활동이라 여기 실린다. 어느 DAG이 받을지는 발표 주기가 아니라 `kind`가 정한다 — 주기로
+가르면 계열이 늘 때마다 그 필터가 거짓이 된다. 190일 창으로 물으면 27행쯤 오고, 다음 주에
+정정되는 값이 그 안에서 함께 갱신된다.
+
+실질금리·기대인플레·신용스프레드는 `fred_signal_daily`가 받는다. 여기 창(190일)으로 일별
+계열을 물으면 같은 값을 매일 130행씩 다시 받는다.
 
 ## 왜 국채 DAG에 합치지 않나
 
@@ -78,7 +87,7 @@ LOOKBACK_DAYS_MACRO = 190
 @dag(
     dag_id="fred_macro_daily",
     dag_display_name="🇺🇸 미국 물가·소매판매 (FRED)",
-    description="매일 FRED에서 미국 CPI·PPI·소매판매를 받아 저장한다. 월간 지표라 되돌아보는 구간이 길다.",
+    description="매일 FRED에서 미국 CPI·근원 CPI·PPI·근원 PCE·소매판매·고용을 받아 저장한다. 발표가 늦어 되돌아보는 구간이 길다.",
     # KST 화~토 07:40 = UTC 월~금 22:40. 국채 수집(07:30)보다 10분 뒤라 겹치지 않는다.
     # 미국 지표는 미국 영업일에 발표되므로 주말 트리거는 값이 없다.
     schedule="40 7 * * 2-6",

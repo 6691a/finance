@@ -19,9 +19,10 @@ def test_the_dag_polls_only_while_disclosures_appear():
 def test_disclosure_events_are_stored_before_earnings_are_extracted():
     tasks = dart_disclosure_intraday.dart_disclosure_intraday.task_dict
 
-    assert set(tasks) == {"collect_disclosures", "extract_earnings"}
+    assert set(tasks) == {"collect_disclosures", "extract_earnings", "collect_bodies"}
     # 공시 이벤트가 먼저다. 실적 추출이 실패해도 이벤트는 이미 저장돼 있다.
     assert tasks["extract_earnings"].upstream_task_ids == {"collect_disclosures"}
+    assert tasks["collect_bodies"].upstream_task_ids == {"extract_earnings"}
 
 
 def _disclosure(report_name: str = "연결재무제표기준영업(잠정)실적(공정공시)") -> Disclosure:

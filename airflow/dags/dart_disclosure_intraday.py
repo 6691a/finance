@@ -47,6 +47,8 @@ WebSocket이 없다. 화면에 보이는 신선도는 **폴링 주기 + DART 반
   직후라 다음 run이 다시 본다.
 - **공시가 0건인 것은 정상이다.** 빈 목록도 성공한 `source_record`로 남는다.
 - 실적 추출 실패는 그 공시만 건너뛴다. 다음 run의 재시도 목록에 그대로 남는다.
+- 본문 수집도 같다. `body IS NULL`이 재시도 목록이라 실패한 공시는 다음 run이 다시 본다.
+  전부 실패하면 원문 형식이나 자격 증명이 바뀐 것이라 태스크를 실패시킨다.
 
 ## 필요한 환경
 
@@ -78,6 +80,7 @@ from modules.collectors.document.dart import (
     DartStatusError,
     Disclosure,
     is_provisional,
+    pending_bodies,
     pending_earnings,
     periodic_report,
 )
@@ -234,7 +237,61 @@ def dart_disclosure_intraday():
             logger.warning("%s of %s earnings extractions failed: %s", len(failures), len(waiting), "; ".join(failures))
         return stored
 
-    collect_disclosures() >> extract_earnings()
+    @task(task_display_name="공시 본문 수집")
+    def collect_bodies() -> int:
+        """시장이 반응하는 종류의 공시 본문을 채운다.
+
+        **목록 API는 보고서명까지만 준다.** 인과 그래프가 그 한 줄로 사건을 만들려다 내용을
+        지어냈다(2026-08-28) — 그래서 원문에서 태그를 걷어낸 문장을 함께 저장한다.
+        """
+        collector = _collector()
+        since = datetime.now(UTC).astimezone(KST_TIMEZONE).date() - timedelta(days=_lookback_days() - 1)
+
+        with closing(_connection()) as connection:
+            waiting = pending_bodies(connection, tuple(company.value for company in DartCompany), since)
+
+        stored = 0
+        failures: list[str] = []
+        for disclosure in waiting:
+            try:
+                body = collector.fetch_body(disclosure)
+            except (DartHTTPError, DartStatusError) as error:
+                _classify(error)
+                logger.warning("%s body fetch failed: %s", disclosure.rcept_no, error)
+                failures.append(f"{disclosure.rcept_no}({error})")
+                continue
+            except DartPayloadError as error:
+                # 원문 형식이 바뀐 것이다. 이 공시만 건너뛰고 공시 이벤트는 그대로 둔다.
+                logger.warning("%s body parsing failed: %s", disclosure.rcept_no, error)
+                failures.append(f"{disclosure.rcept_no}({error})")
+                continue
+            except ConnectionError as error:
+                logger.warning("%s body fetch failed to connect: %s", disclosure.rcept_no, error)
+                failures.append(f"{disclosure.rcept_no}({error})")
+                continue
+
+            if body is None:
+                continue
+
+            with closing(_connection()) as connection, atomic(connection):
+                stored += collector.store_body(connection, disclosure.rcept_no, body)
+
+            logger.info(
+                "Stored %s characters of body for %s (%s)",
+                len(body),
+                disclosure.rcept_no,
+                disclosure.report_name,
+            )
+
+        # 매시간 도는 수집이라 한 건의 실패로 죽이지 않는다. 전부 실패하면 원문 형식이나
+        # 자격 증명이 바뀐 것이라 다음 실행도 같은 자리에서 멈춘다.
+        if failures and len(failures) == len(waiting):
+            raise AirflowFailException(f"Every disclosure body fetch failed: {'; '.join(failures)}")
+        if failures:
+            logger.warning("%s of %s body fetches failed: %s", len(failures), len(waiting), "; ".join(failures))
+        return stored
+
+    collect_disclosures() >> extract_earnings() >> collect_bodies()
 
 
 def _extract(collector: DartCollector, disclosure: Disclosure):

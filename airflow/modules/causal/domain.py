@@ -50,7 +50,10 @@ from modules.utility import KST_TIMEZONE
 # 판 8은 기사 숫자를 근거로 쓰지 못하게 막았다(2026-08-28). 판 7 프로토타입이 CPI 지수를
 # 툴로 받고도 `연율 3.4퍼센트`를 **기사 요약에서** 가져다 `reasoning`에 적었다. 문서는
 # 요약만 있고 원문(`document.body`)이 전 건 비어 있어 그 숫자를 되짚을 방법이 없다.
-PROMPT_VERSION = "8"
+#
+# 판 9는 공시가 예외임을 밝힌다(2026-08-29). 후보 줄에 공시 원문 본문이 붙으면서 판 8의
+# "숫자를 옮기지 마라"가 공시까지 덮어 버렸다. 공시 본문은 요약이 아니라 접수된 원문이다.
+PROMPT_VERSION = "9"
 
 # 대상 주 `W`와 실행 주 `W+2`의 거리. 설계 §2.
 RUN_LAG_WEEKS = 2
@@ -308,6 +311,9 @@ class DisclosureCandidate(BaseModel):
     company_name: str
     report_name: str
     receipt_date: date
+    body: str
+    """원문에서 태그를 걷어낸 본문. **비어 있을 수 없다** — 보고서명 한 줄로는 모델이 내용을
+    지어내는 것 말고 할 수 있는 일이 없어, 본문이 없는 공시는 조회가 아예 빼고 온다."""
 
 
 class SignalCandidate(BaseModel):

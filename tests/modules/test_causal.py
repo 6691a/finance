@@ -328,6 +328,7 @@ class TestFetchCandidates:
                         "삼성전자",
                         "자기주식취득결정",
                         date(2026, 8, 19),
+                        "취득예정금액 3,000,000,000,000원 취득목적 주주가치 제고",
                     )
                 ],
                 "FROM technical_signal": [(12, "KOSPI", date(2026, 8, 12), "golden_cross", "up")],
@@ -373,17 +374,20 @@ class TestFetchCandidates:
 
         assert found.refs == ()
 
-    def test_the_disclosure_query_drops_insider_holding_reports(self) -> None:
-        """**공시 후보의 95퍼센트가 임원 지분 신고다**(2026-08-28 실측: 3,850건 중 3,682건).
-        임원 하나가 사고팔 때마다 한 건이라 같은 회사 같은 날짜로 넷씩 쌓이고, 그 주 주가를
-        움직인 원인이 아니다. 프로토타입 두 번에서 공시 22건 중 인용이 0건이었다.
+    def test_only_disclosures_with_a_body_become_candidates(self) -> None:
+        """**보고서명 한 줄로는 모델이 내용을 지어내는 것 말고 할 일이 없다.** 프로토타입
+        두 번에서 공시 22건 중 인용이 0건이었고, 인용된 두 번은 환각이었다 — 모델이
+        `반기보고서 (2026.06)`을 근거로 달고 "AI 반도체 수출 호황"이라고 썼다.
+
+        본문은 수집기 화이트리스트에 걸린 종류에만 채워지므로 `body IS NOT NULL` 하나가
+        종류 필터를 겸한다. 목록을 두 곳에 적지 않는다.
         """
         connection = self._connection()
-        candidates.fetch_candidates(connection, self._targets(), self.WINDOW)
+        found = candidates.fetch_candidates(connection, self._targets(), self.WINDOW)
 
         sql, _ = next(call for call in connection.calls if "FROM disclosure_event" in call[0])
-        assert "NOT LIKE" in sql
-        assert "임원ㆍ주요주주특정증권등소유상황보고서" in sql
+        assert "body IS NOT NULL" in sql
+        assert found.disclosures[0].body.startswith("취득예정금액")
 
     def test_the_document_query_caps_each_source(self) -> None:
         """**점수순으로만 자르면 두꺼운 소스가 자리를 독식한다.** 8/17 주 실측에서 상위

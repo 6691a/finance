@@ -24,6 +24,8 @@ from modules.collectors.document.dart import (
     DartStatusError,
     Disclosure,
     DisclosureFetch,
+    disclosure_text,
+    is_material,
     is_provisional,
     parse_financials,
     parse_provisional,
@@ -325,6 +327,84 @@ def test_report_classification():
     assert periodic_report("반기보고서 (2025.06)") == (2025, "11012", date(2025, 6, 30))
     assert periodic_report("[기재정정]사업보고서 (2025.12)") == (2025, "11011", date(2025, 12, 31))
     assert periodic_report("증권발행실적보고서") is None
+
+
+def test_material_report_classification():
+    """**본문을 받을 종류를 고르는 자리다.** 4,014건 중 3,682건이 임원 지분 신고였고, 그것을
+    뺀 뒤에도 남은 대부분이 형식 공시라 화이트리스트로 뒤집었다(2026-08-28 실측).
+    """
+    assert is_material("조회공시요구(풍문또는보도)")
+    assert is_material("조회공시요구(풍문또는보도)에대한답변(미확정)")
+    assert is_material("파생상품거래손실발생")
+    assert is_material("주요사항보고서(자기주식취득결정)")
+    assert is_material("[기재정정]주요사항보고서(유상증자결정)")
+    assert is_material("현금ㆍ현물배당결정")
+    assert is_material("주식등의대량보유상황보고서(일반)")
+    assert is_material("최대주주등소유주식변동신고서")
+    assert is_material("연결재무제표기준영업(잠정)실적(공정공시)")
+
+    # 소음. 전체의 95퍼센트가 이 하나다.
+    assert not is_material("임원ㆍ주요주주특정증권등소유상황보고서")
+    assert not is_material("[기재정정]임원ㆍ주요주주특정증권등소유상황보고서")
+    assert not is_material("동일인등출자계열회사와의상품ㆍ용역거래변경")
+    assert not is_material("지급수단별ㆍ지급기간별지급금액및분쟁조정기구에관한사항")
+
+
+def test_periodic_reports_never_get_a_body():
+    """**크기가 자릿수로 다르다.** 삼성전자 반기보고서 원문이 638,116자이고 조회공시요구는
+    220자다(2026-08-29 실측). 한 건이 프롬프트 예산을 통째로 먹고 그 내용은 사건도 아니다.
+    """
+    assert not is_material("반기보고서 (2026.06)")
+    assert not is_material("분기보고서 (2026.03)")
+    assert not is_material("[기재정정]사업보고서 (2025.12)")
+
+    # `증권발행실적보고서`는 정기보고서가 아니라 `실적` 조각에 걸려 남는다.
+    assert is_material("증권발행실적보고서")
+
+
+def test_disclosure_text_drops_style_before_tags():
+    """거래소 공시는 `<style>`에 CSS가 들어 있어, 태그만 벗기면 본문 앞에 CSS가 붙는다."""
+    html = (
+        "<html><head><style>.xforms * { font-family: 돋움체;}</style></head>"
+        "<body><table><tr><td>손실발생금액(원)</td><td>3,977,121,095,025</td></tr>"
+        "<tr><td>자기자본대비(%)</td><td>3.3</td></tr></table>&nbsp;</body></html>"
+    )
+
+    text = disclosure_text(html)
+
+    assert "font-family" not in text
+    assert text == "손실발생금액(원) 3,977,121,095,025 자기자본대비(%) 3.3"
+
+
+def test_disclosure_text_is_capped():
+    assert len(disclosure_text("<p>" + "가" * 9000 + "</p>")) == dart.MAX_BODY_CHARS
+
+
+def test_a_document_with_no_text_is_a_payload_error(monkeypatch):
+    """빈 문자열을 저장하면 `body IS NULL` 재시도 목록에서 빠져 다시 안 본다."""
+    monkeypatch.setattr(dart, "_get", fake_get([document_zip("<html><body> </body></html>")]))
+
+    with pytest.raises(DartPayloadError, match="no text"):
+        COLLECTOR.fetch_body(Disclosure.from_payload(LIST_ROW))
+
+
+def test_a_missing_document_body_is_not_a_failure(monkeypatch):
+    body = b"<result><status>014</status><message>no file</message></result>"
+    monkeypatch.setattr(dart, "_get", fake_get([body]))
+
+    assert COLLECTOR.fetch_body(Disclosure.from_payload(LIST_ROW)) is None
+
+
+def test_the_body_update_does_not_overwrite_what_is_already_there():
+    """같은 접수번호를 두 번 받아도 먼저 저장된 본문을 안 덮는다. 원문이 바뀌면 DART는
+    새 접수번호로 정정 공시를 낸다."""
+    assert "body IS NULL" in dart.DISCLOSURE_BODY_UPDATE
+    assert "UPDATE disclosure_event" in dart.DISCLOSURE_BODY_UPDATE
+
+
+def test_the_pending_body_query_only_asks_for_material_reports():
+    assert "body IS NULL" in dart.DISCLOSURE_BODY_PENDING_SELECT
+    assert "LIKE ANY" in dart.DISCLOSURE_BODY_PENDING_SELECT
 
 
 def test_provisional_reads_period_and_cumulative_rows():

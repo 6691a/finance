@@ -58,7 +58,7 @@ airflow dags trigger dart_disclosure_intraday --conf '{"lookback_days":30}'
 
 **자르지 않는다.** 처음에는 4,000자 상한을 뒀는데 대량보유보고서 세 건이 거기 걸려 저장
 자체가 잘렸다(2026-08-29 실측). 저장은 원본 보존이고, **프롬프트에 얼마를 실을지는 읽는 쪽이
-정한다**(`causal.generation.MAX_DISCLOSURE_BODY_CHARS`, 지금 1,000자). 자르는 자리를 읽는
+정한다**(`causal.generation.MAX_DISCLOSURE_BODY_CHARS`, 지금 1,200자). 자르는 자리를 읽는
 쪽에 두어야 프롬프트 예산을 바꿀 때 재수집이 필요 없다. 한 행이 거대해지는 것은
 화이트리스트가 막는다 — 방대한 것은 정기보고서이고 그것이 목록에 없다.
 

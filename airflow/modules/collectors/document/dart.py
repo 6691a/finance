@@ -146,6 +146,43 @@ FINANCIAL_ACCOUNTS: dict[str, str] = {
 PERIODIC_REPORTS: dict[int, str] = {3: "11013", 6: "11012", 9: "11014", 12: "11011"}
 QUARTER_END_DAYS: dict[int, int] = {3: 31, 6: 30, 9: 30, 12: 31}
 
+# 본문을 받을 공시 종류. 보고서명에 이 조각이 들어가면 받는다.
+#
+# **화이트리스트다.** 전에는 임원 지분 신고 하나만 빼는 블랙리스트였는데 그것으로 부족했다 —
+# 4,014건 중 3,682건이 그 하나였지만, 남은 332건도 대부분 형식 공시(지급수단별·동일인등
+# 거래변경·정기보고서)라 인과 사건이 아니었다(2026-08-28 실측).
+#
+# **정기보고서를 넣지 않는 이유는 크기다.** 삼성전자 반기보고서 원문이 638,116자다
+# (조회공시요구는 220자). 한 건이 프롬프트 예산을 통째로 먹고 그 내용은 사건도 아니다.
+#
+# 조각으로 거는 것은 이름이 접두·접미로 늘어나기 때문이다 — `[기재정정]주요사항보고서
+# (유상증자결정)`, `주요사항보고서(자기주식취득결정)`이 한 조각에 걸린다.
+MATERIAL_REPORT_KEYWORDS: tuple[str, ...] = (
+    "조회공시",  # 거래소가 풍문·보도를 묻는다. 그 답변까지 한 쌍이다
+    "손실발생",  # 파생상품거래손실발생
+    "주요사항보고서",  # 자기주식·유상증자·합병 등
+    "자기주식",
+    "배당",
+    "증자",
+    "대량보유",
+    "소유주식변동",  # 최대주주등소유주식변동신고서
+    "실적",  # 연결재무제표기준영업(잠정)실적(공정공시)
+    "기타경영사항",
+)
+
+# 한 실행이 받는 본문 수 상한. 2분 폴링이라 밀린 것은 다음 실행이 이어 받는다.
+MAX_BODIES_PER_RUN = 20
+
+# 저장할 본문 길이 상한. 실측 최대가 1,943자(동일인등 거래변경)라 여유가 크지만, 화이트리스트에
+# 큰 종류가 새로 들어와도 한 행이 조용히 거대해지지 않게 막는다.
+MAX_BODY_CHARS = 4000
+
+# 본문에서 통째로 걷어낼 요소. 거래소 공시는 `<style>`에 CSS가 들어 있어 태그만 벗기면
+# `.xforms * { font-family: 돋움체;}`가 본문 앞에 붙는다(2026-08-29 실측).
+SCRIPT_OR_STYLE_PATTERN = re.compile(r"<(style|script)[^>]*>.*?</\1>", re.DOTALL | re.IGNORECASE)
+HTML_TAG_PATTERN = re.compile(r"<[^>]+>")
+HTML_ENTITY_PATTERN = re.compile(r"&[a-zA-Z]+;|&#\d+;")
+
 # 잠정실적 공시를 알아보는 이름. 정정 접두사를 떼고 비교한다.
 PROVISIONAL_REPORT_NAME = "연결재무제표기준영업(잠정)실적(공정공시)"
 PERIODIC_REPORT_PATTERN = re.compile(r"^(사업보고서|반기보고서|분기보고서)\s*\((\d{4})\.(\d{2})\)")
@@ -153,6 +190,8 @@ CORRECTION_PREFIX_PATTERN = re.compile(r"^\[[^\]]*\]\s*")
 
 DISCLOSURE_EVENT_UPSERT = read_sql("postgres", "disclosure_event", "upsert.sql")
 DISCLOSURE_EVENT_PENDING_SELECT = read_sql("postgres", "disclosure_event", "select_pending_earnings.sql")
+DISCLOSURE_BODY_PENDING_SELECT = read_sql("postgres", "disclosure_event", "select_pending_bodies.sql")
+DISCLOSURE_BODY_UPDATE = read_sql("postgres", "disclosure_event", "update_body.sql")
 EARNINGS_FACT_UPSERT = read_sql("postgres", "earnings_fact", "upsert.sql")
 SOURCE_RECORD_INSERT = read_sql("postgres", "source_record", "insert.sql")
 
@@ -349,6 +388,67 @@ def _json(raw: bytes) -> dict[str, Any]:
     if not isinstance(payload, dict):
         raise DartPayloadError("DART returned a JSON body that is not an object")
     return payload
+
+
+def is_material(report_name: str) -> bool:
+    """본문을 받을 종류인가. **정기보고서는 이름이 걸려도 뺀다.**
+
+    `반기보고서 (2026.06)`에는 위 조각이 없지만, `[기재정정]사업보고서` 같은 이름이 나중에
+    `실적` 조각에 걸릴 수 있다. 크기가 자릿수로 다르므로 여기서 한 번 더 막는다.
+    """
+    if periodic_report(report_name) is not None:
+        return False
+    return any(keyword in report_name for keyword in MATERIAL_REPORT_KEYWORDS)
+
+
+def disclosure_text(html: str) -> str:
+    """공시 원문 HTML에서 본문 텍스트만 남긴다. **표 구조를 파싱하지 않는다.**
+
+    종류마다 표가 달라 파서를 종류 수만큼 두게 되는데, 모델에게 줄 것은 숫자 칸이 아니라
+    문장이라 태그만 걷어내면 충분하다(2026-08-29 실측: 파생상품거래손실발생이 손실금액·
+    자기자본대비·발생원인을 921자 안에 다 담는다).
+
+    **`<style>`을 먼저 걷어낸다.** 태그만 벗기면 거래소 공시의 CSS가 본문 앞에 붙는다.
+    """
+    text = SCRIPT_OR_STYLE_PATTERN.sub(" ", html)
+    text = HTML_TAG_PATTERN.sub(" ", text)
+    text = HTML_ENTITY_PATTERN.sub(" ", text)
+    return re.sub(r"\s+", " ", text).strip()[:MAX_BODY_CHARS]
+
+
+def pending_bodies(
+    connection: Connection,
+    stock_codes: tuple[str, ...],
+    since: date,
+) -> tuple[Disclosure, ...]:
+    """본문을 아직 못 받은 시장 반응형 공시. 이 조회가 재시도 목록이다."""
+    with connection.cursor() as cursor:
+        cursor.execute(
+            DISCLOSURE_BODY_PENDING_SELECT,
+            {
+                "stock_codes": list(stock_codes),
+                "since": since,
+                "patterns": [f"%{keyword}%" for keyword in MATERIAL_REPORT_KEYWORDS],
+                "limit": MAX_BODIES_PER_RUN,
+            },
+        )
+        rows = cursor.fetchall() or []
+    return tuple(
+        Disclosure(
+            corp_code=row[0],
+            corp_name=row[1],
+            stock_code=row[2],
+            corp_class=row[3],
+            report_name=row[4],
+            rcept_no=row[5],
+            filer_name=row[6],
+            receipt_date=row[7],
+            remarks=row[8],
+        )
+        for row in rows
+        # SQL의 `LIKE ANY`가 정기보고서까지 걸 수 있어 파이썬에서 한 번 더 본다.
+        if is_material(row[4])
+    )
 
 
 def normalized_report_name(report_name: str) -> str:
@@ -696,6 +796,38 @@ class DartCollector:
             completed_at=datetime.now(UTC),
         )
 
+    def fetch_body(self, disclosure: Disclosure) -> str | None:
+        """공시 원문 본문. 원문이 아직 안 올라왔으면 `None`이다.
+
+        `fetch_provisional`과 같은 `document.xml`을 부르지만 **여기서는 파싱하지 않는다** —
+        저쪽은 표에서 숫자를 뽑고 이쪽은 문장을 그대로 준다. 종류가 열 가지라 표 파서를
+        그만큼 둘 수 없고, 모델에게 줄 것도 숫자 칸이 아니라 문장이다.
+        """
+        raw = self._call("document.xml", {"rcept_no": disclosure.rcept_no})
+
+        # ZIP이 아니면 오류 XML이다. HTTP는 200으로 온다(`fetch_provisional`과 같은 계약).
+        if raw[:2] != b"PK":
+            text = raw.decode("utf-8", errors="replace")
+            code = re.search(r"<status>(\d+)</status>", text)
+            status = code.group(1) if code else ""
+            if status == STATUS_NO_FILE:
+                logger.info("Document for %s is not available yet", disclosure.rcept_no)
+                return None
+            raise DartStatusError(status, "document.xml did not return a ZIP")
+
+        with zipfile.ZipFile(io.BytesIO(raw)) as archive:
+            names = archive.namelist()
+            if not names:
+                raise DartPayloadError(f"document ZIP for {disclosure.rcept_no} is empty")
+            content = archive.read(names[0])
+
+        body = disclosure_text(content.decode("utf-8", errors="replace"))
+        if not body:
+            # 태그를 걷어냈더니 아무 것도 안 남았다. 원문 형식이 바뀐 것이라 조용히
+            # 빈 문자열을 저장하면 다음 폴링이 그 공시를 다시 안 본다.
+            raise DartPayloadError(f"document for {disclosure.rcept_no} has no text")
+        return body
+
     def fetch_financials(self, disclosure: Disclosure) -> EarningsFetch | None:
         """정기보고서의 재무제표를 받는다.
 
@@ -818,6 +950,13 @@ class DartCollector:
                 ],
             )
         return len(fetch.disclosures)
+
+    @staticmethod
+    def store_body(connection: Connection, rcept_no: str, body: str) -> int:
+        """본문을 채운다. 이미 채워져 있으면 0이다(`update_body.sql`의 `body IS NULL`)."""
+        with connection.cursor() as cursor:
+            cursor.execute(DISCLOSURE_BODY_UPDATE, {"body": body, "rcept_no": rcept_no})
+            return cursor.rowcount or 0
 
     def store_earnings(self, connection: Connection, fetch: EarningsFetch) -> int:
         """실적 지표를 저장하고 저장한 행 수를 돌려준다."""

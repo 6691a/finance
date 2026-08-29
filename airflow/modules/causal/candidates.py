@@ -199,6 +199,7 @@ def fetch_candidates(
                 company_name=row[2],
                 report_name=row[3],
                 receipt_date=row[4],
+                body=row[5],
             )
             for row in cursor.fetchall()
         )

@@ -34,6 +34,19 @@ def test_the_minute_level_receipt_time_is_gone(capsys):
     assert "published_at" not in statement
 
 
+def test_disclosure_event_carries_the_body_column(capsys):
+    """목록 API는 보고서명까지만 준다. 인과 그래프가 그 한 줄로 사건을 만들려다 내용을
+    지어냈다(2026-08-28) — 원문에서 태그를 걷어낸 문장을 여기 담는다.
+
+    **nullable이다.** 시장이 반응하는 종류에만 채우고, 아직 못 받은 것과 대상이 아닌 것이
+    둘 다 NULL이다.
+    """
+    sql = head_sql(capsys)
+
+    assert "ALTER TABLE disclosure_event ADD COLUMN body TEXT" in sql
+    assert "COMMENT ON COLUMN disclosure_event.body IS" in sql
+
+
 def test_earnings_fact_is_created_with_its_five_part_key(capsys):
     sql = head_sql(capsys)
 

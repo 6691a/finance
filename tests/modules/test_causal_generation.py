@@ -29,6 +29,7 @@ def _candidates() -> domain.CandidateSet:
                 company_name="삼성전자",
                 report_name="자기주식취득결정",
                 receipt_date=date(2026, 8, 19),
+                body="취득예정금액 3,000,000,000,000원 취득목적 주주가치 제고 취득방법 장내매수",
             ),
         ),
     )

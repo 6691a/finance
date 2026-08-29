@@ -105,6 +105,14 @@ class DisclosureEvent(EntityBase):
         nullable=True,
         comment="DART 비고 원문(rm). 정정·철회·유가증권신고서 관련 표시가 들어온다",
     )
+    body: Mapped[str | None] = mapped_column(
+        Text,
+        nullable=True,
+        comment=(
+            "공시 원문에서 태그를 걷어낸 본문 텍스트. 시장이 반응하는 종류만 채우고 "
+            "정기보고서처럼 방대한 것은 비운다. NULL은 아직 못 받았거나 대상이 아니라는 뜻이다"
+        ),
+    )
     source_record_id: Mapped[int] = mapped_column(
         BigInteger,
         ForeignKey("source_record.id", ondelete="RESTRICT"),

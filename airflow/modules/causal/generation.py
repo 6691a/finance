@@ -45,6 +45,12 @@ logger = logging.getLogger(__name__)
 # 그것이 실행 중에 프롬프트가 비는 것보다 낫다.
 PROMPTS = read_prompt("causal_graph")
 
+# 후보 줄에 싣는 공시 본문 길이. 문서 요약(220자)보다 길게 주는 이유는 셋이다 — 공시는
+# 주당 몇 건뿐이라 예산을 덜 먹고, 문장이 아니라 표를 편 텍스트라 앞부분에 머리말이 붙고,
+# 값어치가 숫자에 있다(2026-08-29 실측: 파생상품거래손실발생 921자 안에 손실금액·자기자본
+# 대비·발생원인이 다 들어 있다).
+MAX_DISCLOSURE_BODY_CHARS = 1000
+
 
 class CausalPathAnswer(BaseModel):
     """모델이 낸 경로 하나. 저장 전에 `verify_paths`가 거른다."""
@@ -119,7 +125,8 @@ def candidate_block(found: CandidateSet) -> str:
     ]
     lines += [
         f"[{item.ref}] ({item.target_code}, {item.receipt_date}) "
-        f"{item.company_name} — {item.report_name}"
+        f"{item.company_name} — {item.report_name}\n"
+        f"    {item.body[:MAX_DISCLOSURE_BODY_CHARS]}"
         for item in found.disclosures
     ]
     lines += [

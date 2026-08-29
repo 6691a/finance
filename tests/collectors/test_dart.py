@@ -376,8 +376,12 @@ def test_disclosure_text_drops_style_before_tags():
     assert text == "손실발생금액(원) 3,977,121,095,025 자기자본대비(%) 3.3"
 
 
-def test_disclosure_text_is_capped():
-    assert len(disclosure_text("<p>" + "가" * 9000 + "</p>")) == dart.MAX_BODY_CHARS
+def test_disclosure_text_is_not_truncated():
+    """**저장은 원본 보존이다.** 전에 4,000자 상한을 뒀더니 대량보유보고서 세 건이 거기
+    걸려 저장 자체가 잘렸다. 프롬프트에 얼마를 실을지는 읽는 쪽이 정한다
+    (`causal.generation.MAX_DISCLOSURE_BODY_CHARS`).
+    """
+    assert len(disclosure_text("<p>" + "가" * 9000 + "</p>")) == 9000
 
 
 def test_a_document_with_no_text_is_a_payload_error(monkeypatch):

@@ -173,10 +173,6 @@ MATERIAL_REPORT_KEYWORDS: tuple[str, ...] = (
 # 한 실행이 받는 본문 수 상한. 2분 폴링이라 밀린 것은 다음 실행이 이어 받는다.
 MAX_BODIES_PER_RUN = 20
 
-# 저장할 본문 길이 상한. 실측 최대가 1,943자(동일인등 거래변경)라 여유가 크지만, 화이트리스트에
-# 큰 종류가 새로 들어와도 한 행이 조용히 거대해지지 않게 막는다.
-MAX_BODY_CHARS = 4000
-
 # 본문에서 통째로 걷어낼 요소. 거래소 공시는 `<style>`에 CSS가 들어 있어 태그만 벗기면
 # `.xforms * { font-family: 돋움체;}`가 본문 앞에 붙는다(2026-08-29 실측).
 SCRIPT_OR_STYLE_PATTERN = re.compile(r"<(style|script)[^>]*>.*?</\1>", re.DOTALL | re.IGNORECASE)
@@ -409,11 +405,16 @@ def disclosure_text(html: str) -> str:
     자기자본대비·발생원인을 921자 안에 다 담는다).
 
     **`<style>`을 먼저 걷어낸다.** 태그만 벗기면 거래소 공시의 CSS가 본문 앞에 붙는다.
+
+    **자르지 않는다**(2026-08-29 정정). 전에 4,000자 상한을 뒀는데 대량보유보고서 세 건이
+    거기 걸려 저장 자체가 잘렸다. 저장은 원본 보존이고 **프롬프트에 얼마를 실을지는 읽는
+    쪽이 정한다**(`causal.generation.MAX_DISCLOSURE_BODY_CHARS`). 한 행이 거대해지는 것은
+    화이트리스트가 막는다 — 방대한 것은 정기보고서이고 그것이 목록에 없다.
     """
     text = SCRIPT_OR_STYLE_PATTERN.sub(" ", html)
     text = HTML_TAG_PATTERN.sub(" ", text)
     text = HTML_ENTITY_PATTERN.sub(" ", text)
-    return re.sub(r"\s+", " ", text).strip()[:MAX_BODY_CHARS]
+    return re.sub(r"\s+", " ", text).strip()
 
 
 def pending_bodies(

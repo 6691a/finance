@@ -170,7 +170,12 @@ class LlmSettings(BaseModel):
 
 
 class PendingDocument(BaseModel):
-    """평가를 기다리는 문서."""
+    """평가를 기다리는 문서.
+
+    **본문을 담지 않는다.** 평가는 제목과 요약만 보고 판단하며(2026-08-30 사용자 결정),
+    본문의 소비자는 검색이다. 여기 담으면 `content_hash`가 본문을 안 보는 것과 짝이
+    어긋난다 — 해시가 그대로인데 입력만 바뀌면 문서가 옛 본문으로 평가된 채 남는다.
+    """
 
     model_config = ConfigDict(frozen=True)
 
@@ -178,7 +183,6 @@ class PendingDocument(BaseModel):
     source_slug: str
     title: str
     summary: str | None
-    body: str | None
     language: str
     published_at: datetime | None
     content_hash: str
@@ -315,8 +319,6 @@ class DocumentAssessor:
         ]
         if document.summary:
             parts.append(f"요약: {document.summary}")
-        if document.body:
-            parts.append(f"본문: {document.body}")
         return [SystemMessage(system), HumanMessage("\n".join(parts))]
 
     @staticmethod
@@ -575,7 +577,7 @@ class AssessmentStore:
         return Candidates(instruments=instruments, indicators=indicators)
 
     def pending(self, limit: int = DEFAULT_BATCH_SIZE) -> tuple[PendingDocument, ...]:
-        """아직 평가하지 않았거나 본문·프롬프트가 바뀐 문서.
+        """아직 평가하지 않았거나 제목·요약·프롬프트가 바뀐 문서.
 
         `prompt_revision`에는 관점이 함께 들어 있다(`LlmSettings.prompt_revision`). 관점을 바꾸면
         같은 문서라도 점수가 달라지므로 전부 재평가 대상이 된다.
@@ -589,10 +591,9 @@ class AssessmentStore:
                 source_slug=row[1],
                 title=row[2],
                 summary=row[3],
-                body=row[4],
-                language=row[5],
-                published_at=row[6],
-                content_hash=row[7],
+                language=row[4],
+                published_at=row[5],
+                content_hash=row[6],
             )
             for row in rows
         )

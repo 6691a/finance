@@ -79,7 +79,7 @@ requirements) **배포 단위(worktree/PR 하나)마다 문서를 나눴다.** �
 | 1 | [1-storage.md](1-storage.md) | `apps/models/analysis/thesis.py`, 수기 리비전, `thesis/*.sql`·`thesis_evidence/*.sql`, 세션 등락률 SQL, `thesis/domain.py`의 채점 순수 함수, 스키마·채점 테스트 | 없음 | 없음 |
 | 2 | [2-agent.md](2-agent.md) | `thesis/toolbox.py`의 Toolbox·`thesis/generation.py`의 Builder·`thesis/store.py`의 저장, 툴 SQL 3개, `thesis_model()`, `llm.invoke` tools+schema 가드, `tests/modules/test_thesis_pipeline.py` | 1 | 있음 |
 | 3 | [3-dag-slack.md](3-dag-slack.md) | `dags/market_thesis_forecast.py`·`market_thesis_review.py`, 스케줄, 채점 호출, Slack 렌더링·발송, DAG 테스트. **여기서 첫 운영 발송** | 1, 2 | 있음 |
-| 4 | [4-graph.md](4-graph.md) | `airflow/modules/graph.py`, `sync_graph` 태스크, `sync_only` Param, compose·requirements, `tests/modules/test_graph.py` | 1 (3과 병렬 가능) | 없음 |
+| 4 | [4-graph.md](4-graph.md) | `airflow/modules/graph.py`, `market_causal_weekly`의 `sync_graph` 태스크와 `sync_only` Param, 투영 SQL 셋, requirements, `tests/modules/test_graph.py`. **투영 대상은 `thesis`가 아니라 인과 그래프다**(2026-08-30) | `market-causal-graph.md` | 없음 |
 | 5 | [5-followup.md](5-followup.md) | `thesis_outcome` 테이블, 다지평(T+0·1·3·5) 채점, `FollowupNarrator` 사후 해설과 `verdict`, `past_theses` 툴 | 1, 2, 3 | 있음 |
 | 6 | [6-analyst.md](6-analyst.md) | `stock_analyst_opinion` 테이블과 리비전, `collectors/analyst/kis_opinion.py`, `dags/kis_analyst_opinion_daily.py`, `analyst_opinions` 툴, `SourceKind.research`와 네이버 리서치 출처 여섯(`document_listings.py`의 `enrich` 단계), 테스트 | 5 | 없음(리포트는 기존 문서 평가가 읽는다) |
 | 7 | [7-nxt-review.md](7-nxt-review.md) | `post_nxt_close` 슬롯, `thesis/nxt_review.py`, `market_thesis_nxt_review` DAG, 애프터마켓 조회 SQL, 수기 리비전(CHECK 확장) | 1, 2, 3 | 있음 |
@@ -97,11 +97,12 @@ requirements) **배포 단위(worktree/PR 하나)마다 문서를 나눴다.** �
 (2026-08-21) 그 이동을 1·2단계 코드에 먼저 반영한다. 무엇이 바뀌는지는
 [5-followup.md](5-followup.md) 0절의 표에 있다. 테이블이 아직 운영에 없어 데이터 이관은 없다.
 
-- 1→2→3은 순서대로. 4는 1 뒤 언제든 — **구현**은 3과 독립이라 병렬로 진행해도 된다.
-  단 `sync_graph` 태스크를 붙이는 자리가 3단계 DAG라 **배포는 3 뒤**다([4-graph.md](4-graph.md)).
+- 1→2→3은 순서대로. **4는 1~3과 독립이 됐다**(2026-08-30) — 투영 대상이 `thesis`에서
+  인과 그래프로 바뀌면서 `sync_graph`가 붙는 자리도 `market_causal_weekly`가 됐다.
+  이유와 실측은 [4-graph.md](4-graph.md) §1에 있다.
 - **4는 prod Neo4j 인스턴스가 선행 조건이다.** 이 저장소 코드만으로 끝나지 않는다
-  (NAS 쪽 컨테이너, Airflow 이미지 재빌드). 그 전까지 3까지만 운영에 나가고 `sync_graph`는
-  `NEO4J_URI` 미설정으로 skip이다.
+  (NAS `database` 스택의 컨테이너, Airflow 이미지 재빌드). 인스턴스가 없으면 `sync_graph`는
+  `NEO4J_URI` 미설정으로 skip이라 앞 태스크는 그대로 돈다.
 - **7은 5와 독립이다.** 애프터마켓 리뷰는 예측이 아니라 채점 대상이 아니고 해설도 붙이지
   않아, 5단계의 채점·해설 루프와 만나지 않는다. 다만 그 루프가 새 슬롯을 **자동으로** 집지
   않도록 두 SQL에 슬롯 목록을 걸어야 한다([7-nxt-review.md](7-nxt-review.md) 3절).
@@ -185,7 +186,9 @@ requirements) **배포 단위(worktree/PR 하나)마다 문서를 나눴다.** �
   있었다(`stock_analyst_opinion` 0행). 창은 30일로 넓혔지만 그보다 앞선 의견은 여전히
   없다. `observation_start`·`observation_end`를 **분기 단위로** 주어 몇 번 트리거해야
   한다 — KIS가 100건에서 조용히 자르기 때문에 넓은 구간 한 번으로는 안 된다.
-- **Neo4j prod 인스턴스** — 아직 없다. 상세는 [4-graph.md](4-graph.md).
+- **Neo4j prod 인스턴스** — NAS `database` 스택에 섰다(2026-08-30). 상세와 그때 밟은 덫
+  셋은 [4-graph.md](4-graph.md) §5다. 첫 적재는 `market_causal_weekly`를 `sync_only`로
+  트리거한다.
 - **4주 검증** — 3단계 배포 뒤 한 달간 본다. 두 묶음을 섞지 않는다.
   - **운영 지표**(이걸로 판단한다): 슬롯별 정시 발행률, readiness guard 재시도 횟수, subject
     커버리지(버려진 subject 비율), 근거 유효율(목록 밖이라 버린 ref 비율), (4단계 뒤)

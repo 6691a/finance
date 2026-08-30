@@ -224,6 +224,25 @@ def detail_url(source_slug: str, canonical_url: str) -> str:
     return canonical_url
 
 
+def absolute_url(url: str) -> str:
+    """스킴이 없는 주소에 `https://`를 붙인다.
+
+    최초 수집 실행에 `www.bea.gov/news/...`처럼 스킴 없는 `canonical_url`이 한 건 들어왔다
+    (문서 66, 2026-08-17 실측). curl은 그런 주소도 받아 주지만 `urljoin`은 base로 못 써서
+    상대 링크가 `/sites/...`인 채로 넘어가고 `No host part in the URL`로 죽는다.
+    """
+    return url if urlsplit(url).scheme else f"https://{url.lstrip('/')}"
+
+
+def document_domain(url: str) -> str:
+    """그 문서의 도메인. 첨부인지 남의 자료인지 가르는 기준이다.
+
+    앞의 `www.`만 뗀다. **뒤에서 두 마디를 떼지 않는다** — `www.bbc.co.uk`가 `co.uk`가 되어
+    영국 전체가 같은 도메인이 된다.
+    """
+    return urlsplit(absolute_url(url)).netloc.lower().removeprefix("www.")
+
+
 def clean_markup(raw: str) -> str:
     """본문이 아닌 요소를 통째로 지운다. **본문을 뽑을 때만 쓴다.**
 
@@ -260,7 +279,14 @@ def find_attachment_urls(raw: str, base_url: str) -> tuple[str, ...]:
 
     **본문 정리를 거치지 않은 원본에서 찾는다.** 첨부는 본문이 아니라서 화면 장식 안에
     있어도 이상하지 않다.
+
+    **그 문서의 도메인 것만 받는다.** 기사가 인용한 남의 PDF는 그 문서의 첨부가 아니다 —
+    실측(2026-08-30)에서 저장된 파일 23건 중 5건이 남의 것이었고(BBC가 건 courtlistener·
+    parliament.uk 등, BEA가 건 census.gov), NPR 기사가 건 개인 사이트 PDF는 403으로 죽어
+    매 실행 첨부 실패로 집계됐다. 하위 도메인은 같은 것으로 본다 — BEA가 자기 파일 일부를
+    `apps.bea.gov`에 둔다.
     """
+    domain = document_domain(base_url)
     document = Selector(content=raw)
     found: list[str] = []
     for anchor in document.css("a"):
@@ -272,7 +298,11 @@ def find_attachment_urls(raw: str, base_url: str) -> tuple[str, ...]:
         path = urlsplit(href).path
         if not path.lower().endswith(ATTACHMENT_SUFFIXES) and not ATTACHMENT_ENDPOINTS.search(path):
             continue
-        url = urljoin(base_url, href)
+        url = urljoin(absolute_url(base_url), href)
+        host = urlsplit(url).netloc.lower()
+        if host != domain and not host.endswith(f".{domain}"):
+            logger.debug("skipping %s; it is not a %s file", url, domain)
+            continue
         if url not in found:
             found.append(url)
     return tuple(found)

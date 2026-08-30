@@ -669,6 +669,74 @@ docker compose -f compose/prod/airflow/docker-compose.yaml up -d --force-recreat
 `up -d --build` 합니다. Airflow 과거 태스크 로그를 유지하려면 이전 `logs/` 내용을
 `airflow/logs/`로 복사합니다(생략해도 동작에는 지장 없음).
 
+### Neo4j (인과 그래프 투영)
+
+**이 저장소의 `compose/prod/`에는 없습니다.** Postgres·Redis가 사는 NAS의 `database` 스택
+(저장소 밖)에 서비스 하나로 들어갑니다. Airflow prod compose가 `database` 네트워크에
+external로 붙어 있어 **컨테이너 이름으로 닿습니다**.
+
+```yaml
+  neo4j:
+    image: neo4j:5.26.29-community
+    user: "1026:100"                 # 바인드 마운트 폴더의 호스트 소유자
+    ports:
+      - "17474:7474"
+      - "17687:7687"
+    volumes:
+      - ./neo4j:/data
+    networks:
+      - database
+      - monitoring
+    environment:
+      NEO4J_AUTH: neo4j/${NEO4J_PWD}
+      NEO4J_server_memory_heap_initial__size: 512m
+      NEO4J_server_memory_heap_max__size: 512m
+      NEO4J_server_memory_pagecache_size: 256m
+    healthcheck:
+      test: [ "CMD-SHELL", "cypher-shell -u neo4j -p '${NEO4J_PWD}' 'RETURN 1'" ]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 60s
+    restart: always
+```
+
+Airflow `.env`에 셋을 넣습니다. 없으면 `sync_graph`가 skip이라 나머지 태스크는 그대로 돕니다.
+
+```
+NEO4J_URI=bolt://neo4j:7687
+NEO4J_USER=neo4j
+NEO4J_PASSWORD=<database 스택 .env의 NEO4J_PWD와 같은 값>
+```
+
+드라이버가 이미지에 들어가야 하므로 **`just build-airflow` 후 `just deploy-airflow`**가
+필요합니다(`requirements.txt` 변경).
+
+첫 적재와 밀린 주 복구는 같은 명령입니다. `sync_only`가 LLM을 건너뛰고 저장된 주 전부를
+밀어 넣습니다 — MERGE라 몇 번을 돌려도 같은 그래프입니다.
+
+```bash
+airflow dags trigger market_causal_weekly --conf '{"sync_only": true}'
+```
+
+브라우저는 `http://<NAS 주소>:17474`이고, Connect URL은 **`bolt://<NAS 주소>:17687`**입니다.
+`neo4j://`는 서버가 자기 주소를 컨테이너 내부 포트(7687)로 알려 줘서 실패합니다.
+
+**기동에서 밟은 덫 셋**(2026-08-30, 전부 안 뜨거나 조용히 인증만 실패하는 모양입니다).
+
+- **`/data` 소유권.** neo4j 이미지는 `USER neo4j`(uid 7474)로 **비root 시작**입니다.
+  postgres·redis는 root로 시작해 스스로 `chown` 하고 권한을 내리므로 같은 바인드 마운트에서
+  문제가 없습니다. neo4j는 그 단계가 없어 `AccessDeniedException: .../auth.ini.tmp`로
+  죽습니다. 호스트 폴더 소유를 맞추거나(`user:` + `chown`) named volume을 씁니다.
+- **헬스체크의 `$`.** compose가 `${NEO4J_PWD}`를 문자열로 치환한 뒤 **컨테이너 셸이 다시
+  해석합니다.** 비밀번호에 `$$`가 있으면 셸이 자기 PID로 바꿔 조용히 틀린 비밀번호를 보냅니다.
+  작은따옴표로 감싸야 합니다.
+- **`NEO4J_AUTH`는 첫 기동에만 먹습니다.** `/data`가 비어 있지 않으면 무시됩니다. 비밀번호를
+  바꾸려면 볼륨을 비우고 다시 올립니다.
+
+**이 데이터는 백업 대상이 아닙니다.** Postgres가 원본이고 Neo4j는 파생물이라, 날아가면
+`sync_only` 한 번으로 다시 섭니다(2026-08-30 실측: 두 주 51경로가 몇 초).
+
 ## 관측 (Sentry)
 
 Sentry 프로젝트는 둘입니다. Airflow는 NAS `.env`의 `AIRFLOW__SENTRY__*`로, realtime은

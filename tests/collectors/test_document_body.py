@@ -175,6 +175,51 @@ def test_attachments_survive_the_elements_the_body_rule_throws_away():
     assert find_video_urls(html, "https://www.bok.or.kr/v.do") == ("https://www.bok.or.kr/m/clip.mp4",)
 
 
+def test_an_outbound_pdf_in_the_article_body_is_not_an_attachment():
+    """기사가 인용한 남의 PDF는 그 문서의 첨부가 아니다.
+
+    **운영 실측(2026-08-30)**: 저장된 파일 23건 중 5건이 남의 것이었다. BBC 기사가
+    courtlistener·cdt.org·parliament.uk·nfcc.org.uk의 PDF를 걸었고, BEA 보도자료가
+    census.gov 파일을 걸었다. NPR 기사가 인용한 개인 사이트 PDF는 403으로 죽어서
+    첨부 실패로 매번 집계됐다.
+
+    **하위 도메인은 같은 것으로 본다.** BEA는 자기 파일 일부를 apps.bea.gov에 둔다.
+    """
+    html = page(
+        '<a href="https://apps.bea.gov/f/a.pdf">우리 첨부</a>'
+        '<a href="/sites/default/files/b.xlsx">우리 첨부</a>'
+        '<a href="https://www.census.gov/x/c.pdf">남의 자료</a>'
+        '<a href="https://nfcc.org.uk/d.pdf">남의 자료</a>'
+    )
+
+    assert find_attachment_urls(html, "https://www.bea.gov/news/2026/gdp") == (
+        "https://apps.bea.gov/f/a.pdf",
+        "https://www.bea.gov/sites/default/files/b.xlsx",
+    )
+
+
+def test_a_two_label_public_suffix_is_not_treated_as_the_document_domain():
+    """`www.bbc.co.uk`에서 뒤 두 마디만 떼면 `co.uk`가 되어 영국 전체가 같은 도메인이 된다."""
+    html = page('<a href="https://nfcc.org.uk/d.pdf">남의 자료</a><a href="/news/e.pdf">우리 첨부</a>')
+
+    assert find_attachment_urls(html, "https://www.bbc.co.uk/news/articles/x") == (
+        "https://www.bbc.co.uk/news/e.pdf",
+    )
+
+
+def test_a_canonical_url_without_a_scheme_still_resolves_its_attachments():
+    """최초 수집 실행에 스킴 없는 URL이 한 건 들어왔다(문서 66, BEA, 2026-08-17 실측).
+
+    `urljoin`은 스킴 없는 base로는 상대 링크를 못 푼다. 그대로 두면 `/sites/...`가 curl에
+    넘어가 `No host part in the URL`로 죽는다 — 그 문서의 첨부 다섯이 매 실행 실패했다.
+    """
+    html = page('<a href="/sites/default/files/2026-02/gdp4q25-adv.pdf">붙임</a>')
+
+    assert find_attachment_urls(html, "www.bea.gov/news/2026/gdp-advance-estimate") == (
+        "https://www.bea.gov/sites/default/files/2026-02/gdp4q25-adv.pdf",
+    )
+
+
 def test_a_pdf_viewer_link_is_not_an_attachment():
     """한국은행은 같은 PDF를 뷰어 링크로도 건다. 확장자가 질의 문자열에 있을 뿐 파일이 아니다."""
     html = page('<a href="/static/pdfjs/viewer.html?file=%2FfileSrc%2Fa.pdf">뷰어</a>')

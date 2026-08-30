@@ -41,15 +41,27 @@ class CausalSign(StrEnum):
 
 
 class CausalConfidence(StrEnum):
-    """주장의 성격. **둘 다 인과의 증명이 아니다.**
+    """주장의 성격. **셋 다 인과의 증명이 아니다.**
 
     `MarketEpisode` 설계의 "검증 없이 원인이라 단정하지 않는다"를 엣지 속성으로 옮긴 것이다.
+
+    **가르는 것은 확신의 세기가 아니라 무엇이 뒷받침하는가다.** 사다리가 한 줄로 읽힌다 —
+    문서가 말했다 > 값이 그렇게 움직였다 > 우리가 이었다. 조심스럽다는 이유로 근거가 말한
+    것을 낮추지 않고, 근거가 없는데 올리지도 않는다.
+
+    **칸을 나눈 이유가 있다**(설계 §11.3). 하나로 뭉치면 조회가 "근거 문서가 말한 것"과
+    "가격이 그렇게 보인 것"을 영영 못 가르고, 비율을 지표로 삼는 순간 정의를 느슨하게 하는
+    것이 가장 싼 개선책이 된다.
     """
 
     OBSERVED = "observed"
-    """같은 기간에 함께 관찰됐다."""
+    """근거 후보 중 하나가 그 방향을 직접 말했다. 그 ref가 `MarketCausalEvidence`에 있다."""
+    ENDPOINT_OBSERVED = "endpoint_observed"
+    """원인과 결과가 둘 다 우리가 가진 값이고 방향·선후가 주장과 맞다. **양 끝을 본 것이지
+    사이를 본 것이 아니다.** 대상에서 출발한 경로만 이 값을 가질 수 있다 — 사건에서
+    출발하면 원인 쪽이 문서라 값으로 대조할 것이 없다."""
     PLAUSIBLE = "plausible"
-    """해석이다. 관찰로 뒷받침되지 않는다."""
+    """메커니즘은 그럴듯하지만 값도 문서도 그 말을 하지 않았다. 모델이 이은 것이다."""
 
 
 class CausalReturnUnit(StrEnum):
@@ -164,13 +176,21 @@ class MarketCausalPath(EntityBase):
     실제로 있기 때문이다 — 금리 인상이 `할인율`로는 은행주를 누르고 `예대마진`으로는 올린다.
     자연키가 그것을 못 담으면 두 번째 경로가 조용히 삼켜지고, 조용한 손실은 나중에 자연키를
     늘려도 되돌릴 수 없다.
+
+    **출발점은 사건 또는 대상이다**(설계 §11.4). "US10Y가 내려서 SOX가 올랐다"를 담으려면
+    앞 경로의 끝이 다음 경로의 시작이어야 하는데, 그것을 새 `MarketEvent`로 만들면
+    `target:US10Y`와 `event:미국 국채금리 하락`이 **다른 노드**라 조회가 거기서 끊긴다.
+    문자열만 깊어지고 홉은 늘지 않는다. 그래서 `event_id`를 nullable로 열고
+    `source_target_*` 셋을 두되 CHECK로 **정확히 하나만** 채워지게 막는다.
     """
 
     __tablename__ = "market_causal_path"
     __table_args__ = (
+        # **`event_id`가 아니라 `source_key`로 건다.** nullable이 된 `event_id`를 자연키에
+        # 두면 PostgreSQL이 NULL을 서로 다른 값으로 봐서 대상 출발 경로가 중복 삽입된다.
         UniqueConstraint(
             "week_start",
-            "event_id",
+            "source_key",
             "target_kind",
             "target_code",
             "chain_key",
@@ -181,12 +201,40 @@ class MarketCausalPath(EntityBase):
             name="ck_market_causal_path_sign",
         ),
         CheckConstraint(
-            "confidence IN ('observed', 'plausible')",
+            "confidence IN ('observed', 'endpoint_observed', 'plausible')",
             name="ck_market_causal_path_confidence",
         ),
         CheckConstraint(
             "target_kind IN ('instrument', 'index', 'quote', 'indicator')",
             name="ck_market_causal_path_target_kind",
+        ),
+        # 출발점은 둘 중 정확히 하나다. 둘 다이거나 둘 다 아닌 행을 DB가 막는다.
+        CheckConstraint(
+            "(event_id IS NOT NULL AND source_target_kind IS NULL"
+            " AND source_target_code IS NULL AND source_sign IS NULL)"
+            " OR (event_id IS NULL AND source_target_kind IS NOT NULL"
+            " AND source_target_code IS NOT NULL AND source_sign IS NOT NULL)",
+            name="ck_market_causal_path_source_exclusive",
+        ),
+        CheckConstraint(
+            "source_sign IS NULL OR source_sign IN ('up', 'down')",
+            name="ck_market_causal_path_source_sign",
+        ),
+        CheckConstraint(
+            "source_target_kind IS NULL OR source_target_kind IN"
+            " ('instrument', 'index', 'quote', 'indicator')",
+            name="ck_market_causal_path_source_target_kind",
+        ),
+        # 대상에서 출발한 경로는 자기 자신으로 돌아올 수 없다.
+        CheckConstraint(
+            "source_target_code IS NULL"
+            " OR NOT (source_target_kind = target_kind AND source_target_code = target_code)",
+            name="ck_market_causal_path_source_not_self",
+        ),
+        # `endpoint_observed`는 값에서 나온다. 사건에서 출발한 경로는 쓸 수 없다.
+        CheckConstraint(
+            "confidence <> 'endpoint_observed' OR source_target_code IS NOT NULL",
+            name="ck_market_causal_path_endpoint_needs_source",
         ),
         CheckConstraint(
             "return_unit IN ('percent', 'basis_point')",
@@ -205,11 +253,44 @@ class MarketCausalPath(EntityBase):
             "사건 자체는 이 주보다 앞설 수 있다"
         ),
     )
-    event_id: Mapped[int] = mapped_column(
+    event_id: Mapped[int | None] = mapped_column(
         BigInteger,
         ForeignKey("market_event.id", ondelete="RESTRICT"),
+        nullable=True,
+        comment=(
+            "이 경로의 출발 사건. 지우면 그래프가 끊기므로 RESTRICT다. "
+            "대상에서 출발한 경로는 NULL이고 그때 source_target_* 셋이 채워진다"
+        ),
+    )
+    source_key: Mapped[str] = mapped_column(
+        Text,
         nullable=False,
-        comment="이 경로의 출발 사건. 지우면 그래프가 끊기므로 RESTRICT다",
+        comment=(
+            "출발점을 한 칸에 담은 문자열. 사건이면 'e:<event_id>', "
+            "대상이면 't:<kind>:<code>:<sign>'이다. chain_key와 같은 이유로 둔다 — "
+            "nullable 컬럼을 자연키에 두면 NULL이 서로 달라 중복이 들어온다"
+        ),
+    )
+    source_target_kind: Mapped[CausalTargetKind | None] = mapped_column(
+        _enum_column(CausalTargetKind),
+        nullable=True,
+        comment="대상에서 출발한 경로의 원인 대상 종류. 사건 출발이면 NULL",
+    )
+    source_target_code: Mapped[str | None] = mapped_column(
+        Text,
+        nullable=True,
+        comment=(
+            "대상에서 출발한 경로의 원인 대상 식별자. 같은 주 다른 경로의 대상이어야 한다. "
+            "사건 출발이면 NULL"
+        ),
+    )
+    source_sign: Mapped[CausalSign | None] = mapped_column(
+        _enum_column(CausalSign),
+        nullable=True,
+        comment=(
+            "원인 대상이 그 주에 움직인 방향(up 또는 down). 실현 등락의 부호와 맞아야 하고 "
+            "저장 전에 코드가 대조한다. 사건 출발이면 NULL"
+        ),
     )
     target_kind: Mapped[CausalTargetKind] = mapped_column(
         _enum_column(CausalTargetKind),
@@ -237,7 +318,10 @@ class MarketCausalPath(EntityBase):
     confidence: Mapped[CausalConfidence] = mapped_column(
         _enum_column(CausalConfidence),
         nullable=False,
-        comment="observed는 같은 기간에 함께 관찰됨, plausible은 해석. 둘 다 인과의 증명이 아니다",
+        comment=(
+            "observed는 근거 문서가 방향을 직접 말함, endpoint_observed는 양 끝 값이 그렇게 "
+            "움직임, plausible은 해석. 셋 다 인과의 증명이 아니다"
+        ),
     )
     reasoning: Mapped[str] = mapped_column(
         Text,

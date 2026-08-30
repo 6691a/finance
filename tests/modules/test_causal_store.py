@@ -392,3 +392,109 @@ class TestSeedingWeek:
 
         upserts = [call for call in connection.calls if "INSERT INTO market_channel" in call[0]]
         assert len(upserts) == 1
+
+
+class TestStoreLinkedPaths:
+    """대상에서 출발한 경로(설계 §11.4). **`event_id`가 NULL이고 `source_key`가 자연키다.**"""
+
+    def _link(self, **overrides) -> domain.LinkedPath:
+        base = {
+            "source_target_kind": "quote",
+            "source_target_code": "US10Y",
+            "source_sign": "down",
+            "channels": ("할인율",),
+            "target_kind": "instrument",
+            "target_code": "005930",
+            "sign": "up",
+            "confidence": "endpoint_observed",
+            "reasoning": "8월 11~13일 국채금리가 내리는 동안 주가가 올랐다",
+            "evidence_refs": (),
+        }
+        return domain.LinkedPath(**(base | overrides))
+
+    def _stored_path(self, connection: FakeConnection) -> tuple:
+        for statement, parameters in connection.calls:
+            if "INSERT INTO market_causal_path" in statement:
+                return parameters
+        raise AssertionError("경로가 저장되지 않았다")
+
+    def test_a_linked_path_has_no_event_and_carries_its_source(self) -> None:
+        connection = _connection()
+
+        outcome = store.store_paths(
+            connection,
+            window=WINDOW,
+            paths=(),
+            returns=_returns(),
+            input_hash="h",
+            llm_run_id=None,
+            links=(self._link(),),
+        )
+
+        week, event_id, source_key, source_kind, source_code, source_sign, *_ = self._stored_path(
+            connection
+        )
+        assert week == WINDOW.week_start
+        assert event_id is None
+        assert source_key == "t:quote:US10Y:down"
+        assert (source_kind, source_code, source_sign) == ("quote", "US10Y", "down")
+        assert outcome.linked == 1
+        assert outcome.stored == 0
+
+    def test_an_event_path_fills_source_key_from_its_event(self) -> None:
+        """사건 출발도 같은 칸을 채운다. **자연키가 그 칸 하나만 본다.**"""
+        connection = _connection()
+
+        store.store_paths(
+            connection,
+            window=WINDOW,
+            paths=(_path(),),
+            returns=_returns(),
+            input_hash="h",
+            llm_run_id=None,
+        )
+
+        _, event_id, source_key, source_kind, source_code, source_sign, *_ = self._stored_path(
+            connection
+        )
+        assert event_id == 1
+        assert source_key == "e:1"
+        assert (source_kind, source_code, source_sign) == (None, None, None)
+
+    def test_a_linked_path_reuses_a_channel_the_first_answer_just_made(self) -> None:
+        """링커는 이름으로만 이을 수 있다. 첫 답이 방금 만든 채널에 같은 노드로 붙어야 한다."""
+        connection = _connection()
+
+        outcome = store.store_paths(
+            connection,
+            window=WINDOW,
+            paths=(_path(channels=(NodeChoice(new_name="할인율"),)),),
+            returns=_returns(),
+            input_hash="h",
+            llm_run_id=None,
+            links=(self._link(channels=("할인율",)),),
+        )
+
+        upserts = [
+            parameters
+            for statement, parameters in connection.calls
+            if "INSERT INTO market_channel" in statement
+        ]
+        assert upserts == [("할인율", WINDOW.week_start)]
+        assert outcome.new_channels == 1
+
+    def test_a_linked_path_without_returns_is_skipped(self) -> None:
+        """실현 등락이 없으면 저장할 수 없다(설계 §6). 정상 흐름이라 실패로 만들지 않는다."""
+        connection = _connection()
+
+        outcome = store.store_paths(
+            connection,
+            window=WINDOW,
+            paths=(),
+            returns=_returns(),
+            input_hash="h",
+            llm_run_id=None,
+            links=(self._link(target_code="KOSPI", target_kind="index"),),
+        )
+
+        assert outcome.linked == 0

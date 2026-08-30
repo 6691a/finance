@@ -73,14 +73,16 @@ def build_weekly_graph(
     # **툴은 연결을 쥔다.** 조사 왕복 동안 살아 있어야 하므로 이 블록이 답을 받을 때까지
     # 열려 있다. 저장은 아래에서 연결을 새로 연다 — 트랜잭션을 조사와 섞지 않는다.
     with closing(connection()) as conn:
-        paths = _build_paths(
+        toolbox = _toolbox(conn, window, targets)
+        paths, links = _build_paths(
             window=window,
             returns=returns,
             found=found,
             events=events,
             channels=channels,
             targets=targets,
-            toolbox=_toolbox(conn, window, targets),
+            toolbox=toolbox,
+            prices=_weekly_closes(toolbox, window, returns),
         )
 
     # 후보 인용률. **후보에 없어서 못 본 것과 있었는데 안 쓴 것은 다른 문제다**(2026-08-28).
@@ -88,12 +90,14 @@ def build_weekly_graph(
     # 낮게 유지되면 후보를 넓힐 게 아니라 좁혀서 진하게 줘야 한다는 신호다 — 후보 목록이
     # 길어지면 모델이 "하나 고르기"로 기우는 것이 프로토타입 v1에서 관측됐다(설계 §8.2).
     cited = {ref for path in paths for ref in path.evidence_refs}
+    cited |= {ref for link in links for ref in link.evidence_refs}
     logger.info(
-        "week %s cited %d of %d candidates in %d paths",
+        "week %s cited %d of %d candidates in %d paths (%d linked)",
         week_start,
         len(cited),
         len(found.refs),
         len(paths),
+        len(links),
     )
 
     input_hash = domain.input_hash(
@@ -112,11 +116,12 @@ def build_weekly_graph(
             # 어휘가 비어 있으면 전부 새로 만드는 것이 정상이다. 그때 재사용을 강제하면
             # 첫 주가 언제나 죽는다.
             require_reuse=bool(channels),
+            links=links,
         )
     return _summary(
         window,
         outcome=outcome,
-        paths=len(paths),
+        paths=len(paths) + len(links),
         skipped=False,
         targets=len(targets),
         documents=len(found.documents),
@@ -130,6 +135,25 @@ def _toolbox(connection: Any, window: domain.CausalWindow, targets: Any) -> Any:
     from modules.causal.toolbox import CausalToolbox
 
     return CausalToolbox(connection=connection, window=window, targets=targets)
+
+
+def _weekly_closes(
+    toolbox: Any, window: domain.CausalWindow, returns: Any
+) -> dict[str, tuple[domain.DailyClose, ...]]:
+    """대상별 그 주 일별 종가. **모델이 아니라 코드가 싣는다**(설계 §11.3).
+
+    툴 호출이 모델 재량이라 링커가 볼 숫자가 대화에 없을 수 있다 — 2026-08-10 주 운영
+    실행에서 모델은 `price_window`를 한 번도 부르지 않았다. SQL은 그 툴이 쓰는 넷을 그대로
+    쓰고 부르는 쪽만 모델에서 코드로 바뀐다.
+    """
+    closes: dict[str, tuple[domain.DailyClose, ...]] = {}
+    for code in returns:
+        closes[code] = tuple(
+            domain.DailyClose(business_date=row.business_date, close=row.close)
+            for row in toolbox.price_window(code, 1).rows
+            if window.week_start <= row.business_date <= window.week_end
+        )
+    return closes
 
 
 def _build_paths(toolbox: Any = None, **kwargs: Any) -> tuple[Any, ...]:
@@ -166,6 +190,7 @@ def _summary(
         "candidates": candidates,
         "cited": cited,
         "stored": outcome.stored,
+        "linked": outcome.linked,
         "new_channels": outcome.new_channels,
         "skipped": skipped,
     }

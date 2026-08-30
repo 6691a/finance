@@ -9,6 +9,7 @@
 
 import logging
 from collections.abc import Iterable, Mapping, Sequence
+from datetime import date
 from typing import Annotated, Any, Literal, TypedDict
 
 from langchain_core.language_models import BaseChatModel
@@ -22,6 +23,7 @@ from modules import llm
 from modules.causal.domain import (
     EVENT_LOOKBACK_WEEKS,
     MAX_CHAIN,
+    MAX_LINK_PATHS,
     MAX_PATHS,
     MAX_REASONING_CHARS,
     MAX_TOOL_ROUNDS,
@@ -30,10 +32,14 @@ from modules.causal.domain import (
     CausalTarget,
     CausalWindow,
     ChannelOption,
+    DailyClose,
     EventOption,
+    LinkedPath,
     NodeChoice,
     TargetReturns,
     VerifiedPath,
+    close_direction,
+    crosses_session,
 )
 from modules.causal.toolbox import CausalToolbox, ToolLimitExceeded
 from modules.prompt import read_prompt
@@ -220,6 +226,163 @@ def target_block(targets: Iterable[CausalTarget]) -> str:
     return "\n".join(f"  - {target.code} ({target.kind})" for target in targets)
 
 
+class LinkPathAnswer(BaseModel):
+    """링커가 낸 경로 하나. **출발점이 사건이 아니라 앞 답이 낸 경로의 대상이다**(설계 §11.4).
+
+    `source_date`·`target_date`를 **칸으로 받는다.** 프로토타입은 날짜를 `reasoning` 산문에만
+    적게 했는데, 그러면 `endpoint_observed`가 맞는지를 사람이 읽어야만 안다. 칸으로 받으면
+    코드가 종가와 대조해 스스로 판정한다.
+    """
+
+    source_target_code: str = Field(description="원인이 된 대상 코드. 방금 낸 경로의 대상만")
+    source_target_kind: Literal["instrument", "index", "quote", "indicator"]
+    source_sign: Literal["up", "down"]
+    source_date: str = Field(description="원인 대상이 움직인 날 YYYY-MM-DD. 대상 주 안이어야 한다")
+    channels: list[str] = Field(
+        description=(
+            f"원인에서 결과로 가는 전달 경로를 순서대로. 1~{MAX_CHAIN}단. "
+            "방금 낸 경로에 쓴 이름이 맞으면 글자 그대로 다시 쓴다"
+        )
+    )
+    target_kind: Literal["instrument", "index", "quote", "indicator"]
+    target_code: str = Field(description="결과 대상 코드. source_target_code와 달라야 한다")
+    target_date: str = Field(description="결과 대상이 움직인 날 YYYY-MM-DD. 대상 주 안이어야 한다")
+    sign: Literal["up", "down"]
+    confidence: Literal["endpoint_observed", "plausible"]
+    reasoning: str = Field(description=f"이 연결 한 문장. 최대 {MAX_REASONING_CHARS}자")
+    evidence_refs: list[str] = Field(
+        default_factory=list,
+        description="근거 ref. 반드시 주어진 후보 목록 안의 값. 없으면 빈 목록",
+    )
+
+
+class LinkAnswer(BaseModel):
+    """링커가 낸 연결 전부. **빈 목록이 정상 답이다.**"""
+
+    paths: list[LinkPathAnswer] = Field(description=f"최대 {MAX_LINK_PATHS}개. 없으면 빈 목록")
+
+
+def answered_block(paths: Sequence[VerifiedPath], names: Mapping[str, str]) -> str:
+    """첫 답이 낸 경로. **채널을 id가 아니라 이름으로 보여 준다.**
+
+    `market_channel`의 자연키가 이름이라 링커는 이름만 내면 되고 저장 쪽이 같은 upsert로
+    한 노드에 붙인다. 그런데 첫 답이 기존 채널을 고르면 `c:<id>`만 들고 있고, 새로 만든
+    채널은 저장 전이라 id 자체가 없다. **양쪽을 이름으로 통일해 보여 준다** — 한 글자만
+    달라도 `store._upsert_channel`이 새 행을 만든다.
+    """
+    lines = []
+    for path in paths:
+        chain = " > ".join(
+            channel.new_name or names.get(channel.existing_id, channel.existing_id)
+            for channel in path.channels
+        )
+        lines.append(f"  {path.target_code} {path.sign}  <-- {chain}")
+    return "\n".join(lines) or "  (없음)"
+
+
+def price_block(prices: Mapping[str, tuple[DailyClose, ...]]) -> str:
+    """대상별 그 주 일별 종가. **모델이 물어야 보이는 값이 아니라 언제나 있는 값이다.**"""
+    lines = [
+        f"  {code}: " + "  ".join(f"{row.business_date:%m/%d} {row.close:g}" for row in rows)
+        for code, rows in prices.items()
+        if rows
+    ]
+    return "\n".join(lines) or "  (없음)"
+
+
+def verify_links(
+    paths: Iterable[LinkPathAnswer],
+    *,
+    window: CausalWindow,
+    answered: set[str],
+    target_codes: set[str],
+    prices: Mapping[str, tuple[DailyClose, ...]],
+    found: CandidateSet,
+) -> tuple[tuple[LinkedPath, ...], tuple[str, ...]]:
+    """저장할 수 있는 연결만 남기고 버린 사유를 함께 돌려준다.
+
+    **프롬프트에만 두지 않는다**(설계 §11.4). §4.1이 "`verify_paths`가 사슬과 `reasoning`의
+    일치를 못 잡는다"를 결함으로 적어 뒀는데, 같은 형태를 하나 더 만들지 않는다.
+
+    **`endpoint_observed`는 모델이 주장하고 코드가 확인한다.** 종가가 그 날짜에 그 방향으로
+    움직이지 않았으면 경로를 버리지 않고 `plausible`로 내린다 — 연결 자체는 틀리지 않았고
+    "값이 그렇게 보였다"만 못 미더운 것이라, 버리면 관측을 잃는다.
+    """
+    registry = set(found.refs)
+    kept: list[LinkedPath] = []
+    dropped: list[str] = []
+
+    def drop(path: LinkPathAnswer, why: str) -> None:
+        dropped.append(f"{path.source_target_code}->{path.target_code}({why})")
+
+    for path in paths:
+        if path.source_target_code not in answered:
+            drop(path, "앞 답의 대상이 아니다")
+            continue
+        if path.target_code not in target_codes:
+            drop(path, "대상 목록 밖")
+            continue
+        if path.target_code == path.source_target_code:
+            drop(path, "자기 자신으로 돌아온다")
+            continue
+        if not 1 <= len(path.channels) <= MAX_CHAIN:
+            drop(path, f"사슬 {len(path.channels)}단")
+            continue
+        if any(not channel.strip() for channel in path.channels):
+            drop(path, "빈 채널 이름")
+            continue
+        source_on = _parse_day(path.source_date, window)
+        target_on = _parse_day(path.target_date, window)
+        if source_on is None or target_on is None:
+            drop(path, "날짜가 대상 주 밖")
+            continue
+        if source_on > target_on:
+            drop(path, "원인이 결과보다 늦다")
+            continue
+        # **해외 종가는 KRX보다 늦게 정해진다.** 같은 날짜면 순서가 거꾸로다(설계 §11.5).
+        if crosses_session(path.source_target_code, path.target_code) and source_on == target_on:
+            drop(path, "해외→국내인데 같은 날")
+            continue
+        confidence = path.confidence
+        if confidence == "endpoint_observed" and not _moved_as_claimed(path, source_on, target_on, prices):
+            confidence = "plausible"
+        kept.append(
+            LinkedPath(
+                source_target_kind=path.source_target_kind,
+                source_target_code=path.source_target_code,
+                source_sign=path.source_sign,
+                channels=tuple(channel.strip() for channel in path.channels),
+                target_kind=path.target_kind,
+                target_code=path.target_code,
+                sign=path.sign,
+                confidence=confidence,
+                reasoning=path.reasoning[:MAX_REASONING_CHARS],
+                evidence_refs=tuple(ref for ref in path.evidence_refs if ref in registry),
+            )
+        )
+    return tuple(kept), tuple(dropped)
+
+
+def _parse_day(value: str, window: CausalWindow) -> date | None:
+    try:
+        parsed = date.fromisoformat(value.strip())
+    except ValueError:
+        return None
+    return parsed if window.week_start <= parsed <= window.week_end else None
+
+
+def _moved_as_claimed(
+    path: LinkPathAnswer,
+    source_on: date,
+    target_on: date,
+    prices: Mapping[str, tuple[DailyClose, ...]],
+) -> bool:
+    """그 날짜에 두 값이 실제로 그 방향으로 움직였나. **여기가 `endpoint_observed`의 근거다.**"""
+    source = close_direction(prices.get(path.source_target_code, ()), source_on)
+    target = close_direction(prices.get(path.target_code, ()), target_on)
+    return source == path.source_sign and target == path.sign
+
+
 class CausalState(TypedDict):
     """되짚기 한 번의 상태. **설정 객체를 넣지 않는다** — 상태는 트레이스 입력으로 나간다.
 
@@ -235,6 +398,10 @@ class CausalState(TypedDict):
     paths: tuple[VerifiedPath, ...] | None
     attempts: int
     tool_rounds: int
+    window: CausalWindow
+    prices: dict[str, tuple[DailyClose, ...]]
+    channel_names: dict[str, str]
+    links: tuple[LinkedPath, ...]
 
 
 class CausalBuilder:
@@ -250,6 +417,7 @@ class CausalBuilder:
     def __init__(self, model: BaseChatModel, toolbox: CausalToolbox | None = None) -> None:
         self._model = model
         self._schema = response_format(CausalAnswer, "market_causal_paths")
+        self._link_schema = response_format(LinkAnswer, "market_causal_links")
         self._toolbox = toolbox
         tools = toolbox.tools if toolbox else []
         # **타입을 준다.** 기본값(`True`)은 DB 연결 끊김을 "결과 없음"으로 위장한다.
@@ -265,8 +433,9 @@ class CausalBuilder:
         events: Sequence[EventOption],
         channels: Sequence[ChannelOption],
         targets: Sequence[CausalTarget],
-    ) -> tuple[VerifiedPath, ...]:
-        """그 주의 경로 전부. 검증을 마친 것만 돌려준다.
+        prices: Mapping[str, tuple[DailyClose, ...]] | None = None,
+    ) -> tuple[tuple[VerifiedPath, ...], tuple[LinkedPath, ...]]:
+        """그 주의 경로와 대상→대상 연결. 검증을 마친 것만 돌려준다.
 
         **검증에 쓰는 대상 집합은 `targets`가 아니라 `returns`의 키다.** 실현 등락이 없는
         대상은 저장할 수 없으므로(설계 §6) 프롬프트에도 보여 주지 않는다.
@@ -289,6 +458,10 @@ class CausalBuilder:
             "paths": None,
             "attempts": 0,
             "tool_rounds": 0,
+            "window": window,
+            "prices": dict(prices or {}),
+            "channel_names": {option.node_id: option.name for option in channels},
+            "links": (),
         }
         final = self._graph.invoke(
             state,
@@ -301,7 +474,7 @@ class CausalBuilder:
                 },
             },
         )
-        return final.get("paths") or ()
+        return final.get("paths") or (), final.get("links") or ()
 
     @staticmethod
     def build_messages(
@@ -348,13 +521,19 @@ class CausalBuilder:
         graph.add_node("tools", self._tools)
         graph.add_node("answer", self._answer)
         graph.add_node("repair", self._repair)
+        graph.add_node("link", self._link)
         graph.add_edge(START, "investigate")
         graph.add_conditional_edges(
             "investigate", self._after_investigate, {"tools": "tools", "answer": "answer"}
         )
         graph.add_edge("tools", "investigate")
-        graph.add_conditional_edges("answer", self._next, {"repair": "repair", END: END})
+        # **`repair`는 `answer`의 것이고 `link`는 타지 않는다**(설계 §11.3). 링커가 0건을
+        # 내는 것은 "이을 것이 없다"는 정상 답이라, 다시 물으면 없는 것을 만든다.
+        graph.add_conditional_edges(
+            "answer", self._next, {"repair": "repair", "link": "link", END: END}
+        )
         graph.add_edge("repair", "answer")
+        graph.add_edge("link", END)
         return graph.compile()
 
     def _investigate(self, state: CausalState) -> dict[str, Any]:
@@ -415,8 +594,38 @@ class CausalBuilder:
             "attempts": state["attempts"] + 1,
         }
 
+    def _link(self, state: CausalState) -> dict[str, Any]:
+        """대상이 다시 원인이 된 자리만 한 번 더 묻는다(설계 §11.3).
+
+        **같은 대화다.** 조사 단계가 본 것을 그대로 쥔 채 묻는 것이 도메인별로 쪼갠 뒤
+        병합하는 것과 갈리는 지점이고, 그 하나가 순차를 고른 이유 전부다.
+        """
+        message = HumanMessage(
+            PROMPTS.render_variant(
+                "link",
+                paths=answered_block(state["paths"] or (), state["channel_names"]),
+                prices=price_block(state["prices"]),
+                max_chain=MAX_CHAIN,
+                max_link_paths=MAX_LINK_PATHS,
+                max_reasoning_chars=MAX_REASONING_CHARS,
+            )
+        )
+        reply = llm.invoke(self._model, [*state["messages"], message], schema=self._link_schema)
+        answer = LinkAnswer.model_validate_json(json_object(reply_text(reply)))
+        links, dropped = verify_links(
+            answer.paths[:MAX_LINK_PATHS],
+            window=state["window"],
+            answered={path.target_code for path in state["paths"] or ()},
+            target_codes=set(state["target_codes"]),
+            prices=state["prices"],
+            found=state["found"],
+        )
+        if dropped:
+            logger.warning("dropped %d linked paths: %s", len(dropped), "; ".join(dropped))
+        return {"messages": [message, reply], "links": links}
+
     @staticmethod
     def _next(state: CausalState) -> str:
         if state["paths"]:
-            return END
+            return "link"
         return "repair" if state["attempts"] == 0 else END

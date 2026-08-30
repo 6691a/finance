@@ -69,6 +69,8 @@ def wiring(monkeypatch: pytest.MonkeyPatch) -> FakeStore:
         run.candidates, "fetch_candidates", lambda conn, targets, window: domain.CandidateSet()
     )
     monkeypatch.setattr(run.candidates, "fetch_vocabulary", lambda conn, window: ((), ()))
+    # 종가 블록은 툴박스를 통해 DB를 친다. 조립 순서를 보는 테스트에서는 걷어낸다.
+    monkeypatch.setattr(run, "_weekly_closes", lambda toolbox, window, returns: {})
     return store
 
 
@@ -89,7 +91,7 @@ def test_a_week_that_already_has_paths_does_not_call_the_model(
     """첫 성공본이 불변이다. 재실행은 기존 행을 두고 성공으로 끝난다(설계 §5.4·§10.4)."""
     wiring.already = True
     called = []
-    monkeypatch.setattr(run, "_build_paths", lambda **kwargs: called.append(kwargs) or ())
+    monkeypatch.setattr(run, "_build_paths", lambda **kwargs: called.append(kwargs) or ((), ()))
 
     result = run.build_weekly_graph(
         logical_date=datetime(2026, 8, 23, 22, 0, tzinfo=UTC), week_start_param=None
@@ -103,7 +105,7 @@ def test_a_week_that_already_has_paths_does_not_call_the_model(
 def test_a_fresh_week_stores_what_the_model_returned(
     wiring: FakeStore, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.setattr(run, "_build_paths", lambda **kwargs: (_path(),))
+    monkeypatch.setattr(run, "_build_paths", lambda **kwargs: ((_path(),), ()))
 
     result = run.build_weekly_graph(
         logical_date=datetime(2026, 8, 23, 22, 0, tzinfo=UTC), week_start_param=None
@@ -119,7 +121,7 @@ def test_the_first_week_does_not_require_reuse(
     wiring: FakeStore, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """어휘가 비어 있으면 전부 새로 만드는 것이 정상이다. 그때 재사용을 강제하면 언제나 죽는다."""
-    monkeypatch.setattr(run, "_build_paths", lambda **kwargs: (_path(),))
+    monkeypatch.setattr(run, "_build_paths", lambda **kwargs: ((_path(),), ()))
 
     run.build_weekly_graph(
         logical_date=datetime(2026, 8, 23, 22, 0, tzinfo=UTC), week_start_param=None
@@ -137,7 +139,7 @@ def test_a_week_with_existing_vocabulary_requires_reuse(
         "fetch_vocabulary",
         lambda conn, window: ((), (domain.ChannelOption(node_id="c:1", name="할인율"),)),
     )
-    monkeypatch.setattr(run, "_build_paths", lambda **kwargs: (_path(),))
+    monkeypatch.setattr(run, "_build_paths", lambda **kwargs: ((_path(),), ()))
 
     run.build_weekly_graph(
         logical_date=datetime(2026, 8, 23, 22, 0, tzinfo=UTC), week_start_param=None
@@ -148,7 +150,7 @@ def test_a_week_with_existing_vocabulary_requires_reuse(
 
 def test_the_param_decides_the_week(wiring: FakeStore, monkeypatch: pytest.MonkeyPatch) -> None:
     """수동 재실행은 벽시계가 아니라 Param이 정한다."""
-    monkeypatch.setattr(run, "_build_paths", lambda **kwargs: ())
+    monkeypatch.setattr(run, "_build_paths", lambda **kwargs: ((), ()))
 
     result = run.build_weekly_graph(
         logical_date=datetime(2026, 8, 23, 22, 0, tzinfo=UTC), week_start_param="2026-07-06"
@@ -176,7 +178,7 @@ def test_a_target_without_returns_fails_the_task(
         ),
     )
     called = []
-    monkeypatch.setattr(run, "_build_paths", lambda **kwargs: called.append(1) or ())
+    monkeypatch.setattr(run, "_build_paths", lambda **kwargs: called.append(1) or ((), ()))
 
     with pytest.raises(run.IncompleteReturnsError) as error:
         run.build_weekly_graph(
@@ -194,7 +196,7 @@ def test_no_target_with_returns_fails_too(
     """전부 없는 것도 같은 실패다. 전에는 조용히 0건 성공이었다."""
     monkeypatch.setattr(run.candidates, "fetch_returns", lambda conn, targets, window: {})
     called = []
-    monkeypatch.setattr(run, "_build_paths", lambda **kwargs: called.append(1) or ())
+    monkeypatch.setattr(run, "_build_paths", lambda **kwargs: called.append(1) or ((), ()))
 
     with pytest.raises(run.IncompleteReturnsError):
         run.build_weekly_graph(
@@ -207,7 +209,7 @@ def test_no_target_with_returns_fails_too(
 def test_the_builder_gets_a_toolbox(wiring: FakeStore, monkeypatch: pytest.MonkeyPatch) -> None:
     """**툴은 연결과 창과 대상 목록을 봐야 한다.** 그것을 쥔 것이 여기뿐이다."""
     seen: list[dict] = []
-    monkeypatch.setattr(run, "_build_paths", lambda **kwargs: seen.append(kwargs) or ())
+    monkeypatch.setattr(run, "_build_paths", lambda **kwargs: seen.append(kwargs) or ((), ()))
 
     run.build_weekly_graph(
         logical_date=datetime(2026, 8, 23, 22, 0, tzinfo=UTC), week_start_param=None
@@ -224,7 +226,7 @@ def test_the_summary_counts_what_the_run_saw(
 
     8/03 주가 근거 0건으로 돌아간 것을 알아채는 데 후보 조립을 손으로 재현해야 했다.
     """
-    monkeypatch.setattr(run, "_build_paths", lambda **kwargs: (_path(),))
+    monkeypatch.setattr(run, "_build_paths", lambda **kwargs: ((_path(),), ()))
     monkeypatch.setattr(
         run.candidates,
         "fetch_candidates",
@@ -263,8 +265,11 @@ def test_the_summary_counts_how_many_candidates_the_model_cited(
         "_build_paths",
         # 경로 둘이 같은 문서를 인용한다. 인용 **건수**가 아니라 인용된 **후보 수**다.
         lambda **kwargs: (
-            _path(evidence_refs=("document:1",)),
-            _path(evidence_refs=("document:1", "technical_signal:9")),
+            (
+                _path(evidence_refs=("document:1",)),
+                _path(evidence_refs=("document:1", "technical_signal:9")),
+            ),
+            (),
         ),
     )
     monkeypatch.setattr(
@@ -311,7 +316,7 @@ def test_the_summary_counts_how_many_candidates_the_model_cited(
 
 def test_the_input_hash_is_recorded(wiring: FakeStore, monkeypatch: pytest.MonkeyPatch) -> None:
     """무엇으로 만들었는지가 행마다 남는다(설계 §5.4)."""
-    monkeypatch.setattr(run, "_build_paths", lambda **kwargs: (_path(),))
+    monkeypatch.setattr(run, "_build_paths", lambda **kwargs: ((_path(),), ()))
 
     run.build_weekly_graph(
         logical_date=datetime(2026, 8, 23, 22, 0, tzinfo=UTC), week_start_param=None

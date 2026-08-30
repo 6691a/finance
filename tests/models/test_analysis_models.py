@@ -323,11 +323,47 @@ def test_causal_path_key_carries_the_chain():
 
     assert (
         "week_start",
-        "event_id",
+        "source_key",
         "target_kind",
         "target_code",
         "chain_key",
     ) in _unique_columns(MarketCausalPath)
+
+
+def test_causal_path_source_is_exclusive():
+    """출발점은 사건 또는 대상 중 정확히 하나다(설계 §11.4).
+
+    **자연키가 `event_id`가 아니라 `source_key`인 이유가 여기 있다.** `event_id`가
+    nullable이 되면서 PostgreSQL이 NULL을 서로 다른 값으로 봐, 그것을 자연키에 두면
+    같은 대상 출발 경로가 중복 삽입된다.
+    """
+    from apps.models.analysis import MarketCausalPath
+
+    table = MarketCausalPath.__table__
+    assert table.columns["event_id"].nullable is True
+    assert table.columns["source_key"].nullable is False
+    checks = {
+        constraint.name
+        for constraint in table.constraints
+        if constraint.name and constraint.name.startswith("ck_market_causal_path_")
+    }
+    assert "ck_market_causal_path_source_exclusive" in checks
+    assert "ck_market_causal_path_source_not_self" in checks
+    assert "ck_market_causal_path_endpoint_needs_source" in checks
+
+
+def test_endpoint_observed_is_its_own_rung():
+    """`observed`와 `plausible` 사이에 칸이 하나 있다(설계 §11.3).
+
+    하나로 뭉치면 조회가 "근거 문서가 말한 것"과 "가격이 그렇게 보인 것"을 못 가른다.
+    """
+    from apps.models.analysis.causal import CausalConfidence
+
+    assert [member.value for member in CausalConfidence] == [
+        "observed",
+        "endpoint_observed",
+        "plausible",
+    ]
 
 
 def test_causal_step_is_keyed_by_path_and_position():

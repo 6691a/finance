@@ -9,7 +9,7 @@
 
 import hashlib
 import re
-from collections.abc import Iterable
+from collections.abc import Iterable, Sequence
 from datetime import UTC, date, datetime, time, timedelta
 from enum import StrEnum
 
@@ -53,7 +53,11 @@ from modules.utility import KST_TIMEZONE
 #
 # 판 9는 공시가 예외임을 밝힌다(2026-08-29). 후보 줄에 공시 원문 본문이 붙으면서 판 8의
 # "숫자를 옮기지 마라"가 공시까지 덮어 버렸다. 공시 본문은 요약이 아니라 접수된 원문이다.
-PROMPT_VERSION = "9"
+#
+# 판 10은 `link` 조각을 더했다(2026-08-30). 첫 답이 끝난 뒤 **대상이 다시 원인이 된 자리**만
+# 한 번 더 묻는다. 프로토타입에서 링커가 낸 여덟이 전부 앞 답의 대상에서 출발했고 여덟 전부
+# 종가와 정확히 맞았다(설계 §11.5).
+PROMPT_VERSION = "10"
 
 # 대상 주 `W`와 실행 주 `W+2`의 거리. 설계 §2.
 RUN_LAG_WEEKS = 2
@@ -70,6 +74,12 @@ MAX_PATHS = 40
 
 # 경로 설명 한 문장의 길이 상한.
 MAX_REASONING_CHARS = 200
+
+# 링커가 한 실행에서 더할 수 있는 경로 수(설계 §11.5). **상한 없이 두지 않는다** — 대상이
+# 열하나면 방향이 맞는 쌍을 기계적으로 조합하는 것만으로 수십 개가 나오고, 링커는
+# "가능한 모든 조합"이 아니라 "근거가 가장 강한 추가 연결"만 내야 한다.
+# 2026-08-10 주 프로토타입이 여덟을 냈다.
+MAX_LINK_PATHS = 8
 
 # 조사 왕복 상한(2026-08-28에 툴을 붙이며 생겼다). 대상 열에 툴 셋이면 한 왕복에 열 번쯤
 # 부르므로 셋이면 충분하고, 넘으면 `answer`로 넘어가 가진 것으로 답한다. `thesis`가 5인 것은
@@ -130,6 +140,9 @@ class StoreOutcome(BaseModel):
     """실제로 들어간 경로 수. 자연키 충돌로 빠진 것은 세지 않는다."""
     new_channels: int
     """이 실행이 새로 만든 채널 이름 수."""
+    linked: int = 0
+    """대상에서 출발한 경로 수(설계 §11.4). **따로 센다** — 링커가 값어치를 내는지는 전체
+    경로 수가 아니라 이 값과 그중 `endpoint_observed` 비율이 말한다."""
 
 
 class CausalWindow(BaseModel):
@@ -208,9 +221,14 @@ class CausalSign(StrEnum):
 
 
 class CausalConfidence(StrEnum):
-    """주장의 성격. 둘 다 인과의 증명이 아니다."""
+    """주장의 성격. 셋 다 인과의 증명이 아니다.
+
+    문서가 말했다 > 값이 그렇게 움직였다 > 우리가 이었다. `endpoint_observed`는 대상에서
+    출발한 경로만 가질 수 있다(설계 §11.3).
+    """
 
     OBSERVED = "observed"
+    ENDPOINT_OBSERVED = "endpoint_observed"
     PLAUSIBLE = "plausible"
 
 
@@ -413,3 +431,82 @@ class VerifiedPath(BaseModel):
     confidence: str
     reasoning: str
     evidence_refs: tuple[str, ...]
+
+
+class LinkedPath(BaseModel):
+    """대상에서 출발한 경로 하나(설계 §11.4). 검증을 마친 것만 저장 코드가 본다.
+
+    **`VerifiedPath`와 합치지 않는다.** 저쪽은 `event`가 반드시 있고 이쪽은 반드시 없다.
+    한 모델에 담으면 두 칸이 서로 배타라는 사실이 타입에서 사라지고, DB의 CHECK만 그것을
+    알게 된다.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    source_target_kind: str
+    source_target_code: str
+    source_sign: str
+    channels: tuple[str, ...]
+    """**이름 그대로다.** 첫 답이 만든 채널은 저장 전이라 `c:<id>`가 없어 id로 고를 수 없다.
+    링커는 글자 그대로 다시 쓰고 저장 쪽이 같은 upsert를 태워 한 노드가 되게 한다."""
+    target_kind: str
+    target_code: str
+    sign: str
+    confidence: str
+    reasoning: str
+    evidence_refs: tuple[str, ...]
+
+
+class DailyClose(BaseModel):
+    """대상 하나의 하루 종가. **코드가 싣는다**(설계 §11.3).
+
+    툴 호출은 모델 재량이라 링커가 볼 숫자가 대화에 없을 수 있다 — 2026-08-10 주 운영
+    실행에서 모델은 `price_window`를 한 번도 부르지 않았다.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    business_date: date
+    close: float
+
+
+# 미국 장에서 값이 정해지는 대상. **KRX보다 늦게 닫는다.**
+#
+# 프로토타입이 `SOX ↑ → KOSPI ↑ (둘 다 8/12)`를 냈는데 시간 순서가 거꾸로다 — 8/12 SOX
+# 종가는 8/12 KOSPI 종가보다 **뒤**다. 종가 블록에 날짜만 있고 시각이 없어 모델도 그것을
+# 못 가린다. 그래서 이 목록으로 코드가 막는다(설계 §11.5).
+OVERSEAS_TARGET_CODES = frozenset({"US10Y", "SOX", "VIX", "NASDAQ100_FUT"})
+
+
+def crosses_session(source_code: str, target_code: str) -> bool:
+    """원인이 해외이고 결과가 국내인가. 그러면 **같은 날짜는 인과가 될 수 없다.**"""
+    return source_code in OVERSEAS_TARGET_CODES and target_code not in OVERSEAS_TARGET_CODES
+
+
+def close_direction(rows: Sequence[DailyClose], on: date) -> str | None:
+    """`on`일의 방향. 직전 거래일 종가와 비교한다. 값이 없거나 첫날이면 `None`이다."""
+    for index, row in enumerate(rows):
+        if row.business_date != on:
+            continue
+        if index == 0:
+            return None
+        previous = rows[index - 1].close
+        if row.close == previous:
+            return None
+        return "up" if row.close > previous else "down"
+    return None
+
+
+def event_source_key(event_id: int) -> str:
+    """사건에서 출발한 경로의 `source_key`."""
+    return f"e:{event_id}"
+
+
+def target_source_key(kind: str, code: str, sign: str) -> str:
+    """대상에서 출발한 경로의 `source_key`.
+
+    **자연키의 한 칸이라 순수 함수로 둔다**(설계 §11.4). `event_id`가 nullable이 되면서
+    PostgreSQL이 NULL을 서로 다른 값으로 보기 때문에, 출발점을 한 칸에 담지 않으면
+    같은 대상 출발 경로가 중복 삽입된다. `chain_key`와 같은 자리다.
+    """
+    return f"t:{kind}:{code}:{sign}"

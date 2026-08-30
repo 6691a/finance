@@ -7,6 +7,10 @@
 -- 자연키에 `chain_key`가 들어간다. 같은 사건이 같은 대상에 서로 다른 경로로 닿는 일이
 -- 실제로 있어서다(금리 인상이 `할인율`로는 은행주를 누르고 `예대마진`으로는 올린다).
 --
+-- **출발점은 사건 또는 대상이다**(설계 §11.4). `event_id`가 nullable이라 자연키는 그것이
+-- 아니라 `source_key`로 건다 — PostgreSQL이 NULL을 서로 다른 값으로 봐서, 대상 출발 경로가
+-- 자연키에 걸리지 않고 중복 삽입된다.
+--
 -- `return_unit`이 실현 등락 셋의 단위다. 가격은 percent, 금리는 basis_point다 — 한 칸에
 -- 담으면 7bp와 10퍼센트가 섞여 크기 비교가 조용히 무의미해진다.
 --
@@ -14,6 +18,10 @@
 INSERT INTO market_causal_path (
     week_start,
     event_id,
+    source_key,
+    source_target_kind,
+    source_target_code,
+    source_sign,
     target_kind,
     target_code,
     chain_key,
@@ -26,6 +34,6 @@ INSERT INTO market_causal_path (
     return_unit,
     input_hash,
     llm_run_id
-) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
 ON CONFLICT ON CONSTRAINT uq_market_causal_path_natural_key DO NOTHING
 RETURNING id

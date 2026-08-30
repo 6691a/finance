@@ -214,14 +214,20 @@ def paragraph_selector(source_slug: str) -> str:
 
 
 def detail_url(source_slug: str, canonical_url: str) -> str:
-    """본문을 읽을 주소. 화면 주소와 다른 출처만 바꾼다.
+    """본문을 읽을 **절대** 주소. 화면 주소와 다른 출처만 경로를 바꾼다.
 
     네이버 리서치의 화면(`/research/economy/13742`)은 JavaScript가 그리고, 그것을 그리는
     내부 JSON이 `/api/research/economy/13742`다. 목록·상세 수집이 쓰는 주소와 같다.
+
+    **스킴을 반드시 붙인다.** 없으면 curl이 `https`가 아니라 `http`로 붙는데, 문서 66
+    (`www.bea.gov/news/...`)의 본문 요청이 그래서 컨테이너에서 30초 타임아웃 × 3회로
+    죽었다(2026-08-30 실측). 한 실행에 90초를 먹고 `body_status`가 NULL로 남아 매 실행
+    되풀이된다.
     """
+    url = absolute_url(canonical_url)
     if source_slug.startswith(NAVER_RESEARCH_PREFIX):
-        return canonical_url.replace("/research/", "/api/research/", 1)
-    return canonical_url
+        return url.replace("/research/", "/api/research/", 1)
+    return url
 
 
 def absolute_url(url: str) -> str:

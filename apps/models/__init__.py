@@ -13,7 +13,13 @@ from apps.models.analysis import (
     ThesisOutcome,
     ThesisPrecedent,
 )
-from apps.models.content import Document, DocumentIndicator, DocumentInstrument, DocumentSource
+from apps.models.content import (
+    Document,
+    DocumentAttachment,
+    DocumentIndicator,
+    DocumentInstrument,
+    DocumentSource,
+)
 from apps.models.market import (
     BondFutureBar,
     BondFutureDaily,
@@ -59,6 +65,7 @@ __all__ = [
     "CryptoDaily",
     "DisclosureEvent",
     "Document",
+    "DocumentAttachment",
     "DocumentIndicator",
     "DocumentInstrument",
     "DocumentSource",

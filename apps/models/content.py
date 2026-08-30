@@ -35,6 +35,30 @@ class CollectionMode(StrEnum):
     FULL_TEXT = "full_text"
 
 
+class BodyStatus(StrEnum):
+    """본문을 받아 봤는가, 못 받았다면 왜인가.
+
+    **컬럼이 NULL이면 "아직 해 보지 않았다"이고 그 집합이 곧 수집 큐다.** 그래서 여기에
+    `failed`가 없다 — 연결 실패와 5xx는 상태를 남기지 않고 NULL로 두어 다음 실행이 다시
+    집는다. 상태를 남기면 재시도 규칙을 따로 써야 한다.
+    """
+
+    OK = "ok"
+    # 페이지에 글이 없다. 문단이 하나도 최소 길이를 넘지 않은 경우다.
+    EMPTY = "empty"
+    # 본문이 첨부에만 있다(한국은행·금감원·BOJ·네이버 리서치). 첨부는 받았다.
+    ATTACHMENT_ONLY = "attachment_only"
+    # 받을 수 없다. KRX는 문서별 GET 딥링크가 없고, HTTP 4xx는 다시 쳐도 같은 답이다.
+    UNAVAILABLE = "unavailable"
+
+
+class AttachmentKind(StrEnum):
+    """첨부 하나가 내려받은 파일인지 링크만 남긴 영상인지."""
+
+    FILE = "file"
+    VIDEO = "video"
+
+
 class DocumentType(StrEnum):
     ARTICLE = "article"
     REPORT = "report"
@@ -174,6 +198,11 @@ class Document(EntityBase):
             "content_level <> 'metadata_only' OR body IS NULL",
             name="ck_document_metadata_only_has_no_body",
         ),
+        # 평가 전과 마찬가지로 본문 수집 전이면 NULL이다.
+        CheckConstraint(
+            "body_status IN ('ok', 'empty', 'attachment_only', 'unavailable')",
+            name="ck_document_body_status",
+        ),
         Index("ix_document_published_at", "published_at"),
         Index("ix_document_content_hash", "content_hash"),
         Index("ix_document_canonical_document_id", "canonical_document_id"),
@@ -214,7 +243,21 @@ class Document(EntityBase):
     body: Mapped[str | None] = mapped_column(
         Text,
         nullable=True,
-        comment="정규화한 본문. metadata_only 출처는 NULL이며 CHECK 제약이 이를 강제한다",
+        comment="정규화한 본문. 길이 상한을 두지 않는다. metadata_only 출처는 NULL이며 CHECK 제약이 이를 강제한다",
+    )
+    body_status: Mapped[BodyStatus | None] = mapped_column(
+        SqlEnum(
+            BodyStatus,
+            native_enum=False,
+            length=20,
+            values_callable=lambda enum: [member.value for member in enum],
+        ),
+        nullable=True,
+        comment=(
+            "본문 수집 결과(ok, empty, attachment_only 또는 unavailable). "
+            "NULL은 아직 시도하지 않았다는 뜻이고 **그 집합이 곧 수집 큐다.** "
+            "연결 실패와 5xx는 상태를 남기지 않아 다음 실행이 다시 집는다"
+        ),
     )
     language: Mapped[str] = mapped_column(
         Text,
@@ -239,13 +282,18 @@ class Document(EntityBase):
             values_callable=lambda enum: [member.value for member in enum],
         ),
         nullable=False,
-        comment="이 문서에 실제로 담긴 수준. 출처 정책과 같지만 본문 수집이 실패하면 낮아질 수 있다",
+        comment=(
+            "이 문서에 실제로 담긴 수준. 출처 정책(document_source.collection_mode)과 다르다 — "
+            "발견 시점에는 feed_content이고 본문이 들어온 뒤에야 full_text로 오른다"
+        ),
     )
     content_hash: Mapped[str] = mapped_column(
         Text,
         nullable=False,
         comment=(
-            "정규화한 제목·요약·본문의 SHA-256. 재평가 여부와 완전 중복 판정의 기준이다. "
+            "정규화한 제목·요약의 SHA-256. 재평가 여부와 완전 중복 판정의 기준이다. "
+            "**본문은 넣지 않는다** — 평가가 제목과 요약만 보므로 본문이 바뀌었다고 다시 평가할 "
+            "이유가 없고, 넣으면 본문 백필이 전체 문서의 재평가를 부른다. "
             "정규화 규칙이 흔들리면 이 값이 매번 바뀌므로 규칙을 먼저 고정한다"
         ),
     )
@@ -368,4 +416,94 @@ class DocumentIndicator(EntityBase):
         Text,
         nullable=False,
         comment="indicator_series.series_id 또는 quote_symbol.symbol과 같은 값(예: DGS10, USDKRW)",
+    )
+
+
+class DocumentAttachment(EntityBase):
+    """문서에 붙은 파일과 영상 링크. 문서 하나에 여러 개일 수 있다.
+
+    본문이 HTML에 없고 **첨부 PDF에만 있는 출처가 있다**(한국은행·금감원·BOJ·네이버 리서치).
+    그 문서는 제목과 요약만으로는 검색되지 않으므로 파일을 받아 둔다. **텍스트로 바꾸는 일은
+    아직 하지 않는다** — 파일을 먼저 모아 두면 변환 기능을 붙일 때 재수집이 필요 없다.
+
+    영상은 내려받지 않고 링크만 남긴다(`kind='video'`, `storage_path`는 NULL). 기사가 글이
+    아니라 영상인 경우가 있고, 그때 어디로 가면 볼 수 있는지가 남아야 한다.
+
+    자연키는 `(document_id, url)`이다. **`position`을 키에 넣지 않는다** — 페이지 마크업이
+    바뀌면 순서가 흔들려 같은 파일이 새 행이 된다.
+
+    `document`로는 외래키를 **건다.** `document_instrument`가 `instrument`에 안 거는 것과
+    다른 판단인데, 저기는 마스터가 늦게 채워지는 문제이고 첨부는 문서 없이 뜻이 없다.
+    """
+
+    __tablename__ = "document_attachment"
+    __table_args__ = (
+        UniqueConstraint("document_id", "url", name="uq_document_attachment_natural_key"),
+        CheckConstraint("kind IN ('file', 'video')", name="ck_document_attachment_kind"),
+        # 영상은 내려받지 않으므로 저장 경로가 없다. 파일은 받았으면 경로가 있어야 한다.
+        CheckConstraint(
+            "kind <> 'video' OR storage_path IS NULL",
+            name="ck_document_attachment_video_has_no_path",
+        ),
+        Index("ix_document_attachment_document_id", "document_id"),
+        table_options(
+            comment="문서에 붙은 첨부 파일과 영상 링크",
+            database="default",
+        ),
+    )
+
+    document_id: Mapped[int] = mapped_column(
+        BigInteger,
+        ForeignKey("document.id", ondelete="CASCADE"),
+        nullable=False,
+        comment="문서 ID. 문서가 지워지면 첨부도 함께 지운다",
+    )
+    position: Mapped[int] = mapped_column(
+        Integer,
+        nullable=False,
+        comment="문서 안에서의 순서(0부터). 페이지에 나온 차례일 뿐 자연키가 아니다",
+    )
+    kind: Mapped[AttachmentKind] = mapped_column(
+        SqlEnum(
+            AttachmentKind,
+            native_enum=False,
+            length=20,
+            values_callable=lambda enum: [member.value for member in enum],
+        ),
+        nullable=False,
+        comment="내려받은 파일(file)인지 링크만 남긴 영상(video)인지",
+    )
+    url: Mapped[str] = mapped_column(Text, nullable=False, comment="첨부 원본 URL. 영상은 이 값이 전부다")
+    storage_path: Mapped[str | None] = mapped_column(
+        Text,
+        nullable=True,
+        comment=(
+            "파일을 둔 자리의 상대경로(예: documents/boj/2026/08/1234-0.pdf). "
+            "마운트 지점을 빼고 남기므로 마운트가 바뀌어도 행을 고치지 않는다. 영상은 NULL이다"
+        ),
+    )
+    filename: Mapped[str | None] = mapped_column(
+        Text,
+        nullable=True,
+        comment="제공처가 준 파일 이름. 알 수 없으면 NULL이다",
+    )
+    media_type: Mapped[str | None] = mapped_column(
+        Text,
+        nullable=True,
+        comment="응답의 Content-Type(예: application/pdf). 제공처가 주지 않으면 NULL이다",
+    )
+    byte_size: Mapped[int | None] = mapped_column(
+        BigInteger,
+        nullable=True,
+        comment="받은 파일의 바이트 수. 크기 상한은 두지 않는다. 영상은 NULL이다",
+    )
+    sha256: Mapped[str | None] = mapped_column(
+        Text,
+        nullable=True,
+        comment="받은 파일 내용의 SHA-256. 서로 다른 문서가 같은 파일을 가리키는지 보는 근거다. 영상은 NULL이다",
+    )
+    fetched_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True,
+        comment="파일을 내려받은 시각(UTC). 영상은 NULL이다",
     )

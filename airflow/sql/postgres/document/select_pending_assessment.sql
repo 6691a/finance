@@ -1,7 +1,8 @@
 -- 아직 평가하지 않았거나 다시 평가해야 하는 문서.
 --
--- 세 가지가 대상이다. 한 번도 평가하지 않은 문서, 본문이 바뀐 문서, 프롬프트 버전이 오른
--- 문서다. `assessed_content_hash`가 없으면 같은 문서를 매번 다시 평가하거나 영영 안 하거나
+-- 세 가지가 대상이다. 한 번도 평가하지 않은 문서, 제목이나 요약이 바뀐 문서, 프롬프트
+-- 버전이 오른 문서다. **본문은 고르지 않는다** — 평가가 제목과 요약만 보므로 content_hash도
+-- 본문을 안 보고, 그래서 본문이 바뀌어도 재평가 대상이 아니다. `assessed_content_hash`가 없으면 같은 문서를 매번 다시 평가하거나 영영 안 하거나
 -- 둘 중 하나가 된다.
 --
 -- 대표에 연결된 중복(canonical_document_id)은 평가하지 않는다. 대표가 평가를 받는다.
@@ -18,7 +19,6 @@ WITH pending AS (
         source_slug,
         title,
         summary,
-        body,
         language,
         published_at,
         content_hash,
@@ -41,7 +41,6 @@ SELECT
     source_slug,
     title,
     summary,
-    body,
     language,
     published_at,
     content_hash

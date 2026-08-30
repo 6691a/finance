@@ -1,3 +1,4 @@
+import inspect
 import json
 import re
 from datetime import UTC, datetime
@@ -216,11 +217,33 @@ def test_canonical_url_drops_tracking_and_fragments():
 
 def test_content_hash_separates_the_parts():
     # 구분자가 없으면 제목 끝과 요약 앞이 붙어 서로 다른 문서가 같은 해시를 낸다.
-    assert content_hash("ab", "c", None) != content_hash("a", "bc", None)
+    assert content_hash("ab", "c") != content_hash("a", "bc")
 
 
 def test_content_hash_is_stable_for_the_same_input():
-    assert content_hash("t", "s", None) == content_hash("t", "s", None)
+    assert content_hash("t", "s") == content_hash("t", "s")
+
+
+def test_content_hash_keeps_the_value_it_had_when_every_body_was_null():
+    """**이 값을 바꾸면 저장된 문서 전부가 재평가 대상이 된다.**
+
+    해시는 세 조각을 이어 붙이고 세 번째가 본문 자리였다. 본문을 해시에서 뺐지만 조각 수는
+    그대로 둔다 — 조각을 둘로 줄이면 구분자가 하나 빠져 이미 저장된 해시와 달라지고,
+    그 순간 `assessed_content_hash`와 어긋나 본문 백필이 전량 재평가를 부른다.
+
+    그래서 옛 값을 리터럴로 못 박는다. 공식을 다시 고칠 일이 생기면 이 테스트가 먼저 깨진다.
+    """
+    assert content_hash("t", "s") == "4fef3774e06bb5ee2741d6fb2d54bf2e077d188f9d76efcbc73a6b6235d6667b"
+    assert content_hash("기준금리 동결", None) == "1ecf6cb81b67f9b761696f921ecfa2e701437a4650c32df7d52c75e2b418765a"
+
+
+def test_content_hash_ignores_the_body():
+    """평가가 본문을 보지 않으므로 본문이 바뀌었다고 다시 평가하지 않는다.
+
+    시그니처에 본문이 아예 없다는 사실 자체가 계약이다. 인자로 받아 버리면 언젠가 누군가
+    넘긴다.
+    """
+    assert inspect.signature(content_hash).parameters.keys() == {"title", "summary"}
 
 
 def test_parse_reads_rss_items():
@@ -431,7 +454,7 @@ def test_store_writes_rows_in_the_upsert_column_order():
     assert (language, level) == ("en", "feed_content")
     assert published == datetime(2026, 8, 14, 22, 30, tzinfo=UTC)
     assert detected == DETECTED_AT
-    assert digest == content_hash(title, summary, None)
+    assert digest == content_hash(title, summary)
     assert record == SOURCE_RECORD_ID
 
 
@@ -484,7 +507,25 @@ def test_metadata_only_sources_do_not_store_the_summary():
     assert row[5] is None
     assert row[10] == "metadata_only"
     # 해시도 요약 없이 계산해야 한다. 안 그러면 저장한 것과 해시한 것이 어긋난다.
-    assert row[11] == content_hash("기준금리 동결", None, None)
+    assert row[11] == content_hash("기준금리 동결", None)
+
+
+def test_a_full_text_source_still_lands_as_feed_content_until_the_body_arrives():
+    """정책과 실제를 가른다.
+
+    `collection_mode`는 "여기까지 받아도 된다"이고 `content_level`은 "이 행에 실제로 담긴
+    것"이다. 발견은 피드 한 번이라 본문이 없고, 그때 `full_text`로 적으면 본문이 있는 문서와
+    없는 문서를 나중에 가릴 수 없다. `full_text`로 오르는 것은 본문이 들어올 때다.
+    """
+    connection = FakeConnection()
+    items, _ = parse_feed(RSS.encode("utf-8"))
+
+    store_documents(connection, source(collection_mode="full_text"), response_for(), items, False, DETECTED_AT)
+
+    row = document_rows(connection.recorded_cursor)[0]
+    assert row[10] == "feed_content"
+    # 본문 자리는 비어 있고, 그래서 이 문서는 `document_body_hourly`의 큐에 남는다.
+    assert row[6] is None
 
 
 def test_store_keeps_a_source_record_when_the_feed_has_no_items():

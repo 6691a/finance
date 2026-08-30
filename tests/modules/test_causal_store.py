@@ -87,7 +87,9 @@ def _connection(**extra) -> FakeConnection:
     return FakeConnection(
         results={
             "INSERT INTO market_event": [(1,)],
-            "INSERT INTO market_channel": [(2,)],
+            # upsert가 id와 **그 채널이 처음 나온 주**를 돌려준다. 기본값은 이번 주라
+            # "새로 생겼다"는 뜻이다. 재사용을 흉내 내려면 `_reused_channel()`을 쓴다.
+            "INSERT INTO market_channel": [(2, WINDOW.week_start)],
             "INSERT INTO market_causal_path": [(3,)],
             **extra,
         }
@@ -498,3 +500,108 @@ class TestStoreLinkedPaths:
         )
 
         assert outcome.linked == 0
+
+
+class TestVocabularyGrowthIsCounted:
+    """`new_channels`는 **새로 생긴 채널 수**다(2026-08-30 정정).
+
+    전에는 `_upsert_channel`을 통과한 이름 수를 셌는데, upsert는 이름이 이미 있으면 행을
+    안 만들고 기존 id를 돌려주므로 둘이 다르다. **링커가 그 차이를 상시화했다** — 링커는
+    저장 전 채널의 `c:<id>`를 알 수 없어 이름만 낼 수 있어서(설계 §11.4), 기존 채널을
+    완벽히 재사용해도 전부 새 이름으로 세어졌다.
+    """
+
+    def _reused(self) -> FakeConnection:
+        """이름이 이미 있는 상태. upsert가 **예전 주**를 돌려준다."""
+        return FakeConnection(
+            results={
+                "INSERT INTO market_event": [(1,)],
+                "INSERT INTO market_channel": [(2, date(2026, 8, 3))],
+                "INSERT INTO market_causal_path": [(3,)],
+            }
+        )
+
+    def _link(self, **overrides) -> domain.LinkedPath:
+        base = {
+            "source_target_kind": "quote",
+            "source_target_code": "US10Y",
+            "source_sign": "down",
+            "channels": ("할인율",),
+            "target_kind": "instrument",
+            "target_code": "005930",
+            "sign": "up",
+            "confidence": "endpoint_observed",
+            "reasoning": "금리가 내린 뒤 주가가 올랐다",
+            "evidence_refs": (),
+        }
+        return domain.LinkedPath(**(base | overrides))
+
+    def test_a_linker_reusing_an_old_channel_does_not_grow_the_vocabulary(self) -> None:
+        """**이 테스트가 없어서 놓쳤다.** 2026-08-17 주 실측에서 링커가 쓴 셋이 그대로
+        `new_channels: 3`이 됐는데 실제로 생긴 채널은 0이었다."""
+        connection = self._reused()
+
+        outcome = store.store_paths(
+            connection,
+            window=WINDOW,
+            paths=(),
+            returns=_returns(),
+            input_hash="h",
+            llm_run_id=None,
+            links=(self._link(),),
+        )
+
+        assert outcome.linked == 1
+        assert outcome.new_channels == 0
+
+    def test_an_answer_retyping_an_old_name_does_not_grow_it_either(self) -> None:
+        """모델이 `existing_id` 대신 이름을 다시 쳐도 어휘가 는 것은 아니다."""
+        connection = self._reused()
+
+        outcome = store.store_paths(
+            connection,
+            window=WINDOW,
+            paths=(_path(channels=(NodeChoice(new_name="할인율"),)),),
+            returns=_returns(),
+            input_hash="h",
+            llm_run_id=None,
+        )
+
+        assert outcome.stored == 1
+        assert outcome.new_channels == 0
+
+    def test_a_genuinely_new_name_is_counted(self) -> None:
+        """이번 주에 처음 생긴 것만 센다."""
+        connection = _connection()
+
+        outcome = store.store_paths(
+            connection,
+            window=WINDOW,
+            paths=(_path(channels=(NodeChoice(new_name="처음 보는 경로"),)),),
+            returns=_returns(),
+            input_hash="h",
+            llm_run_id=None,
+        )
+
+        assert outcome.new_channels == 1
+
+    def test_the_drift_guard_still_only_counts_id_picks(self) -> None:
+        """**링커의 재사용으로 드리프트 가드를 달래지 않는다.**
+
+        가드가 재는 것은 "모델이 후보 목록을 보고 골랐나"이고 링커는 그 목록을 받지
+        않는다. 링커가 이름으로 재사용했다고 통과시키면 정작 후보 목록이 안 먹히는 주를
+        못 잡는다.
+        """
+        connection = self._reused()
+
+        with pytest.raises(store.VocabularyDriftError):
+            store.store_paths(
+                connection,
+                window=WINDOW,
+                paths=(_path(channels=(NodeChoice(new_name="새 이름"),)),),
+                returns=_returns(),
+                input_hash="h",
+                llm_run_id=None,
+                require_reuse=True,
+                links=(self._link(),),
+            )

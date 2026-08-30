@@ -243,6 +243,21 @@ def test_naver_research_html_instead_of_json_is_a_failure():
         naver_attachment_urls(b"<html>Not found</html>")
 
 
+def test_the_url_we_fetch_always_carries_a_scheme():
+    """스킴이 없으면 curl이 `https`가 아니라 `http`로 붙는다.
+
+    운영 실측(2026-08-30): 문서 66(`www.bea.gov/news/...`)의 본문 요청이 컨테이너에서
+    30초 타임아웃 × 3회로 죽었다. 한 실행에 90초를 먹고 `body_status`가 NULL로 남아
+    매 실행 같은 자리에서 되풀이된다.
+
+    `urljoin` base만 고쳐서는 부족하다. **받으러 가는 주소 자체**가 절대 주소여야 한다.
+    """
+    assert detail_url("bea", "www.bea.gov/news/2026/gdp") == "https://www.bea.gov/news/2026/gdp"
+    assert detail_url("naver_research_economy", "m.stock.naver.com/research/economy/1") == (
+        "https://m.stock.naver.com/api/research/economy/1"
+    )
+
+
 def test_the_naver_detail_url_is_the_json_behind_the_screen():
     assert (
         detail_url("naver_research_economy", "https://m.stock.naver.com/research/economy/13742")

@@ -4,7 +4,10 @@
 - 이전본: 2026-08-11 승인본
 - 상태: **1·2단계 구현 완료, 3·4단계 재계획 보류.** 2단계는 `document_ingestion_hourly`(수집)와
   `document_assessment_hourly`(LLM 태깅) 둘로 갈려 운영 중이다. 본문 수집·청크·임베딩은
-  아직 없다(6.3·6.4의 벡터 판정 절이 그렇다). 3·4단계는 market-thesis가 사실상 같은 자리를
+  아직 없다(6.3·6.4의 벡터 판정 절이 그렇다). **본문과 첨부 수집은
+  [collection/document-body-collection.md](../collection/document-body-collection.md)가 계약을
+  갖는다**(2026-08-30 승인, 미구현) — 그 문서 4절이 여기 `content_hash` 정의를 바꾼다.
+  3·4단계는 market-thesis가 사실상 같은 자리를
   채우고 있어 착수 전에 범위를 다시 잡는다 — 7·8절 머리에 그 표기가 있다
 
 ## 0. 왜 다시 쓰는가

@@ -12,7 +12,8 @@ from datetime import UTC, date, datetime
 from decimal import Decimal
 from types import SimpleNamespace
 
-from apps.api.service.document import DART_VIEWER, dart_url, disclosure_of, earnings_of
+from apps.api.service.common import DART_VIEWER, dart_url
+from apps.api.service.document import disclosure_of, earnings_of
 from modules.thesis.domain import DART_VIEWER_URL
 
 RCEPT = "20260827000123"

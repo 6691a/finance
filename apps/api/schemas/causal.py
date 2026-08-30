@@ -55,6 +55,30 @@ class CausalPathRow(ApiModel):
 CausalPathList = Page[CausalPathRow]
 
 
+class CausalEvidenceRow(ApiModel):
+    """경로 하나가 근거로 든 후보 하나.
+
+    **`ref`는 `<kind>:<id>` 문자열이고 외래키가 없다.** 근거가 문서·공시·기술적 신호 셋에
+    흩어져 있어 걸 대상이 하나가 아니다. 그래서 응답이 그 규약을 풀어 준다 — 화면이 매번
+    문자열을 쪼개면 규약이 두 곳에 생긴다.
+    """
+
+    path_id: int = Field(description="이 근거가 붙은 경로.")
+    ref: str = Field(description="후보 식별자 원문(`document:84026`).")
+    kind: str = Field(description="근거의 종류(document·disclosure·technical_signal).")
+    title: str | None = Field(
+        default=None,
+        description=(
+            "읽을 수 있는 이름. **문서만 채운다** — `document:189`만 보이면 사람이 못 읽는다. "
+            "다른 종류는 화면이 식별자를 그대로 보인다."
+        ),
+    )
+    url: str | None = Field(
+        default=None,
+        description="원문으로 가는 길. 문서는 화면 상세 경로, 공시는 DART 뷰어다.",
+    )
+
+
 class CausalPathDetail(ApiModel):
     """경로 하나와 **그 사건이 그 주에 뻗은 경로 전부**.
 
@@ -67,6 +91,13 @@ class CausalPathDetail(ApiModel):
     siblings: tuple[CausalPathRow, ...] = Field(
         default=(),
         description="같은 사건·같은 주의 경로 전부. **자기 자신을 포함한다** — 그래프의 전체 모양이다.",
+    )
+    evidence: tuple[CausalEvidenceRow, ...] = Field(
+        default=(),
+        description=(
+            "형제 경로들이 인용한 근거 전부. `path_id`로 갈라 읽는다. **`confidence`가 옳은지"
+            "되짚는 자리다** — 이 표가 없던 동안은 볼 방법이 없었다."
+        ),
     )
 
 

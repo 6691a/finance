@@ -77,3 +77,10 @@ export const CAUSAL_TARGET_KINDS: Labels = {
   quote: "해외 지수·환율·선물",
   indicator: "지표",
 };
+
+/** 인과 경로가 인용한 근거의 종류. 셋에 흩어져 있어 `ref`가 `<kind>:<id>`다. */
+export const CAUSAL_EVIDENCE_KINDS: Labels = {
+  document: "문서",
+  disclosure: "공시",
+  technical_signal: "기술적 신호",
+};

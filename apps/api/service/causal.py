@@ -13,11 +13,12 @@ from apps.api.schemas import (
     CausalChannelRow,
     CausalEventList,
     CausalEventRow,
+    CausalEvidenceRow,
     CausalPathDetail,
     CausalPathList,
     CausalPathRow,
 )
-from apps.api.service.common import number
+from apps.api.service.common import dart_url, number
 
 
 def _text(value: Any) -> str:
@@ -65,6 +66,24 @@ class UnknownPath(Exception):
     """없는 경로 id. 라우트가 404로 바꾼다."""
 
 
+def evidence_of(path_id: int, ref: str, titles: dict[int, str]) -> CausalEvidenceRow:
+    """`<kind>:<id>` 규약을 응답에서 한 번만 푼다.
+
+    **화면이 문자열을 쪼개게 두지 않는다** — 그러면 규약이 두 곳에 생기고, 종류가 늘 때
+    한쪽만 고친다. 모르는 종류는 종류 이름만 남기고 링크를 만들지 않는다.
+    """
+    kind, _, value = ref.partition(":")
+    title = titles.get(int(value)) if kind == "document" and value.isdigit() else None
+    url = None
+    if kind == "document" and value.isdigit():
+        # 문서는 우리 화면에 상세가 있다. 원문 링크는 그 상세가 준다.
+        url = f"/documents/{value}"
+    elif kind == "disclosure" and value:
+        # 공시는 접수번호가 곧 주소다. 이 근거는 DART에서 온 것만 있다.
+        url = dart_url("dart", value)
+    return CausalEvidenceRow(path_id=path_id, ref=ref, kind=kind, title=title, url=url)
+
+
 def build_detail(rows: PathRows, path_id: int) -> CausalPathDetail:
     """**형제를 함께 낸다.** 경로 하나만 내면 화면이 그릴 것이 직선 하나뿐이다."""
     family = tuple(
@@ -75,7 +94,13 @@ def build_detail(rows: PathRows, path_id: int) -> CausalPathDetail:
     found = next((row for row in family if row.id == path_id), None)
     if found is None:
         raise UnknownPath(str(path_id))
-    return CausalPathDetail(path=found, siblings=family)
+    return CausalPathDetail(
+        path=found,
+        siblings=family,
+        evidence=tuple(
+            evidence_of(path, ref, rows.document_titles) for path, ref in rows.evidence
+        ),
+    )
 
 
 def event_of(row: tuple[Any, ...]) -> CausalEventRow:
@@ -167,5 +192,6 @@ __all__ = [
     "build_paths",
     "channel_of",
     "event_of",
+    "evidence_of",
     "path_of",
 ]

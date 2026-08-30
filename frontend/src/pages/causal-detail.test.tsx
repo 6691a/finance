@@ -50,7 +50,28 @@ const SIBLING = {
   sign: "up",
 };
 
-const DETAIL = { path: PATH, siblings: [PATH, SIBLING] };
+const DETAIL = {
+  path: PATH,
+  siblings: [PATH, SIBLING],
+  evidence: [
+    {
+      path_id: 1,
+      ref: "document:189",
+      kind: "document",
+      title: "물가 둔화에 국채금리 하락",
+      url: "/documents/189",
+    },
+    {
+      path_id: 1,
+      ref: "disclosure:20260826000445",
+      kind: "disclosure",
+      title: null,
+      url: "https://dart.fss.or.kr/dsaf001/main.do?rcpNo=20260826000445",
+    },
+    // 형제의 근거는 이 경로 밑에 안 보인다.
+    { path_id: 2, ref: "document:20", kind: "document", title: "다른 문서", url: "/documents/20" },
+  ],
+};
 
 afterEach(() => {
   added.length = 0;
@@ -85,4 +106,30 @@ it("없는 경로는 목록으로 돌아가는 길을 준다", async () => {
   renderAt("/causal/999", "/causal/:pathId", <CausalDetailPage />);
 
   expect(await screen.findByText("인과 경로이(가) 없다.")).toBeTruthy();
+});
+
+it("이 경로가 든 근거만 보이고 원문으로 이어진다", async () => {
+  // **`confidence`가 옳은지 되짚는 자리다.** 근거가 없으면 `함께 관찰`이 무엇에 기대고
+  // 있는지 알 수 없다.
+  stubFetch({ "/api/causal/paths/1": DETAIL });
+  renderAt("/causal/1", "/causal/:pathId", <CausalDetailPage />);
+
+  await screen.findByRole("heading", { name: "이 경로가 든 근거" });
+  expect(screen.getByRole("link", { name: "물가 둔화에 국채금리 하락" }).getAttribute("href")).toBe(
+    "/documents/189",
+  );
+  // 공시는 접수번호가 곧 DART 주소다. 제목이 없으면 식별자를 그대로 보인다.
+  expect(
+    screen.getByRole("link", { name: "disclosure:20260826000445" }).getAttribute("href"),
+  ).toContain("rcpNo=20260826000445");
+  // 형제 경로의 근거는 여기 없다.
+  expect(screen.queryByRole("link", { name: "다른 문서" })).toBeNull();
+});
+
+it("근거가 없는 경로는 없다고 말한다", async () => {
+  // 없다는 것도 사실이다. 감추면 되짚을 수 없다.
+  stubFetch({ "/api/causal/paths/1": { ...DETAIL, evidence: [] } });
+  renderAt("/causal/1", "/causal/:pathId", <CausalDetailPage />);
+
+  expect(await screen.findByText("이 경로에 저장된 근거가 없다.")).toBeTruthy();
 });

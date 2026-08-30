@@ -743,10 +743,23 @@ export interface CausalPathRow {
   llm_run_id: number | null;
 }
 
+/** 경로가 인용한 근거 하나. `<kind>:<id>` 규약은 서버가 이미 풀어서 준다. */
+export interface CausalEvidenceRow {
+  path_id: number;
+  ref: string;
+  kind: string;
+  /** 문서만 채운다. 다른 종류는 식별자를 그대로 보인다. */
+  title: string | null;
+  /** 문서는 화면 상세 경로, 공시는 DART 뷰어. 모르는 종류는 null이다. */
+  url: string | null;
+}
+
 /** 경로 하나와 **그 사건이 그 주에 뻗은 경로 전부**. 자기 자신을 포함한다. */
 export interface CausalPathDetail {
   path: CausalPathRow;
   siblings: CausalPathRow[];
+  /** 형제 경로들이 인용한 근거 전부. `path_id`로 갈라 읽는다. */
+  evidence: CausalEvidenceRow[];
 }
 
 export interface CausalEventRow {

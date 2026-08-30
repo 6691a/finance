@@ -25,7 +25,7 @@ from apps.api.schemas import (
     EarningsFactItem,
     EarningsFactList,
 )
-from apps.api.service.common import number
+from apps.api.service.common import dart_url, number
 from apps.models.content import Document, DocumentSource
 from apps.models.market import DisclosureEvent, EarningsFact
 
@@ -36,15 +36,6 @@ class UnknownDocument(Exception):
 
 # DART 원문 뷰어. 접수번호 하나로 열리는 공개 주소라 저장하지 않고 만든다 —
 # 저장하면 같은 값이 두 테이블에 생기고 제공처가 주소를 바꾼 날 둘이 갈린다.
-DART_VIEWER = "https://dart.fss.or.kr/dsaf001/main.do?rcpNo={rcept_no}"
-
-
-def dart_url(provider: str, rcept_no: str) -> str | None:
-    """**제공처가 `dart`일 때만 만든다.** 다른 제공처의 접수번호를 DART 주소에 끼우면
-    열리지 않는 링크가 생기고, 그건 없는 것보다 나쁘다."""
-    return DART_VIEWER.format(rcept_no=rcept_no) if provider == "dart" else None
-
-
 def summary_of(
     document: Document, instruments: tuple[str, ...] = (), indicators: tuple[str, ...] = ()
 ) -> DocumentSummary:

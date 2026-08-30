@@ -17,11 +17,13 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from apps.api.repository.common import DEFAULT_LIMIT, RowBundle, page_slice
 from apps.models.analysis import (
+    MarketCausalEvidence,
     MarketCausalPath,
     MarketCausalStep,
     MarketChannel,
     MarketEvent,
 )
+from apps.models.content import Document
 
 
 class PathRows(RowBundle):
@@ -31,6 +33,10 @@ class PathRows(RowBundle):
     events: dict[int, MarketEvent] = Field(default_factory=dict)
     # 경로 id → 채널 이름(사건 쪽에서 대상 쪽 순서)
     chains: dict[int, tuple[str, ...]] = Field(default_factory=dict)
+    # (경로 id, ref) 쌍. 목록에는 안 싣고 상세만 채운다 — 판정을 되짚는 자리다.
+    evidence: tuple[tuple[int, str], ...] = ()
+    # 문서 id → 제목. `document:189`만 보이면 사람이 못 읽는다.
+    document_titles: dict[int, str] = Field(default_factory=dict)
 
 
 class MarketCausalReadRepository:
@@ -76,6 +82,15 @@ class MarketCausalReadRepository:
             .join(MarketChannel, MarketChannel.id == MarketCausalStep.channel_id)
             .where(MarketCausalStep.path_id.in_(path_ids))
             .order_by(MarketCausalStep.path_id, MarketCausalStep.position)
+        )
+
+    @staticmethod
+    def evidence_statement(path_ids: Sequence[int]) -> Select[Any]:
+        """경로들이 인용한 근거. **`ref`는 `<kind>:<id>` 문자열이라 조인할 대상이 없다.**"""
+        return (
+            select(MarketCausalEvidence.path_id, MarketCausalEvidence.ref)
+            .where(MarketCausalEvidence.path_id.in_(path_ids))
+            .order_by(MarketCausalEvidence.path_id, MarketCausalEvidence.ref)
         )
 
     @staticmethod
@@ -185,12 +200,37 @@ class MarketCausalReadRepository:
             ):
                 chains.setdefault(path_key, []).append(name)
 
+            evidence = tuple(
+                (row.path_id, row.ref)
+                for row in await session.execute(
+                    self.evidence_statement([path.id for path in family])
+                )
+            )
+            # 문서 제목만 한 번 더 읽는다. 공시·신호는 식별자가 곧 읽을 수 있는 값이다.
+            document_ids = {
+                int(ref.split(":", 1)[1])
+                for _, ref in evidence
+                if ref.startswith("document:") and ref.split(":", 1)[1].isdigit()
+            }
+            titles = (
+                {
+                    row.id: row.title
+                    for row in await session.execute(
+                        select(Document.id, Document.title).where(Document.id.in_(document_ids))
+                    )
+                }
+                if document_ids
+                else {}
+            )
+
         if event is None:
             return None
         return PathRows(
             paths=tuple(family),
             events={path.id: event for path in family},
             chains={key: tuple(value) for key, value in chains.items()},
+            evidence=evidence,
+            document_titles=titles,
         )
 
     async def event_rows(self, **filters: Any) -> tuple[tuple[Any, ...], bool]:

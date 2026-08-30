@@ -162,6 +162,30 @@ async def test_the_detail_carries_the_whole_event():
 
 
 @pytest.mark.asyncio
+async def test_the_detail_resolves_the_evidence_ref():
+    """`document:189`만 보이면 사람이 못 읽는다. **규약을 응답이 한 번만 푼다.**"""
+    rows = PathRows(
+        paths=(path(1),),
+        events={1: event()},
+        chains={},
+        evidence=((1, "document:189"), (1, "disclosure:20260826000445"), (1, "unknown:7")),
+        document_titles={189: "물가 둔화에 국채금리 하락"},
+    )
+    async with client(FakeCausal(detail=rows)) as http:
+        payload = (await http.get("/api/causal/paths/1")).json()
+
+    document, disclosure, unknown = payload["evidence"]
+    assert document["kind"] == "document"
+    assert document["title"] == "물가 둔화에 국채금리 하락"
+    assert document["url"] == "/documents/189"
+    # 공시는 접수번호가 곧 주소다.
+    assert disclosure["url"].endswith("rcpNo=20260826000445")
+    # 모르는 종류는 링크를 만들지 않는다. 없는 곳으로 가는 링크는 없는 것보다 나쁘다.
+    assert unknown["url"] is None
+    assert unknown["ref"] == "unknown:7"
+
+
+@pytest.mark.asyncio
 async def test_an_unknown_path_is_404():
     async with client(FakeCausal()) as http:
         reply = await http.get("/api/causal/paths/999")

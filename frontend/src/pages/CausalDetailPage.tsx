@@ -13,9 +13,20 @@ import { useJson } from "../api";
 import { Async } from "../components/AsyncState";
 import GraphView, { type GraphViewHandle } from "../components/GraphView";
 import { causalElements } from "../causal";
-import { CAUSAL_CONFIDENCES, CAUSAL_SIGNS, CAUSAL_TARGET_KINDS, labelOf } from "../labels";
-import type { CausalPathDetail, CausalPathRow } from "../types";
+import {
+  CAUSAL_CONFIDENCES,
+  CAUSAL_EVIDENCE_KINDS,
+  CAUSAL_SIGNS,
+  CAUSAL_TARGET_KINDS,
+  labelOf,
+} from "../labels";
+import type { CausalEvidenceRow, CausalPathDetail, CausalPathRow } from "../types";
 import { changeText, chainText } from "./CausalPage";
+
+/** 근거 한 줄의 보일 이름. 문서만 제목이 오고 나머지는 식별자가 곧 읽을 수 있는 값이다. */
+export function evidenceText(row: CausalEvidenceRow): string {
+  return row.title ?? row.ref;
+}
 
 /** 이 경로가 무엇을 주장하는지 한 줄. 표와 그래프가 같은 말을 해야 한다. */
 export function claimText(row: CausalPathRow): string {
@@ -99,6 +110,33 @@ export default function CausalDetailPage() {
               </ul>
             </aside>
           </div>
+
+          <h3>이 경로가 든 근거</h3>
+          {(() => {
+            const mine = detail.evidence.filter((row) => row.path_id === detail.path.id);
+            // **근거가 없는 경로도 있다.** 0으로 채우거나 감추면 `함께 관찰`이 무엇에
+            // 기대고 있는지 되짚을 수 없다 — 없다는 것도 사실이다.
+            return mine.length === 0 ? (
+              <p className="state">이 경로에 저장된 근거가 없다.</p>
+            ) : (
+              <ul>
+                {mine.map((row) => (
+                  <li key={row.ref}>
+                    <span className="badge">{labelOf(CAUSAL_EVIDENCE_KINDS, row.kind)}</span>{" "}
+                    {row.url === null ? (
+                      evidenceText(row)
+                    ) : row.url.startsWith("/") ? (
+                      <Link to={row.url}>{evidenceText(row)}</Link>
+                    ) : (
+                      <a href={row.url} target="_blank" rel="noopener noreferrer">
+                        {evidenceText(row)}
+                      </a>
+                    )}
+                  </li>
+                ))}
+              </ul>
+            );
+          })()}
 
           <h3>같은 내용의 표</h3>
           <table>

@@ -221,6 +221,7 @@ autogenerate 결과는 **반드시 열어서 확인합니다.**
 | `airflow/sql/` | `/opt/airflow/sql` | 쿼리 파일 |
 | `airflow/plugins/` | `/opt/airflow/plugins` | Airflow 플러그인 |
 | `airflow/config/` | `/opt/airflow/config` | Airflow 설정 |
+| `airflow/files/` | `/opt/airflow/files` | **코드가 아니라 데이터.** `document_body_hourly`가 받은 첨부 파일이 쌓이는 자리이고 `.gitkeep`만 커밋합니다 |
 
 Airflow는 `apps/`, `apps/core/`, `migrations/`를 **보지 못합니다.** DAG가 실행 시점에 import하는 코드는 전부 `airflow/` 아래 있어야 합니다.
 
@@ -385,7 +386,7 @@ airflow dags trigger mof_jgb_daily --conf '{\"source_file\": \"all\", \"observat
 시세와 금리는 값이지만 뉴스와 공식 발표는 글입니다. 글을 시세와 같은 좌표계에 올리는 것이 이 두 DAG의 일입니다.
 
 - [airflow/dags/document_ingestion_hourly.py](../airflow/dags/document_ingestion_hourly.py)가 매시 05분에 공식기관·언론 피드에서 문서를 발견해 `document`에 정규화합니다.
-- [airflow/dags/document_body_hourly.py](../airflow/dags/document_body_hourly.py)가 매시 15분에 `body_status`가 비어 있는 문서의 원문을 받아 본문을 채우고, 첨부 파일을 내려받아 `document_attachment`에 경로를 남기며, 기사가 영상이면 그 링크를 남깁니다. **이 DAG은 `/opt/airflow/files` 마운트를 요구하고 없으면 즉시 실패합니다.**
+- [airflow/dags/document_body_hourly.py](../airflow/dags/document_body_hourly.py)가 매시 15분에 `body_status`가 비어 있는 문서의 원문을 받아 본문을 채우고, 첨부 파일을 내려받아 `document_attachment`에 경로를 남기며, 기사가 영상이면 그 링크를 남깁니다. **이 DAG은 `/opt/airflow/files` 마운트를 요구하고 없으면 즉시 실패합니다.** 볼륨은 로컬·운영 compose가 `logs`와 같은 자리에 선언합니다.
 - [airflow/dags/document_assessment_hourly.py](../airflow/dags/document_assessment_hourly.py)가 매시 25분에 아직 평가하지 않은 문서를 LLM에 보내 종목·지표 태그, 방향, 0~8점 점수와 근거를 받아 `document`, `document_instrument`, `document_indicator`에 저장합니다.
 
 **평가는 제목과 요약만 봅니다.** 본문을 채우기 시작한 뒤에도 그렇습니다(2026-08-30 결정). 본문의 소비자는 평가가 아니라 검색이고, `content_hash`도 제목과 요약만 보므로 본문이 바뀌어도 재평가가 돌지 않습니다.

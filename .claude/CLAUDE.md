@@ -196,6 +196,7 @@ uv run ruff check apps airflow migrations tests
 | `airflow/sql/` | `/opt/airflow/sql` |
 | `airflow/plugins/` | `/opt/airflow/plugins` |
 | `airflow/config/` | `/opt/airflow/config` |
+| `airflow/files/` | `/opt/airflow/files` — **코드가 아니라 데이터**(첨부 파일) |
 
 Airflow는 `apps/`, `../apps/core/`, `migrations/`를 보지 못한다. DAG가 실행 시점에 import하는 코드는
 전부 `airflow/` 아래 있어야 한다.
@@ -208,8 +209,13 @@ ruff isort `known-first-party`가 `pyproject.toml`에 맞춰져 있다.
 `modules/sql.py`의 `read_sql`이 `AIRFLOW_HOME`이 있으면 그 아래를, 없으면 저장소의
 `airflow/sql`을 읽는다. 컨테이너와 로컬 pytest가 같은 파일을 쓴다.
 
-로컬 Compose와 Dockerfile은 운영 Airflow에 맞춰 둔 상태다. **건드리지 않는다.** 배치 문제는
-코드 위치로만 해결한다. 실행 코드를 이미지에 굽거나 `apps/`를 볼륨으로 붙이지 않는다.
+로컬 Compose와 Dockerfile은 운영 Airflow에 맞춰 둔 상태다. **코드 배치 문제로는 건드리지
+않는다.** 실행 코드를 이미지에 굽거나 `apps/`를 볼륨으로 붙이지 않는다.
+
+**데이터 볼륨은 예외이고, 그때는 로컬과 운영 compose를 함께 고친다.** `airflow/files/`가
+그 예다(2026-08-30, `document_body_hourly`의 첨부 파일). 한쪽만 고치면 로컬에서 도는 DAG이
+운영에서 마운트 없음으로 죽는다. `.gitignore`에 내용물을 막고 `.gitkeep`을 커밋하는 것까지가
+한 벌이다 — 디렉터리가 없으면 바인드 마운트가 root 소유 빈 폴더를 만들어 Airflow가 못 쓴다.
 
 **`airflow/` 아래에는 DAG가 실제로 import·실행하는 코드만 둔다.** Airflow가 실행하지
 않는 상주 서비스·API는 `apps/` 아래에 백엔드 규칙(ORM, `config.yaml`, async)으로 두고

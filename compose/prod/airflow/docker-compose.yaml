@@ -107,6 +107,10 @@ x-airflow-common:
     - ${AIRFLOW_PROJ_DIR:-../../../airflow}/modules:/opt/airflow/modules
     - ${AIRFLOW_PROJ_DIR:-../../../airflow}/utility:/opt/airflow/utility
     - ${AIRFLOW_PROJ_DIR:-../../../airflow}/sql:/opt/airflow/sql
+    # 문서 첨부 파일을 두는 자리. `document_body_hourly`가 받은 PDF·HWP가 여기 쌓이고
+    # DB에는 이 뿌리를 뺀 상대경로만 남는다. **없으면 그 DAG은 즉시 실패한다** — 조용히
+    # 건너뛰면 문서만 쌓이고 파일은 한 건도 안 남는데 태스크는 성공으로 보인다.
+    - ${AIRFLOW_PROJ_DIR:-../../../airflow}/files:/opt/airflow/files
   user: "${AIRFLOW_UID:-50000}:0"
   # 진짜 CPU 상한. cpu_shares는 경합 시 가중치일 뿐이라 총 사용량도 발열도 못 줄인다.
   # cpuset은 cpu.cfs_quota_us 없이도 동작하고, 4코어 중 2개(2,3)로 물리적으로 묶는다.
@@ -288,7 +292,7 @@ services:
         echo
         echo "Change ownership of files in shared volumes to ${AIRFLOW_UID:-50000}:0"
         echo
-        chown -v -R "${AIRFLOW_UID:-50000}:0" /opt/airflow/{logs,dags,plugins,config}
+        chown -v -R "${AIRFLOW_UID:-50000}:0" /opt/airflow/{logs,dags,plugins,config,files}
         echo
         echo "Files in shared volumes:"
         echo

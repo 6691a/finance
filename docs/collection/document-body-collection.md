@@ -1,8 +1,8 @@
 # 문서 본문·첨부 수집
 
 - 기준일: 2026-08-30
-- 상태: **구현 완료(2026-08-30), 배포 대기.** 12절의 파일 마운트가 선행 조건이다 —
-  그것 없이 DAG을 켜면 첫 실행이 즉시 실패한다
+- 상태: **구현 완료(2026-08-30), 배포 대기.** 파일 볼륨은 로컬·운영 compose에 들어갔고(12절)
+  남은 것은 마이그레이션 반영과 DAG 켜기다
 - 상위 설계: [analysis/economic-document-archive-design.md](../analysis/economic-document-archive-design.md) 2단계.
   그 문서 6.2·6.3이 예고한 본문 수집을 여기서 계약으로 만든다
 
@@ -438,14 +438,30 @@ DB에는 뿌리(`/opt/airflow/files`)를 뺀 **상대경로**만 남긴다. 마�
 `apps/models/__init__.py`의 `__all__`에 넣는다. **한 단계라도 빠지면 `Base.metadata`에서
 테이블이 사라지고 autogenerate가 `DROP TABLE`을 낸다.**
 
-## 12. 배포 선행조건 — 사용자 몫
+## 12. 배포 — 파일 볼륨
 
-**NAS에 파일 디렉터리를 만들고 Airflow 컨테이너에 `/opt/airflow/files`로 마운트해야 한다.**
-지금 Airflow 볼륨은 전부 코드 마운트(`dags`·`modules`·`utility`·`sql`·`plugins`·`config`)뿐이고
-데이터 볼륨이 없다.
+**볼륨은 compose가 선언한다**(2026-08-30 추가). 로컬과 운영 둘 다다.
 
-없으면 **DAG를 즉시 실패시킨다.** 경로가 없는데 조용히 첨부를 건너뛰면 문서만 쌓이고
-파일은 한 건도 안 남는데 태스크는 성공으로 표시된다.
+```yaml
+- ${AIRFLOW_PROJ_DIR:-...}/files:/opt/airflow/files
+```
+
+`logs`와 같은 자리에 붙는다. 저장소의 `airflow/files/`는 `.gitkeep` 하나만 두고
+`.gitignore`가 내용물을 막는다 — **디렉터리 자체가 없으면 새로 클론한 곳에서 바인드
+마운트가 root 소유 빈 폴더를 만들고**, 그러면 Airflow가 그 안에 못 쓴다. `logs`·`config`·
+`plugins`가 이미 같은 이유로 `.gitkeep`을 갖고 있다.
+
+init 서비스의 `chown` 목록에도 `files`를 넣었다. 컨테이너는
+`${AIRFLOW_UID:-50000}:0`으로 도는데 도커가 만든 바인드 디렉터리는 root 소유라, 안 넣으면
+첫 첨부 저장이 `Permission denied`로 죽는다.
+
+**그래도 DAG은 마운트를 확인하고 없으면 즉시 실패한다.** compose를 안 고친 채 이미지를
+올리거나 `AIRFLOW_PROJ_DIR`가 다른 곳을 가리키면 경로가 없다. 조용히 첨부를 건너뛰면 문서만
+쌓이고 파일은 한 건도 안 남는데 태스크는 성공으로 표시된다.
+
+운영에서 파일이 실제로 놓이는 자리는 `AIRFLOW_PROJ_DIR`가 정한다 — NAS `.env`가 dags·logs와
+같은 뿌리를 가리키므로 첨부도 그 옆에 쌓인다. **연 9GB 수준이라 그 볼륨의 여유 공간을 한
+번 보고 켠다**(3절).
 
 조회 API가 그 파일을 서빙하게 되면 `apps/api` 컨테이너에도 같은 경로가 필요하다.
 그건 14단계(웹 화면)와 함께 온다.

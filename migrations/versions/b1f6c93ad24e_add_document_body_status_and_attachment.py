@@ -151,7 +151,7 @@ def upgrade_default() -> None:
             sa.Text(),
             nullable=True,
             comment=(
-                "파일을 둔 자리의 상대경로(예: documents/boj/2026/08/1234-0.pdf). "
+                "파일을 둔 자리의 상대경로(예: documents/boj/1042/0.pdf). 문서 하나가 폴더 하나다. "
                 "마운트 지점을 빼고 남기므로 마운트가 바뀌어도 행을 고치지 않는다. 영상은 NULL이다"
             ),
         ),

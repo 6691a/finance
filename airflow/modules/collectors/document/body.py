@@ -391,11 +391,26 @@ class DocumentBodyCollector:
             video_urls=video_urls,
         )
 
-    def download(self, url: str, position: int, now: datetime | None = None) -> Attachment:
+    def download(
+        self,
+        candidate: BodyCandidate,
+        url: str,
+        position: int,
+        now: datetime | None = None,
+    ) -> Attachment:
         """첨부 하나를 받아 파일로 두고 그 자리를 돌려준다. **크기 상한은 없다.**
 
-        경로는 내용 해시로 만든다. 같은 파일을 두 문서가 가리키면 한 벌만 남고, 같은 문서를
-        다시 집어도 덮어쓸 뿐 파일이 늘지 않는다.
+        **경로가 문서를 가리킨다** — `documents/<출처>/<문서ID>/<순서>.<확장자>`. 문서 하나가
+        폴더 하나라 디스크만 보고도 어느 출처의 무엇인지 안다. 내용 해시로 두면 중복 파일이
+        한 벌로 줄지만 `00/00ab3f….pdf`가 되어 매번 DB를 조회해야 무엇인지 알 수 있고,
+        **겹치는 파일이 얼마나 되는지는 재 본 적이 없다.** 안 잰 이득을 위해 읽기 어려운
+        경로를 고르지 않는다. 중복이 문제가 되면 `sha256` 컬럼으로 조회해 찾는다.
+
+        `position`을 이름에 써도 밀리지 않는다. 큐가 `body_status IS NULL`이라 성공한 문서는
+        다시 집히지 않고, 그래서 이 파일들은 한 번 쓰고 안 바뀐다.
+
+        제공처가 준 파일 이름은 `filename` 컬럼에만 남긴다. 한글·공백·괄호가 섞이고 길이도
+        길어서 경로에 쓰면 파일시스템마다 다르게 깨진다.
         """
         fetched_at = now or datetime.now(UTC)
         response = fetch_url("attachment", url)
@@ -404,7 +419,12 @@ class DocumentBodyCollector:
         media_type = _header(response, "content-type")
         filename = _filename(response, url)
 
-        relative = Path("documents") / digest[:2] / f"{digest}{_suffix(filename, media_type)}"
+        relative = (
+            Path("documents")
+            / candidate.source_slug
+            / str(candidate.id)
+            / f"{position}{_suffix(filename, media_type)}"
+        )
         destination = self._file_root / relative
         destination.parent.mkdir(parents=True, exist_ok=True)
         destination.write_bytes(payload)

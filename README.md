@@ -35,8 +35,8 @@ flowchart LR
         FEED["뉴스·리서치 피드"]
     end
 
-    subgraph AF["Airflow — DAG 42"]
-        COL["수집 DAG 29<br/>분봉·일봉·수급·공시·매크로·문서"]
+    subgraph AF["Airflow — DAG 43"]
+        COL["수집 DAG 30<br/>분봉·일봉·수급·공시·매크로·문서"]
         ANA["분석 DAG 8<br/>문서 평가(LLM) · 기술 신호(SQL)<br/>시장 추론(LLM+툴) · 채점·사후 해설<br/>주간 인과 그래프"]
         BRF["브리핑 DAG 5"]
     end
@@ -46,7 +46,10 @@ flowchart LR
     subgraph DB["PostgreSQL"]
         FACT[("시세·봉 · 지표 관측치<br/>문서·공시 · source_record")]
         THESIS[("thesis · thesis_outcome<br/>thesis_llm_run")]
+        CAUSAL[("market_causal_path · step<br/>market_event · market_channel")]
     end
+
+    GRAPH["Neo4j — 인과 그래프 투영<br/>Event → Channel → Target"]
 
     SLACK["Slack 브리핑 5종"]
     API["apps/api — FastAPI 조회 API"]
@@ -63,6 +66,8 @@ flowchart LR
     ANA --> FACT
     ANA --> THESIS
     THESIS --> ANA
+    ANA --> CAUSAL
+    CAUSAL --> GRAPH
 
     FACT --> BRF
     THESIS --> BRF
@@ -103,15 +108,13 @@ flowchart LR
    강제) 두 단계로 나눕니다.
 4. **인용을 검증합니다.** 툴이 돌려준 항목에는 전부 `ref`가 붙어 있어서, 답변의 주장을 툴 결과
    레지스트리와 대조합니다.
-5. **모델은 "그 시각까지 알 수 있던 것"만 봅니다.** 예를 들어 08:35 장전 추론은 08:35까지
+5. **LLM은 "그 시각까지 알 수 있던 것"만 봅니다.** 예를 들어 08:35 장전 추론은 08:35까지
    들어온 공시·기사·시세만 조회합니다. 배치가 밀려서 실제로는 09시에 돌더라도, 그 사이에
-   들어온 정보는 보이지 않습니다. 기준은 실행된 벽시계 시각이 아니라 슬롯에 정해 둔
-   `as_of_at`이고, 그 이후에 들어오거나 평가된 행은 조회에서 빠집니다.
-   이걸 안 막으면 "이미 답을 본 뒤에 맞힌" 기록이 쌓여서, 나중에 채점을 해도 의미가 없어집니다.
+   들어온 정보는 보이지 않습니다.
 6. **채점은 코드가 합니다.** 방향은 Brier score로, 크기는 기대 등락률 오차로 T+0/1/3/5 여러
    지평에서 채점합니다. LLM은 확률과 이유 문장, 근거 인용만 만듭니다.
-7. **첫 성공본은 그대로 둡니다.** 같은 (날짜, 슬롯)에 이미 행이 있으면 LLM을 다시 부르지
-   않습니다. 다시 부르면 답이 달라져서 처음 판단이 사라지니까요.
+7. **첫 성공본은 그대로 둡니다.** 같은 (날짜, 슬롯)에 이미 값이 있으면 LLM을 다시 부르지
+   않습니다.
 
 모델은 용도별로 나눠 씁니다. 툴 왕복이 많은 추론에는 `grok-4.6`을, 문장 품질이 중요한
 해설·분류에는 `gpt-5.6-luna`를 씁니다. 프롬프트는 코드에서 떼어 YAML에 두고
@@ -125,13 +128,14 @@ flowchart LR
 | 언어 | Python 3.13, uv | 수집·분석·서비스가 한 언어 |
 | 오케스트레이션 | Apache Airflow 3.3 | 제공처마다 다른 주기, 재시도, 백필이 필요 |
 | 저장 | PostgreSQL, SQLAlchemy 2.0 async, asyncpg, Alembic | 시계열도 관계형으로 충분한 규모 |
+| 그래프 | Neo4j (community) | 주간 인과 그래프의 다중 홉 탐색. **Postgres가 원본이고 투영입니다** |
 | 캐시 | Redis | 실시간 수집 버퍼 |
 | LLM | LangChain / LangGraph, xAI Grok, OpenAI 호환 API | 툴 호출 루프와 구조화 출력 |
 | API | FastAPI, dependency-injector | 읽기 전용 조회, 생성자 주입 + provider override 테스트 |
 | 수집 | httpx, scrapling(+playwright) | REST와 HTML을 같은 규약으로 |
 | 관측 | Sentry (Airflow / 상주 서비스 각각) | 에러·로그·트레이싱·프로파일링 |
 | 배포 | Docker Compose (Synology NAS), just | 이미지 3종, bind-mount 배포 |
-| 품질 | pytest, ruff, pyrefly, pre-commit | 테스트 약 2,100개 |
+| 품질 | pytest, ruff, pyrefly, pre-commit | 테스트 2,837개 |
 
 ## 설계하면서 고민한 것들
 
@@ -143,7 +147,7 @@ flowchart LR
 **DAG 실패 판정을 세 형태로 정리하기.** ① 다음 실행이 같은 구간을 다시 보는 수집은 전부
 실패했을 때만 죽이고 ② 하루 한 번 도는 확정 수집은 하나만 실패해도 죽이고 ③ 단일 요청은 예외를
 그대로 올립니다. 어느 쪽을 골랐는지와 그 이유는 DAG 모듈 docstring의 "실패와 재시도" 절에
-남겨 둡니다. 안 적어 두면 다음에 보는 사람이 규칙 위반으로 읽더군요.
+남겨 둡니다.
 
 **실행 시각으로 모드를 추론하지 않기.** 한 DAG가 여러 시각에 돌면서 `logical_date`로 장전·장후를
 갈랐더니, `logical_date`가 없는 수동 실행이 벽시계로 떨어져서 UI의 Trigger 버튼이 조용히 다른
@@ -160,9 +164,6 @@ flowchart LR
 **중복을 허용하되 테스트가 양쪽을 대조**하게 했습니다. 수집기는 문자열 SQL을 쓰기 때문에,
 INSERT 컬럼과 `ON CONFLICT` 키를 ORM metadata와 맞춰 보는 테스트도 따로 두었습니다.
 
-**하위 패키지의 `__init__.py`는 비워 두기.** 재수출해 두면 가벼운 모듈 하나를 import해도
-LangChain이 딸려 와서 Airflow DagBag이 그 무게를 그대로 뭅니다. import 무게를 재는 테스트가
-그 경계를 지켜 줍니다.
 
 **시간대 규칙은 한 벌로.** 트리거와 날짜 경계는 KST, 저장과 로그는 UTC입니다. 제공처가 기준을
 정하는 값(FRED는 미국 영업일, ECOS는 KST, 일본 재무성은 일본 영업일)은 그 기준을 따르고 어느

@@ -205,6 +205,7 @@ npm --prefix frontend run build
 | `airflow/sql/` | `/opt/airflow/sql` |
 | `airflow/plugins/` | `/opt/airflow/plugins` |
 | `airflow/config/` | `/opt/airflow/config` |
+| `airflow/files/` | `/opt/airflow/files` — **코드가 아니라 데이터**(첨부 파일) |
 
 Airflow는 `apps/`, `../apps/core/`, `migrations/`를 보지 못한다. DAG가 실행 시점에 import하는 코드는
 전부 `airflow/` 아래 있어야 한다.
@@ -217,8 +218,13 @@ ruff isort `known-first-party`가 `pyproject.toml`에 맞춰져 있다.
 `modules/sql.py`의 `read_sql`이 `AIRFLOW_HOME`이 있으면 그 아래를, 없으면 저장소의
 `airflow/sql`을 읽는다. 컨테이너와 로컬 pytest가 같은 파일을 쓴다.
 
-로컬 Compose와 Dockerfile은 운영 Airflow에 맞춰 둔 상태다. **건드리지 않는다.** 배치 문제는
-코드 위치로만 해결한다. 실행 코드를 이미지에 굽거나 `apps/`를 볼륨으로 붙이지 않는다.
+로컬 Compose와 Dockerfile은 운영 Airflow에 맞춰 둔 상태다. **코드 배치 문제로는 건드리지
+않는다.** 실행 코드를 이미지에 굽거나 `apps/`를 볼륨으로 붙이지 않는다.
+
+**데이터 볼륨은 예외이고, 그때는 로컬과 운영 compose를 함께 고친다.** `airflow/files/`가
+그 예다(2026-08-30, `document_body_hourly`의 첨부 파일). 한쪽만 고치면 로컬에서 도는 DAG이
+운영에서 마운트 없음으로 죽는다. `.gitignore`에 내용물을 막고 `.gitkeep`을 커밋하는 것까지가
+한 벌이다 — 디렉터리가 없으면 바인드 마운트가 root 소유 빈 폴더를 만들어 Airflow가 못 쓴다.
 
 **`airflow/` 아래에는 DAG가 실제로 import·실행하는 코드만 둔다.** Airflow가 실행하지
 않는 상주 서비스·API는 `apps/` 아래에 백엔드 규칙(ORM, `config.yaml`, async)으로 두고
@@ -261,10 +267,12 @@ DAG가 쓰는 코드는 **위치는 Airflow를, 규칙은 백엔드를** 따른�
   그 경계를 재고 있어 재수출은 그 테스트를 즉시 깬다. 한 수집기의 의존성이 없는 환경에서
   관계없는 DAG이 import 오류로 죽는 것도 같은 이유다.
 - **최상위에 남는 것은 공용 잎이다.** `db`·`sql`·`upsert`·`utility`·`period`·`schema`·
-  `slack`·`llm`·`prompt`·`market_session`·`assessment`·`dedup` 열둘이고 전부 300줄 미만이다.
+  `slack`·`llm`·`prompt`·`market_session`·`assessment`·`dedup`·`graph` **열셋**이다.
+  열은 300줄 미만이고 셋이 넘는다(`assessment` 637, `graph` 414, `llm` 350 — 2026-08-30 실측).
   **이것들을 `core/` 같은 폴더로 모으지 않는다** — 114개 파일 226줄을 고치고 얻는 것이 목록
   열 줄이다(2026-08-27 실측). 폴더는 파일이 많아서 만드는 것이지 정리해 보이려고 만드는
-  것이 아니다.
+  것이 아니다. **줄 수는 폴더로 내리는 기준이 아니다** — 기준은 "한 도메인의 파일이 셋
+  이상인가"이고, 잎 하나가 길어진 것은 그 파일을 나눌 문제이지 폴더를 만들 문제가 아니다.
 - **접두어를 떼면 바인딩 이름이 짧아져 지역 변수와 겹칠 수 있다.**
   `from modules import technical`이 `from modules.technical import indicators`가 되는 식이다.
   `ruff`의 `F823`(할당 전 참조)이 그것을 잡는 유일한 장치이므로 **기계적 치환 직후에 `ruff`를

@@ -213,7 +213,8 @@ npm --prefix frontend run build
 - Airflow는 `apps/`, `../apps/core/`, `migrations/`를 보지 못한다. DAG가 실행 시점에 import하는 코드는 전부 `airflow/` 아래 둔다.
 - import 뿌리는 `airflow/`다. DAG는 배포와 같은 이름으로 `from modules.collectors import ...`처럼 쓴다. pytest `pythonpath`, pyrefly `search-path`, ruff isort `known-first-party`가 `pyproject.toml`에서 같은 뿌리를 가리킨다.
 - 쿼리는 Python 문자열이 아니라 `airflow/sql/<엔진>/<테이블>/<동작>.sql`에 둔다. `modules/sql.py`의 `read_sql`이 `AIRFLOW_HOME` 유무와 관계없이 같은 파일을 읽는다.
-- 로컬 Compose와 Dockerfile은 운영 Airflow에 맞춰 둔 상태다. 건드리지 않는다. 배치 문제는 코드 위치로만 해결하고, 실행 코드를 이미지에 굽거나 `apps/`를 볼륨으로 붙이지 않는다.
+- 로컬 Compose와 Dockerfile은 운영 Airflow에 맞춰 둔 상태다. **코드 배치 문제로는 건드리지 않는다.** 실행 코드를 이미지에 굽거나 `apps/`를 볼륨으로 붙이지 않는다.
+- **데이터 볼륨은 예외이고, 그때는 로컬과 운영 compose를 함께 고친다.** `airflow/files/`가 그 예다(2026-08-30, `document_body_hourly`의 첨부 파일). 한쪽만 고치면 로컬에서 도는 DAG이 운영에서 마운트 없음으로 죽는다. `.gitignore`에 내용물을 막고 `.gitkeep`을 커밋하는 것까지가 한 벌이다 — 디렉터리가 없으면 바인드 마운트가 root 소유 빈 폴더를 만들어 Airflow가 못 쓴다.
 - `airflow/` 아래에는 DAG가 실제로 import·실행하는 코드만 둔다. Airflow가 실행하지 않는 상주 서비스·API는 `apps/` 아래에 백엔드 규칙(ORM, `config.yaml`, async)으로 두고 FastAPI와 공유하며 배포만 컨테이너로 가른다(`apps/realtime/`가 그 예). 두 트리가 같은 도메인 상수를 쓰면 중복을 허용하되 테스트로 대조한다. 한쪽 트리가 다른 쪽을 import하지 않는 것이 우선이다.
 - DAG가 쓰는 코드는 위치는 Airflow를, 규칙은 백엔드를 따른다. DAG가 쓰는 공유 코드는 `airflow/modules` 아래 한 벌만 둔다.
 - 외부 입력은 Pydantic으로 검증하고, 시각은 timezone-aware UTC이며, 주석은 한국어로 쓴다.
@@ -226,7 +227,7 @@ npm --prefix frontend run build
 
 - **한 도메인의 파일이 셋 이상이면 폴더로 내리고 접두어를 뗀다.** `collectors/`·`briefing/`·`expectation/`·`technical/`·`thesis/`가 그 형태다(뒤의 셋은 2026-08-27). `modules.thesis.thesis_domain`이 아니라 `modules.thesis.domain`이다 — `collectors/`가 파일 이름에 남긴 접두어는 **제공처**라 뜻이 있고, `thesis_`는 **폴더가 될 것**이 이름에 붙어 있던 것이다.
 - **하위 패키지 `__init__.py`는 빈 파일이다.** 재수출하면 `modules.thesis.domain` 하나를 import해도 LangChain이 딸려 와 DagBag이 그 무게를 문다. `tests/modules/test_import_weight.py`가 그 경계를 재고 있어 재수출은 그 테스트를 즉시 깬다.
-- **최상위에 남는 것은 공용 잎 열둘이다**(`db`·`sql`·`upsert`·`utility`·`period`·`schema`·`slack`·`llm`·`prompt`·`market_session`·`assessment`·`dedup`, 전부 300줄 미만). **`core/` 같은 폴더로 모으지 않는다** — 114개 파일 226줄을 고치고 얻는 것이 목록 열 줄이다(2026-08-27 실측).
+- **최상위에 남는 것은 공용 잎 열셋이다**(`db`·`sql`·`upsert`·`utility`·`period`·`schema`·`slack`·`llm`·`prompt`·`market_session`·`assessment`·`dedup`·`graph`). 열은 300줄 미만이고 셋이 넘는다(`assessment` 637, `graph` 414, `llm` 350 — 2026-08-30 실측). **`core/` 같은 폴더로 모으지 않는다** — 114개 파일 226줄을 고치고 얻는 것이 목록 열 줄이다(2026-08-27 실측). **줄 수는 폴더로 내리는 기준이 아니다** — 기준은 "한 도메인의 파일이 셋 이상인가"이고, 잎 하나가 길어진 것은 그 파일을 나눌 문제다.
 - **접두어를 떼면 바인딩 이름이 짧아져 지역 변수와 겹칠 수 있다**(`from modules import technical` → `from modules.technical import indicators`). `ruff`의 `F823`이 그것을 잡는 유일한 장치이므로 기계적 치환 직후에 `ruff`를 먼저 돌린다. 2026-08-27 이동에서 셋이 걸렸다.
 - **이동과 파일 분리를 같은 커밋에 두지 않는다.** 어느 쪽이 회귀를 만들었는지 못 가른다. `thesis/toolbox.py`가 1,440줄로 저장소 최대이고 다음 분리 후보다.
 - **`dags/`는 폴더로 나누지 않는다.** DagBag은 하위 폴더를 재귀로 훑지만 `dag_id`가 경로와 무관해 UI에 그룹이 생기지 않는다(그 일은 `tags`가 한다). DAG은 파일당 얇고 접두어가 이미 정렬을 해 준다.

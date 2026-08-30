@@ -12,7 +12,6 @@ DOCUMENT = PendingDocument(
     source_slug="test",
     title="문서",
     summary=None,
-    body=None,
     language="ko",
     published_at=datetime(2026, 8, 14, 22, 30, tzinfo=UTC),
     content_hash="abc",

@@ -18,10 +18,9 @@ INSERT INTO document (
     language,
     published_at,
     detected_at,
-    content_level,
     content_hash,
     source_record_id
-) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
 ON CONFLICT (source_slug, external_id) DO UPDATE SET
     canonical_url = EXCLUDED.canonical_url,
     document_type = EXCLUDED.document_type,
@@ -30,7 +29,6 @@ ON CONFLICT (source_slug, external_id) DO UPDATE SET
     body = EXCLUDED.body,
     language = EXCLUDED.language,
     published_at = EXCLUDED.published_at,
-    content_level = EXCLUDED.content_level,
     content_hash = EXCLUDED.content_hash,
     source_record_id = EXCLUDED.source_record_id,
     updated_at = now()

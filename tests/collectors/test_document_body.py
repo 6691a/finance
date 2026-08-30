@@ -487,19 +487,13 @@ def test_the_update_never_touches_the_content_hash():
     assert "body_status IS NULL" in statement
 
 
-def test_content_level_rises_whenever_a_body_arrives():
-    """본문이 들어온 행은 예외 없이 `full_text`다.
-
-    **`metadata_only`를 빼 두면 CHECK가 막는다.** 그 수준에는 본문이 있으면 안 되는데
-    본문은 쓰면서 수준만 안 올리면 `ck_document_metadata_only_has_no_body` 위반으로
-    태스크가 죽는다 — 운영에서 실제로 죽었다(2026-08-30, fss 옛 행 34건).
-
-    옛 `metadata_only`는 fss 정책이 그랬던 시절의 흔적이고, 지금 그 출처의 정책은
-    `full_text`다. 본문을 받은 이상 그 행에 담긴 것은 전문이 맞다.
-    """
+def test_the_update_touches_only_the_body_and_its_status():
+    """`content_level`은 지웠다. 읽는 코드가 없는데 CHECK만 걸려 태스크를 죽였다."""
     statement = without_comments(BODY_UPDATE)
-    assert "WHEN %(body)s IS NOT NULL THEN 'full_text'" in statement
-    assert "metadata_only" not in statement
+
+    assert "content_level" not in statement
+    assert "SET body = %(body)s" in statement
+    assert "body_status = %(body_status)s" in statement
 
 
 def test_the_queue_respects_a_source_that_forbids_full_text():

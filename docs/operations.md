@@ -287,7 +287,7 @@ DAG마다 절을 두지 않습니다. 상세는 각 DAG 파일의 `doc_md`에 �
 | `yahoo_quote_daily` | 매일 07:30 | `quote_daily` | Yahoo |
 | `dart_disclosure_intraday` | 평일 07~20시 2분마다 | `disclosure_event`, `earnings_fact` | DART |
 | `document_ingestion_hourly` | 매시 05분 | `document`, `document_source` | 공식기관·언론 피드 |
-| `document_body_hourly` | 매시 15분 | `document`(본문), `document_attachment` | 문서 원문 페이지 |
+| `document_body_hourly` | 매시 15분 | `document`(`body`·`body_status`), `document_attachment` | 문서 원문 페이지 |
 | `document_assessment_hourly` | 매시 25분 | `document`, `document_instrument`, `document_indicator` | LLM (`gpt-5.6-luna`) |
 
 수집하는 DAG는 전부 `source_record`도 함께 남깁니다. 관측값이 0건이어도 남겨서, 조회했지만 값이 없는 구간과 아직 조회하지 않은 구간을 구분합니다. 예외는 둘입니다. `document_body_hourly`와 `document_assessment_hourly`는 새 문서를 발견하지 않고 이미 저장된 문서의 행을 채웁니다.

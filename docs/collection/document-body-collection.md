@@ -203,22 +203,29 @@ def content_hash(title: str, summary: str | None) -> str:
 `instrument`에 외래키를 걸지 않는 규칙과 달리 **여기는 `document`에 외래키를 건다.** 첨부는
 문서 없이 뜻이 없고, 마스터가 늦게 채워지는 문제가 없다.
 
-### 5.3 `content_level`은 본문이 들어올 때 오른다
+### 5.3 `content_level`은 지웠다
 
-`document_source.collection_mode`는 **정책**이고 `document.content_level`은 **그 문서에 실제로
-담긴 수준**이다. 지금 `store_documents`가 둘을 같은 값으로 쓰는데, 정책을 `full_text`로 올린
-뒤에도 그대로 두면 본문이 없는 문서가 `full_text`로 표시된다.
+원래 이 컬럼이 "그 문서에 실제로 담긴 수준"을 들고 있었고, 발견은 `feed_content`, 본문이
+오면 `full_text`로 올리는 규칙이었다. **지웠다**(2026-08-30).
 
-- 수집 시점(`store_documents`)은 `feed_content`로 넣는다. 본문이 아직 없다.
-- 본문이 들어오면 **예외 없이** `full_text`로 올린다.
+이유는 둘이다.
 
-**`metadata_only`를 예외로 빼면 안 된다.** 처음에 그렇게 썼다가 운영에서 태스크가 죽었다
-(2026-08-30). 그 수준에는 본문이 있으면 안 된다는 CHECK가 있어서, 본문만 쓰고 수준을 안
-올리면 `ck_document_metadata_only_has_no_body` 위반이다. fss 옛 행 34건이 걸렸다 — fss
-정책이 `metadata_only`이던 시절의 흔적이고 지금 그 출처의 정책은 `full_text`다.
+**아무도 안 읽었다.** 저장소 전체에서 쓰는 자리가 발견 시 INSERT, 본문 UPDATE, CHECK 제약
+둘뿐이고 **조회하는 SQL이 하나도 없었다.** 브리핑도 평가도 추론도 안 본다.
 
-**본문을 받으면 안 되는 출처는 저장 자리가 아니라 큐가 뺀다**(8.2). 판정을 UPDATE에 두면
-"받아 놓고 안 쓰는" 모양이 되어 요청은 이미 나간 뒤다.
+**그런데 그 CHECK가 운영 태스크를 죽였다.** `ck_document_metadata_only_has_no_body`가
+"`metadata_only`에는 본문이 없어야 한다"인데, fss 정책이 `metadata_only`이던 시절의 옛 행
+34건에 본문이 들어가면서 걸렸다. 아무도 안 읽는 값이 사고만 낸 셈이다.
+
+**이 컬럼이 하려던 일은 `body_status`가 더 정확히 한다.** "본문이 있나"는 `body_status='ok'`
+이고, "왜 없나"까지 그 컬럼이 갖는다(5.1). 정책은 원래부터 `document_source.collection_mode`가
+원본이고, 그 값은 그대로 남아 있다 — 둘은 다른 것이다.
+
+**지울 때 배포 순서가 강제된다.** 컬럼이 `NOT NULL`이라 마이그레이션을 먼저 넣으면 도는
+코드가 없는 컬럼을 쓰려다 죽고, 코드를 먼저 넣으면 값을 안 채워 `NOT NULL` 위반이다.
+`document_ingestion_hourly`와 `document_body_hourly` 둘을 한 슬롯 멈추고 코드와
+마이그레이션을 함께 넣는다. 무중단으로 하려면 리비전이 셋으로 쪼개지는데
+(NULL 허용 → 코드 배포 → DROP) 시간당 DAG에 그 값어치가 없다.
 
 ### 5.4 `collection_mode`를 전부 `full_text`로
 

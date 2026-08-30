@@ -183,20 +183,10 @@ class Document(EntityBase):
             "document_type IN ('article', 'report', 'press_release', 'speech')",
             name="ck_document_type",
         ),
-        CheckConstraint(
-            "content_level IN ('metadata_only', 'feed_content', 'full_text')",
-            name="ck_document_content_level",
-        ),
         # 평가 전이면 NULL이다. SQL에서 NULL은 CHECK를 통과하므로 따로 열어 둘 필요가 없다.
         CheckConstraint(
             "direction IN ('positive', 'negative', 'neutral')",
             name="ck_document_direction",
-        ),
-        # 본문을 저장하지 않기로 한 출처의 문서에 본문이 들어가는 것을 DB가 막는다.
-        # 수집기 판단이 어긋나도 여기서 걸린다.
-        CheckConstraint(
-            "content_level <> 'metadata_only' OR body IS NULL",
-            name="ck_document_metadata_only_has_no_body",
         ),
         # 평가 전과 마찬가지로 본문 수집 전이면 NULL이다.
         CheckConstraint(
@@ -243,7 +233,7 @@ class Document(EntityBase):
     body: Mapped[str | None] = mapped_column(
         Text,
         nullable=True,
-        comment="정규화한 본문. 길이 상한을 두지 않는다. metadata_only 출처는 NULL이며 CHECK 제약이 이를 강제한다",
+        comment="정규화한 본문. 길이 상한을 두지 않는다. 아직 못 받았으면 NULL이고 그 사유는 body_status가 갖는다",
     )
     body_status: Mapped[BodyStatus | None] = mapped_column(
         SqlEnum(
@@ -273,19 +263,6 @@ class Document(EntityBase):
         DateTime(timezone=True),
         nullable=False,
         comment="이 문서를 처음 본 시각(UTC). 발행 시각과 달리 항상 있다",
-    )
-    content_level: Mapped[CollectionMode] = mapped_column(
-        SqlEnum(
-            CollectionMode,
-            native_enum=False,
-            length=20,
-            values_callable=lambda enum: [member.value for member in enum],
-        ),
-        nullable=False,
-        comment=(
-            "이 문서에 실제로 담긴 수준. 출처 정책(document_source.collection_mode)과 다르다 — "
-            "발견 시점에는 feed_content이고 본문이 들어온 뒤에야 full_text로 오른다"
-        ),
     )
     content_hash: Mapped[str] = mapped_column(
         Text,

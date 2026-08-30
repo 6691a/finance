@@ -465,14 +465,9 @@ def store_documents(
     **본문은 여기서 채우지 않는다.** 발견은 목록이나 피드 한 번이고 본문은 문서마다 요청이
     한 번 더 든다. 그 일은 `document_body_hourly`가 하고 여기는 `body_status`를 NULL로 남겨
     그 큐에 넣는다.
-
-    그래서 `content_level`도 **출처 정책을 그대로 쓰지 않는다.** 정책이 `full_text`여도 지금
-    이 행에 실제로 담긴 것은 제목과 요약뿐이라 `feed_content`다. `full_text`로 올리는 것은
-    본문이 들어올 때다.
     """
     detected_at = detected_at or datetime.now(UTC)
     keep_summary = source.collection_mode != "metadata_only"
-    content_level = "feed_content" if keep_summary else "metadata_only"
 
     outcome = SourceOutcome(
         slug=source.slug,
@@ -520,7 +515,6 @@ def store_documents(
                     source.language,
                     item.published_at,
                     detected_at,
-                    content_level,
                     content_hash(item.title, item.summary if keep_summary else None),
                     source_record_id,
                 )

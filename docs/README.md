@@ -51,6 +51,7 @@
 
 | 문서 | 무엇 |
 | --- | --- |
+| [operations.md](operations.md) | 설정·DB alias·마이그레이션·DAG 목록·배포·관측. 저장소를 돌리는 쪽이 읽는다 |
 | [collection-map.html](collection-map.html) | 지금 무엇을 얼마나 자주 수집하는지 한 장 |
 | [project-presentation.html](project-presentation.html) | 비개발자용 프로젝트 소개 슬라이드 |
 

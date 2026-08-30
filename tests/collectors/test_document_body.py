@@ -1,3 +1,4 @@
+import hashlib
 import re
 from datetime import UTC, datetime
 from typing import Self
@@ -300,7 +301,8 @@ def test_a_page_whose_body_lives_in_an_attachment_is_marked_attachment_only(monk
     assert result.file_urls == ("https://www.boj.or.jp/f/report.pdf",)
 
     # 파일은 별도 요청이다. 그 실패가 본문 저장을 되돌리지 않게 나뉘어 있다.
-    attachment = DocumentBodyCollector(tmp_path).download(result.file_urls[0], 0, FETCHED_AT)
+    candidate = BodyCandidate(id=7, source_slug="boj", canonical_url="https://www.boj.or.jp/a.htm")
+    attachment = DocumentBodyCollector(tmp_path).download(candidate, result.file_urls[0], 0, FETCHED_AT)
     stored = tmp_path / attachment.storage_path
     assert stored.read_bytes() == b"%PDF-1.7 x"
     assert stored.suffix == ".pdf"
@@ -322,22 +324,68 @@ def test_a_page_with_neither_body_nor_attachment_is_empty_not_a_failure(monkeypa
     assert result.video_urls == ()
 
 
-def test_the_download_path_comes_from_the_content_hash(monkeypatch, tmp_path):
-    """같은 파일을 두 문서가 가리키면 한 벌만 남고, 다시 집어도 파일이 늘지 않는다."""
+def test_the_download_path_is_the_document_folder(monkeypatch, tmp_path):
+    """디스크만 보고 어느 출처의 어느 문서인지 알 수 있어야 한다.
+
+    내용 해시로 두면 `00/00ab3f….pdf`가 되어 매번 DB를 조회해야 무엇인지 안다. 백업을
+    뒤지거나 용량이 튀었을 때 원인을 못 짚는다.
+    """
+    monkeypatch.setattr(
+        "modules.collectors.document.body.fetch_url",
+        lambda *args, **kwargs: FakeResponse(b"%PDF-1.7", {"Content-Type": "application/pdf"}),
+    )
+    candidate = BodyCandidate(id=1042, source_slug="boj", canonical_url="https://www.boj.or.jp/a.htm")
+
+    attachment = DocumentBodyCollector(tmp_path).download(candidate, "https://x.example/a.pdf", 0, FETCHED_AT)
+
+    assert attachment.storage_path == "documents/boj/1042/0.pdf"
+    assert (tmp_path / attachment.storage_path).read_bytes() == b"%PDF-1.7"
+    assert attachment.byte_size == len(b"%PDF-1.7")
+    assert attachment.fetched_at == FETCHED_AT
+    # 해시는 경로에서 빠졌지만 컬럼에는 남는다. 중복은 나중에 조회로 찾는다.
+    assert attachment.sha256 == hashlib.sha256(b"%PDF-1.7").hexdigest()
+
+
+def test_every_attachment_of_one_document_lands_in_the_same_folder(monkeypatch, tmp_path):
+    """문서 하나가 폴더 하나다. 첨부가 여섯이어도 한자리에 모인다(금감원이 그렇다)."""
+    monkeypatch.setattr(
+        "modules.collectors.document.body.fetch_url",
+        lambda *args, **kwargs: FakeResponse(b"x", {"Content-Type": "application/pdf"}),
+    )
+    candidate = BodyCandidate(id=225621, source_slug="fss", canonical_url="https://www.fss.or.kr/v.do")
+    collector = DocumentBodyCollector(tmp_path)
+
+    paths = [collector.download(candidate, f"https://x.example/{index}.pdf", index).storage_path for index in range(3)]
+
+    assert paths == ["documents/fss/225621/0.pdf", "documents/fss/225621/1.pdf", "documents/fss/225621/2.pdf"]
+    assert sorted(path.name for path in (tmp_path / "documents/fss/225621").iterdir()) == [
+        "0.pdf",
+        "1.pdf",
+        "2.pdf",
+    ]
+
+
+def test_two_documents_pointing_at_one_file_each_keep_their_own_copy(monkeypatch, tmp_path):
+    """중복 제거를 버린 대가다. 그 대신 경로가 문서를 가리킨다.
+
+    겹치는 파일이 얼마나 되는지는 재 본 적이 없다. 안 잰 이득을 위해 읽기 어려운 경로를
+    고르지 않는다. 필요해지면 `sha256` 컬럼으로 조회해 찾는다.
+    """
     monkeypatch.setattr(
         "modules.collectors.document.body.fetch_url",
         lambda *args, **kwargs: FakeResponse(b"same bytes", {"Content-Type": "application/pdf"}),
     )
     collector = DocumentBodyCollector(tmp_path)
+    first = collector.download(
+        BodyCandidate(id=1, source_slug="boj", canonical_url="https://a"), "https://x.example/a.pdf", 0
+    )
+    second = collector.download(
+        BodyCandidate(id=2, source_slug="boj", canonical_url="https://b"), "https://x.example/a.pdf", 0
+    )
 
-    first = collector.download("https://a.example/x.pdf", 0, FETCHED_AT)
-    second = collector.download("https://b.example/y.pdf", 1, FETCHED_AT)
-
+    assert first.storage_path != second.storage_path
     assert first.sha256 == second.sha256
-    assert first.storage_path == second.storage_path
-    assert first.byte_size == len(b"same bytes")
-    assert first.fetched_at == FETCHED_AT
-    assert len(list(tmp_path.rglob("*.pdf"))) == 1
+    assert len(list(tmp_path.rglob("*.pdf"))) == 2
 
 
 def test_the_filename_prefers_what_the_provider_declared(monkeypatch, tmp_path):
@@ -348,10 +396,14 @@ def test_the_filename_prefers_what_the_provider_declared(monkeypatch, tmp_path):
         ),
     )
 
-    attachment = DocumentBodyCollector(tmp_path).download("https://x.example/fileDown.do?id=1", 0, FETCHED_AT)
+    candidate = BodyCandidate(id=9, source_slug="fss", canonical_url="https://www.fss.or.kr/v.do")
+    attachment = DocumentBodyCollector(tmp_path).download(
+        candidate, "https://x.example/fileDown.do?id=1", 0, FETCHED_AT
+    )
 
+    # 제공처 이름은 컬럼에 남기고 경로에는 안 쓴다. 한글·공백·괄호가 섞여 있고 길이도 길다.
     assert attachment.filename == "보도자료.hwp"
-    assert attachment.storage_path.endswith(".hwp")
+    assert attachment.storage_path == "documents/fss/9/0.hwp"
 
 
 def test_the_queue_is_the_backfill():

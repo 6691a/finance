@@ -36,7 +36,7 @@ def run_collect(monkeypatch, tmp_path, *, waiting, collect, download=None, batch
         def collect(self, candidate):
             return collect(candidate)
 
-        def download(self, url, position, now=None):
+        def download(self, candidate, url, position, now=None):
             assert download is not None
             return download(url, position)
 

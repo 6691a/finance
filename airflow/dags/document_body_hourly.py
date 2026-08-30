@@ -174,7 +174,7 @@ def _attach_files(
     """
     for position, url in enumerate(result.file_urls):
         try:
-            attachment = collector.download(url, position)
+            attachment = collector.download(candidate, url, position)
         except (DocumentHTTPError, ConnectionError) as error:
             logger.warning("attachment %s of document %s failed: %s", url, candidate.id, error)
             failures.append(f"{candidate.id}:{url}({error})")

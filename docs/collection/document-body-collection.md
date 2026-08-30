@@ -529,8 +529,13 @@ init 서비스의 `chown` 목록에도 `files`를 넣었다. 컨테이너는
    chunk_overlap=200)`, HNSW 인덱스. **pgvector 0.8.4가 운영 DB에 이미 설치돼 있다**
    (2026-08-30 확인). 임베딩 모델은 새 의존성이 없다 — `langchain_openai`가 이미 있고
    `OPENAI_API_KEY`를 그대로 쓴다.
-3. **키워드 검색.** `tsvector` + GIN. 한국어 형태소 분석기가 없어 조사가 붙은 말은 따로
-   잡힌다는 한계를 안고 간다. `pg_trgm`은 available이지만 미설치다.
+3. **키워드 검색은 `pg_search`(BM25)다. `tsvector`가 아니다.** 운영 DB가 ParadeDB이고
+   **`pg_search` 0.25.2가 이미 설치돼 `shared_preload_libraries`에 올라가 있다**
+   (2026-08-30 확인. `bm25` 접근 메서드와 `pdb.lindera_*` 함수군, `paradedb`·`pdb` 스키마도
+   있다). `tsvector`는 한국어 형태소 분석기가 없어 `삼성전자가`와 `삼성전자는`이 따로
+   잡히는데, lindera는 그것을 가른다. 새 의존성도 새 인프라도 없다.
+   문법은 버전을 타므로 상위 설계 4절에 적힌 0.25.2 형태를 그대로 쓴다 —
+   `pdb.lindera('korean')`은 인덱스 토크나이저 이름이 아니라 **컬럼에 씌우는 캐스트**다.
 4. **하이브리드 순위.** 2와 3을 RRF로 합친다. 상위 설계 6.4 ③의 회색지대 판정
    (코사인 0.80~0.95만 LLM에게 묻는다)도 여기서 함께 선다.
 5. **소비자 붙이기.** market-thesis의 `search_documents` 툴, `apps/api`의

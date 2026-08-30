@@ -159,6 +159,21 @@ def test_attachments_are_found_without_a_per_source_rule():
     )
 
 
+def test_attachments_survive_the_elements_the_body_rule_throws_away():
+    """한국은행 게시판은 첨부를 `<form>` 안에 둔다. 그 `<form>`이 페이지의 98%다.
+
+    본문에서 걷어내는 요소를 첨부 찾기에도 적용하면 그 130건이 통째로 `empty`가 되고
+    PDF도 영영 안 받는다(2026-08-30 실측: 388,802자 → 7,136자, 첨부 링크 8개 → 0개).
+    """
+    html = (
+        "<html><body><form><a href='/fileSrc/a/2024.hwp'>붙임</a></form>"
+        "<figure><video src='/m/clip.mp4'></video></figure></body></html>"
+    )
+
+    assert find_attachment_urls(html, "https://www.bok.or.kr/v.do") == ("https://www.bok.or.kr/fileSrc/a/2024.hwp",)
+    assert find_video_urls(html, "https://www.bok.or.kr/v.do") == ("https://www.bok.or.kr/m/clip.mp4",)
+
+
 def test_a_pdf_viewer_link_is_not_an_attachment():
     """한국은행은 같은 PDF를 뷰어 링크로도 건다. 확장자가 질의 문자열에 있을 뿐 파일이 아니다."""
     html = page('<a href="/static/pdfjs/viewer.html?file=%2FfileSrc%2Fa.pdf">뷰어</a>')

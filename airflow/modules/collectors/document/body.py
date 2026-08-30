@@ -16,7 +16,7 @@
 
 출처 15곳에 실제로 요청해 정한 규칙이다.
 
-1. `script`·`style`·`nav`·`footer`·`header`·`aside`·`form`·`figure`·`noscript`를 통째로 지운다.
+1. `script`·`style`·`nav`·`footer`·`header`·`aside`·`figure`·`noscript`를 통째로 지운다.
 2. `article` → `[itemprop=articleBody]` → `main` → `body` 순으로 컨테이너를 보고, **문단을
    이어 붙인 길이가 `MIN_BODY_LENGTH`를 처음 넘는 컨테이너에서 멈춘다.**
 3. 문단은 `<p>`이고 `MIN_PARAGRAPH_LENGTH`자 미만은 버린다.
@@ -38,6 +38,9 @@
 첨부는 **출처별 규칙이 필요 없었다.** 한국은행·금감원·BOJ 셋 다 파일 확장자나 내려받기
 경로를 링크에 그대로 노출한다(`/fileSrc/...hwp`, `fileDown.do`, `data/rev26e11.pdf`).
 네이버 리서치만 화면이 JavaScript라 목록·상세와 같은 내부 JSON에서 `attachUrl`을 읽는다.
+
+**첨부와 영상은 위 1번의 정리를 거치지 않은 원본에서 찾는다.** 링크는 본문이 아니라서 화면
+장식 안에 있어도 이상하지 않다 — 영상은 `<figure>` 안이 오히려 제자리다.
 
 영상은 내려받지 않고 링크만 남긴다. 찾는 자리 넷을 위에서부터 본다.
 
@@ -82,8 +85,12 @@ logger = logging.getLogger(__name__)
 DEFAULT_FILE_ROOT = Path("/opt/airflow/files")
 
 # 본문이 아니라 화면 장식이라 통째로 지운다. 태그만 벗기면 CSS와 메뉴가 본문 앞에 붙는다.
+#
+# **`<form>`은 넣지 않는다.** eGov 게시판은 화면 전체를 `<form>`으로 감싼다 — 한국은행
+# 보도자료에서 그것을 지우면 388,802자가 7,136자로 줄어 첨부 링크 8개가 통째로 사라졌다
+# (2026-08-30 실측). 검색창 라벨 같은 짧은 조각은 문단 길이 하한이 이미 거른다.
 DROP_ELEMENTS = re.compile(
-    r"(?is)<(script|style|nav|footer|header|aside|form|figure|noscript)[^>]*>.*?</\1>",
+    r"(?is)<(script|style|nav|footer|header|aside|figure|noscript)[^>]*>.*?</\1>",
 )
 
 # 본문이 들어 있을 만한 자리를 좁은 것부터 본다. **순서가 규칙이다** — `body`는 언제나
@@ -218,7 +225,11 @@ def detail_url(source_slug: str, canonical_url: str) -> str:
 
 
 def clean_markup(raw: str) -> str:
-    """본문이 아닌 요소를 통째로 지운다."""
+    """본문이 아닌 요소를 통째로 지운다. **본문을 뽑을 때만 쓴다.**
+
+    첨부와 영상은 이 정리를 거치지 않은 원본에서 찾는다. 링크는 본문이 아니라서 화면 장식
+    안에 얼마든지 있을 수 있다 — 영상은 `<figure>` 안이 오히려 제자리다.
+    """
     return DROP_ELEMENTS.sub(" ", raw)
 
 
@@ -246,8 +257,11 @@ def find_attachment_urls(raw: str, base_url: str) -> tuple[str, ...]:
     """내려받을 첨부의 절대 URL. 순서는 페이지에 나온 차례이고 중복은 뗀다.
 
     같은 파일이 이름 링크와 `다운로드` 링크로 두 번 나오는 게시판이 흔하다(한국은행·금감원).
+
+    **본문 정리를 거치지 않은 원본에서 찾는다.** 첨부는 본문이 아니라서 화면 장식 안에
+    있어도 이상하지 않다.
     """
-    document = Selector(content=clean_markup(raw))
+    document = Selector(content=raw)
     found: list[str] = []
     for anchor in document.css("a"):
         href = (anchor.attrib.get("href") or "").strip()
@@ -287,8 +301,11 @@ def find_video_urls(raw: str, canonical_url: str) -> tuple[str, ...]:
     """영상 링크. 위에서부터 처음 걸리는 자리 하나만 쓴다.
 
     자리를 섞으면 같은 영상이 재생기 주소와 페이지 주소로 두 번 저장된다.
+
+    **본문 정리를 거치지 않은 원본에서 찾는다.** 영상은 `<figure>` 안에 있는 것이 오히려
+    제자리다.
     """
-    document = Selector(content=clean_markup(raw))
+    document = Selector(content=raw)
 
     embedded = []
     for element in document.css("video, video source"):

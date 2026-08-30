@@ -83,11 +83,30 @@ def store_paths(
     수렴했다. 폭주는 아래 `VocabularyDriftError`가 막는다 — 그쪽은 데이터를 버리지 않고
     태스크를 죽인다.
     """
-    new_channels: dict[str, int] = {}
+    # 이름 → id. 이 실행이 `_upsert_channel`로 해결한 이름 전부다.
+    resolved: dict[str, int] = {}
+    # 그중 **이번 주에 처음 생긴 것**. 어휘 수렴을 재는 값은 이쪽이다(2026-08-30 정정).
+    #
+    # 전에는 `resolved`의 크기를 그대로 썼는데 그것은 "새 이름 수"가 아니라 "이름으로 넘긴
+    # 횟수"다. upsert는 이름이 이미 있으면 행을 안 만들고 기존 id를 돌려주므로 둘이 다르다.
+    # **링커가 그 차이를 상시화했다** — 링커는 저장 전 채널의 `c:<id>`를 알 수 없어 이름만
+    # 낼 수 있고(설계 §11.4), 그래서 기존 채널을 완벽히 재사용해도 전부 새 이름으로 세어졌다.
+    # 2026-08-17 주 실측에서 링커가 쓴 셋이 그대로 `new_channels: 3`이 됐는데 실제로 생긴
+    # 채널은 0이었다.
+    created: set[str] = set()
     event_ids: dict[tuple[str, date], int] = {}
     reused_any = False
     stored = 0
     linked = 0
+
+    def channel_id_for(name: str) -> int:
+        if name in resolved:
+            return resolved[name]
+        channel_id, first_seen = _upsert_channel(connection, name, window.week_start)
+        resolved[name] = channel_id
+        if first_seen == window.week_start:
+            created.add(name)
+        return channel_id
 
     for path in paths:
         target = returns.get(path.target_code)
@@ -101,12 +120,7 @@ def store_paths(
                 reused_any = True
                 channel_ids.append(_node_id(choice.existing_id))
                 continue
-            if choice.new_name in new_channels:
-                channel_ids.append(new_channels[choice.new_name])
-                continue
-            channel_id = _upsert_channel(connection, choice.new_name, window.week_start)
-            new_channels[choice.new_name] = channel_id
-            channel_ids.append(channel_id)
+            channel_ids.append(channel_id_for(choice.new_name))
 
         event_id = _resolve_event(connection, path, window, event_ids)
         if event_id is None:
@@ -134,14 +148,7 @@ def store_paths(
         target = returns.get(link.target_code)
         if target is None:
             continue
-        channel_ids = []
-        for name in link.channels:
-            if name in new_channels:
-                channel_ids.append(new_channels[name])
-                continue
-            channel_id = _upsert_channel(connection, name, window.week_start)
-            new_channels[name] = channel_id
-            channel_ids.append(channel_id)
+        channel_ids = [channel_id_for(name) for name in link.channels]
         path_id = _insert_linked_path(
             connection,
             window=window,
@@ -157,16 +164,21 @@ def store_paths(
         _insert_evidence(connection, path_id, link.evidence_refs)
         linked += 1
 
-    if new_channels:
+    if created:
         # 어휘가 수렴하는지는 이 수가 말한다. 매주 늘기만 하면 정규화가 안 되고 있는 것이다.
-        logger.info("causal vocabulary grew by %s channels: %s", len(new_channels),
-                    ", ".join(new_channels))
+        logger.info("causal vocabulary grew by %s channels: %s", len(created),
+                    ", ".join(sorted(created)))
+    # **판정은 답이 id로 고른 것만 본다.** 링커는 `existing_id`를 낼 수 없어(설계 §11.4)
+    # 기존 채널을 완벽히 재사용해도 `reused_any`를 켜지 않는다. 이 가드가 재는 것은
+    # "모델이 후보 목록을 보고 골랐나"이고 링커는 그 목록을 받지 않으므로 그것이 맞다 —
+    # 링커의 재사용으로 이 가드를 달래면 정작 후보 목록이 안 먹히는 주를 못 잡는다.
     if require_reuse and paths and not reused_any:
         raise VocabularyDriftError(
-            f"no path reused an existing channel; {len(new_channels)} new names were proposed"
+            f"no path reused an existing channel; {len(created)} new names were created "
+            f"from {len(resolved)} proposed"
         )
     connection.commit()
-    return StoreOutcome(stored=stored, new_channels=len(new_channels), linked=linked)
+    return StoreOutcome(stored=stored, new_channels=len(created), linked=linked)
 
 
 def _node_id(existing_id: str) -> int:
@@ -174,11 +186,18 @@ def _node_id(existing_id: str) -> int:
     return int(existing_id.split(":", 1)[-1])
 
 
-def _upsert_channel(connection: TransactionalConnection, name: str, week_start: date) -> int:
+def _upsert_channel(
+    connection: TransactionalConnection, name: str, week_start: date
+) -> tuple[int, date]:
+    """채널 id와 그 채널이 **처음 나온 주**를 돌려준다.
+
+    upsert라 이름이 이미 있으면 행이 안 생기고 예전 주가 돌아온다. 부르는 쪽이 그것을
+    `week_start`와 비교해 어휘가 실제로 늘었는지 판정한다.
+    """
     with connection.cursor() as cursor:
         cursor.execute(CHANNEL_UPSERT, (name, week_start))
         row = cursor.fetchone()
-    return int(row[0])
+    return int(row[0]), row[1]
 
 
 def _resolve_event(

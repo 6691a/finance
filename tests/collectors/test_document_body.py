@@ -1,0 +1,428 @@
+import re
+from datetime import UTC, datetime
+from typing import Self
+
+import pytest
+from sqlalchemy import Table
+
+from apps.models.content import DocumentAttachment as AttachmentModel
+from modules.collectors.document.body import (
+    ATTACHMENT_UPSERT,
+    BODY_UPDATE,
+    MIN_BODY_LENGTH,
+    MIN_PARAGRAPH_LENGTH,
+    PENDING_BODIES,
+    Attachment,
+    BodyCandidate,
+    DocumentBody,
+    DocumentBodyCollector,
+    detail_url,
+    extract_body,
+    find_attachment_urls,
+    find_video_urls,
+    naver_attachment_urls,
+    paragraph_selector,
+    pending_bodies,
+)
+from modules.collectors.document.documents import DocumentPayloadError
+
+FETCHED_AT = datetime(2026, 8, 30, 9, 15, tzinfo=UTC)
+
+LONG = "이것은 문단 하나가 본문으로 인정받을 만큼 충분히 긴 문장이며 숫자와 맥락을 담고 있다."
+
+
+def page(inner: str, container: str = "article") -> str:
+    return f"<html><body><{container}>{inner}</{container}></body></html>"
+
+
+def paragraphs(count: int) -> str:
+    return "".join(f"<p>{LONG} {index}</p>" for index in range(count))
+
+
+def without_comments(statement: str) -> str:
+    """설명 주석을 뗀 SQL. 주석이 규칙을 글로 적고 있어 그대로 찾으면 늘 걸린다."""
+    return re.sub(r"(?m)^\s*--.*$", "", statement)
+
+
+class FakeCursor:
+    def __init__(self, rows: list | None = None) -> None:
+        self.calls: list[tuple[str, object]] = []
+        self.rows = rows or []
+        self.rowcount = 1
+
+    def __enter__(self) -> Self:
+        return self
+
+    def __exit__(self, *args: object) -> bool:
+        return False
+
+    def execute(self, statement: str, parameters: object = ()) -> None:
+        self.calls.append((statement, parameters))
+
+    def fetchall(self) -> list:
+        return self.rows
+
+
+class FakeConnection:
+    def __init__(self, rows: list | None = None) -> None:
+        self.recorded_cursor = FakeCursor(rows)
+
+    def cursor(self) -> FakeCursor:
+        return self.recorded_cursor
+
+
+class FakeResponse:
+    def __init__(self, body: bytes, headers: dict[str, str] | None = None) -> None:
+        self.body = body
+        self.headers = headers or {}
+        self.status = 200
+
+
+def test_the_paragraph_ladder_stops_at_the_narrowest_container_that_has_a_body():
+    """`body`는 언제나 `main`을 포함한다. 가장 긴 것을 고르면 화면 문구가 늘 함께 들어온다.
+
+    미국 연준 보도자료가 그렇게 "An official website of the United States Government"를
+    본문 앞에 달고 저장될 뻔했다(2026-08-30 실측).
+    """
+    chrome = f"<p>{'화면 안내 문구입니다. ' * 12}</p>"
+    html = f"<html><body>{chrome}<main>{paragraphs(4)}</main></body></html>"
+
+    body = extract_body(html)
+
+    assert body is not None
+    assert "화면 안내 문구" not in body
+    assert body.count("이것은 문단") == 4
+
+
+def test_a_page_below_the_floor_has_no_body_at_all():
+    """금융감독원 게시판은 본문이 첨부에만 있는데 안내 문구 한 문단이 잡힌다.
+
+    하한이 없으면 그 한 문장이 본문으로 저장되고, 검색은 그것을 기사로 읽는다.
+    """
+    assert MIN_PARAGRAPH_LENGTH < MIN_BODY_LENGTH
+    short = "자주쓰는 메뉴를 설정하시거나, 유형별 서비스를 찾아서 바로 이용해보세요."
+    assert len(short) >= MIN_PARAGRAPH_LENGTH
+
+    assert extract_body(page(f"<p>{short}</p>")) is None
+
+
+def test_short_paragraphs_are_not_body():
+    assert extract_body(page("<p>짧다</p>" * 30)) is None
+
+
+def test_scripts_and_menus_never_reach_the_body():
+    noisy = (
+        "<script>var tracking = 1;</script>"
+        "<style>.a{color:red}</style>"
+        "<nav><p>메뉴 항목이 길게 늘어서 있는 내비게이션 문단입니다 정말로</p></nav>"
+        f"{paragraphs(4)}"
+    )
+
+    body = extract_body(page(noisy))
+
+    assert body is not None
+    assert "tracking" not in body
+    assert "color:red" not in body
+    assert "내비게이션" not in body
+
+
+def test_the_body_has_no_length_cap():
+    """저장은 원본 보존이다. 프롬프트에 얼마를 실을지는 읽는 쪽이 정한다."""
+    body = extract_body(page(paragraphs(400)))
+
+    assert body is not None
+    assert len(body) > 20_000
+
+
+def test_only_the_listed_sources_read_list_items_as_body():
+    """`li`를 기본으로 열면 메뉴와 관련기사가 함께 들어온다."""
+    assert paragraph_selector("cnbc") == "p"
+    assert paragraph_selector("whitehouse") == "p, li"
+
+
+def test_attachments_are_found_without_a_per_source_rule():
+    """한국은행·금감원·BOJ 셋 다 확장자나 내려받기 경로를 링크에 그대로 노출한다."""
+    html = page(
+        '<a href="/fileSrc/portal/abc/1/2024.hwp">붙임1</a>'
+        '<a href="/fileSrc/portal/abc/1/2024.hwp">다운로드</a>'
+        '<a href="/fss/cmmn/file/fileDown.do?atchFileId=x&fileSn=1">보도자료</a>'
+        '<a href="data/rev26e11.pdf">Full Text</a>'
+        '<a href="/about">회사 소개</a>'
+    )
+
+    found = find_attachment_urls(html, "https://example.org/board/view.do")
+
+    assert found == (
+        "https://example.org/fileSrc/portal/abc/1/2024.hwp",
+        "https://example.org/fss/cmmn/file/fileDown.do?atchFileId=x&fileSn=1",
+        "https://example.org/board/data/rev26e11.pdf",
+    )
+
+
+def test_a_pdf_viewer_link_is_not_an_attachment():
+    """한국은행은 같은 PDF를 뷰어 링크로도 건다. 확장자가 질의 문자열에 있을 뿐 파일이 아니다."""
+    html = page('<a href="/static/pdfjs/viewer.html?file=%2FfileSrc%2Fa.pdf">뷰어</a>')
+
+    assert find_attachment_urls(html, "https://www.bok.or.kr/x") == ()
+
+
+def test_naver_research_reads_the_attachment_from_its_own_json():
+    payload = b'{"researchContent": {"content": "\\uc694\\uc57d", "attachUrl": "https://s.pstatic.net/a.pdf"}}'
+
+    assert naver_attachment_urls(payload) == ("https://s.pstatic.net/a.pdf",)
+
+
+def test_naver_research_without_an_attachment_is_not_a_failure():
+    assert naver_attachment_urls(b'{"researchContent": {"content": null}}') == ()
+
+
+def test_naver_research_html_instead_of_json_is_a_failure():
+    """경로가 바뀌면 HTML 안내가 200으로 온다. 조용히 0건으로 넘기면 몇 달째 비어도 모른다."""
+    with pytest.raises(DocumentPayloadError):
+        naver_attachment_urls(b"<html>Not found</html>")
+
+
+def test_the_naver_detail_url_is_the_json_behind_the_screen():
+    assert (
+        detail_url("naver_research_economy", "https://m.stock.naver.com/research/economy/13742")
+        == "https://m.stock.naver.com/api/research/economy/13742"
+    )
+    assert detail_url("cnbc", "https://www.cnbc.com/a.html") == "https://www.cnbc.com/a.html"
+
+
+def test_a_video_tag_wins_over_everything_else():
+    html = page('<video src="/media/clip.mp4"></video><iframe src="https://www.youtube.com/embed/x"></iframe>')
+
+    assert find_video_urls(html, "https://example.org/a") == ("https://example.org/media/clip.mp4",)
+
+
+def test_only_known_players_count_as_a_video_iframe():
+    """연합뉴스 기사 페이지의 첫 `iframe`이 게임 위젯이었다(2026-08-30 실측).
+
+    아무 `iframe`이나 집으면 그 위젯이 영상으로 저장된다.
+    """
+    html = page(
+        '<iframe src="https://games.yna.co.kr/embed?screen=pc"></iframe>'
+        '<iframe src="https://www.youtube.com/embed/abc"></iframe>'
+    )
+
+    assert find_video_urls(html, "https://www.yna.co.kr/view/AKR1") == ("https://www.youtube.com/embed/abc",)
+
+
+def test_a_widget_iframe_alone_is_not_a_video():
+    html = page('<iframe src="https://games.yna.co.kr/embed?screen=pc"></iframe>')
+
+    assert find_video_urls(html, "https://www.yna.co.kr/view/AKR1") == ()
+
+
+def test_a_media_url_in_the_markup_is_taken_when_there_is_no_player():
+    """CNBC가 재생 주소를 HTML에 그대로 싣는다(2026-08-30 실측)."""
+    html = page('<div data-src="https://pdl.cnbc.com/7000/hd_L.mp4"></div>')
+
+    assert find_video_urls(html, "https://www.cnbc.com/a.html") == ("https://pdl.cnbc.com/7000/hd_L.mp4",)
+
+
+def test_a_video_page_that_hydrates_its_player_falls_back_to_its_own_url():
+    """BBC 영상 페이지에는 `og:video`도 `iframe`도 `<video>`도 `.mp4`도 없다.
+
+    재생기를 JavaScript가 만든다(2026-08-30 실측). 주소 말고 남길 것이 없지만, 그 문서가
+    영상이라는 사실 자체가 읽는 쪽에 필요하다.
+    """
+    url = "https://www.bbc.co.uk/news/videos/c4gjn4ezljno"
+
+    assert find_video_urls(page(paragraphs(3)), url) == (url,)
+
+
+def test_an_article_page_is_not_guessed_to_be_a_video():
+    url = "https://www.bbc.co.uk/news/articles/cy9zjgv9lgdo"
+
+    assert find_video_urls(page(paragraphs(3)), url) == ()
+
+
+def test_a_video_document_still_keeps_its_body():
+    """영상 페이지에도 설명 문단이 있다. 영상이라고 본문을 버리지 않는다."""
+    url = "https://www.bbc.co.uk/news/videos/c4gjn4ezljno"
+    html = page(paragraphs(4))
+
+    body = extract_body(html)
+    videos = find_video_urls(html, url)
+
+    assert body is not None
+    assert videos == (url,)
+
+
+def test_a_source_without_a_document_url_is_settled_without_a_request(monkeypatch):
+    """KRX 보도자료는 내용 조회도 POST라 문서별 GET 딥링크가 없다.
+
+    요청해 봐야 목록 화면이 온다. 받아 보지 않고 확정해 36건의 헛요청을 없앤다.
+    """
+
+    def explode(*args: object, **kwargs: object):
+        raise AssertionError("KRX must not be requested")
+
+    monkeypatch.setattr("modules.collectors.document.body.fetch_url", explode)
+
+    result = DocumentBodyCollector().collect(
+        BodyCandidate(id=1, source_slug="krx", canonical_url="https://open.krx.co.kr/x.jsp?noti_no=1")
+    )
+
+    assert result == DocumentBody(document_id=1, status="unavailable")
+
+
+def test_a_page_whose_body_lives_in_an_attachment_is_marked_attachment_only(monkeypatch, tmp_path):
+    html = page('<a href="/f/report.pdf">붙임</a>')
+    responses = iter([FakeResponse(html.encode()), FakeResponse(b"%PDF-1.7 x", {"Content-Type": "application/pdf"})])
+    monkeypatch.setattr(
+        "modules.collectors.document.body.fetch_url", lambda *args, **kwargs: next(responses)
+    )
+
+    result = DocumentBodyCollector(tmp_path).collect(
+        BodyCandidate(id=7, source_slug="boj", canonical_url="https://www.boj.or.jp/a.htm")
+    )
+
+    assert result.status == "attachment_only"
+    assert result.body is None
+    assert result.file_urls == ("https://www.boj.or.jp/f/report.pdf",)
+
+    # 파일은 별도 요청이다. 그 실패가 본문 저장을 되돌리지 않게 나뉘어 있다.
+    attachment = DocumentBodyCollector(tmp_path).download(result.file_urls[0], 0, FETCHED_AT)
+    stored = tmp_path / attachment.storage_path
+    assert stored.read_bytes() == b"%PDF-1.7 x"
+    assert stored.suffix == ".pdf"
+
+
+def test_a_page_with_neither_body_nor_attachment_is_empty_not_a_failure(monkeypatch, tmp_path):
+    """목록 화면을 가리키는 문서가 있다. 새 글이 없는 것과 같아 실패가 아니다."""
+    monkeypatch.setattr(
+        "modules.collectors.document.body.fetch_url",
+        lambda *args, **kwargs: FakeResponse(page("<p>짧다</p>").encode()),
+    )
+
+    result = DocumentBodyCollector(tmp_path).collect(
+        BodyCandidate(id=8, source_slug="census", canonical_url="https://www.census.gov/i.html")
+    )
+
+    assert result.status == "empty"
+    assert result.file_urls == ()
+    assert result.video_urls == ()
+
+
+def test_the_download_path_comes_from_the_content_hash(monkeypatch, tmp_path):
+    """같은 파일을 두 문서가 가리키면 한 벌만 남고, 다시 집어도 파일이 늘지 않는다."""
+    monkeypatch.setattr(
+        "modules.collectors.document.body.fetch_url",
+        lambda *args, **kwargs: FakeResponse(b"same bytes", {"Content-Type": "application/pdf"}),
+    )
+    collector = DocumentBodyCollector(tmp_path)
+
+    first = collector.download("https://a.example/x.pdf", 0, FETCHED_AT)
+    second = collector.download("https://b.example/y.pdf", 1, FETCHED_AT)
+
+    assert first.sha256 == second.sha256
+    assert first.storage_path == second.storage_path
+    assert first.byte_size == len(b"same bytes")
+    assert first.fetched_at == FETCHED_AT
+    assert len(list(tmp_path.rglob("*.pdf"))) == 1
+
+
+def test_the_filename_prefers_what_the_provider_declared(monkeypatch, tmp_path):
+    monkeypatch.setattr(
+        "modules.collectors.document.body.fetch_url",
+        lambda *args, **kwargs: FakeResponse(
+            b"x", {"Content-Disposition": 'attachment; filename="보도자료.hwp"', "Content-Type": "application/x-hwp"}
+        ),
+    )
+
+    attachment = DocumentBodyCollector(tmp_path).download("https://x.example/fileDown.do?id=1", 0, FETCHED_AT)
+
+    assert attachment.filename == "보도자료.hwp"
+    assert attachment.storage_path.endswith(".hwp")
+
+
+def test_the_queue_is_the_backfill():
+    """`body IS NULL`로 고르면 받을 수 없는 문서를 매시간 다시 친다."""
+    statement = without_comments(PENDING_BODIES)
+    assert "body_status IS NULL" in statement
+    assert "body IS NULL" not in statement
+    assert "canonical_document_id IS NULL" in statement
+
+    connection = FakeConnection([(3, "bbc_business", "https://b.example/a")])
+    assert pending_bodies(connection, 50) == (
+        BodyCandidate(id=3, source_slug="bbc_business", canonical_url="https://b.example/a"),
+    )
+    assert connection.recorded_cursor.calls[0] == (PENDING_BODIES, (50,))
+
+
+def test_the_update_never_touches_the_content_hash():
+    """해시는 제목과 요약만 본다. 여기서 건드리면 문서 전체가 재평가 대상이 된다."""
+    statement = without_comments(BODY_UPDATE)
+    assert "content_hash" not in statement
+    assert "body_status IS NULL" in statement
+
+
+def test_content_level_rises_only_when_a_body_actually_arrived():
+    assert "WHEN %(body)s IS NOT NULL AND content_level <> 'metadata_only' THEN 'full_text'" in BODY_UPDATE
+
+
+def test_storing_the_body_also_lands_the_video_links():
+    """영상은 내려받지 않으므로 본문과 같은 트랜잭션에서 끝난다."""
+    connection = FakeConnection()
+    result = DocumentBody(
+        document_id=5,
+        status="ok",
+        body="본문",
+        file_urls=("https://x.example/a.pdf",),
+        video_urls=("https://x.example/v",),
+    )
+
+    assert DocumentBodyCollector.store_body(connection, result) == 1
+
+    calls = connection.recorded_cursor.calls
+    assert calls[0][0] is BODY_UPDATE
+    assert calls[0][1] == {"body": "본문", "body_status": "ok", "document_id": 5}
+    assert [call[0] for call in calls[1:]] == [ATTACHMENT_UPSERT]
+    video = calls[1][1]
+    assert video[2] == "video"
+    # 파일이 앞자리를 쓴다. 파일 저장이 뒤에 와도 순서는 페이지에 나온 차례다.
+    assert video[1] == 1
+    # 영상은 내려받지 않으므로 저장 경로가 없다. DB CHECK와 같은 사실이다.
+    assert video[4] is None
+
+
+def test_a_file_is_attached_in_its_own_transaction():
+    """첨부 하나가 죽었다고 어렵게 받은 본문을 버리지 않는다."""
+    connection = FakeConnection()
+    attachment = Attachment(
+        position=0,
+        kind="file",
+        url="https://x.example/a.pdf",
+        storage_path="documents/ab/abcd.pdf",
+        filename="a.pdf",
+        media_type="application/pdf",
+        byte_size=3,
+        sha256="abcd",
+        fetched_at=FETCHED_AT,
+    )
+
+    DocumentBodyCollector.store_attachment(connection, 5, attachment)
+
+    statement, parameters = connection.recorded_cursor.calls[0]
+    assert statement is ATTACHMENT_UPSERT
+    assert parameters == (5, 0, "file", attachment.url, "documents/ab/abcd.pdf", "a.pdf", "application/pdf", 3, "abcd", FETCHED_AT)
+
+
+def inserted_columns(statement: str) -> tuple[str, ...]:
+    columns = re.search(r"INSERT INTO \w+ \(([^)]+)\)", statement, re.DOTALL)
+    assert columns is not None
+    names = re.sub(r"--[^\n]*", "", columns.group(1))
+    return tuple(name.strip() for name in names.split(",") if name.strip())
+
+
+def test_the_attachment_upsert_matches_the_model_and_its_natural_key():
+    """수집기는 문자열 SQL을 쓴다. 모델과 어긋나면 저장 시점에야 안다."""
+    table: Table = AttachmentModel.__table__
+    columns = inserted_columns(ATTACHMENT_UPSERT)
+
+    assert set(columns) <= set(table.columns.keys())
+    assert ATTACHMENT_UPSERT.count("%s") == len(columns)
+    assert "ON CONFLICT (document_id, url)" in ATTACHMENT_UPSERT

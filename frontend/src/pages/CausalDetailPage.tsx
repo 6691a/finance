@@ -17,11 +17,12 @@ import {
   CAUSAL_CONFIDENCES,
   CAUSAL_EVIDENCE_KINDS,
   CAUSAL_SIGNS,
+  CAUSAL_SOURCE_KINDS,
   CAUSAL_TARGET_KINDS,
   labelOf,
 } from "../labels";
 import type { CausalEvidenceRow, CausalPathDetail, CausalPathRow } from "../types";
-import { changeText, chainText } from "./CausalPage";
+import { changeText, chainText, sourceText } from "./CausalPage";
 
 /** 근거 한 줄의 보일 이름. 문서만 제목이 오고 나머지는 식별자가 곧 읽을 수 있는 값이다. */
 export function evidenceText(row: CausalEvidenceRow): string {
@@ -30,7 +31,7 @@ export function evidenceText(row: CausalEvidenceRow): string {
 
 /** 이 경로가 무엇을 주장하는지 한 줄. 표와 그래프가 같은 말을 해야 한다. */
 export function claimText(row: CausalPathRow): string {
-  return `${row.event_title} → ${labelOf(CAUSAL_TARGET_KINDS, row.target_kind)} ${row.target_code}를 ${labelOf(CAUSAL_SIGNS, row.sign)}`;
+  return `${sourceText(row)} → ${labelOf(CAUSAL_TARGET_KINDS, row.target_kind)} ${row.target_code}를 ${labelOf(CAUSAL_SIGNS, row.sign)}`;
 }
 
 export default function CausalDetailPage() {
@@ -61,9 +62,12 @@ export default function CausalDetailPage() {
           <dl className="meta">
             <dt>주장</dt>
             <dd>{claimText(detail.path)}</dd>
-            <dt>주 · 사건 발생일</dt>
+            <dt>주 · 출발점</dt>
             <dd>
-              {detail.path.week_start} · {detail.path.event_occurred_on}
+              {detail.path.week_start} · {labelOf(CAUSAL_SOURCE_KINDS, detail.path.source_kind)}
+              {detail.path.event_occurred_on === null
+                ? ""
+                : ` · 사건 발생 ${detail.path.event_occurred_on}`}
             </dd>
             <dt>체인</dt>
             <dd>{chainText(detail.path)}</dd>
@@ -95,8 +99,8 @@ export default function CausalDetailPage() {
               onSelect={setSelected}
               handleRef={handle}
             />
-            <aside className="panel" aria-label="이 사건의 경로">
-              <h3>이 사건의 경로 {detail.siblings.length}개</h3>
+            <aside className="panel" aria-label="이 주의 경로">
+              <h3>이 주의 경로 {detail.siblings.length}개</h3>
               <ul>
                 {detail.siblings.map((row) => (
                   <li key={row.id}>

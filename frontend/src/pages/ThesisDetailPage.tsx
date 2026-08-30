@@ -11,7 +11,16 @@ import { Link, useParams } from "react-router-dom";
 
 import { useJson } from "../api";
 import { Async } from "../components/AsyncState";
-import { jsonText, kstText, numberText, percentText, safeHref, signedPercentText } from "../format";
+import {
+  bandText,
+  integerText,
+  jsonText,
+  kstText,
+  numberText,
+  percentText,
+  safeHref,
+  signedPercentText,
+} from "../format";
 import type { EvidenceCitation, ThesisDetail } from "../types";
 
 function EvidenceTable({ rows, caption }: { rows: EvidenceCitation[]; caption: string }) {
@@ -75,7 +84,9 @@ export default function ThesisDetailPage() {
           </h2>
           <nav className="pager" aria-label="관련 화면">
             <Link to={`/theses/${thesis.id}/graph`}>관계 그래프</Link>
-            {thesis.llm_run === null ? null : <Link to={`/runs/${thesis.llm_run.id}`}>이 판단을 만든 실행</Link>}
+            {thesis.llm_run === null ? null : (
+              <Link to={`/runs/${thesis.llm_run.id}`}>이 판단을 만든 실행</Link>
+            )}
           </nav>
 
           <table>
@@ -93,12 +104,16 @@ export default function ThesisDetailPage() {
               <tr>
                 <th scope="row">상승</th>
                 <td>{percentText(thesis.prob_up)}</td>
-                <td>{signedPercentText(thesis.up_return_pct)}</td>
+                <td>{bandText(thesis.up_return_pct, thesis.up_return_band_pct)}</td>
               </tr>
               <tr>
                 <th scope="row">하락</th>
                 <td>{percentText(thesis.prob_down)}</td>
-                <td>{thesis.down_return_pct === null ? "—" : `-${thesis.down_return_pct.toFixed(2)}%`}</td>
+                <td>
+                  {thesis.down_return_pct === null
+                    ? "—"
+                    : bandText(-thesis.down_return_pct, thesis.down_return_band_pct)}
+                </td>
               </tr>
               <tr>
                 <th scope="row">횡보</th>
@@ -107,6 +122,22 @@ export default function ThesisDetailPage() {
               </tr>
             </tbody>
           </table>
+
+          <p className="state">
+            {/* **축이 없으면 크기를 읽을 수 없다.** 장중 0.7퍼센트가 하루 등락으로 읽히던
+                것이 이 칸이 생긴 이유다(15단계 0절). */}
+            {thesis.base_price === null ? (
+              "기준가가 없는 판의 추론이다 — 크기의 분모가 기록되기 전이다."
+            ) : (
+              <>
+                기준가 {integerText(thesis.base_price)}
+                {thesis.base_at === null ? "" : ` (${kstText(thesis.base_at)} KST)`}에서 그 세션
+                마감까지가 채점 창이다. 직전 종가에서 여기까지 이미{" "}
+                {signedPercentText(thesis.base_return_pct)} 왔다 — **예측 크기와 축이 달라 그대로
+                더하면 안 된다.**
+              </>
+            )}
+          </p>
 
           <h3>명시적 판단 이유</h3>
           <div className="panel">
@@ -121,7 +152,10 @@ export default function ThesisDetailPage() {
           </div>
 
           <h3>인용 근거</h3>
-          <EvidenceTable rows={thesis.evidence} caption="원 판단이 인용한 근거(모델 최종 응답이 고른 것)" />
+          <EvidenceTable
+            rows={thesis.evidence}
+            caption="원 판단이 인용한 근거(모델 최종 응답이 고른 것)"
+          />
 
           <h3>당시 입력 상태</h3>
           <p className="state">모델의 최초 프롬프트에 제공된 스냅샷이다.</p>
@@ -159,8 +193,8 @@ export default function ThesisDetailPage() {
           ) : (
             <table>
               <caption>
-                Brier(방향), 크기 오차(폭), 판정(이유)은 **서로 다른 것을 잰다.** 합친 종합
-                점수를 만들지 않는다.
+                Brier(방향), 크기 오차(폭), 판정(이유)은 **서로 다른 것을 잰다.** 합친 종합 점수를
+                만들지 않는다.
               </caption>
               <thead>
                 <tr>
@@ -181,8 +215,19 @@ export default function ThesisDetailPage() {
                     <td>{signedPercentText(outcome.actual_return_pct)}</td>
                     <td>{outcome.actual_outcome ?? "—"}</td>
                     <td>{numberText(outcome.brier_score)}</td>
-                    <td>{outcome.predicted_return_pct === null ? "—" : `${outcome.predicted_return_pct}%`}</td>
-                    <td>{outcome.return_error_pct === null ? "—" : `${outcome.return_error_pct}%p`}</td>
+                    <td>
+                      {outcome.predicted_return_pct === null
+                        ? "—"
+                        : `${outcome.predicted_return_pct}%`}
+                    </td>
+                    <td>
+                      {outcome.return_error_pct === null ? "—" : `${outcome.return_error_pct}%p`}
+                      {/* 밴드 적중은 오차와 폭의 비교다. 적중 여부 칸을 서버가 두지 않는 이유가
+                        그것이고, 화면도 값을 나란히 놓아 읽는 사람이 재게 한다. */}
+                      {outcome.predicted_band_pct === null
+                        ? ""
+                        : ` (±${outcome.predicted_band_pct}%p)`}
+                    </td>
                     <td>{outcome.verdict ?? "—"}</td>
                     <td>
                       <time dateTime={outcome.as_of_at}>{kstText(outcome.as_of_at)}</time>
@@ -211,13 +256,18 @@ export default function ThesisDetailPage() {
                       <>
                         <dt>실행</dt>
                         <dd>
-                          <Link to={`/runs/${outcome.narration_run.id}`}>{outcome.narration_run.id}</Link>
+                          <Link to={`/runs/${outcome.narration_run.id}`}>
+                            {outcome.narration_run.id}
+                          </Link>
                         </dd>
                       </>
                     )}
                   </dl>
                 </div>
-                <EvidenceTable rows={outcome.evidence} caption={`T+${outcome.horizon_days} 해설이 인용한 근거`} />
+                <EvidenceTable
+                  rows={outcome.evidence}
+                  caption={`T+${outcome.horizon_days} 해설이 인용한 근거`}
+                />
               </div>
             ))}
 

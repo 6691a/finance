@@ -15,9 +15,13 @@ afterEach(() => vi.unstubAllGlobals());
 const PATH = {
   id: 1,
   week_start: "2026-08-10",
+  source_kind: "event",
   event_id: 1,
   event_title: "미국 7월 소비자물가 상승률 둔화",
   event_occurred_on: "2026-08-12",
+  source_target_kind: null,
+  source_target_code: null,
+  source_sign: null,
   target_kind: "quote",
   target_code: "US10Y",
   channels: ["통화정책 기대", "할인율"],
@@ -60,7 +64,7 @@ it("인과의 증명이 아니라는 말이 화면에 있다", async () => {
 
   await screen.findByRole("table");
   expect(document.body.textContent).toContain("인과의 증명이 아니다");
-  expect(screen.getByRole("cell", { name: "함께 관찰" })).toBeTruthy();
+  expect(screen.getByRole("cell", { name: "문서가 말함" })).toBeTruthy();
 });
 
 it("데이터셋을 바꾸면 사건·채널 경로를 부른다", async () => {
@@ -92,4 +96,34 @@ it("경로를 누르면 상세로 간다", async () => {
     name: "미국 7월 소비자물가 상승률 둔화 → 통화정책 기대 → 할인율 → US10Y",
   });
   expect(link.getAttribute("href")).toBe("/causal/1");
+});
+
+it("대상에서 출발한 경로는 원인의 방향까지 보인다", async () => {
+  // **원인이 우리가 가진 값이라 방향이 있어야 뜻이 산다** — `US10Y`만으로는 올라서인지
+  // 내려서인지 알 수 없다.
+  const fromTarget = {
+    ...PATH,
+    id: 51,
+    source_kind: "target",
+    event_id: null,
+    event_title: null,
+    event_occurred_on: null,
+    source_target_kind: "quote",
+    source_target_code: "US10Y",
+    source_sign: "down",
+    target_kind: "instrument",
+    target_code: "005930",
+    channels: ["할인율"],
+    confidence: "endpoint_observed",
+    sign: "up",
+  };
+  stubFetch({
+    "/api/causal/paths": { items: [fromTarget], limit: 50, offset: 0, has_more: false },
+  });
+  renderAt("/causal", "/causal", <CausalPage />);
+
+  await screen.findByRole("table");
+  expect(screen.getByRole("link", { name: "US10Y(하락) → 할인율 → 005930" })).toBeTruthy();
+  expect(screen.getByRole("cell", { name: "대상" })).toBeTruthy();
+  expect(screen.getByRole("cell", { name: "양 끝 값" })).toBeTruthy();
 });

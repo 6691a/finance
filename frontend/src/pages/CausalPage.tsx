@@ -12,7 +12,14 @@ import { Link } from "react-router-dom";
 import DatasetBrowser, { type Dataset } from "../components/DatasetBrowser";
 import type { Column } from "../components/DataTable";
 import { integerText, numberText } from "../format";
-import { CAUSAL_CONFIDENCES, CAUSAL_SIGNS, CAUSAL_TARGET_KINDS, labelOf } from "../labels";
+import {
+  CAUSAL_CONFIDENCES,
+  CAUSAL_SIGNS,
+  CAUSAL_SOURCE_KINDS,
+  CAUSAL_TARGET_KINDS,
+  DIRECTIONS,
+  labelOf,
+} from "../labels";
 import type { CausalChannelRow, CausalEventRow, CausalPathRow, Items } from "../types";
 
 /** 실현 등락 한 칸. 단위가 퍼센트면 `%`, 금리면 `bp`다. */
@@ -22,9 +29,24 @@ export function changeText(value: number, unit: string): string {
   return `${numberText(value, digits)}${suffix}`;
 }
 
-/** 체인 한 줄. 사건에서 대상까지의 순서를 그대로 보인다. */
+/**
+ * 이 경로의 출발점 한 마디.
+ *
+ * **사건이면 제목, 대상이면 `코드(방향)`다.** 대상 출발은 원인이 우리가 가진 값이라
+ * 방향까지 적어야 뜻이 산다 — `US10Y`만으로는 올라서인지 내려서인지 알 수 없다.
+ */
+export function sourceText(row: CausalPathRow): string {
+  if (row.source_kind === "target" && row.source_target_code !== null) {
+    // **`위로`가 아니라 `하락`이다.** 여기서 방향은 경로가 민 쪽이 아니라 원인 대상이
+    // 그 주에 실제로 움직인 쪽이라 값의 말로 적는다.
+    return `${row.source_target_code}(${labelOf(DIRECTIONS, row.source_sign)})`;
+  }
+  return row.event_title ?? "출발점 없음";
+}
+
+/** 체인 한 줄. 출발점에서 대상까지의 순서를 그대로 보인다. */
 export function chainText(row: CausalPathRow): string {
-  return [row.event_title, ...row.channels, row.target_code].join(" → ");
+  return [sourceText(row), ...row.channels, row.target_code].join(" → ");
 }
 
 function change<T extends { return_unit: string }>(
@@ -39,7 +61,7 @@ const DATASETS: Dataset[] = [
   {
     id: "paths",
     label: "경로",
-    note: "**인과의 증명이 아니다** — `함께 관찰`은 같은 기간에 함께 움직였다는 뜻이고 `해석`은 모델의 말이다.",
+    note: "**인과의 증명이 아니다** — 근거의 성격이 무엇이 뒷받침하는지만 말한다(문서가 말함 > 양 끝 값 > 해석). 출발점은 사건이거나, 같은 주에 움직인 다른 대상이다.",
     filters: ["dates"],
     path: (params) => `/api/causal/paths?${params}`,
     tables: (data: Items<CausalPathRow>) => [
@@ -54,6 +76,11 @@ const DATASETS: Dataset[] = [
             label: "체인",
             // 누르면 그 사건의 그래프로 간다. 체인이 이 표에서 가장 긴 칸이라 과녁이 넓다.
             value: (row: CausalPathRow) => <Link to={`/causal/${row.id}`}>{chainText(row)}</Link>,
+          },
+          {
+            key: "src",
+            label: "출발",
+            value: (row: CausalPathRow) => labelOf(CAUSAL_SOURCE_KINDS, row.source_kind),
           },
           {
             key: "tk",

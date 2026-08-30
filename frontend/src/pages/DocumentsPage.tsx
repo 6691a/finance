@@ -302,6 +302,7 @@ export default function DocumentsPage() {
                         보고서
                       </th>
                       <th scope="col">제출인</th>
+                      <th scope="col">본문</th>
                       <th scope="col">원문</th>
                     </tr>
                   </thead>
@@ -313,6 +314,9 @@ export default function DocumentsPage() {
                         <td className="wrap">{row.company_name}</td>
                         <td className="wrap">{row.report_name}</td>
                         <td>{row.filer_name ?? "—"}</td>
+                        {/* 인과 그래프가 내용을 보려고 받는 본문이다. **시장이 반응하는
+                          종류만 채운다** — 정기보고서처럼 방대한 것은 비운다. */}
+                        <td>{row.has_body ? "받음" : "—"}</td>
                         <td>
                           {row.url === null ? (
                             row.rcept_no

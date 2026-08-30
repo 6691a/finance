@@ -167,7 +167,12 @@ class MarketCausalReadRepository:
         )
 
     async def detail_rows(self, path_id: int) -> PathRows | None:
-        """경로 하나와 **같은 사건·같은 주의 형제 경로 전부**. 왕복 셋이고 한 세션 안이다."""
+        """경로 하나와 **그 주의 경로 전부**. 왕복 넷이고 한 세션 안이다.
+
+        **사건이 아니라 주로 묶는다.** 대상이 다시 원인이 되는 경로가 생기면서
+        (`event_id`가 NULL이고 `source_target_*`이 채워진다) 사건 단위로 모으면
+        `VIX → NASDAQ100_FUT → SOX → 005930` 같은 사슬이 조각난 채로 보인다.
+        """
         async with self._session_factory() as session:
             found = (
                 await session.execute(
@@ -181,19 +186,24 @@ class MarketCausalReadRepository:
                 (
                     await session.execute(
                         select(MarketCausalPath)
-                        .where(
-                            MarketCausalPath.event_id == found.event_id,
-                            MarketCausalPath.week_start == found.week_start,
-                        )
+                        .where(MarketCausalPath.week_start == found.week_start)
                         .order_by(MarketCausalPath.id)
                     )
                 ).scalars()
             )
-            event = (
-                await session.execute(
-                    select(MarketEvent).where(MarketEvent.id == found.event_id)
-                )
-            ).scalar_one_or_none()
+            event_ids = {path.event_id for path in family if path.event_id is not None}
+            events = (
+                {
+                    event.id: event
+                    for event in (
+                        await session.execute(
+                            select(MarketEvent).where(MarketEvent.id.in_(event_ids))
+                        )
+                    ).scalars()
+                }
+                if event_ids
+                else {}
+            )
             chains: dict[int, list[str]] = {}
             for path_key, name in await session.execute(
                 self.chain_statement([path.id for path in family])
@@ -223,11 +233,14 @@ class MarketCausalReadRepository:
                 else {}
             )
 
-        if event is None:
-            return None
         return PathRows(
             paths=tuple(family),
-            events={path.id: event for path in family},
+            # 경로 id로 다시 걸어 준다. 대상에서 출발한 경로는 여기 자리가 없다.
+            events={
+                path.id: events[path.event_id]
+                for path in family
+                if path.event_id is not None and path.event_id in events
+            },
             chains={key: tuple(value) for key, value in chains.items()},
             evidence=evidence,
             document_titles=titles,

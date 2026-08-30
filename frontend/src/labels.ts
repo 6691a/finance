@@ -64,10 +64,22 @@ export const CAUSAL_SIGNS: Labels = {
   down: "아래로",
 };
 
-/** 인과 주장의 성격. **둘 다 인과의 증명이 아니다.** */
+/**
+ * 인과 주장의 성격. **셋 다 인과의 증명이 아니다.**
+ *
+ * 가르는 것은 확신의 세기가 아니라 **무엇이 뒷받침하는가**다 — 문서가 말했다 >
+ * 값이 그렇게 움직였다 > 우리가 이었다.
+ */
 export const CAUSAL_CONFIDENCES: Labels = {
-  observed: "함께 관찰",
+  observed: "문서가 말함",
+  endpoint_observed: "양 끝 값",
   plausible: "해석",
+};
+
+/** 인과 경로의 출발점 종류. 대상 출발이 있어야 다중 홉이 이어진다. */
+export const CAUSAL_SOURCE_KINDS: Labels = {
+  event: "사건",
+  target: "대상",
 };
 
 /** 인과 대상이 어느 마스터에서 오는지. 값의 성격이 아니라 저장소를 가른다. */

@@ -31,6 +31,7 @@ def _disclosure(provider: str) -> SimpleNamespace:
         receipt_date=date(2026, 8, 27),
         detected_at=datetime(2026, 8, 27, 4, tzinfo=UTC),
         remarks=None,
+        body=None,
         provider=provider,
     )
 

@@ -16,13 +16,35 @@ from apps.api.schemas.common import ApiModel, Page
 
 
 class CausalPathRow(ApiModel):
-    """사건 하나가 대상 하나에 닿은 경로 하나."""
+    """출발점 하나가 대상 하나에 닿은 경로 하나.
+
+    **출발점은 사건 또는 대상이다.** "US10Y가 내려서 SOX가 올랐다"를 담으려면 앞 경로의
+    끝이 다음 경로의 시작이어야 하는데, 그것을 새 사건으로 만들면 `target:US10Y`와
+    `event:미국 국채금리 하락`이 다른 노드라 그래프가 거기서 끊긴다. 그래서 `source_kind`가
+    둘을 가르고 **한쪽 칸만 채워진다**(DB CHECK가 그것을 강제한다).
+    """
 
     id: int = Field(description="경로 id.")
     week_start: date = Field(description="이 경로가 관찰된 주의 시작일(월요일).")
-    event_id: int = Field(description="출발 사건 id.")
-    event_title: str = Field(description="출발 사건의 제목.")
-    event_occurred_on: date = Field(description="사건이 일어난 날.")
+    source_kind: str = Field(
+        description="출발점의 종류(`event` 또는 `target`). 어느 칸이 채워졌는지를 이 값이 말한다."
+    )
+    event_id: int | None = Field(default=None, description="출발 사건 id. 대상 출발이면 null.")
+    event_title: str | None = Field(default=None, description="출발 사건의 제목.")
+    event_occurred_on: date | None = Field(default=None, description="사건이 일어난 날.")
+    source_target_kind: str | None = Field(
+        default=None, description="대상 출발일 때 원인 대상의 종류. 사건 출발이면 null."
+    )
+    source_target_code: str | None = Field(
+        default=None,
+        description=(
+            "대상 출발일 때 원인 대상의 식별자. **같은 주 다른 경로의 대상이다** — 그래서 "
+            "그래프에서 노드가 이어져 다중 홉이 된다."
+        ),
+    )
+    source_sign: str | None = Field(
+        default=None, description="원인 대상이 그 주에 움직인 방향(up·down). 사건 출발이면 null."
+    )
     target_kind: str = Field(
         description=(
             "대상이 어느 마스터에서 오는지(instrument·index·quote·indicator). "
@@ -37,7 +59,10 @@ class CausalPathRow(ApiModel):
     sign: str = Field(description="이 경로가 대상을 민 방향(up·down).")
     confidence: str = Field(
         description=(
-            "observed는 같은 기간에 함께 관찰됨, plausible은 해석. **둘 다 인과의 증명이 아니다.**"
+            "observed는 근거 문서가 그 방향을 직접 말함, endpoint_observed는 양 끝 값이 그렇게 "
+            "움직임, plausible은 해석. **셋 다 인과의 증명이 아니다.** `endpoint_observed`는 "
+            "대상에서 출발한 경로만 가질 수 있다 — 사건 출발은 원인 쪽이 문서라 값으로 대조할 "
+            "것이 없다."
         )
     )
     reasoning: str = Field(description="이 경로를 설명하는 한 문장. 모델이 만든다.")
@@ -80,17 +105,21 @@ class CausalEvidenceRow(ApiModel):
 
 
 class CausalPathDetail(ApiModel):
-    """경로 하나와 **그 사건이 그 주에 뻗은 경로 전부**.
+    """경로 하나와 **그 주의 경로 전부**.
 
     상세를 경로 하나로만 내면 화면이 그릴 것이 직선 하나뿐이다. 이 그래프의 값어치는
-    같은 사건이 여러 채널을 거쳐 여러 대상에 닿는 모양에 있으므로, 형제 경로를 함께 낸다 —
+    한 주의 경로들이 노드를 공유해 사슬을 만드는 모양에 있으므로 주 전체를 함께 낸다 —
     화면이 대상마다 다시 묻지 않게 하는 것도 같은 이유다.
     """
 
     path: CausalPathRow
     siblings: tuple[CausalPathRow, ...] = Field(
         default=(),
-        description="같은 사건·같은 주의 경로 전부. **자기 자신을 포함한다** — 그래프의 전체 모양이다.",
+        description=(
+            "**같은 주의 경로 전부.** 자기 자신을 포함한다. 사건 단위가 아니라 주 단위인 이유는 "
+            "대상이 다시 원인이 되기 때문이다 — `VIX → NASDAQ100_FUT → SOX → 005930`은 경로 "
+            "넷이고 사건으로 묶으면 그 사슬이 끊어진 채로 보인다."
+        ),
     )
     evidence: tuple[CausalEvidenceRow, ...] = Field(
         default=(),

@@ -80,6 +80,20 @@ export function signedPercentText(value: number | null | undefined): string {
   return `${value > 0 ? "+" : ""}${value.toFixed(2)}%`;
 }
 
+/**
+ * 크기와 그 ± 폭을 한 칸에. **폭은 상한이 아니라 구간의 반이다.**
+ *
+ * 폭이 없는 판의 추론이 섞여 있어(칸이 생기기 전) 값만 있는 행도 그대로 읽혀야 한다.
+ */
+export function bandText(
+  value: number | null | undefined,
+  band: number | null | undefined,
+): string {
+  const middle = signedPercentText(value);
+  if (middle === "—" || band === null || band === undefined) return middle;
+  return `${middle} ±${band.toFixed(2)}%p`;
+}
+
 export function integerText(value: number | null | undefined): string {
   return value === null || value === undefined ? "—" : value.toLocaleString("ko-KR");
 }

@@ -95,6 +95,14 @@ class DisclosureItem(ApiModel):
     receipt_date: date = Field(description="접수일(KST).")
     detected_at: UtcDatetime = Field(description="우리가 감지한 시각(UTC).")
     remarks: str | None = Field(default=None, description="비고.")
+    has_body: bool = Field(
+        default=False,
+        description=(
+            "공시 본문을 받아 뒀나. **본문 자체는 목록에 싣지 않는다** — 한 건이 만 자를 넘고"
+            "(2026-08-30 실측 최대 14,695자) 그건 목록의 일이 아니다. 원문은 `url`이 준다. "
+            "false는 아직 못 받았거나 받을 대상이 아니라는 뜻이다 — 시장이 반응하는 종류만 채운다."
+        ),
+    )
     url: str | None = Field(
         default=None,
         description=(

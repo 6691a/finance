@@ -26,9 +26,13 @@ const { default: CausalDetailPage } = await import("./CausalDetailPage");
 const PATH = {
   id: 1,
   week_start: "2026-08-10",
+  source_kind: "event",
   event_id: 1,
   event_title: "미국 7월 소비자물가 상승률 둔화",
   event_occurred_on: "2026-08-12",
+  source_target_kind: null,
+  source_target_code: null,
+  source_sign: null,
   target_kind: "quote",
   target_code: "US10Y",
   channels: ["통화정책 기대", "할인율"],
@@ -50,9 +54,27 @@ const SIBLING = {
   sign: "up",
 };
 
+/** 대상에서 출발한 경로. 둘째 경로의 대상(`NASDAQ100_FUT`)이 이 경로의 원인이다. */
+const FROM_TARGET = {
+  ...PATH,
+  id: 3,
+  source_kind: "target",
+  event_id: null,
+  event_title: null,
+  event_occurred_on: null,
+  source_target_kind: "quote",
+  source_target_code: "NASDAQ100_FUT",
+  source_sign: "up",
+  target_kind: "instrument",
+  target_code: "005930",
+  channels: ["이익 기대"],
+  confidence: "endpoint_observed",
+  sign: "up",
+};
+
 const DETAIL = {
   path: PATH,
-  siblings: [PATH, SIBLING],
+  siblings: [PATH, SIBLING, FROM_TARGET],
   evidence: [
     {
       path_id: 1,
@@ -78,17 +100,21 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
-it("그 사건의 경로 전부를 한 그래프로 그린다", async () => {
-  // 경로 하나만 그리면 직선 하나라 그림이 말해 주는 것이 없다.
+it("그 주의 경로 전부를 한 그래프로 그리고 사슬이 이어진다", async () => {
+  // 경로 하나만 그리면 직선 하나라 그림이 말해 주는 것이 없다. **대상 출발 경로는 다른
+  // 경로의 대상 노드에 이어 붙어 다중 홉이 된다.**
   stubFetch({ "/api/causal/paths/1": DETAIL });
   renderAt("/causal/1", "/causal/:pathId", <CausalDetailPage />);
 
   await screen.findByRole("heading", { name: "인과 경로" });
-  expect(screen.getByRole("heading", { name: "이 사건의 경로 2개" })).toBeTruthy();
+  expect(screen.getByRole("heading", { name: "이 주의 경로 3개" })).toBeTruthy();
 
-  // 사건 하나 + 채널 셋 + 대상 둘. 채널은 이름으로 공유된다.
-  const nodes = added.flat().filter((element) => (element as { group: string }).group === "nodes");
-  expect(nodes.length).toBe(6);
+  const drawn = added.flat() as { group: string; data: { id: string } }[];
+  const nodes = drawn.filter((element) => element.group === "nodes").map((e) => e.data.id);
+  // `NASDAQ100_FUT`은 둘째 경로의 결과이자 셋째 경로의 원인이라 노드가 하나뿐이다.
+  expect(nodes.filter((id) => id === "target:quote:NASDAQ100_FUT").length).toBe(1);
+  const edges = drawn.filter((element) => element.group === "edges").map((e) => e.data.id);
+  expect(edges).toContain("target:quote:NASDAQ100_FUT->channel:이익 기대");
 });
 
 it("같은 내용을 표로도 준다", async () => {

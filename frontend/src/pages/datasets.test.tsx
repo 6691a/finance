@@ -125,6 +125,7 @@ const DISCLOSURES = {
       receipt_date: "2026-08-27",
       detected_at: "2026-08-27T04:00:00Z",
       remarks: null,
+      has_body: true,
       url: "https://dart.fss.or.kr/dsaf001/main.do?rcpNo=20260827000123",
     },
   ],
@@ -165,6 +166,16 @@ it("공시는 접수번호가 DART 원문 링크다", async () => {
     "https://dart.fss.or.kr/dsaf001/main.do?rcpNo=20260827000123",
   );
   expect(link.getAttribute("rel")).toContain("noopener");
+});
+
+it("공시 본문을 받아 뒀는지 표가 밝힌다", async () => {
+  // 인과 그래프가 내용을 보려고 받는다. **본문 자체는 목록에 없다** — 한 건이 만 자를 넘는다.
+  stubFetch({ "/api/documents/disclosures": DISCLOSURES });
+  renderAt("/documents?tab=disclosures", "/documents", <DocumentsPage />);
+
+  await screen.findByRole("table");
+  expect(screen.getByRole("columnheader", { name: "본문" })).toBeTruthy();
+  expect(screen.getByRole("cell", { name: "받음" })).toBeTruthy();
 });
 
 it("실적 숫자도 그것이 나온 공시로 이어진다", async () => {

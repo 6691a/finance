@@ -129,6 +129,8 @@ def disclosure_of(row: DisclosureEvent) -> DisclosureItem:
         receipt_date=row.receipt_date,
         detected_at=row.detected_at,
         remarks=row.remarks,
+        # 본문은 있다는 사실만 낸다. 목록에 실으면 한 쪽이 수십만 자가 된다.
+        has_body=row.body is not None,
         url=dart_url(row.provider, row.rcept_no),
     )
 

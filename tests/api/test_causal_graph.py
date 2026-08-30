@@ -34,6 +34,7 @@ def path(path_id: int = 1, unit: str = "percent") -> MarketCausalPath:
         id=path_id,
         week_start=WEEK,
         event_id=1,
+        source_key="e:1",
         target_kind="quote",
         target_code="US10Y",
         sign="down",
@@ -45,6 +46,21 @@ def path(path_id: int = 1, unit: str = "percent") -> MarketCausalPath:
         return_unit=unit,
         llm_run_id=None,
     )
+
+
+def target_path(path_id: int = 51) -> MarketCausalPath:
+    """대상에서 출발한 경로. 원인 쪽이 문서가 아니라 우리가 가진 값이다."""
+    row = path(path_id)
+    row.event_id = None
+    row.source_key = "t:quote:US10Y:down"
+    row.source_target_kind = "quote"
+    row.source_target_code = "US10Y"
+    row.source_sign = "down"
+    row.target_kind = "instrument"
+    row.target_code = "005930"
+    row.sign = "up"
+    row.confidence = "endpoint_observed"
+    return row
 
 
 class FakeCausal:
@@ -104,13 +120,21 @@ async def test_the_change_carries_its_unit():
 
 
 @pytest.mark.asyncio
-async def test_a_path_without_its_event_is_dropped():
-    """외래키가 있어 생길 수 없지만, 생겼다면 반쪽 행을 화면에 보내지 않는다."""
-    rows = PathRows(paths=(path(),), events={}, chains={})
-    async with client(FakeCausal(paths=rows)) as http:
-        payload = (await http.get("/api/causal/paths")).json()
+async def test_a_target_origin_path_is_not_dropped():
+    """**사건이 없는 경로가 정상이다.** 대상에서 출발한 경로가 그렇다.
 
-    assert payload["items"] == []
+    전에는 사건을 못 찾은 행을 버렸는데, 그 규칙이 대상 출발 경로를 통째로 삼켰다
+    (2026-08-30 실측: 그 주 24개 중 8개가 대상 출발이다).
+    """
+    rows = PathRows(paths=(target_path(),), events={}, chains={51: ("위험선호",)})
+    async with client(FakeCausal(paths=rows)) as http:
+        item = (await http.get("/api/causal/paths")).json()["items"][0]
+
+    assert item["source_kind"] == "target"
+    assert item["event_id"] is None
+    assert item["source_target_code"] == "US10Y"
+    assert item["source_sign"] == "down"
+    assert item["confidence"] == "endpoint_observed"
 
 
 @pytest.mark.asyncio
@@ -147,18 +171,21 @@ def test_the_chain_query_orders_by_position():
 
 
 @pytest.mark.asyncio
-async def test_the_detail_carries_the_whole_event():
-    """경로 하나만 내면 화면이 그릴 것이 직선 하나뿐이다. 그래프의 값어치는 갈래에 있다."""
+async def test_the_detail_carries_the_whole_week():
+    """**주 단위로 묶는다.** 사건으로 묶으면 대상이 다시 원인이 되는 사슬이 조각난다 —
+    `US10Y → 005930`은 그 주의 다른 경로가 만든 `US10Y`에 이어져야 뜻이 산다."""
     rows = PathRows(
-        paths=(path(1), path(2)),
+        paths=(path(1), path(2), target_path(51)),
         events={1: event(), 2: event()},
-        chains={1: ("통화정책 기대",), 2: ("통화정책 기대", "할인율")},
+        chains={1: ("통화정책 기대",), 2: ("통화정책 기대", "할인율"), 51: ("위험선호",)},
     )
     async with client(FakeCausal(detail=rows)) as http:
         payload = (await http.get("/api/causal/paths/2")).json()
 
     assert payload["path"]["id"] == 2
-    assert [row["id"] for row in payload["siblings"]] == [1, 2]
+    assert [row["id"] for row in payload["siblings"]] == [1, 2, 51]
+    # 사건 출발과 대상 출발이 한 판에 함께 온다.
+    assert {row["source_kind"] for row in payload["siblings"]} == {"event", "target"}
 
 
 @pytest.mark.asyncio

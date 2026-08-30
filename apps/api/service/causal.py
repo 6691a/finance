@@ -26,13 +26,21 @@ def _text(value: Any) -> str:
     return str(getattr(value, "value", value))
 
 
-def path_of(path: Any, event: Any, channels: tuple[str, ...]) -> CausalPathRow:
+def path_of(path: Any, event: Any | None, channels: tuple[str, ...]) -> CausalPathRow:
+    """**사건이 없는 경로가 정상이다.** 대상에서 출발한 경로는 `event_id`가 NULL이고
+    `source_target_*` 셋이 채워진다 — 그것을 버리면 다중 홉의 절반이 화면에서 사라진다."""
     return CausalPathRow(
         id=path.id,
         week_start=path.week_start,
+        source_kind="event" if path.event_id is not None else "target",
         event_id=path.event_id,
-        event_title=event.title,
-        event_occurred_on=event.occurred_on,
+        event_title=None if event is None else event.title,
+        event_occurred_on=None if event is None else event.occurred_on,
+        source_target_kind=None
+        if path.source_target_kind is None
+        else _text(path.source_target_kind),
+        source_target_code=path.source_target_code,
+        source_sign=None if path.source_sign is None else _text(path.source_sign),
         target_kind=_text(path.target_kind),
         target_code=path.target_code,
         channels=channels,
@@ -48,13 +56,13 @@ def path_of(path: Any, event: Any, channels: tuple[str, ...]) -> CausalPathRow:
 
 
 def build_paths(rows: PathRows, *, limit: int, offset: int) -> CausalPathList:
-    """**사건을 못 찾은 경로는 내지 않는다.** 외래키가 있어 생길 수 없는 일이고,
-    생겼다면 그 행은 사건 없는 경로라 화면에 반쪽으로 보이는 것보다 빠지는 편이 낫다."""
+    """**모든 경로를 낸다.** 전에는 사건을 못 찾은 행을 버렸는데, 출발점이 대상인 경로가
+    생기면서 그 규칙이 그것들을 통째로 삼켰다(2026-08-30). 사건 출발인데 사건이 없는 것은
+    외래키가 막고 있다."""
     return CausalPathList(
         items=tuple(
-            path_of(path, rows.events[path.id], rows.chains.get(path.id, ()))
+            path_of(path, rows.events.get(path.id), rows.chains.get(path.id, ()))
             for path in rows.paths
-            if path.id in rows.events
         ),
         limit=limit,
         offset=offset,
@@ -85,11 +93,11 @@ def evidence_of(path_id: int, ref: str, titles: dict[int, str]) -> CausalEvidenc
 
 
 def build_detail(rows: PathRows, path_id: int) -> CausalPathDetail:
-    """**형제를 함께 낸다.** 경로 하나만 내면 화면이 그릴 것이 직선 하나뿐이다."""
+    """**그 주 전체를 함께 낸다.** 경로 하나만 내면 화면이 그릴 것이 직선 하나뿐이고,
+    사건 단위로 묶으면 대상이 다시 원인이 되는 사슬이 끊어진 채로 보인다."""
     family = tuple(
-        path_of(path, rows.events[path.id], rows.chains.get(path.id, ()))
+        path_of(path, rows.events.get(path.id), rows.chains.get(path.id, ()))
         for path in rows.paths
-        if path.id in rows.events
     )
     found = next((row for row in family if row.id == path_id), None)
     if found is None:

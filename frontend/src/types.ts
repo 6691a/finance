@@ -24,6 +24,14 @@ export interface ThesisSummary {
   prob_flat: number;
   up_return_pct: number | null;
   down_return_pct: number | null;
+  /** `up_return_pct`의 ± 폭(퍼센트포인트). **상한이 아니라 구간의 반이다.** */
+  up_return_band_pct: number | null;
+  down_return_band_pct: number | null;
+  /** **확률 셋과 등락률 둘의 분모.** 이 가격에서 그 세션 마감까지가 채점 창이다. */
+  base_price: number | null;
+  base_at: UtcText | null;
+  /** 직전 세션 종가에서 `base_price`까지 **이미 온** 등락률. 예측과 축이 다르다. */
+  base_return_pct: number | null;
   graded_horizons: number;
   narrated_horizons: number;
   mean_brier: number | null;
@@ -84,6 +92,8 @@ export interface ThesisOutcomeItem {
   brier_score: number | null;
   predicted_return_pct: number | null;
   return_error_pct: number | null;
+  /** 실현된 방향의 ± 폭 스냅샷. **밴드 적중은 `abs(return_error_pct) <= 이 값`이다.** */
+  predicted_band_pct: number | null;
   narrative: string | null;
   verdict: string | null;
   narrative_at: UtcText | null;
@@ -420,6 +430,8 @@ export interface DisclosureItem {
   receipt_date: DayText;
   detected_at: UtcText;
   remarks: string | null;
+  /** 본문을 받아 뒀나. **본문 자체는 목록에 없다** — 한 건이 만 자를 넘는다. */
+  has_body: boolean;
   /** DART 원문 뷰어. **제공처가 `dart`일 때만 값이 있다.** */
   url: string | null;
 }
@@ -719,20 +731,33 @@ export interface Paged<T> extends Items<T> {
   has_more: boolean;
 }
 
-/** 인과 그래프의 경로 하나. 사건 → 채널 체인 → 대상이다. */
+/**
+ * 인과 그래프의 경로 하나. 출발점 → 채널 체인 → 대상이다.
+ *
+ * **출발점은 사건 또는 대상이다.** `source_kind`가 어느 칸이 채워졌는지 말한다 — 대상이
+ * 다시 원인이 되는 경로가 있어야 `VIX → NASDAQ100_FUT → SOX → 005930`이 이어진다.
+ */
 export interface CausalPathRow {
   id: number;
   week_start: DayText;
-  event_id: number;
-  event_title: string;
-  event_occurred_on: DayText;
+  source_kind: string;
+  event_id: number | null;
+  event_title: string | null;
+  event_occurred_on: DayText | null;
+  source_target_kind: string | null;
+  /** 같은 주 다른 경로의 대상이다 — 그래서 그래프에서 노드가 이어진다. */
+  source_target_code: string | null;
+  source_sign: string | null;
   /** 값의 성격이 아니라 저장소를 가른다 — `US10Y`는 시세, `KTB10Y`는 지표다. */
   target_kind: string;
   target_code: string;
   /** 사건 쪽에서 대상 쪽 순서다. */
   channels: string[];
   sign: string;
-  /** observed는 함께 관찰됨, plausible은 해석. **둘 다 인과의 증명이 아니다.** */
+  /**
+   * observed는 근거 문서가 말함, endpoint_observed는 양 끝 값이 그렇게 움직임,
+   * plausible은 해석. **셋 다 인과의 증명이 아니다.**
+   */
   confidence: string;
   reasoning: string;
   return_week_change: number;
@@ -757,8 +782,9 @@ export interface CausalEvidenceRow {
 /** 경로 하나와 **그 사건이 그 주에 뻗은 경로 전부**. 자기 자신을 포함한다. */
 export interface CausalPathDetail {
   path: CausalPathRow;
+  /** **그 주의 경로 전부.** 사건이 아니라 주로 묶는다 — 대상이 다시 원인이 되기 때문이다. */
   siblings: CausalPathRow[];
-  /** 형제 경로들이 인용한 근거 전부. `path_id`로 갈라 읽는다. */
+  /** 그 주 경로들이 인용한 근거 전부. `path_id`로 갈라 읽는다. */
   evidence: CausalEvidenceRow[];
 }
 

@@ -225,13 +225,21 @@ def canonical_url(raw: str) -> str:
     return url.rstrip("?&")
 
 
-def content_hash(title: str, summary: str | None, body: str | None) -> str:
-    """정규화한 제목·요약·본문의 SHA-256.
+def content_hash(title: str, summary: str | None) -> str:
+    """정규화한 제목·요약의 SHA-256.
 
     구분자를 넣어 이어 붙인다. 안 넣으면 제목 끝과 요약 앞이 붙어 서로 다른 문서가 같은
     해시를 낼 수 있다.
+
+    **본문은 넣지 않는다.** 이 값이 재평가 조건(`assessed_content_hash`와의 비교)인데
+    평가는 제목과 요약만 본다. 본문을 넣으면 본문이 채워지는 순간 문서 전체가 재평가
+    대상이 되고, 모델이 받는 입력은 글자 하나 안 바뀐 채 비용만 나간다.
+
+    **세 번째 빈 조각은 본문 자리다. 지우지 않는다.** 본문이 전부 NULL이던 시절에 저장된
+    해시와 글자 그대로 같아야 본문 백필이 바로 그 전량 재평가를 부르지 않는다.
+    `tests/collectors/test_documents.py`가 옛 값을 리터럴로 못 박고 있다.
     """
-    joined = "\x1f".join(part or "" for part in (title, summary, body))
+    joined = "\x1f".join((title, summary or "", ""))
     return hashlib.sha256(joined.encode("utf-8")).hexdigest()
 
 
@@ -452,12 +460,19 @@ def store_documents(
     **문서가 0건이어도 `source_record`는 남긴다.** 새 문서가 없는 시간대와 아직 조회하지
     않은 시간대가 구분돼야 한다.
 
-    `collection_mode`가 `metadata_only`면 요약을 저장하지 않는다. 본문은 아직 어느 출처도
-    받지 않으므로 항상 NULL이다.
+    `collection_mode`가 `metadata_only`면 요약을 저장하지 않는다.
+
+    **본문은 여기서 채우지 않는다.** 발견은 목록이나 피드 한 번이고 본문은 문서마다 요청이
+    한 번 더 든다. 그 일은 `document_body_hourly`가 하고 여기는 `body_status`를 NULL로 남겨
+    그 큐에 넣는다.
+
+    그래서 `content_level`도 **출처 정책을 그대로 쓰지 않는다.** 정책이 `full_text`여도 지금
+    이 행에 실제로 담긴 것은 제목과 요약뿐이라 `feed_content`다. `full_text`로 올리는 것은
+    본문이 들어올 때다.
     """
     detected_at = detected_at or datetime.now(UTC)
     keep_summary = source.collection_mode != "metadata_only"
-    content_level = source.collection_mode if keep_summary else "metadata_only"
+    content_level = "feed_content" if keep_summary else "metadata_only"
 
     outcome = SourceOutcome(
         slug=source.slug,
@@ -500,13 +515,13 @@ def store_documents(
                     source.document_type,
                     item.title,
                     item.summary if keep_summary else None,
-                    # 본문 수집은 아직 범위 밖이다. 열리면 여기만 채운다.
+                    # 본문은 `document_body_hourly`가 채운다. 여기서는 항상 NULL이다.
                     None,
                     source.language,
                     item.published_at,
                     detected_at,
                     content_level,
-                    content_hash(item.title, item.summary if keep_summary else None, None),
+                    content_hash(item.title, item.summary if keep_summary else None),
                     source_record_id,
                 )
                 for item in items

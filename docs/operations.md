@@ -286,9 +286,10 @@ DAG마다 절을 두지 않습니다. 상세는 각 DAG 파일의 `doc_md`에 �
 | `yahoo_quote_daily` | 매일 07:30 | `quote_daily` | Yahoo |
 | `dart_disclosure_intraday` | 평일 07~20시 2분마다 | `disclosure_event`, `earnings_fact` | DART |
 | `document_ingestion_hourly` | 매시 05분 | `document`, `document_source` | 공식기관·언론 피드 |
+| `document_body_hourly` | 매시 15분 | `document`(본문), `document_attachment` | 문서 원문 페이지 |
 | `document_assessment_hourly` | 매시 25분 | `document`, `document_instrument`, `document_indicator` | LLM (`gpt-5.6-luna`) |
 
-수집하는 DAG는 전부 `source_record`도 함께 남깁니다. 관측값이 0건이어도 남겨서, 조회했지만 값이 없는 구간과 아직 조회하지 않은 구간을 구분합니다. 예외는 하나입니다. `document_assessment_hourly`는 새로 수집하지 않고 이미 저장된 문서를 읽습니다.
+수집하는 DAG는 전부 `source_record`도 함께 남깁니다. 관측값이 0건이어도 남겨서, 조회했지만 값이 없는 구간과 아직 조회하지 않은 구간을 구분합니다. 예외는 둘입니다. `document_body_hourly`와 `document_assessment_hourly`는 새 문서를 발견하지 않고 이미 저장된 문서의 행을 채웁니다.
 
 `yahoo_quote_intraday`에만 시간 창이 없습니다. 한국 장중의 미국 선물 변동을 보는 것이 이 수집의 목적이라 미국 장 시간에만 도는 스케줄로는 목적을 못 이룹니다.
 
@@ -384,7 +385,10 @@ airflow dags trigger mof_jgb_daily --conf '{\"source_file\": \"all\", \"observat
 시세와 금리는 값이지만 뉴스와 공식 발표는 글입니다. 글을 시세와 같은 좌표계에 올리는 것이 이 두 DAG의 일입니다.
 
 - [airflow/dags/document_ingestion_hourly.py](../airflow/dags/document_ingestion_hourly.py)가 매시 05분에 공식기관·언론 피드에서 문서를 발견해 `document`에 정규화합니다.
+- [airflow/dags/document_body_hourly.py](../airflow/dags/document_body_hourly.py)가 매시 15분에 `body_status`가 비어 있는 문서의 원문을 받아 본문을 채우고, 첨부 파일을 내려받아 `document_attachment`에 경로를 남기며, 기사가 영상이면 그 링크를 남깁니다. **이 DAG은 `/opt/airflow/files` 마운트를 요구하고 없으면 즉시 실패합니다.**
 - [airflow/dags/document_assessment_hourly.py](../airflow/dags/document_assessment_hourly.py)가 매시 25분에 아직 평가하지 않은 문서를 LLM에 보내 종목·지표 태그, 방향, 0~8점 점수와 근거를 받아 `document`, `document_instrument`, `document_indicator`에 저장합니다.
+
+**평가는 제목과 요약만 봅니다.** 본문을 채우기 시작한 뒤에도 그렇습니다(2026-08-30 결정). 본문의 소비자는 평가가 아니라 검색이고, `content_hash`도 제목과 요약만 보므로 본문이 바뀌어도 재평가가 돌지 않습니다.
 
 **문서를 버리지 않습니다.** 승인·보류 같은 상태 머신을 두면 나중에 기준을 바꿀 때 이미 버린 문서를 되돌릴 수 없습니다. 전부 저장하고 점수만 남긴 뒤, 리포트를 만들 때 상위 몇 개를 고릅니다. 평가에 실패한 문서는 `assessed_at`이 `NULL`로 남아 다음 정시 실행이 다시 집습니다.
 

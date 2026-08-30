@@ -43,7 +43,6 @@ DOCUMENT = PendingDocument(
     source_slug="yonhap",
     title="원/달러 환율 급등",
     summary="장중 1,400원을 넘었다.",
-    body=None,
     language="ko",
     published_at=datetime(2026, 8, 14, 22, 30, tzinfo=UTC),
     content_hash="abc",
@@ -183,6 +182,23 @@ def test_prompt_lists_the_allowed_values():
     assert "005930: 삼성전자" in prompt
     assert "yahoo:USDKRW" in prompt
     assert DOCUMENT.title in prompt
+
+
+def test_the_prompt_never_carries_the_body():
+    """평가는 제목과 요약만 본다.
+
+    본문을 채우기 시작해도 이 판단은 안 바뀐다(2026-08-30 사용자 결정). 본문을 프롬프트에
+    실으면 토큰이 수십 배가 되는데 판단이 좋아진다는 근거가 없고, 무엇보다 `content_hash`가
+    본문을 안 보는 것과 짝이 어긋난다 — 해시가 안 바뀌는데 입력만 바뀌면 문서가 옛 본문으로
+    평가된 채 영영 갱신되지 않는다.
+
+    본문의 소비자는 검색이지 평가가 아니다.
+    """
+    assert "body" not in PendingDocument.model_fields
+    assert "body" not in PENDING_DOCUMENTS
+
+    prompt = DocumentAssessor.build_messages(DOCUMENT, CANDIDATES)[-1].content
+    assert "본문" not in prompt
 
 
 def test_relevance_may_be_zero_and_the_prompt_says_so():

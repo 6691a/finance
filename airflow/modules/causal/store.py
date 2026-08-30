@@ -12,8 +12,10 @@ import logging
 from collections.abc import Mapping, Sequence
 from datetime import date
 
+from modules.causal import domain
 from modules.causal.domain import (
     CausalWindow,
+    LinkedPath,
     StoreOutcome,
     TargetReturns,
     VerifiedPath,
@@ -67,6 +69,7 @@ def store_paths(
     input_hash: str,
     llm_run_id: int | None,
     require_reuse: bool = False,
+    links: Sequence[LinkedPath] = (),
 ) -> StoreOutcome:
     """경로를 저장하고 무엇을 했는지 돌려준다.
 
@@ -84,6 +87,7 @@ def store_paths(
     event_ids: dict[tuple[str, date], int] = {}
     reused_any = False
     stored = 0
+    linked = 0
 
     for path in paths:
         target = returns.get(path.target_code)
@@ -124,6 +128,35 @@ def store_paths(
         _insert_evidence(connection, path_id, path.evidence_refs)
         stored += 1
 
+    # **대상에서 출발한 경로는 사건 경로 뒤에 저장한다**(설계 §11.4). 링커가 쓴 채널 이름이
+    # 첫 답이 방금 만든 것과 같으면 위에서 이미 upsert돼 있어 같은 노드에 붙는다.
+    for link in links:
+        target = returns.get(link.target_code)
+        if target is None:
+            continue
+        channel_ids = []
+        for name in link.channels:
+            if name in new_channels:
+                channel_ids.append(new_channels[name])
+                continue
+            channel_id = _upsert_channel(connection, name, window.week_start)
+            new_channels[name] = channel_id
+            channel_ids.append(channel_id)
+        path_id = _insert_linked_path(
+            connection,
+            window=window,
+            link=link,
+            channel_ids=channel_ids,
+            target=target,
+            input_hash=input_hash,
+            llm_run_id=llm_run_id,
+        )
+        if path_id is None:
+            continue
+        _insert_steps(connection, path_id, channel_ids)
+        _insert_evidence(connection, path_id, link.evidence_refs)
+        linked += 1
+
     if new_channels:
         # 어휘가 수렴하는지는 이 수가 말한다. 매주 늘기만 하면 정규화가 안 되고 있는 것이다.
         logger.info("causal vocabulary grew by %s channels: %s", len(new_channels),
@@ -133,7 +166,7 @@ def store_paths(
             f"no path reused an existing channel; {len(new_channels)} new names were proposed"
         )
     connection.commit()
-    return StoreOutcome(stored=stored, new_channels=len(new_channels))
+    return StoreOutcome(stored=stored, new_channels=len(new_channels), linked=linked)
 
 
 def _node_id(existing_id: str) -> int:
@@ -201,12 +234,57 @@ def _insert_path(
             (
                 window.week_start,
                 event_id,
+                domain.event_source_key(event_id),
+                None,
+                None,
+                None,
                 path.target_kind,
                 path.target_code,
                 chain_key(channel_ids),
                 path.sign,
                 path.confidence,
                 path.reasoning,
+                target.week,
+                target.t1,
+                target.t5,
+                target.unit,
+                input_hash,
+                llm_run_id,
+            ),
+        )
+        row = cursor.fetchone()
+    return int(row[0]) if row else None
+
+
+def _insert_linked_path(
+    connection: TransactionalConnection,
+    *,
+    window: CausalWindow,
+    link: LinkedPath,
+    channel_ids: Sequence[int],
+    target: TargetReturns,
+    input_hash: str,
+    llm_run_id: int | None,
+) -> int | None:
+    """대상에서 출발한 경로 하나. **`event_id`가 NULL이고 `source_target_*` 셋이 채워진다.**"""
+    with connection.cursor() as cursor:
+        cursor.execute(
+            PATH_INSERT,
+            (
+                window.week_start,
+                None,
+                domain.target_source_key(
+                    link.source_target_kind, link.source_target_code, link.source_sign
+                ),
+                link.source_target_kind,
+                link.source_target_code,
+                link.source_sign,
+                link.target_kind,
+                link.target_code,
+                chain_key(channel_ids),
+                link.sign,
+                link.confidence,
+                link.reasoning,
                 target.week,
                 target.t1,
                 target.t5,

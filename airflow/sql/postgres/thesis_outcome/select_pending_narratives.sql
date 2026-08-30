@@ -37,7 +37,13 @@ SELECT thesis.id,
        -- 크기 채점은 **지평 0에만** 있다. 해설은 지평 1·3·5라 지평을 건너 조인해야 한다.
        -- 숫자만으로는 과대·과소의 이유가 안 남아서, 크게 어긋난 날은 해설이 그것을 다루게 한다.
        sizing.predicted_return_pct,
-       sizing.return_error_pct
+       sizing.return_error_pct,
+       sizing.predicted_band_pct,
+       -- 예측의 축(15단계). **해설 모델이 이 단계가 만들어진 이유의 절반이다** — 전에는
+       -- 실제 결과 한 줄뿐이라 어느 축의 등락인지 모델도 알 수 없었다.
+       thesis.base_price,
+       thesis.base_at,
+       thesis.base_return_pct
 FROM thesis
 LEFT JOIN thesis_outcome AS outcome
        ON outcome.thesis_id = thesis.id

@@ -1,0 +1,7 @@
+interface:
+  display_name: "Writing Migrations"
+  short_description: "Alembic 리비전과 별칭 라우팅 규칙"
+  default_prompt: "Use $writing-migrations before creating an Alembic revision or declaring table_options on a model."
+
+policy:
+  allow_implicit_invocation: true

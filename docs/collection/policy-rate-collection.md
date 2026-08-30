@@ -314,7 +314,7 @@ Param과 스케줄도 갈린다.
   나오는지.
 - 마이그레이션(둘째): `kind` 컬럼 주석이 모델과 같은 문장인지. 어긋나면 autogenerate가
   매번 차이를 낸다.
-- DAG: 주 1회 cron, 제공처 태스크 넷이 서로 독립인지(하나가 실패해도 나머지가 도는지),
+- DAG: 주 1회 cron, 제공처 태스크 셋(ECOS·FRED·BoE)이 서로 독립인지(하나가 실패해도 나머지가 도는지),
   계열이 둘인 FRED 태스크가 하나만 실패해도 죽는지, 4xx가 `AirflowFailException`이 되는지.
 - FRED 목록: 새 정책금리 계열이 DAG가 도는 상수에 실제로 들어갔는지(§5의 `TREASURY_SERIES`·
   `MACRO_SERIES` 필터에서 조용히 빠지는 사고를 잡는다).

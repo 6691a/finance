@@ -3,13 +3,17 @@
 - 날짜: 2026-08-20 (2026-08-21 리뷰 반영 후 단계별 문서로 분리, 2026-08-22 6·7단계 추가,
   2026-08-24 8단계 추가, 2026-08-26 9·10단계와 11·12·13·14단계 추가)
 - 상태: 4단계(그래프 DB)를 뺀 전부 구현 완료이고 **리비전은 운영에
-  전부 반영됐다**(2026-08-27 실측, 운영 포인터가 체인 head `a8c5f207d1e6`). 10단계 일봉
-  백필도 끝났다(`index_daily`가 2016-08부터). 슬롯 일곱이 모두 실적을 갖고 장중 슬롯과
-  채점·해설 루프가 돌고 있다. 12·14단계는 마이그레이션이 없고 **함께 배포한다** —
-  화면이 12단계의 클라이언트다. 배포는 `just build-api` 뒤 `just deploy-api`이고,
-  프런트 산출물이 이미지 안에 있어 순서가 뒤바뀌면 옛 화면이 그대로 뜬다.
-  4단계(그래프 DB)만 미착수다. 15단계가 **저장소의 테이블 49개를 전부 화면에 올렸다.**
+  전부 반영됐다**(2026-08-30 기준, 운영 포인터의 원본은 이 줄이다). 10단계 일봉
+  백필도 끝났다(`index_daily`가 2016-08부터). 추론이 쌓였고 채점·해설 루프가 돈다.
+  **장중 슬롯은 2026-08-28에 넷에서 `intraday_midday` 하나로 줄었다**([TUNING.md](TUNING.md) 6절).
+  12·14·15단계는 마이그레이션이 없고 **함께 배포한다** — 화면이 12단계의 클라이언트다.
+  배포는 `just build-api` 뒤 `just deploy-api`이고, 프런트 산출물이 이미지 안에 있어
+  순서가 뒤바뀌면 옛 화면이 그대로 뜬다. 4단계(그래프 DB)와 16단계는 미착수다.
+  15단계가 **저장소의 테이블을 전부 화면에 올렸다.**
   남은 확인은 5절
+
+  **head 리비전 값의 원본은 이 줄 하나다.** 단계 문서에 각자 적지 않는다 — 그러면 리비전이
+  붙을 때마다 다섯이 따로 낡는다
 
 한 문서로 쓰기엔 범위가 커서(모델·리비전, 모듈 둘, DAG, SQL 열 개, 테스트 넷, compose·
 requirements) **배포 단위(worktree/PR 하나)마다 문서를 나눴다.** 이 파일은 공통 원칙과
@@ -78,7 +82,7 @@ requirements) **배포 단위(worktree/PR 하나)마다 문서를 나눴다.** �
 | 3 | [3-dag-slack.md](3-dag-slack.md) | `dags/market_thesis_forecast.py`·`market_thesis_review.py`, 스케줄, 채점 호출, Slack 렌더링·발송, DAG 테스트. **여기서 첫 운영 발송** | 1, 2 | 있음 |
 | 4 | [4-graph.md](4-graph.md) | `airflow/modules/graph.py`, `sync_graph` 태스크, `sync_only` Param, compose·requirements, `tests/modules/test_graph.py` | 1 (3과 병렬 가능) | 없음 |
 | 5 | [5-followup.md](5-followup.md) | `thesis_outcome` 테이블, 다지평(T+0·1·3·5) 채점, `FollowupNarrator` 사후 해설과 `verdict`, `past_theses` 툴 | 1, 2, 3 | 있음 |
-| 6 | [6-analyst.md](6-analyst.md) | `stock_analyst_opinion` 테이블과 리비전, `collectors/kis_analyst_opinion.py`, `dags/kis_analyst_opinion_daily.py`, `analyst_opinions` 툴, `SourceKind.research`와 네이버 리서치 출처 여섯(`document_listings.py`의 `enrich` 단계), 테스트 | 5 | 없음(리포트는 기존 문서 평가가 읽는다) |
+| 6 | [6-analyst.md](6-analyst.md) | `stock_analyst_opinion` 테이블과 리비전, `collectors/analyst/kis_opinion.py`, `dags/kis_analyst_opinion_daily.py`, `analyst_opinions` 툴, `SourceKind.research`와 네이버 리서치 출처 여섯(`document_listings.py`의 `enrich` 단계), 테스트 | 5 | 없음(리포트는 기존 문서 평가가 읽는다) |
 | 7 | [7-nxt-review.md](7-nxt-review.md) | `post_nxt_close` 슬롯, `thesis/nxt_review.py`, `market_thesis_nxt_review` DAG, 애프터마켓 조회 SQL, 수기 리비전(CHECK 확장) | 1, 2, 3 | 있음 |
 | 8 | [8-expectation.md](8-expectation.md) | `stock_event_claim`·`stock_event_extraction`·`stock_event_outcome`과 수기 리비전, `modules/expectation/domain.py`·`expectation/extraction.py`·`expectation/judgment.py`, `event_expectation_hourly` DAG, `event_surprises` 툴, 컨센서스 수집기(후행) | 2, 6 | 추출만 |
 | 9 | [9-intraday.md](9-intraday.md) | 장중 슬롯 넷과 수기 리비전, `thesis/intraday.py`, `market_thesis_intraday` DAG, 장중 봉·되짚기·채점 SQL 다섯, 채점·해설 슬롯 목록 파라미터화 | 1, 2, 3, 5 | 있음 |
@@ -87,7 +91,9 @@ requirements) **배포 단위(worktree/PR 하나)마다 문서를 나눴다.** �
 | 12 | [12-api.md](12-api.md) | `apps/api/`(FastAPI 읽기 전용 조회 API 넷), `compose/prod/api`·`compose/local/api`, `justfile` 태스크 여섯, `tests/api/`·`tests/config/test_api_stack.py`, 프로젝트 가이드 문서의 구조 표 | 1, 5 (11은 선택 — 없으면 응답 칸이 빈다) | 없음 |
 | 13 | [13-llm-ledger.md](13-llm-ledger.md) | `thesis_llm_run`·`thesis_tool_call` 테이블과 수기 리비전(+`thesis`·`thesis_outcome`에 연결 칸), `thesis/toolbox.py`의 기록 래퍼, 생성·해설 흐름의 대화 열고 닫기, SQL 넷, 테스트 | 2, 5, 7 | 없음(기록만) |
 | 14 | [14-web-ui.md](14-web-ui.md) | React·TypeScript 실행 추적·추론 상세·주간 품질 화면, Cytoscape.js 관계 그래프, FastAPI 정적 자산 제공, Grafana 로컬 서비스·대시보드·테스트·문서 제거 | 11, 12, 13 | 없음(조회만) |
-| 15 | [15-collection-browser.md](15-collection-browser.md) | 수집 원자료 조회 API와 화면 여섯. **테이블 49개가 전부 화면까지 닿는다**(구현 전 26개). uPlot 차트 하나를 들이고 Sentry를 opt-in으로 바꿨다 | 12, 14 | 없음(조회만) |
+| 15 | [15-return-basis.md](15-return-basis.md) | `thesis`에 축 세 칸과 크기 오차 두 칸, `thesis_outcome`에 오차 스냅샷, 수기 리비전, Slack 기준 줄과 `±` 표기, API 다섯 칸, 크기 앵커 툴 `typical_move`, 프롬프트 `## 크기` 절(앵커 + 오차), `select_window_changes.sql`의 국내 지수 제외 | 9, 10, 11, 12 | 있음(크기·오차 추정만 — 채점은 순수 함수) |
+| 16 | [16-narration-model.md](16-narration-model.md) | 사후 해설만 `gpt-5.6-luna`로 옮긴다 — `narration_model()` 하나, `thesis_narrative.yaml`에 조사 규칙·표기 절, `NARRATIVE_PROMPT_VERSION` 4. **예측은 `grok-4.6`에 그대로 둔다**(백테스트가 반대로 나왔다) | 5, 13 | 있음(해설만) |
+| 17 | [17-collection-browser.md](17-collection-browser.md) | 수집 원자료 조회 API와 화면 일곱. **저장소의 테이블이 전부 화면까지 닿는다**(구현 전 26/49). uPlot 차트 하나를 들이고 Sentry를 opt-in으로 바꿨다 | 12, 14 | 없음(조회만) |
 
 **5단계는 1단계의 `thesis` 채점 컬럼을 `thesis_outcome`으로 옮긴다.** 채택했으므로
 (2026-08-21) 그 이동을 1·2단계 코드에 먼저 반영한다. 무엇이 바뀌는지는
@@ -115,10 +121,18 @@ requirements) **배포 단위(worktree/PR 하나)마다 문서를 나눴다.** �
   내고 별도 frontend service는 만들지 않는다. **Grafana는 함께 걷어낸다** — 이 화면이
   대체해서가 아니라 더 안 쓰기로 한 결정이다(2026-08-26). 대시보드 열여덟은 원시 수집을
   보던 것이라 대체 없이 사라진다([14-web-ui.md](14-web-ui.md) 7절).
-- **15는 14가 남긴 빈자리를 메운다.** Grafana를 걷어내며 사라진 원자료 화면을 우리 계약
-  위에 다시 짓는다. 1판(시세 봉·지표 시계열)이 돌고 2~4판(문서·수급·수집 감시)은 설계다.
-  **차트 라이브러리 하나(uPlot)를 들이면서 14단계의 "chart 안 넣는다"가 뒤집혔다** —
-  분봉 53만 행은 표로만 두면 아무도 못 읽는다([15-collection-browser.md](15-collection-browser.md) 0.3절).
+- **17은 14가 남긴 빈자리를 메운다.** Grafana를 걷어내며 사라진 원자료 화면을 우리 계약
+  위에 다시 짓는다. **차트 라이브러리 하나(uPlot)를 들이면서 14단계의 "chart 안 넣는다"가
+  뒤집혔다** — 분봉 53만 행은 표로만 두면 아무도 못 읽는다
+  ([17-collection-browser.md](17-collection-browser.md) 0.3절). 번호가 15에서 17로 밀린 것은
+  main이 그 사이 15·16을 먼저 쓴 탓이다(2026-08-30 병합).
+- **15는 11이 남긴 자리를 채운다.** 11이 크기 두 칸을 만들면서 축(어느 가격 대비인가)을
+  문서에만 두고 행에 안 남겼고, 기준선을 `daily_history` 눈대중에 맡겼다. 2026-08-28 실측이
+  둘 다 값을 치른다는 것을 보여 줬다 — 장중 0.7퍼센트가 하루 등락으로 읽혔고, 장전 크기는
+  모델이 조회한 재료의 중앙값보다도 낮았다([15-return-basis.md](15-return-basis.md) 0절).
+  같은 문서가 `macro_changes`의 국내 지수 축 오염도 함께 걷고, **크기를 점이 아니라
+  `mid ± band` 구간으로 바꾼다**(사용자 2026-08-28 — "1퍼 2퍼가 정확히 맞지 않을 것
+  같은데 ± 오차 값도 추가해줘").
 - 한 단계가 끝날 때마다 그 단계 문서의 "테스트" 절이 통과해야 다음으로 간다.
 
 **[TUNING.md](TUNING.md)는 단계가 아니다.** 다 만든 뒤에 쓰는 운영 규칙이라 번호가 없다 —

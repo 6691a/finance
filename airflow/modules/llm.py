@@ -146,6 +146,12 @@ def causal_model() -> BaseChatModel:
     return ChatOpenAI(
         model="gpt-5.6-luna",
         timeout=REQUEST_TIMEOUT_SECONDS,
+        # **툴을 쓰므로 Responses API로 간다**(2026-08-28). Chat Completions에서는 이 모델이
+        # 함수 툴과 reasoning을 같이 못 받는다 — `Function tools with reasoning_effort are
+        # not supported for gpt-5.6-luna in /v1/chat/completions`. `reasoning_effort="none"`
+        # 으로 낮추는 대신 API를 옮긴다. 인과 추론이 이 흐름의 값어치이고 그것을 끄면
+        # 툴을 붙인 이유가 사라진다.
+        use_responses_api=True,
         # 재시도는 Airflow가 한다. 위 모듈 docstring 참고.
         max_retries=0,
     )
@@ -208,6 +214,40 @@ def thesis_model(conv_id: str) -> BaseChatModel:
         model="grok-4.6",
         timeout=THESIS_TIMEOUT_SECONDS,
         default_headers=_conversation_headers(conv_id),
+        # 재시도는 Airflow가 한다. 위 모듈 docstring 참고.
+        max_retries=0,
+    )
+
+
+def narration_model() -> BaseChatModel:
+    """사후 해설(`modules/thesis/outcomes.py`)이 쓰는 모델. **추론과 다른 모델이다.**
+
+    같은 시장 추론 계보인데 모델이 갈리는 이유는 두 작업의 병목이 반대이기 때문이다.
+    해설은 답이 문서에 있고 가져오면 되는 일이라 **조사를 많이 하는 쪽**이 이기고, 예측은
+    같은 관측에서 확률을 매기는 일이라 **추론**이 값어치다. 실측이 정확히 그렇게 갈렸다 —
+    해설은 이 모델이 그록과 같은 조사 깊이를 22배 싸게 냈고(48건), 예측은 방향 적중이
+    그록 9/20에 이 모델 5/20으로 무작위 기대(6.7)보다 낮았다(20건).
+    근거는 `docs/analysis/market-thesis/16-narration-model.md` 2·8절이다.
+
+    **`use_responses_api`가 필수다.** `/v1/chat/completions`는 이 모델에 function tool과
+    reasoning을 같이 주면 400이다("To use function tools, use /v1/responses or set
+    reasoning_effort to 'none'"). 같은 문서 6절.
+
+    **effort는 `high`로 고정한다.** `max`는 프롬프트가 재량을 남긴 자리에서 툴 호출을 자기
+    추론으로 대체해 조사가 얕아지고(툴 7회 → 2회), `medium`은 표기가 샌다 — 해설 본문에
+    `(ref: ...)`를 박고 그중 다수가 `_known_refs`에 잘려 본문과 `evidence_refs`가 어긋난다.
+
+    `thesis_model`과 달리 `conv_id`를 받지 않는다. 그 인자는 xAI의 **서버별** 캐시를 sticky
+    라우팅으로 맞추려는 것인데(위 모듈 docstring) OpenAI의 캐시는 접두 해시로 자동이라
+    맞출 서버가 없다. 인자를 남기면 아무 일도 하지 않는 인자가 된다.
+
+    키는 이 클래스가 `OPENAI_API_KEY`에서 스스로 읽는다. `document_model`과 같은 키다.
+    """
+    return ChatOpenAI(
+        model="gpt-5.6-luna",
+        timeout=THESIS_TIMEOUT_SECONDS,
+        use_responses_api=True,
+        reasoning={"effort": "high"},
         # 재시도는 Airflow가 한다. 위 모듈 docstring 참고.
         max_retries=0,
     )

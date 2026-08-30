@@ -37,6 +37,15 @@ from modules.sql import read_sql
 from modules.thesis.state import FORECAST_SLOTS, NARRATED_SLOTS
 from modules.utility import KST_TIMEZONE
 
+
+class OpsQueryError(RuntimeError):
+    """감시 조회가 계약을 안 지켰다. 재시도해도 같은 결과다.
+
+    **0으로 메우지 않는 이유가 이 예외의 존재 이유다.** 이 리포트는 "무엇이 밀렸나"를
+    보는 화면이라, 조회가 비었을 때 0을 찍으면 초록으로 보이고 아무도 안 본다.
+    """
+
+
 BRIEFING_WINDOW = read_sql("postgres", "source_record", "select_briefing_window.sql")
 RECENT_FAILURES = read_sql("postgres", "source_record", "select_recent_failures.sql")
 THESIS_CALIBRATION = read_sql("postgres", "thesis_outcome", "select_calibration.sql")
@@ -131,6 +140,11 @@ class ThesisHorizon(BaseModel):
     # 평균은 부호를 살린다 — 양수면 과소추정, 음수면 과대추정이고 그것이 프롬프트를 고칠 방향이다.
     return_graded: int = 0
     mean_return_error_pct: float | None = None
+    # 밴드 적중. **오차 평균과 다른 것을 잰다** — 저쪽은 중심의 치우침이고 이쪽은 모델이
+    # 자기 불확실성을 아는가다. **적중률이 지나치게 높아도 문제다**: 95퍼센트면 폭을
+    # 너무 넓게 불러 구간이 아무 것도 말하지 않는다는 뜻이다.
+    band_graded: int = 0
+    band_hits: int = 0
 
     @property
     def beats_uniform(self) -> bool | None:
@@ -205,6 +219,10 @@ class OpsBriefingReader:
             # 문서 평가는 source_record를 안 남긴다. 2부와 같은 질문이라 같은 쿼리를 쓴다.
             cursor.execute(documents.BRIEFING_SUMMARY, (since,))
             document_counts = cursor.fetchone()
+            if document_counts is None:
+                # GROUP BY 없는 집계라 한 행이 반드시 온다. 안 오면 쿼리나 스키마가 깨진
+                # 것이고, 그때 적체 0을 찍으면 **감시 리포트가 초록으로 위장한다.**
+                raise OpsQueryError("document briefing summary returned no row")
             thesis = self._thesis_health(cursor)
 
         activity = tuple(
@@ -227,7 +245,7 @@ class OpsBriefingReader:
                 FailureDetail(source=row[0], source_key=row[1], started_at=row[2], detail=row[3])
                 for row in failure_rows
             ),
-            assessment_backlog=document_counts[5] if document_counts else 0,
+            assessment_backlog=document_counts[5],
             thesis=thesis,
         )
 
@@ -249,6 +267,9 @@ class OpsBriefingReader:
             (list(THESIS_HORIZONS), since, list(FORECAST_SLOTS), list(NARRATED_SLOTS), today),
         )
         backlog = cursor.fetchone()
+        if backlog is None:
+            # 위와 같은 이유다. 밀린 건수가 0으로 보이는 것이 가장 나쁜 거짓말이다.
+            raise OpsQueryError("thesis backlog query returned no row")
         return ThesisHealth(
             horizons=tuple(
                 ThesisHorizon(
@@ -262,11 +283,13 @@ class OpsBriefingReader:
                     unresolved=row[7],
                     return_graded=row[8],
                     mean_return_error_pct=float(row[9]) if row[9] is not None else None,
+                    band_graded=row[10],
+                    band_hits=row[11],
                 )
                 for row in rows
             ),
-            ungraded=backlog[0] if backlog else 0,
-            unnarrated=backlog[1] if backlog else 0,
+            ungraded=backlog[0],
+            unnarrated=backlog[1],
         )
 
 
@@ -321,7 +344,7 @@ def _thesis_blocks(health: ThesisHealth) -> list[dict[str, Any]]:
     if health.horizons:
         rendered += blocks.table_section(
             f"추론 품질 · 최근 {health.window_days}일",
-            ("지평", "채점", "Brier", "크기 오차", "판정(지지/반박/보류)"),
+            ("지평", "채점", "Brier", "크기 오차", "밴드 적중", "판정(지지/반박/보류)"),
             [_horizon_row(item) for item in health.horizons],
         )
         # baseline을 매번 다시 설명하지 않도록 한 줄로 붙인다.
@@ -331,6 +354,7 @@ def _thesis_blocks(health: ThesisHealth) -> list[dict[str, Any]]:
                     f"균등 확률 baseline {UNIFORM_BRIER}",
                     "낮을수록 좋다",
                     "판정은 Brier와 다른 것을 잰다 — 저쪽은 방향, 이쪽은 이유",
+                    "밴드 적중은 60~80퍼센트가 목표대 — 너무 높으면 폭을 넓게 부른 것이다",
                 ]
             )
         )
@@ -340,7 +364,7 @@ def _thesis_blocks(health: ThesisHealth) -> list[dict[str, Any]]:
     return rendered
 
 
-def _horizon_row(item: ThesisHorizon) -> tuple[str, str, str, str, str]:
+def _horizon_row(item: ThesisHorizon) -> tuple[str, str, str, str, str, str]:
     if item.mean_brier is None:
         brier = "-"
     else:
@@ -354,11 +378,17 @@ def _horizon_row(item: ThesisHorizon) -> tuple[str, str, str, str, str]:
         # 부호가 뜻이다. 표본 수를 함께 적는다 — flat과 미채점이 빠져 Brier의 n과 다르다.
         gap = "과소" if item.mean_return_error_pct > 0 else "과대"
         sizing = f"{item.mean_return_error_pct:+.2f}%p {gap} (n={item.return_graded})"
+    if not item.band_graded:
+        # 오차 폭을 받기 전 판의 추론이다. 0/0을 0퍼센트로 그리면 "한 번도 못 맞혔다"로 읽힌다.
+        band = "-"
+    else:
+        band = f"{item.band_hits}/{item.band_graded} ({item.band_hits / item.band_graded:.0%})"
     return (
         f"T+{item.horizon_days}",
         str(item.graded),
         brier,
         sizing,
+        band,
         f"{item.supported}/{item.contradicted}/{item.unresolved}",
     )
 

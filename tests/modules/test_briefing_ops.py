@@ -183,12 +183,13 @@ def test_the_window_is_a_full_day():
 
 # --- 추론 품질 ---------------------------------------------------------------
 
-# (지평, 채점, 평균 Brier, flat, 해설, 지지, 반박, 보류, 크기 채점, 평균 크기 오차)
-# 크기 오차는 지평 0에만 있다. 나머지 지평은 크기를 받지 않아 NULL이 정상이다.
+# (지평, 채점, 평균 Brier, flat, 해설, 지지, 반박, 보류, 크기 채점, 평균 크기 오차,
+#  밴드 채점, 밴드 적중)
+# 크기 오차와 밴드는 지평 0에만 있다. 나머지 지평은 크기를 받지 않아 NULL이 정상이다.
 THESIS_ROWS = [
-    (0, 12, 0.612, 3, 0, 0, 0, 0, 9, 0.42),
-    (1, 12, 0.701, 4, 12, 1, 4, 7, 0, None),
-    (5, 8, 0.588, 2, 8, 2, 1, 5, 0, None),
+    (0, 12, 0.612, 3, 0, 0, 0, 0, 9, 0.42, 8, 5),
+    (1, 12, 0.701, 4, 12, 1, 4, 7, 0, None, 0, 0),
+    (5, 8, 0.588, 2, 8, 2, 1, 5, 0, None, 0, 0),
 ]
 
 
@@ -227,6 +228,25 @@ def test_a_horizon_without_a_size_grade_shows_a_dash():
     assert "0.00%p" not in text
 
 
+def test_the_thesis_section_shows_the_band_hit_rate():
+    """**오차 평균과 다른 것을 잰다** — 저쪽은 중심의 치우침, 이쪽은 자기 불확실성을 아는가다.
+
+    적중률이 지나치게 높아도 문제라 목표대를 함께 적는다. 95퍼센트면 폭을 너무 넓게 불러
+    구간이 아무 것도 말하지 않는다는 뜻이다.
+    """
+    text = _block_text(ops.render_blocks(summary(thesis_rows=THESIS_ROWS)))
+
+    assert "5/8 (62%)" in text
+    assert "60~80퍼센트" in text
+
+
+def test_a_horizon_without_a_band_grade_shows_a_dash_not_zero_percent():
+    """오차 폭을 받기 전 판의 추론이다. 0/0을 0퍼센트로 그리면 "한 번도 못 맞혔다"로 읽힌다."""
+    text = _block_text(ops.render_blocks(summary(thesis_rows=[(0, 4, 0.5, 1, 0, 0, 0, 0, 4, 0.2, 0, 0)])))
+
+    assert "(0%)" not in text
+
+
 def test_the_thesis_section_shows_the_verdict_split():
     text = _block_text(ops.render_blocks(summary(thesis_rows=THESIS_ROWS)))
 
@@ -255,7 +275,7 @@ def test_an_overdue_grade_breaks_the_all_green():
 
 
 def test_a_horizon_without_grades_shows_a_dash_not_a_zero():
-    text = _block_text(ops.render_blocks(summary(thesis_rows=[(5, 0, None, 0, 0, 0, 0, 0, 0, None)])))
+    text = _block_text(ops.render_blocks(summary(thesis_rows=[(5, 0, None, 0, 0, 0, 0, 0, 0, None, 0, 0)])))
 
     # 0.000은 "완벽했다"로 읽힌다. 채점이 없는 것과 완벽한 것을 가른다.
     assert "0.000" not in text
@@ -303,3 +323,17 @@ def _block_text(blocks) -> str:
 def _activity_table(blocks) -> dict:
     """수집 현황 표 블록. 렌더에는 추론 지평 표도 있어 첫 table 만 집는다."""
     return next(block for block in blocks if block.get("type") == "table")
+
+
+# 감시 리포트의 빈 조회. 둘 다 GROUP BY 없는 집계라 한 행이 반드시 오고, 안 오면 쿼리나
+# 스키마가 깨진 것이다. 그때 0을 찍으면 적체 없음(=초록)으로 위장한다.
+
+
+def test_a_document_summary_without_a_row_is_an_error_not_zero_backlog():
+    with pytest.raises(ops.OpsQueryError):
+        summary(backlog=None)
+
+
+def test_a_thesis_backlog_without_a_row_is_an_error_not_zero_backlog():
+    with pytest.raises(ops.OpsQueryError):
+        summary(thesis_backlog=None)

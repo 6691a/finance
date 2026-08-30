@@ -55,6 +55,7 @@ import logging
 from collections.abc import Iterable, Mapping, Sequence
 from datetime import UTC, date, datetime
 from decimal import Decimal
+from types import MappingProxyType
 from typing import Any
 
 from pydantic import BaseModel, ConfigDict
@@ -68,6 +69,7 @@ from modules.thesis.domain import (
     NARRATED_HORIZON_DAYS,
     PROMPT_VERSION,
     Evidence,
+    ForecastBaseline,
     LlmRunKind,
     LlmRunStatus,
     Subject,
@@ -140,6 +142,15 @@ class StoredThesis(BaseModel):
     # 확률만 그리던 모양으로 떨어진다.
     up_return_pct: Decimal | None = None
     down_return_pct: Decimal | None = None
+    # 그 크기의 ± 폭(퍼센트포인트). 오차를 요구하는 판 전의 행은 `None`이고 렌더가
+    # `±`를 안 붙인다.
+    up_return_band_pct: Decimal | None = None
+    down_return_band_pct: Decimal | None = None
+    # 예측의 축(15단계). 셋은 함께 있거나 함께 없다 — 장후 둘과 이 칸들이 생기기 전 행이
+    # 전부 `None`이다.
+    base_price: Decimal | None = None
+    base_at: datetime | None = None
+    base_return_pct: Decimal | None = None
 
 
 WATCHED_INSTRUMENTS = read_sql("postgres", "instrument", "select_watched.sql")
@@ -207,6 +218,11 @@ def _stored(row: Sequence[Any]) -> StoredThesis:
         prompt_version=row[16],
         up_return_pct=row[17],
         down_return_pct=row[18],
+        up_return_band_pct=row[19],
+        down_return_band_pct=row[20],
+        base_price=row[21],
+        base_at=row[22],
+        base_return_pct=row[23],
     )
 
 
@@ -243,12 +259,17 @@ class PendingGrade(BaseModel):
     prob_flat: Decimal
     horizon_days: int
     run_slot: RunSlot
-    # 장중 슬롯의 채점 기준가. 추론 행의 `input_state`에 박혀 있는, **모델이 실제로 본**
-    # 가격이다. 장전 슬롯은 `None`이고 기준가를 전일 종가에서 얻는다.
+    # 채점 기준가. **모델이 실제로 본** 가격이다(`thesis.base_price`, 그 칸이 없던 행은
+    # `input_state`에서 캐낸다). 예측 슬롯 전부에 값이 오지만 **장중만 이것을 분모로 쓴다** —
+    # 장전 채점은 전일 종가를 따로 찾고 그 경로는 이 변경에 얹지 않았다
+    # (`thesis.review._horizon_return`).
     base_price: Decimal | None = None
     # 크기 채점의 입력. 실현된 방향에 대응하는 쪽만 쓰인다(`thesis.domain.return_error`).
     up_return_pct: Decimal | None = None
     down_return_pct: Decimal | None = None
+    # 그 크기의 오차 폭. 실현된 방향의 것이 `predicted_band_pct`로 스냅샷된다.
+    up_return_band_pct: Decimal | None = None
+    down_return_band_pct: Decimal | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -503,6 +524,7 @@ class ThesisStore:
         tool_rounds: int,
         precedents: Mapping[str, Sequence[int]],
         llm_run_id: int | None = None,
+        baselines: Mapping[str, ForecastBaseline] = MappingProxyType({}),
     ) -> tuple[StoredThesis, ...]:
         """추론과 근거, 그리고 본 과거 추론을 한 트랜잭션에 쓴다.
 
@@ -513,9 +535,14 @@ class ThesisStore:
         thesis와 evidence를 한 트랜잭션에 쓴다 — 추론만 들어가고 근거가 빠진 상태를 남기지 않는다.
         `precedents`는 subject 코드별로 프롬프트에 실린 과거 thesis ID 목록이고 `thesis_precedent`
         엣지가 된다. 같은 트랜잭션이다 — "무엇을 보고 냈나"도 추론과 함께 들어가거나 함께 빠진다.
+
+        `baselines`는 subject 코드별 예측의 축이다. **없는 코드는 셋 다 NULL로 들어간다** —
+        장후 두 슬롯이 통째로 빈 매핑을 넘기고, 예측 슬롯에서도 봉이 없어 관측 상태에서
+        빠진 대상은 여기서도 빠진다. all-or-none CHECK가 그 짝을 지킨다.
         """
         with atomic(self._connection) as transaction, transaction.cursor() as cursor:
             for draft in drafts:
+                baseline = baselines.get(draft.subject.code)
                 cursor.execute(
                     THESIS_INSERT,
                     (
@@ -531,6 +558,11 @@ class ThesisStore:
                         draft.prob_flat,
                         draft.up_return_pct,
                         draft.down_return_pct,
+                        draft.up_return_band_pct,
+                        draft.down_return_band_pct,
+                        baseline.price if baseline else None,
+                        baseline.at if baseline else None,
+                        baseline.return_pct if baseline else None,
                         draft.up_reasoning,
                         draft.down_reasoning,
                         draft.flat_reasoning,
@@ -572,10 +604,12 @@ class ThesisStore:
                 prob_flat=row[7],
                 horizon_days=row[8],
                 run_slot=RunSlot(row[9]),
-                # SQL이 jsonb에서 뽑은 문자열이다. 없으면(장전 슬롯) NULL이 온다.
-                base_price=None if row[10] is None else Decimal(row[10]),
+                # SQL이 `numeric`으로 맞춰 준다(옛 행은 jsonb 문자열을 캐스팅한다).
+                base_price=None if row[10] is None else Decimal(str(row[10])),
                 up_return_pct=row[11],
                 down_return_pct=row[12],
+                up_return_band_pct=row[13],
+                down_return_band_pct=row[14],
             )
             for row in rows
         )
@@ -679,11 +713,13 @@ class ThesisStore:
                 outcome=outcome,
                 up_return_pct=pending.up_return_pct,
                 down_return_pct=pending.down_return_pct,
+                up_return_band_pct=pending.up_return_band_pct,
+                down_return_band_pct=pending.down_return_band_pct,
             )
             if pending.horizon_days == 0
             else None
         )
-        predicted_return_pct, return_error_pct = sizing if sizing else (None, None)
+        predicted_return_pct, return_error_pct, predicted_band_pct = sizing if sizing else (None, None, None)
         with self._connection.cursor() as cursor:
             cursor.execute(
                 INSERT_GRADE,
@@ -698,6 +734,7 @@ class ThesisStore:
                     score.quantize(Decimal("0.00001")),
                     predicted_return_pct,
                     return_error_pct,
+                    predicted_band_pct,
                 ),
             )
 
@@ -736,6 +773,10 @@ class ThesisStore:
                 brier_score=row[14],
                 predicted_return_pct=row[15],
                 return_error_pct=row[16],
+                predicted_band_pct=row[17],
+                base_price=row[18],
+                base_at=row[19],
+                base_return_pct=row[20],
             )
             for row in rows
         )

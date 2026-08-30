@@ -1,3 +1,10 @@
+## 이 저장소
+
+- **프로젝트가 무엇인지: 루트 [README.md](README.md)를 먼저 읽는다.** 데이터 흐름, 하루에 무엇이 도는지, 스택이 거기 있다.
+- 저장소를 돌리는 법(설정·DB alias·마이그레이션·배포·관측): [docs/operations.md](docs/operations.md)
+- 작업 규칙: [.codex/AGENTS.md](.codex/AGENTS.md) (Claude Code는 [.claude/CLAUDE.md](.claude/CLAUDE.md))
+- 코드를 고쳐 README의 숫자·목록이 낡으면 **같은 커밋에서** README도 고친다.
+
 ## graphify
 
 This project has a knowledge graph at graphify-out/ with god nodes, community structure, and cross-file relationships.

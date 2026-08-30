@@ -56,6 +56,9 @@ T+0·1·3·5로 채점하고, T+1·3·5에는 사후 해설과 판정을 붙인�
 ## 필요한 환경
 
 - `XAI_API_KEY`, `SLACK_BOT_TOKEN`, `SLACK_CHANNEL_MARKET`, `CONNECTION_ID`.
+- **`OPENAI_API_KEY`도 필요하다**(2026-08-28). 이 DAG만 키가 둘이다 — 추론 생성은
+  `XAI_API_KEY`(grok-4.6), 사후 해설은 `OPENAI_API_KEY`(gpt-5.6-luna)를 쓴다.
+  왜 갈랐는지는 `modules/llm.py`의 `narration_model`에 있다.
 - `LANGSMITH_TRACING`을 켜면 프롬프트와 툴 결과가 외부로 나간다.
 """
 

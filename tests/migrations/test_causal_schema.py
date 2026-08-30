@@ -102,3 +102,45 @@ def test_the_evidence_dies_with_its_path(capsys):
     # `ref`는 document·disclosure·signal 셋을 담는다. 마스터가 셋이라 FK를 걸 수 없고,
     # 걸면 마스터에 없는 근거 하나가 경로 전체를 죽인다.
     assert "REFERENCES document" not in body
+
+
+def test_the_path_source_can_be_a_target(capsys):
+    """출발점이 사건 또는 대상 중 하나다(설계 §11.4).
+
+    **사건 노드를 빌리면 그래프가 안 이어진다.** §7의 투영에서 `target:US10Y`와
+    `event:미국 국채금리 하락`은 라벨도 식별자도 다른 노드라 조회가 거기서 끊긴다.
+    """
+    sql = head_sql(capsys)
+
+    assert "ALTER TABLE market_causal_path ADD COLUMN source_key TEXT" in sql
+    assert "ADD COLUMN source_target_kind VARCHAR(20)" in sql
+    assert "ADD COLUMN source_target_code TEXT" in sql
+    assert "ADD COLUMN source_sign VARCHAR(20)" in sql
+    assert "ALTER TABLE market_causal_path ALTER COLUMN event_id DROP NOT NULL" in sql
+
+
+def test_the_natural_key_moves_to_the_source_key(capsys):
+    """**nullable 컬럼을 자연키에 두면 NULL이 서로 달라 중복이 들어온다.**
+
+    `event_id`가 NULL인 대상 출발 경로 둘이 `ON CONFLICT DO NOTHING`에 안 걸리고 둘 다
+    삽입된다. 그래서 출발점을 한 칸에 담아 그 칸으로 건다 — `chain_key`와 같은 자리다.
+    """
+    sql = head_sql(capsys)
+
+    assert "uq_market_causal_path_natural_key UNIQUE (week_start, source_key" in sql
+
+
+def test_endpoint_observed_needs_a_target_source(capsys):
+    """`endpoint_observed`는 값에서 나온다. 사건 출발 경로는 쓸 수 없다(설계 §11.3)."""
+    sql = head_sql(capsys)
+
+    assert "ck_market_causal_path_endpoint_needs_source" in sql
+    assert "endpoint_observed" in sql
+
+
+def test_the_source_is_exclusive_and_never_itself(capsys):
+    """둘 다이거나 둘 다 아닌 행, 그리고 자기 자신으로 돌아오는 경로를 DB가 막는다."""
+    sql = head_sql(capsys)
+
+    assert "ck_market_causal_path_source_exclusive" in sql
+    assert "ck_market_causal_path_source_not_self" in sql

@@ -210,7 +210,8 @@ uv run ruff check apps airflow migrations tests
 - Airflow는 `apps/`, `../apps/core/`, `migrations/`를 보지 못한다. DAG가 실행 시점에 import하는 코드는 전부 `airflow/` 아래 둔다.
 - import 뿌리는 `airflow/`다. DAG는 배포와 같은 이름으로 `from modules.collectors import ...`처럼 쓴다. pytest `pythonpath`, pyrefly `search-path`, ruff isort `known-first-party`가 `pyproject.toml`에서 같은 뿌리를 가리킨다.
 - 쿼리는 Python 문자열이 아니라 `airflow/sql/<엔진>/<테이블>/<동작>.sql`에 둔다. `modules/sql.py`의 `read_sql`이 `AIRFLOW_HOME` 유무와 관계없이 같은 파일을 읽는다.
-- 로컬 Compose와 Dockerfile은 운영 Airflow에 맞춰 둔 상태다. 건드리지 않는다. 배치 문제는 코드 위치로만 해결하고, 실행 코드를 이미지에 굽거나 `apps/`를 볼륨으로 붙이지 않는다.
+- 로컬 Compose와 Dockerfile은 운영 Airflow에 맞춰 둔 상태다. **코드 배치 문제로는 건드리지 않는다.** 실행 코드를 이미지에 굽거나 `apps/`를 볼륨으로 붙이지 않는다.
+- **데이터 볼륨은 예외이고, 그때는 로컬과 운영 compose를 함께 고친다.** `airflow/files/`가 그 예다(2026-08-30, `document_body_hourly`의 첨부 파일). 한쪽만 고치면 로컬에서 도는 DAG이 운영에서 마운트 없음으로 죽는다. `.gitignore`에 내용물을 막고 `.gitkeep`을 커밋하는 것까지가 한 벌이다 — 디렉터리가 없으면 바인드 마운트가 root 소유 빈 폴더를 만들어 Airflow가 못 쓴다.
 - `airflow/` 아래에는 DAG가 실제로 import·실행하는 코드만 둔다. Airflow가 실행하지 않는 상주 서비스·API는 `apps/` 아래에 백엔드 규칙(ORM, `config.yaml`, async)으로 두고 FastAPI와 공유하며 배포만 컨테이너로 가른다(`apps/realtime/`가 그 예). 두 트리가 같은 도메인 상수를 쓰면 중복을 허용하되 테스트로 대조한다. 한쪽 트리가 다른 쪽을 import하지 않는 것이 우선이다.
 - DAG가 쓰는 코드는 위치는 Airflow를, 규칙은 백엔드를 따른다. DAG가 쓰는 공유 코드는 `airflow/modules` 아래 한 벌만 둔다.
 - 외부 입력은 Pydantic으로 검증하고, 시각은 timezone-aware UTC이며, 주석은 한국어로 쓴다.

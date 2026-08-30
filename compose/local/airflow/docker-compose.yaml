@@ -87,6 +87,7 @@ x-airflow-common:
     - ${AIRFLOW_PROJ_DIR:-.}/modules:/opt/airflow/modules
     - ${AIRFLOW_PROJ_DIR:-.}/utility:/opt/airflow/utility
     - ${AIRFLOW_PROJ_DIR:-.}/sql:/opt/airflow/sql
+    - ${AIRFLOW_PROJ_DIR:-.}/files:/opt/airflow/files
   user: "${AIRFLOW_UID:-50000}:0"
   depends_on:
     &airflow-common-depends-on
@@ -286,7 +287,7 @@ services:
         echo
         echo "Change ownership of files in shared volumes to ${AIRFLOW_UID:-50000}:0"
         echo
-        chown -v -R "${AIRFLOW_UID:-50000}:0" /opt/airflow/{logs,dags,plugins,config}
+        chown -v -R "${AIRFLOW_UID:-50000}:0" /opt/airflow/{logs,dags,plugins,config,files}
         echo
         echo "Files in shared volumes:"
         echo

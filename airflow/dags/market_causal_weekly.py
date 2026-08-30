@@ -33,14 +33,28 @@
 
 **그 주에 경로가 이미 있으면 skip이 아니라 성공이다.** 재실행이 정상 흐름이라 매번 노란
 태스크를 만들 이유가 없다.
+
+## Neo4j 투영
+
+`sync_graph`가 그 주 몫을 Neo4j에 민다. **Postgres가 원본이고 Neo4j는 파생물이다** —
+설계는 [4-graph.md](../../docs/analysis/market-thesis/4-graph.md)다.
+
+- **`NEO4J_URI`가 비어 있으면 `AirflowSkipException`이다.** 인스턴스가 서기 전에도
+  `build_causal_graph`는 정상이어야 하고, 설정 누락으로 매주 빨간 태스크를 만들면 진짜
+  실패가 묻힌다. URI가 있는데 접속이 안 되는 것은 skip이 아니라 `ConnectionError` 재시도다.
+- **두 스토어를 한 트랜잭션에 넣지 않는다.** Neo4j 쓰기가 실패해도 Postgres는 이미 커밋돼
+  있다. Slack 발송 실패가 DB 쓰기를 되돌리지 않는 것과 같은 이유다.
+- **`sync_only`를 주면 `build_causal_graph`를 건너뛰고 저장된 주 전부를 다시 민다.**
+  초기 적재와 밀린 주 복구가 이것 하나다. MERGE라 몇 번을 돌려도 같은 그래프다.
 """
 
+import os
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
 import pendulum
 from airflow.sdk import Param, dag, task
-from airflow.sdk.exceptions import AirflowFailException
+from airflow.sdk.exceptions import AirflowFailException, AirflowSkipException
 
 from modules.utility import KST_TIMEZONE
 
@@ -49,7 +63,11 @@ DEFAULT_ARGS: dict[str, Any] = {"retries": 3, "retry_delay": timedelta(minutes=1
 # 대화 하나가 대상 열한 개를 한 번에 본다. 교정이 붙으면 왕복이 둘이다.
 BUILD_TIMEOUT = timedelta(minutes=20)
 
+# 주 하나가 경로 수십 개다. 왕복은 트랜잭션 하나뿐이라 오래 걸릴 것이 없다.
+SYNC_TIMEOUT = timedelta(minutes=10)
+
 WEEK_START_PARAM = "week_start"
+SYNC_ONLY_PARAM = "sync_only"
 
 
 @dag(
@@ -68,10 +86,18 @@ WEEK_START_PARAM = "week_start"
             format="date",
             title="대상 주의 월요일",
             description=(
-                "YYYY-MM-DD이고 **반드시 월요일**이다. 비우면 실행 주의 2주 전 월요일. "
-                "지난 주를 다시 만들 때만 준다."
+                "YYYY-MM-DD이고 **반드시 월요일**이다. 비우면 실행 주의 2주 전 월요일. 지난 주를 다시 만들 때만 준다."
             ),
-        )
+        ),
+        SYNC_ONLY_PARAM: Param(
+            False,
+            type="boolean",
+            title="Neo4j 재동기화만",
+            description=(
+                "켜면 LLM을 부르지 않고 **저장된 주 전부**를 Neo4j에 다시 민다. "
+                "초기 적재와 밀린 주 복구용이다. MERGE라 몇 번을 돌려도 같은 그래프다."
+            ),
+        ),
     },
     doc_md=__doc__,
     tags=["causal", "llm", "market", "korea"],
@@ -85,6 +111,11 @@ def market_causal_weekly():
         from modules.llm import LlmError
         from modules.prompt import PromptError
 
+        params = context.get("params") or {}
+        if params.get(SYNC_ONLY_PARAM):
+            # 재동기화만 하는 실행이다. 모델을 부르지 않는다.
+            raise AirflowSkipException("sync_only run; skipping the model")
+
         # **`logical_date`는 스케줄된 실행에만 붙는다.** `airflow dags trigger`로 부르면
         # context에 아예 없어서 직접 인덱싱하면 태스크가 시작하자마자 죽는다. 없으면 벽시계를
         # 쓰고, 그 값은 Param이 있으면 어차피 안 본다(`domain.resolve_week`).
@@ -93,7 +124,7 @@ def market_causal_weekly():
         try:
             return run.build_weekly_graph(
                 logical_date=logical_date,
-                week_start_param=(context.get("params") or {}).get(WEEK_START_PARAM),
+                week_start_param=params.get(WEEK_START_PARAM),
                 dag_run_id=getattr(dag_run, "run_id", ""),
             )
         except (
@@ -106,7 +137,53 @@ def market_causal_weekly():
             # 설정·프롬프트·정규화 문제다. 다시 불러도 같은 답이 온다.
             raise AirflowFailException(str(error)) from error
 
-    build_causal_graph()
+    @task(
+        task_display_name="Neo4j 투영",
+        execution_timeout=SYNC_TIMEOUT,
+        # 기본값 `all_success`는 upstream이 skip이면 downstream도 skip이다. `sync_only`
+        # 실행에서 `build_causal_graph`가 skip되어도 이 태스크는 돌아야 한다.
+        trigger_rule="none_failed",
+    )
+    def sync_graph(summary: dict[str, Any] | None, **context: Any) -> dict[str, Any]:
+        from contextlib import closing
+        from datetime import date
+
+        from modules import graph
+        from modules.causal.run import connection
+
+        uri = os.environ.get("NEO4J_URI")
+        if not uri:
+            # 인스턴스가 서기 전에도 앞 태스크는 정상이어야 한다. 설정 누락으로 매주
+            # 빨간 태스크를 만들면 진짜 실패가 묻힌다.
+            raise AirflowSkipException("NEO4J_URI is not set; skipping the projection")
+        user = os.environ.get("NEO4J_USER")
+        password = os.environ.get("NEO4J_PASSWORD")
+        if not user or not password:
+            raise AirflowFailException("NEO4J_USER and NEO4J_PASSWORD are required")
+
+        sync_only = bool((context.get("params") or {}).get(SYNC_ONLY_PARAM))
+        with closing(connection()) as conn:
+            if sync_only:
+                weeks = graph.stored_weeks(conn)
+            elif summary and summary.get("week_start"):
+                weeks = [date.fromisoformat(summary["week_start"])]
+            else:
+                # upstream이 요약을 안 남겼는데 `sync_only`도 아니다. 어느 주를 밀지 모르는
+                # 채로 도는 것보다 죽는 편이 낫다.
+                raise AirflowFailException("no week to project; pass sync_only to backfill")
+
+            projected = 0
+            for week in weeks:
+                paths, steps = graph.read_week(conn, week)
+                if not paths:
+                    continue
+                payload = graph.project(paths, steps)
+                graph.write_graph(uri, (user, password), payload)
+                projected += payload.edge_count
+
+        return {"weeks": [week.isoformat() for week in weeks], "edges": projected}
+
+    sync_graph(build_causal_graph())
 
 
 market_causal_weekly = market_causal_weekly()

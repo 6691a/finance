@@ -443,7 +443,6 @@ def test_store_writes_rows_in_the_upsert_column_order():
         language,
         published,
         detected,
-        level,
         digest,
         record,
     ) = row
@@ -451,7 +450,7 @@ def test_store_writes_rows_in_the_upsert_column_order():
     assert url == "https://example.com/a"
     assert document_type == "article"
     assert (title, summary, body) == ("기준금리 동결", "한국은행이 기준금리를 동결했다.", None)
-    assert (language, level) == ("en", "feed_content")
+    assert language == "en"
     assert published == datetime(2026, 8, 14, 22, 30, tzinfo=UTC)
     assert detected == DETECTED_AT
     assert digest == content_hash(title, summary)
@@ -505,27 +504,22 @@ def test_metadata_only_sources_do_not_store_the_summary():
 
     row = document_rows(connection.recorded_cursor)[0]
     assert row[5] is None
-    assert row[10] == "metadata_only"
     # 해시도 요약 없이 계산해야 한다. 안 그러면 저장한 것과 해시한 것이 어긋난다.
-    assert row[11] == content_hash("기준금리 동결", None)
+    assert row[10] == content_hash("기준금리 동결", None)
 
 
-def test_a_full_text_source_still_lands_as_feed_content_until_the_body_arrives():
-    """정책과 실제를 가른다.
+def test_discovery_never_stores_a_body():
+    """발견은 피드 한 번이고 본문은 문서마다 요청이 한 번 더 든다.
 
-    `collection_mode`는 "여기까지 받아도 된다"이고 `content_level`은 "이 행에 실제로 담긴
-    것"이다. 발견은 피드 한 번이라 본문이 없고, 그때 `full_text`로 적으면 본문이 있는 문서와
-    없는 문서를 나중에 가릴 수 없다. `full_text`로 오르는 것은 본문이 들어올 때다.
+    본문 자리가 비어 있어야 그 문서가 `document_body_hourly`의 큐(`body_status IS NULL`)에
+    남는다.
     """
     connection = FakeConnection()
     items, _ = parse_feed(RSS.encode("utf-8"))
 
     store_documents(connection, source(collection_mode="full_text"), response_for(), items, False, DETECTED_AT)
 
-    row = document_rows(connection.recorded_cursor)[0]
-    assert row[10] == "feed_content"
-    # 본문 자리는 비어 있고, 그래서 이 문서는 `document_body_hourly`의 큐에 남는다.
-    assert row[6] is None
+    assert document_rows(connection.recorded_cursor)[0][6] is None
 
 
 def test_store_keeps_a_source_record_when_the_feed_has_no_items():

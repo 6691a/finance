@@ -1,7 +1,7 @@
 import pytest
 from sqlalchemy import CheckConstraint
 
-from apps.models.content import Document
+from apps.models.content import Document, DocumentSource
 from tests.helpers import NO_REVISION_REASON, head_sql, revision_files
 
 pytestmark = pytest.mark.skipif(not revision_files(), reason=NO_REVISION_REASON)
@@ -32,7 +32,7 @@ def test_every_enum_column_of_document_has_a_check_constraint(capsys):
     sql = head_sql(capsys)
 
     declared = check_constraint_names(Document.__table__)
-    assert declared >= {"ck_document_type", "ck_document_content_level", "ck_document_direction"}
+    assert declared >= {"ck_document_type", "ck_document_direction", "ck_document_body_status"}
     for name in declared:
         assert f"CONSTRAINT {name} CHECK" in sql
 
@@ -99,3 +99,18 @@ def test_enabled_sources_are_raised_to_full_text(capsys):
 
     assert "UPDATE document_source" in sql
     assert "SET collection_mode = 'full_text'" in sql
+
+
+def test_content_level_is_gone(capsys):
+    """읽는 코드가 없는데 CHECK만 걸려 운영 태스크를 죽였다(2026-08-30).
+
+    "그 문서에 본문이 있나"는 `body_status`가 더 정확히 답한다. 정책은 원래부터
+    `document_source.collection_mode`가 원본이다.
+    """
+    sql = head_sql(capsys)
+
+    assert "content_level" not in Document.__table__.columns
+    assert "ALTER TABLE document DROP COLUMN content_level" in sql
+    assert "DROP CONSTRAINT ck_document_metadata_only_has_no_body" in sql
+    # 정책 컬럼은 그대로다. 둘은 다른 것이다.
+    assert "collection_mode" in DocumentSource.__table__.columns

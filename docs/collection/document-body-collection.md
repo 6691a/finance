@@ -1,0 +1,452 @@
+# 문서 본문·첨부 수집
+
+- 기준일: 2026-08-30
+- 상태: **미구현. 구현 계약**(설계 승인 2026-08-30)
+- 상위 설계: [analysis/economic-document-archive-design.md](../analysis/economic-document-archive-design.md) 2단계.
+  그 문서 6.2·6.3이 예고한 본문 수집을 여기서 계약으로 만든다
+
+`document_ingestion_hourly`가 모으는 문서에 **본문과 첨부 파일**을 채운다. 지금 3,598건이
+제목과 요약만 갖고 있고 `body`는 한 건도 채워져 있지 않다.
+
+목적은 **검색이다.** 이 문서의 범위는 검색이 딛고 설 원문을 모으는 데까지이고, 검색 자체는
+14절의 향후 목록에 있다.
+
+## 0. 확정 결정
+
+| 결정 | 값 | 근거 |
+| --- | --- | --- |
+| 본문 크기 제한 | **없다** | 사용자 결정(2026-08-30). 저장은 원본 보존이고 프롬프트에 얼마를 실을지는 읽는 쪽이 정한다 — `disclosure_event.body`가 같은 판단을 이미 했다 |
+| 평가가 보는 것 | **제목과 요약만**(지금과 같다) | 사용자 결정. 본문을 넣으면 토큰이 수십 배가 되고 판단 품질이 좋아진다는 근거가 아직 없다 |
+| `content_hash` | 제목·요약만으로 정의 | 본문을 넣으면 백필이 3,598건 전량 재평가를 부른다(4절) |
+| 첨부 파일 | **받아서 NAS에 저장**하고 경로를 남긴다 | 사용자 결정. 문서 하나에 파일이 여럿일 수 있다 |
+| 파일 저장소 | NAS 디렉터리를 컨테이너에 마운트 | 사용자 결정. 새 서비스·새 의존성이 0이다 |
+| 영상 | **링크만** 남긴다. 내려받지 않는다 | 사용자 결정 |
+| 첨부 텍스트 변환 | **이번 범위 밖** | 향후(14절). 파일을 먼저 모아 두면 그때 재수집이 필요 없다 |
+| `collection_mode` | 켜진 출처 22개 전부 `full_text` | 사용자 결정 |
+| DAG | **새 DAG** `document_body_hourly` | 앞단과 실패 성격이 다르다(8.1) |
+| 백필 | 별도 스크립트 없이 **정상 큐가 곧 백필** | 10절 |
+
+## 1. 왜 필요한가
+
+문서를 검색할 수 있어야 한다. 부르는 쪽은 둘이다(사용자 결정 2026-08-30).
+
+- **market-thesis의 LLM 툴.** 추론 에이전트가 종목·주제로 근거 문서를 찾는다.
+- **`apps/api`의 조회 API.** 화면(`apps/web`)이 붙으면 그 위에 선다.
+
+지금 검색할 수 있는 것은 제목과 피드 요약뿐이다. 요약은 **우리가 만든 것이 아니라 제공처가
+준 것**이고, 길이가 출처마다 5자에서 2,863자까지 흩어져 있다(2절). 요약만으로 유사도를 재면
+연합인포맥스 1,718건(평균 289자)과 KRX 36건(평균 5자)이 같은 축에서 비교된다.
+
+본문 없이 임베딩을 만들면 그 임베딩을 나중에 전부 다시 만들어야 한다. **검색을 붙이기 전에
+본문이 있어야 하는 이유가 이것이다.**
+
+## 2. 지금 상태 (2026-08-30 운영 DB 실측)
+
+문서 3,598건, `body`가 채워진 것 **0건**, `summary`가 있는 것 3,332건.
+수집 시작은 2026-08-17이다.
+
+| 출처 | 문서 | 요약 평균 길이 | 본문이 어디 있나 |
+| --- | ---: | ---: | --- |
+| einfomax | 1,718 | 289 | HTML |
+| yonhap(꺼짐) | 514 | 75 | HTML |
+| cnbc | 181 | 127 | HTML |
+| bbc_business | 177 | 105 | HTML |
+| bok | 130 | 488 | **첨부** |
+| naver_research_market | 119 | 472 | **첨부(PDF)** |
+| naver_research_industry | 119 | 620 | **첨부(PDF)** |
+| boj | 101 | (없음) | **첨부(PDF)** |
+| naver_research_invest | 99 | 739 | **첨부(PDF)** |
+| naver_research_debenture | 71 | 617 | **첨부(PDF)** |
+| whitehouse | 58 | 482 | HTML |
+| npr_business | 57 | 168 | HTML |
+| naver_research_economy | 57 | 806 | **첨부(PDF)** |
+| bea | 49 | 430 | HTML |
+| krx | 36 | 5 | **받을 수 없다** |
+| fss | 36 | (없음) | **첨부** |
+| fed | 26 | 109 | HTML |
+| census | 24 | 248 | HTML |
+| ustr | 11 | 2,863 | HTML |
+| eia | 10 | 292 | HTML |
+| naver_research_company | 4 | 894 | **첨부(PDF)** |
+| bls | 1 | 686 | HTML |
+
+첨부에만 본문이 있는 출처가 **772건(21%)**이다.
+
+`document.body`는 **컬럼이 이미 있다**(Text, 상한 없음). 채우는 코드가 없을 뿐이다 —
+`collectors/document/documents.py`의 `store_documents`가 `None`을 하드코딩하고 있고
+`# 본문 수집은 아직 범위 밖이다. 열리면 여기만 채운다`라는 주석이 붙어 있다.
+
+## 3. 출처는 둘로 갈린다 (2026-08-30 실측)
+
+일곱 출처에 실제로 요청해 확인했다. 추출은 `article p` → `main p` → `p` 순으로 40자가 넘는
+문단을 모으는 방식이다.
+
+| 출처 | 뽑힌 본문 | 판정 |
+| --- | ---: | --- |
+| whitehouse | 6,134자 | HTML에 본문이 있다 |
+| cnbc | 4,918자 | 있다 |
+| bbc_business(기사) | 4,072자 | 있다 |
+| yonhap | 1,154자 | 있다 |
+| einfomax | 663자 | 있다 |
+| bbc_business(영상) | 446자 | 있다 — **영상 페이지에도 설명 문단이 있다** |
+| fed | 336자 | 있다. 다만 `p` 전역 선택자가 "An official website of the United States Government" 같은 화면 문구를 함께 집는다 |
+| bok | 442자 | **없다.** 제목·등록일·조회수·담당부서·첨부파일 목록뿐이다 |
+| fss | 1,092자 | **없다.** 전부 메뉴다 |
+| boj | 1,929자 | **없다.** 초록과 내비게이션뿐이고 본문은 `data/rev26e11.pdf`다 |
+| naver_research | — | **없다.** 상세 API의 `researchContent.content`(이미 요약으로 저장 중)와 `attachUrl` PDF다 |
+
+첨부 PDF 크기 실측: 네이버 리포트 873KB, BOJ 리뷰 326KB. 백필 772건이면 대략 **0.5GB**,
+신규는 리포트 하루 약 40건 기준 **월 750MB · 연 9GB** 수준이다.
+
+**krx는 첨부도 아니고 본문도 아니다.** 보도자료 화면이 문서별 GET 딥링크를 제공하지 않아
+`canonical_url`부터가 `?noti_no=`를 붙인 합성 URL이다(`document_listings.py` 주석에 이미
+그 한계가 적혀 있다). 목록 JSON이 주는 `contn`을 요약으로 이미 저장하고 있고, 그 이상은
+받을 수 없다.
+
+## 4. 재평가 함정과 `content_hash`
+
+**이 절이 이 설계에서 가장 잘못되기 쉬운 자리다.**
+
+지금 `content_hash`는 제목·요약·본문을 이어 붙인 SHA-256이고, 재평가 조건은
+`assessed_content_hash IS DISTINCT FROM content_hash`다. 본문을 채우면 해시가 전부 달라져
+**3,598건이 통째로 재평가된다.** 평가가 본문을 보지도 않는데 LLM 비용만 나간다.
+
+그래서 **`content_hash`를 제목과 요약만으로 재정의한다.** 본문이 바뀌었다고 다시 평가할
+이유가 없다 — 평가의 입력이 아니기 때문이다.
+
+다만 **조각 수는 그대로 둔다.** 지금 공식이 세 조각을 `\x1f`로 잇고 본문 자리에는 `None`이
+들어와 빈 문자열이 된다. 조각을 둘로 줄이면 구분자가 하나 빠져 기존 3,598행의 저장값과
+달라지고, 그 순간 우리가 피하려던 전량 재평가가 그대로 일어난다.
+
+```python
+def content_hash(title: str, summary: str | None) -> str:
+    """정규화한 제목·요약의 SHA-256.
+
+    **본문은 넣지 않는다.** 평가가 제목과 요약만 보므로 본문이 바뀌었다고 다시 평가할
+    이유가 없다.
+
+    세 번째 빈 조각은 본문 자리다. 지우지 않는다 — 본문이 전부 NULL이던 시절에 저장된
+    3,598행의 해시와 글자 그대로 같아야 본문 백필이 전량 재평가를 부르지 않는다.
+    """
+    joined = "\x1f".join((title, summary or "", ""))
+    return hashlib.sha256(joined.encode("utf-8")).hexdigest()
+```
+
+**마이그레이션이 필요 없고 재평가가 0건이다.** 대안으로 마이그레이션에서 3,598행의
+`content_hash`와 `assessed_content_hash`를 SQL로 다시 계산하는 방법도 있는데
+(PostgreSQL 17에 `sha256()`이 내장이다), 얻는 것이 빈 조각 하나를 지우는 것뿐이라
+쓰지 않는다.
+
+본문이 바뀐 것을 알아야 할 날이 오면(재임베딩 판정) 그때 `body_hash` 컬럼을 따로 더한다.
+지금 넣으면 아무도 읽지 않는다.
+
+`dedup.py`의 ② 규칙이 `content_hash` 완전일치로 전재 기사를 묶는데, **그 규칙의 뜻이
+좁아진다** — "제목·요약·본문이 같다"에서 "제목과 요약이 같다"로 바뀐다. 지금 운영
+데이터에서 ②가 새로 잡는 쌍이 0건이고(설계 문서 6.4 실측), 시각 창 ±72시간이 그대로
+있으므로 오탐이 늘 자리는 같은 날 같은 제목·같은 요약인 경우뿐이다. 그건 애초에 중복이다.
+
+## 5. 스키마
+
+### 5.1 `document.body_status`
+
+큐를 `body IS NULL`로 돌리면 **영영 받을 수 없는 문서를 매시간 다시 친다.** krx 36건은
+딥링크가 없고, 첨부에만 본문이 있는 772건도 HTML에서는 영원히 빈손이다. 그래서 "해 봤나"와
+"왜 비었나"를 한 컬럼에 남긴다.
+
+`StrEnum` + `SqlEnum(native_enum=False, length=20, values_callable=...)` + `CHECK`.
+**nullable이고 NULL이 "아직 해 보지 않았다"다.** 그 NULL 집합이 곧 백필 큐다.
+
+| 값 | 뜻 | 예 |
+| --- | --- | --- |
+| `ok` | 본문을 받아 저장했다 | cnbc, bbc, einfomax |
+| `empty` | 페이지에 글이 없다 | 문단이 하나도 40자를 넘지 않는 경우 |
+| `attachment_only` | 본문이 첨부에만 있다. 첨부는 받았다 | bok, fss, boj, naver_research |
+| `unavailable` | 받을 수 없다 | krx(딥링크 없음), HTTP 4xx |
+
+`failed`를 두지 않는다. 연결 실패·5xx는 **`body_status`를 NULL로 남겨** 다음 실행이 다시
+집게 한다. 상태를 남기면 재시도 규칙을 따로 써야 하고, NULL로 두면 큐가 그 일을 이미 한다.
+
+### 5.2 `document_attachment`
+
+문서 하나에 파일이 여럿일 수 있다(사용자 요구). 새 테이블이다.
+
+| 컬럼 | 형 | 뜻 |
+| --- | --- | --- |
+| `document_id` | BigInteger FK `document.id` ON DELETE CASCADE | 문서가 지워지면 첨부도 지운다 |
+| `position` | Integer | 문서 안의 순서. 페이지에 나온 차례다 |
+| `kind` | Enum(`file`, `video`) | 내려받은 파일인지 링크만 남긴 영상인지 |
+| `url` | Text | 원본 URL. 영상은 이 값이 전부다 |
+| `storage_path` | Text \| NULL | NAS 상대경로. **영상은 NULL이다** |
+| `filename` | Text \| NULL | 제공처가 준 파일 이름 |
+| `media_type` | Text \| NULL | 응답의 `Content-Type` |
+| `byte_size` | BigInteger \| NULL | 받은 바이트 수 |
+| `sha256` | Text \| NULL | 내용 해시. 같은 파일을 두 번 받지 않는 근거 |
+| `fetched_at` | DateTime(tz) \| NULL | 내려받은 시각(UTC). 영상은 NULL |
+
+자연키는 **`(document_id, url)`**이다. 같은 문서에 같은 URL을 두 번 붙이지 않는다.
+`position`은 표시 순서일 뿐 키가 아니다 — 페이지 마크업이 바뀌면 순서가 흔들린다.
+
+**텍스트 변환 컬럼(`extracted_text`, `extracted_at`)을 지금 넣지 않는다.** 변환 기능을 만들 때
+컬럼을 더한다. 지금 넣으면 전부 NULL인 컬럼 둘이 스키마에 남고, 그때 필요한 모양(청크 단위인가
+파일 단위인가)을 지금은 모른다.
+
+`instrument`에 외래키를 걸지 않는 규칙과 달리 **여기는 `document`에 외래키를 건다.** 첨부는
+문서 없이 뜻이 없고, 마스터가 늦게 채워지는 문제가 없다.
+
+### 5.3 `content_level`은 본문이 들어올 때 오른다
+
+`document_source.collection_mode`는 **정책**이고 `document.content_level`은 **그 문서에 실제로
+담긴 수준**이다. 지금 `store_documents`가 둘을 같은 값으로 쓰는데, 정책을 `full_text`로 올린
+뒤에도 그대로 두면 본문이 없는 문서가 `full_text`로 표시된다.
+
+- 수집 시점(`store_documents`)은 `feed_content`로 넣는다. 본문이 아직 없다.
+- `body_status='ok'`가 되는 순간 `full_text`로 올린다.
+- `metadata_only`는 이제 어느 출처도 쓰지 않지만 값은 남긴다. `ck_document_metadata_only_has_no_body`
+  CHECK도 그대로 둔다.
+
+### 5.4 `collection_mode`를 전부 `full_text`로
+
+켜진 출처 22개 전부를 시드 리비전으로 올린다(사용자 결정). fss만 `metadata_only`였고
+나머지는 `feed_content`다.
+
+이 컬럼의 존재 이유가 "무료로 읽힌다는 것이 자동 수집 근거가 되지 않는다"이므로, **문제가
+되면 코드가 아니라 그 출처의 `enabled`나 `collection_mode`를 내린다.** 네이버 리서치는
+`terms_url`·`terms_checked_at`이 이미 채워져 있고(2026-08-21, robots.txt 확인), 나머지는
+비어 있다.
+
+## 6. 본문 추출
+
+새 모듈 `airflow/modules/collectors/document/body.py`.
+
+**클래스가 아니라 함수다.** 자격 증명도 연결도 기준 시각도 들고 있지 않다 — 규칙이 정한
+"감쌀 상태가 없는 것"이다. HTTP는 `documents.py`의 `fetch_url`을 그대로 쓴다.
+
+### 6.1 선택자 사다리
+
+40자를 넘는 `<p>`를 모으되, 아래 순서로 **처음 결과가 나오는 곳에서 멈춘다.**
+
+1. `article p`
+2. `[itemprop=articleBody] p`
+3. `main p`
+4. `p`
+
+3절의 실측이 이 사다리로 나온 값이다. 빗나가는 출처는 `BODY_SELECTORS: dict[str, str]`에
+한 줄로 예외를 준다 — `NAIVE_FEED_TIMEZONES`·`SERIES_GUID_SOURCES`가 이미 쓰는 형태다.
+fed가 첫 예외 후보다(전역 `p`가 화면 문구를 함께 집는다).
+
+`<script>`·`<style>`·`<nav>`·`<footer>`·`<aside>`·`<form>`은 먼저 통째로 걷어낸다.
+거래소 공시의 CSS가 본문 앞에 붙은 일이 이미 있었다(`dart.py`, 2026-08-29).
+
+### 6.2 정규화는 기존 것을 쓴다
+
+`documents.py`의 `normalize_text`와 `NOISE_PATTERNS`를 그대로 부른다. 상대시각·조회수·
+기자 이메일·저작권 푸터를 걷어내는 규칙이 이미 거기 있고, 두 벌로 나뉘면 한쪽만 고친 날
+요약과 본문의 표기가 갈린다.
+
+**해시 안정성 부담은 없어졌다.** 본문이 `content_hash`에 안 들어가므로(4절) 노이즈가 남아도
+매시간 재평가가 돌지 않는다. 그래도 정규화는 한다 — 검색 품질과 나중의 임베딩이 그것을 먹는다.
+
+### 6.3 길이 상한을 두지 않는다
+
+사용자 결정이다. `disclosure_event.body`가 4,000자 상한 때문에 대량보유보고서 세 건을 잘라
+저장한 일이 있었고(2026-08-29 실측) 그 상한은 그때 없앴다. 같은 판단을 여기서 되풀이하지
+않는다. `Text` 컬럼은 1GB까지 받는다.
+
+**한 실행이 처리할 문서 수 상한은 따로 있다**(8.2). 그건 크기 제한이 아니라 배치 상한이다.
+
+## 7. 첨부와 영상
+
+### 7.1 무엇을 첨부로 보는가
+
+출처별 규칙이다. 범용 규칙 하나로 링크를 다 긁으면 메뉴의 PDF까지 받는다.
+
+| 출처 | 규칙 |
+| --- | --- |
+| naver_research_* | 상세 API 응답의 `researchContent.attachUrl`. **이미 받고 있는 응답에 들어 있다** — 요청이 늘지 않는다 |
+| boj | 본문 페이지의 `a[href$=.pdf]` |
+| bok · fss | 게시판 첨부 링크 |
+
+`NaverResearchContent`에 `attach_url: str | None = Field(default=None, alias="attachUrl")`을
+더한다. 상세 응답에서 실측으로 확인했다(2026-08-30).
+
+### 7.2 저장 경로
+
+```
+/opt/airflow/files/documents/<source_slug>/<YYYY>/<MM>/<document_id>-<position>.<ext>
+```
+
+DB에는 `/opt/airflow/files`를 뺀 **상대경로**만 남긴다. 마운트 지점이 바뀌어도 행을 고치지
+않는다. 확장자는 `Content-Type`과 URL 끝에서 정한다.
+
+같은 파일을 두 번 받지 않는 근거는 `sha256`이다. 자연키가 이미 `(document_id, url)`이라
+같은 문서의 재시도는 걸리고, 해시는 서로 다른 문서가 같은 파일을 가리킬 때(정정 리포트 등)
+쓴다.
+
+### 7.3 영상은 링크만 남긴다
+
+사용자 결정이다. `kind='video'`, `storage_path`는 NULL이다.
+
+영상 링크를 찾는 경로는 넷이고, **위에서부터 처음 걸리는 것을 쓴다.**
+
+1. `<video src>` 또는 `<video><source src>`
+2. `iframe[src]` 중 **알려진 플레이어 호스트만**(youtube, youtu.be, vimeo, dailymotion, `player.`).
+   호스트를 안 좁히면 오탐이 난다 — 연합뉴스 기사 페이지의 첫 `iframe`이 `games.yna.co.kr`
+   게임 위젯이었다(2026-08-30 실측).
+3. HTML 안의 `.mp4`·`.m3u8` URL. cnbc가 여기서 잡힌다
+   (`pdl-iphone-cnbc-com.akamaized.net/...hd_L.mp4`, 2026-08-30 실측).
+4. 위 셋이 다 비었는데 **URL이 영상 경로면 문서 URL 자체를 링크로 남긴다.**
+
+넷째가 BBC다. `/news/videos/...` 페이지에 `og:video`도 `<iframe>`도 `<video>`도 `.mp4`도
+없다 — 플레이어를 JS가 만든다(2026-08-30 실측). 그래도 그 문서가 영상이라는 사실과 어디로
+가면 볼 수 있는지는 남는다. 지금 운영 데이터에서 영상은 BBC 6건이 전부다.
+
+**영상 문서의 본문은 비어 있지 않다.** BBC 영상 페이지에도 설명 문단 446자가 있고
+(3절 실측) 6.1의 사다리가 그것을 집는다. 그러니 영상은 실패가 아니다 —
+본문 `ok` + 첨부 `video` 한 행이 정상이다.
+
+## 8. DAG
+
+새 DAG `document_body_hourly`, `dag_display_name`은 `📄 문서 본문·첨부 수집`이다.
+`document_ingestion_hourly`는 건드리지 않는다.
+
+### 8.1 왜 새 DAG인가
+
+규칙이 정한 기준은 "앞단 데이터와 실패 성격이 다른가"다. 둘 다 다르다.
+
+- **앞단이 다르다.** 수집은 피드 응답을 기다리고, 본문은 `document` 행을 기다린다.
+- **실패의 단위가 다르다.** 수집은 출처 하나가 죽고, 본문은 문서 하나가 죽는다.
+- **요청 수가 다르다.** 수집은 출처당 1회, 본문은 문서당 1회 + 첨부 수만큼이다.
+
+한 DAG에 넣으면 본문 200건 요청이 다음 시간 피드 수집을 밀고, 재시도가 피드까지 다시 친다.
+
+### 8.2 큐와 상한
+
+`body_status IS NULL`인 문서를 **오래된 것부터** N건. 대표 문서에 연결된 중복
+(`canonical_document_id IS NOT NULL`)은 뺀다 — 대표가 본문을 갖는다.
+
+기본 상한은 **한 실행 200건**이고 Param으로 조절한다. 3,598건이면 18시간, 하루면 백필이
+끝난다.
+
+스케줄은 **KST 매시 15분 = UTC 매시 15분**이다. 시간당 DAG의 분이 이미 05(수집)·25(평가)·
+45(사건 기대)로 차 있어 남은 자리가 15다. 수집 바로 뒤에 붙어 방금 들어온 문서가 그 시간
+안에 본문을 갖는다. 평가와 앞뒤 관계는 없다 — 평가가 본문을 보지 않기 때문이다(9절).
+
+### 8.3 실패 판정
+
+**항목별 실패 수집이고, 전부 실패했을 때만 태스크를 죽인다.** 다음 실행이 같은 큐를 곧
+다시 보기 때문이다 — `kis_equity_bar_reconcile`·`document_ingestion_hourly`와 같은 계열이다.
+이 근거를 모듈 docstring의 "실패와 재시도" 절에 남긴다.
+
+문서 하나가 실패하면 이름과 사유를 함께 `failures`에 모은다(구분자는 `;`).
+
+되돌릴 수 없는 오류(HTTP 4xx)는 그 문서를 `unavailable`로 확정하고 넘어간다.
+재시도할 값어치가 있는 것(`ConnectionError`, 5xx)은 `body_status`를 NULL로 남겨 다음 실행이
+다시 집는다.
+
+이 DAG이 들어오는 커밋에서 루트 README의 `DAG 42` → `43`, `수집 DAG 29` → `30`도 함께
+고친다. README는 밖으로 보이는 문서이고 숫자가 코드보다 늦으면 다음 사람이 그것을 현재형으로
+읽는다.
+
+**첨부 다운로드 실패가 본문 저장을 되돌리지 않는다.** 문서 하나가 트랜잭션 하나이되, 본문을
+먼저 커밋하고 첨부는 행마다 커밋한다. 첨부 하나가 죽었다고 어렵게 받은 본문을 버리지 않는다.
+
+## 9. 평가는 그대로 제목과 요약만 본다
+
+사용자 결정이다. `assessment.py`에서 본문을 넣는 자리를 **지운다.**
+
+- `_prompt`의 `if document.body: parts.append(f"본문: {document.body}")` 세 줄
+- `PendingDocument.body` 필드
+- `select_pending_assessment.sql`의 `body` 컬럼 둘(CTE와 최종 SELECT)과 행 언패킹 인덱스
+
+**`PROMPT_VERSION`은 올리지 않는다.** 프롬프트 문장이 안 바뀌고, `body`가 지금도 전부 NULL이라
+모델이 받는 입력이 글자 하나 달라지지 않는다. 올리면 3,598건이 재평가된다.
+
+이 절과 4절이 같은 것을 지킨다 — **본문을 모으는 일이 LLM 비용을 한 푼도 늘리지 않는다.**
+
+## 10. 백필
+
+**별도 스크립트가 없다.** 8.2의 큐가 `body_status IS NULL`이고, 마이그레이션 직후 그 집합이
+기존 3,598건 전부다. 신규 문서와 과거 문서가 같은 코드로 같은 줄에 선다.
+
+오래된 것부터 집으므로 백필이 끝나기 전까지는 새 문서가 뒤로 밀린다. 하루면 끝나는 양이라
+줄을 둘로 가르지 않는다(`select_pending_assessment.sql`이 신규와 재평가를 갈라 세우는 것과
+다른 판단인데, 저기는 재평가 백로그가 상시로 쌓이고 여기는 한 번뿐이다).
+
+과거 문서의 URL이 죽어 있으면 `unavailable`로 확정되고 다시 시도하지 않는다.
+
+## 11. 마이그레이션
+
+수기 리비전 **하나**다. 운영 DB에 `--autogenerate`를 돌리지 않는다.
+
+1. `document.body_status` 컬럼 추가 + `CHECK` 제약. 기존 행은 NULL이다(= 백필 큐).
+2. `document_attachment` 테이블 생성. 테이블·컬럼 주석을 모델과 같은 문장으로 넣는다.
+3. `document_source.collection_mode`를 켜진 22개 출처에 대해 `full_text`로 UPDATE.
+
+`downgrade`는 컬럼·테이블을 되돌리고 `collection_mode`를 원래 값으로 되돌린다.
+원래 값이 fss만 `metadata_only`이고 나머지가 `feed_content`이므로 리비전에 그대로 적는다.
+
+모델은 `apps/models/content.py`에 `DocumentAttachment`와 `BodyStatus`를 더하고
+`apps/models/__init__.py`의 `__all__`에 넣는다. **한 단계라도 빠지면 `Base.metadata`에서
+테이블이 사라지고 autogenerate가 `DROP TABLE`을 낸다.**
+
+## 12. 배포 선행조건 — 사용자 몫
+
+**NAS에 파일 디렉터리를 만들고 Airflow 컨테이너에 `/opt/airflow/files`로 마운트해야 한다.**
+지금 Airflow 볼륨은 전부 코드 마운트(`dags`·`modules`·`utility`·`sql`·`plugins`·`config`)뿐이고
+데이터 볼륨이 없다.
+
+없으면 **DAG를 즉시 실패시킨다.** 경로가 없는데 조용히 첨부를 건너뛰면 문서만 쌓이고
+파일은 한 건도 안 남는데 태스크는 성공으로 표시된다.
+
+조회 API가 그 파일을 서빙하게 되면 `apps/api` 컨테이너에도 같은 경로가 필요하다.
+그건 14단계(웹 화면)와 함께 온다.
+
+## 13. 테스트
+
+새 파일 `tests/collectors/test_document_body.py`.
+
+- 선택자 사다리가 순서대로 걸리는가. 첫 결과에서 멈추는가
+- 40자 미만 문단만 있는 페이지가 `empty`인가
+- `<script>`·`<style>`이 본문 앞에 붙지 않는가
+- 영상 링크 넷의 우선순위. **`games.yna.co.kr` 같은 비플레이어 `iframe`을 안 집는가**
+- 영상 페이지의 본문이 `ok`이고 첨부 `video` 한 행이 함께 생기는가
+- 첨부 규칙이 출처별로 맞는가. naver의 `attachUrl` 파싱
+- `document_attachment`의 INSERT 컬럼과 `ON CONFLICT` 키가 모델 metadata와 맞는가
+  (`test_documents.py`가 `document`에 하는 대조와 같은 형태)
+- **`content_hash`가 기존 값과 같은가.** 제목·요약을 주고 옛 3조각 공식과 같은 해시가 나오는지
+  고정 문자열로 못 박는다. 이 테스트가 4절 전체를 지킨다
+
+`tests/modules/test_assessment.py`는 본문을 넘기던 픽스처에서 그 필드를 뺀다.
+
+## 14. 하지 않는 것 — 향후 목록
+
+순서가 곧 의존 관계다. 위가 끝나야 아래가 선다.
+
+1. **첨부 파일 텍스트 변환.** PDF·HWP를 텍스트로 바꾼다. `pypdf` 같은 의존성이 필요하고
+   **운영 Airflow 이미지에 먼저 들어가야 한다.** 스캔 PDF는 OCR이 없어 여전히 빈다.
+   컬럼은 그때 `document_attachment`에 더한다.
+2. **`document_chunk`와 임베딩.** 상위 설계 6.2가 이미 모양을 적어 뒀다 —
+   `(document_id, position)` 자연키, `RecursiveCharacterTextSplitter(chunk_size=2000,
+   chunk_overlap=200)`, HNSW 인덱스. **pgvector 0.8.4가 운영 DB에 이미 설치돼 있다**
+   (2026-08-30 확인). 임베딩 모델은 새 의존성이 없다 — `langchain_openai`가 이미 있고
+   `OPENAI_API_KEY`를 그대로 쓴다.
+3. **키워드 검색.** `tsvector` + GIN. 한국어 형태소 분석기가 없어 조사가 붙은 말은 따로
+   잡힌다는 한계를 안고 간다. `pg_trgm`은 available이지만 미설치다.
+4. **하이브리드 순위.** 2와 3을 RRF로 합친다. 상위 설계 6.4 ③의 회색지대 판정
+   (코사인 0.80~0.95만 LLM에게 묻는다)도 여기서 함께 선다.
+5. **소비자 붙이기.** market-thesis의 `search_documents` 툴, `apps/api`의
+   `/api/documents/search`.
+6. **영상 자막.** BBC는 자막 API가 없다. YouTube 링크가 잡히는 문서가 쌓이면 그때 본다.
+
+krx 본문은 목록이 주는 `contn` 이상으로 갈 방법이 없다. 딥링크가 생기면 다시 본다.
+
+## 15. 검토 기록
+
+- **2026-08-30** 초안. 사용자 요구는 넷이었다 — 본문 저장, 크기 제한 없음, 평가는 제목·요약
+  유지, 기존 문서 백필. 설계 중 사용자가 셋을 더했다: 첨부 PDF를 **파일 저장소에 내려받아**
+  경로까지 저장(문서 하나에 복수 파일), 영상은 **링크를 가져간다**, 첨부 텍스트 변환은
+  임베딩과 함께 향후 목록에 적는다.
+- 조사에서 나온 것 중 요구에 없던 것 둘을 설계에 넣었다. ① `content_hash`가 본문을 포함해
+  백필이 전량 재평가를 부르는 문제(4절) ② `content_level`이 정책과 실제를 혼동하는 문제(5.3).
+  둘 다 본문을 채우는 순간 조용히 터진다.
+- 출처 일곱과 첨부 PDF 둘에 실제로 요청해 3·7절의 숫자를 얻었다(2026-08-30).

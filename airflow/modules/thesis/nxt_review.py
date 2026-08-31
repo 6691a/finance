@@ -3,6 +3,11 @@
 여기 있는 것은 전부 "정규장이 닫힌 뒤"라서 그런 것이다. 다른 슬롯과 공유하지 않는다 —
 공유하면 다시 `if slot ==`이 생긴다. 슬롯을 모르는 것은 `thesis/common.py`에 있다.
 
+**애프터마켓 창·봉 행 모델·조회는 `thesis/common.py`에 있다**(2026-08-31 이동). NXT가
+15:30~20:00이라는 것은 세션 사실이지 슬롯 사실이 아니고, 장전 전망이 전 영업일의 같은 창을
+읽는다(`18-nxt-precedent.md` 2.6절). 여기 남은 것은 기준 시각·매크로 창·readiness guard처럼
+"이 슬롯이라서" 그런 것뿐이다.
+
 ## 왜 슬롯을 또 나눴나 (2026-08-22)
 
 한국 주식의 실제 하루는 KRX 15:30이 아니라 NXT 애프터마켓 20:00에 끝난다. 그런데 장후
@@ -39,18 +44,16 @@
 
 import logging
 from contextlib import closing
-from datetime import UTC, date, datetime, time
-from decimal import Decimal
+from datetime import UTC, date, datetime
 from typing import TYPE_CHECKING, Any
 
 from airflow.sdk import get_current_context
 from airflow.sdk.exceptions import AirflowSkipException
-from pydantic import AwareDatetime, BaseModel, ConfigDict
 
-from modules.sql import read_sql
 from modules.thesis import common
+from modules.thesis.common import AfterHoursBar
 from modules.thesis.domain import LlmRunKind, ThesisSubjectKind
-from modules.thesis.state import AfterHoursObservation, NxtObservedState, RunSlot, ThesisRunResult
+from modules.thesis.state import NxtObservedState, RunSlot, ThesisRunResult
 from modules.utility import KST_TIMEZONE
 
 if TYPE_CHECKING:
@@ -62,22 +65,10 @@ logger = logging.getLogger(__name__)
 
 SLOT = "post_nxt_close"
 
-# 애프터마켓 봉을 고를 창의 양 끝(KST). 거래소만 걸면 프리·주간 세션이 섞인다 —
-# 하루 690봉 중 애프터는 260봉뿐이다(2026-08-21 운영 DB 실측).
-#
-# **하한은 KRX 마감 15:30이고 실제 첫 애프터 봉은 15:40이다**(같은 실측: 15:40~19:59가
-# 정확히 260분, 구멍 없음). 10분을 더 열어 두는 것은 그 사이에 봉이 없어 결과가 같고,
-# NXT가 나중에 15:30부터 열면 코드를 고치지 않아도 잡히기 때문이다. 주간 세션 마지막 봉은
-# 15:20이라 이 하한으로도 섞이지 않는다.
-AFTER_HOURS_OPEN = time(15, 30)
-AFTER_HOURS_CLOSE = time(20, 0)
-
-AFTER_HOURS_STATE = read_sql("postgres", "stock_bar", "select_nxt_after_hours.sql")
-
 
 def as_of(run_date: date) -> datetime:
     """조회 창의 끝(UTC) = 그날 20:00 NXT 마감. **실행 시각이 아니다**(모듈 docstring)."""
-    return datetime.combine(run_date, AFTER_HOURS_CLOSE, tzinfo=KST_TIMEZONE).astimezone(UTC)
+    return datetime.combine(run_date, common.AFTER_HOURS_CLOSE, tzinfo=KST_TIMEZONE).astimezone(UTC)
 
 
 def macro_window_start(run_date: date) -> datetime:
@@ -88,43 +79,7 @@ def macro_window_start(run_date: date) -> datetime:
 
     DB를 보지 않는다 — 오늘 장이 열렸다는 것은 readiness guard가 이미 확인했다.
     """
-    return datetime.combine(run_date, AFTER_HOURS_OPEN, tzinfo=KST_TIMEZONE).astimezone(UTC)
-
-
-def after_hours_window(run_date: date) -> tuple[datetime, datetime]:
-    """애프터마켓 봉을 고를 창(UTC). KST 경계 계산은 SQL이 아니라 여기서 한다."""
-    return macro_window_start(run_date), as_of(run_date)
-
-
-class AfterHoursBar(BaseModel):
-    """`select_nxt_after_hours.sql`이 주는 한 줄. 종목마다 애프터 마지막 봉 하나다.
-
-    **컬럼 순서가 계약이다.** `from_row`가 그 순서를 아는 유일한 자리이고, 나머지 코드는
-    이름으로만 읽는다 — SQL이 열을 늘려도 인덱스가 밀리는 사고가 여기서 멈춘다.
-    """
-
-    model_config = ConfigDict(frozen=True)
-
-    stock_code: str
-    last_bar_at: AwareDatetime
-    last_close: Decimal
-    bar_count: int
-    all_final: bool
-    # 당일 15:30 확정 종가. 아직 안 들어왔으면 None이고 등락률도 None이다.
-    settled_close: Decimal | None
-    return_pct: Decimal | None
-
-    @classmethod
-    def from_row(cls, row: tuple) -> "AfterHoursBar":
-        return cls(
-            stock_code=row[0],
-            last_bar_at=row[1],
-            last_close=row[2],
-            bar_count=row[3],
-            all_final=row[4],
-            settled_close=row[5],
-            return_pct=row[6],
-        )
+    return datetime.combine(run_date, common.AFTER_HOURS_OPEN, tzinfo=KST_TIMEZONE).astimezone(UTC)
 
 
 class NxtAfterHoursReview:
@@ -159,10 +114,7 @@ class NxtAfterHoursReview:
     def bars(self) -> tuple[AfterHoursBar, ...]:
         """종목마다 애프터마켓 마지막 봉 하나. 봉이 없는 종목은 결과에 없다."""
         if self._bars is None:
-            window_start, window_end = after_hours_window(self._run_date)
-            with self._connection.cursor() as cursor:
-                cursor.execute(AFTER_HOURS_STATE, (window_start, window_end, self._run_date, self.watched))
-                self._bars = tuple(AfterHoursBar.from_row(row) for row in cursor.fetchall())
+            self._bars = self._run.after_hours_bars(self._run_date, self.watched)
         return self._bars
 
     def check_ready(self) -> None:
@@ -207,21 +159,11 @@ class NxtAfterHoursReview:
             # `is not None`이다. `if bar.return_pct`로 두면 **보합(정확히 0)인 종목이 통째로
             # 빠져** 모델이 그것을 '애프터마켓 데이터 없음'으로 읽는다.
             after_hours={
-                bar.stock_code: self._after_hours_entry(bar) for bar in self.bars if bar.return_pct is not None
+                bar.stock_code: common.after_hours_entry(bar) for bar in self.bars if bar.return_pct is not None
             },
             index_regular=regular.index,
             technical=regular.technical,
             flat_base_rate=regular.flat_base_rate,
-        )
-
-    @staticmethod
-    def _after_hours_entry(bar: AfterHoursBar) -> AfterHoursObservation:
-        """봉 하나를 프롬프트 칸으로. 등락률이 없는 종목은 부르는 쪽이 이미 걸렀다."""
-        return AfterHoursObservation(
-            close=float(bar.last_close),
-            return_pct=round(float(bar.return_pct or 0), 2),
-            last_bar_at=bar.last_bar_at,
-            bars=bar.bar_count,
         )
 
     def run(self, *, dag_run_id: str, try_number: int) -> int:

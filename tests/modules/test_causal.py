@@ -162,7 +162,10 @@ class TestInputHash:
 
 
 class TestResolveTargets:
-    """대상 아홉. 종목만 마스터에서 읽고 나머지는 코드 상수다(설계 §0)."""
+    """종목만 마스터에서 읽고 나머지는 코드 상수다(설계 §0).
+
+    지수는 KOSPI 하나다 — KOSDAQ은 2026-08-31에 빠졌다(두 주 실행에 경로 0개).
+    """
 
     def test_watched_stocks_join_the_fixed_targets(self) -> None:
         connection = FakeConnection(rows=[("000660",), ("005930",)])  # SQL은 ticker 순이다
@@ -171,7 +174,6 @@ class TestResolveTargets:
 
         assert [target.code for target in targets] == [
             "KOSPI",
-            "KOSDAQ",
             "000660",
             "005930",
             "USDKRW",
@@ -201,7 +203,7 @@ class TestResolveTargets:
         targets = candidates.resolve_targets(connection)
 
         assert "373220" in [target.code for target in targets]
-        assert len(targets) == 12
+        assert len(targets) == 11
 
     def test_indicator_targets_carry_their_provider(self) -> None:
         """`indicator_observation`은 (provider, series_id)가 키다. series_id 하나로 걸면

@@ -110,7 +110,8 @@ def test_the_guard_waits_for_every_settled_close():
 
 
 def test_the_guard_waits_for_the_index_closing_bars():
-    connection = FakeConnection([(2,), (1,)])
+    # 두 번째 값이 `index_bar` 조회 결과다. 대상 지수가 KOSPI 하나이므로 0이어야 못 선다.
+    connection = FakeConnection([(2,), (0,)])
 
     with pytest.raises(common.ThesisNotReady, match="index closing bars"):
         review.PostCloseReview(connection, run_date=date(2026, 8, 21)).check_ready(["005930", "000660"])

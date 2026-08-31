@@ -11,6 +11,11 @@
 
 **Goal:** KOSPI·KOSDAQ과 추적 국내 종목의 확정 일봉에서 SMA·RSI·MACD·거래량 비율을 계산해 시장 추론과 Slack 브리핑에 투자 참고용 관측값으로 제공하고, 같은 계산에서 이평선·MACD·RSI 매매 신호(사건)를 검출해 저장·채점한다.
 
+> **2026-08-31 — 신호 검출 대상에서 KOSDAQ이 빠졌다.** 지표(SMA·RSI·MACD) 계산은 그대로
+> KOSPI·KOSDAQ 둘을 하고 브리핑 표도 둘을 싣는다. 바뀐 것은 `technical/signals.py`의
+> `SIGNAL_INDEXES` 하나다 — KOSDAQ 신호 289건이 쌓이는 동안 인용한 추론이 0건이었다.
+> 그래서 브리핑 표의 KOSDAQ **신호** 칸은 30일 뒤 빈다(지표 칸은 그대로다).
+
 **Architecture:** KIS 지수 일봉만 기존 `index_daily`에 추가 수집한다. 국내 종목은 이미 수집 중인 `stock_investor_trade_daily`의 OHLCV를 재사용한다. 두 원천을 읽기 전용 SQL로 정규화하고 순수 Python 함수가 요청 시 지표를 계산한다. 지표값은 저장하지 않고 기존 `daily_history` 툴과 `MarketSummary`가 함께 사용한다. 매매 신호만은 **사건**이라 `technical_signal` 테이블에 저장하고(12절), 지평별 사후 수익률로 채점해 규칙을 고쳐 나간다 — `thesis`의 `prompt_version`·Brier와 같은 형태다.
 
 **Tech Stack:** Python 3.13, Pydantic, PostgreSQL, Apache Airflow 3.3, matplotlib(기존 분봉 차트만), pytest, ruff, pyrefly
@@ -44,7 +49,7 @@
 | 사용자 출력 | 한국장 Slack 표와 당일 분봉 차트가 있음 | Slack에 작은 지표 표 추가, 차트는 유지 |
 | 매매 신호 | 없음. 지표값만으로는 "언제 교차했는지"가 남지 않음 | `technical_signal` 테이블 + 계산 DAG 추가(12절). 지표 시리즈에서 검출하므로 새 원천은 없다 |
 | 신호 채점 | `thesis_outcome`이 지평별 Brier를 채점 | 같은 형태로 지평별 사후 수익률을 SQL로 본다. 채점 테이블·DAG는 두지 않는다 |
-| LLM 추론 입력 | `observed_state`가 세션 종가·등락만 줌. 지표는 툴로만 | 추론 대상(KOSPI·KOSDAQ·watched)의 snapshot·최근 신호를 관측 상태에 **함께 싣고**(14.1절) 깊은 이력만 툴로 |
+| LLM 추론 입력 | `observed_state`가 세션 종가·등락만 줌. 지표는 툴로만 | 추론 대상(KOSPI·watched, 2026-08-31 전에는 KOSDAQ 포함)의 snapshot·최근 신호를 관측 상태에 **함께 싣고**(14.1절) 깊은 이력만 툴로 |
 | LLM 근거·평가 | `thesis_evidence`는 문서·공시·매크로만 인용 가능 | 신호를 `technical_signal:<id>`로 인용하게 하고(14.3절), `input_state`·`thesis_evidence`로 "지표가 추론에 도움이 됐나"를 SQL로 잰다(14.4절) |
 
 별도 `technical_snapshot` LLM 툴을 만들지 않는다. 현재 툴은 13개이고 실행당 호출 상한은 12회다. 같은 심볼의 일봉과 보조지표를 따로 호출하게 만들 이유가 없으므로 기존 `daily_history` 한 번으로 둘 다 돌려준다.

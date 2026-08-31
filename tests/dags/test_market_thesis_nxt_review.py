@@ -45,8 +45,14 @@ def _row(
 
 
 
-# 기저율 조회 둘. 관측 상태를 만들 때마다 불리므로 가짜 커서가 순번 큐 밖으로 뺀다.
-BASE_RATE_QUERIES = frozenset({base_rate.FORWARD_RETURNS, base_rate.UNCONDITIONAL_RETURNS})
+# 관측 상태를 만들 때마다 불리는 조회들. 가짜 커서가 순번 큐 밖으로 뺀다.
+#
+# 기저율 둘과 주간 인과 방향성이다. 방향성은 애프터마켓 리뷰가 쓰지 않지만
+# `common.observed_state`를 재사용하기 때문에 함께 불린다 — `NxtObservedState`에는
+# 그 칸이 없어 값이 버려진다.
+BASE_RATE_QUERIES = frozenset(
+    {base_rate.FORWARD_RETURNS, base_rate.UNCONDITIONAL_RETURNS, common.CAUSAL_DIRECTION}
+)
 
 class FakeCursor:
     def __init__(self, answers: list[Any]) -> None:

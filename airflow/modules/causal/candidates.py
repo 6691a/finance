@@ -88,6 +88,23 @@ def resolve_targets(connection: Connection) -> tuple[CausalTarget, ...]:
     return INDEX_TARGETS + stocks + MACRO_TARGETS + INDICATOR_TARGETS
 
 
+def direction_targets(connection: Connection) -> tuple[CausalTarget, ...]:
+    """방향성을 만들 대상. **`resolve_targets`의 부분집합이다.**
+
+    지수와 관심종목만이다 — 매크로·금리는 그래프에서 **경유지**로 쓰이지
+    (`US10Y → 할인율 → 005930`) 방향성을 받을 자리가 아니다. 추론 대상이 아닌 것에
+    방향성을 만들면 아무도 안 읽는 행이 매주 는다(설계 §1.4).
+
+    **추론의 subject 목록과 같아야 한다**(`thesis/store.py`의 `INDEX_SUBJECTS` + watched).
+    두 트리가 서로를 import하지 않아 값이 한 벌 더 있고, `tests/modules/test_causal.py`가
+    그것을 대조한다.
+    """
+    with connection.cursor() as cursor:
+        cursor.execute(WATCHED_STOCKS)
+        stocks = tuple(CausalTarget(kind=CausalTargetKind.INSTRUMENT, code=row[0]) for row in cursor.fetchall())
+    return INDEX_TARGETS + stocks
+
+
 def fetch_returns(
     connection: Connection,
     targets: Iterable[CausalTarget],

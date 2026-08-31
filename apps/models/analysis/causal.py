@@ -24,6 +24,7 @@ from sqlalchemy import (
     Text,
     UniqueConstraint,
 )
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 
 from apps.core.database import EntityBase, table_options
@@ -76,6 +77,27 @@ class CausalReturnUnit(StrEnum):
     """가격·지수·환율. 종가 대비 변화율."""
     BASIS_POINT = "basis_point"
     """금리. 값의 차이에 100을 곱한 bp다."""
+
+
+class CausalBias(StrEnum):
+    """한 주의 경로들을 대상 하나로 모았을 때의 방향. **LLM이 정하는 유일한 칸이다.**
+
+    `mixed`가 `flat`과 다르다 — `flat`은 "밀린 쪽이 없다"이고 `mixed`는 "양쪽이 다 밀었고
+    어느 쪽이 이겼는지 그래프가 말하지 못한다"다. 하나로 뭉치면 읽는 쪽이 "조용한 주"와
+    "팽팽한 주"를 구별하지 못한다.
+
+    **다수결로 못 정해서 이 칸이 있다.** 2026-08-31 운영 실측에서 (주,대상) 13개 중 6개가
+    엇갈렸고 005930의 08-17 주는 `up` 4 / `down` 4였다. `confidence`로도 안 갈렸다
+    (`observed` 3 대 3, `endpoint_observed` 1 대 1). 설계는
+    `docs/analysis/market-thesis/17-graph-query.md` §1.2다.
+    """
+
+    UP = "up"
+    DOWN = "down"
+    MIXED = "mixed"
+    """양쪽이 다 밀었다. 어느 채널이 이겼는지는 `reasoning`이 말한다."""
+    FLAT = "flat"
+    """민 쪽이 없다. 경로가 아예 없는 것과는 다르다 — 그때는 행 자체가 없다."""
 
 
 class CausalTargetKind(StrEnum):
@@ -439,4 +461,112 @@ class MarketCausalEvidence(EntityBase):
         Text,
         nullable=False,
         comment="후보 식별자. `document:84026`처럼 `<kind>:<id>` 규약이다",
+    )
+
+
+class MarketCausalDirection(EntityBase):
+    """한 주의 인과 그래프를 대상 하나로 모은 방향성. 시장 추론이 관측 상태로 읽는다.
+
+    **경로의 파생 요약이다.** `market_causal_path`가 원본이고 이 행은 그것을 대상별로 접은
+    것이라, 그래프가 다시 밀리면 이 행도 따라 갱신된다(`ON CONFLICT DO UPDATE`). 추론의
+    "첫 성공본 불변"과 다른 판단인데, 추론이 그때 무엇을 봤나는 `thesis.input_state`에
+    관측 상태가 통째로 박혀 이미 남기 때문이다.
+
+    **`bias`와 `reasoning`만 LLM이 만든다.** 세기(`up_count` 셋)와 경로 목록은 코드가
+    Cypher 결과에서 센다. 저장소 규칙대로 숫자는 모델이 만들지 않는다.
+
+    **이 값은 예측이 아니라 사전 맥락이다.** 주 `W`를 `W+2` 월요일에 분석하므로 추론이 보는
+    방향성은 최소 9일 전 인과다. 읽는 쪽이 그것을 밝혀야 한다
+    (`docs/analysis/market-thesis/17-graph-query.md` §1.3).
+    """
+
+    __tablename__ = "market_causal_direction"
+    __table_args__ = (
+        UniqueConstraint(
+            "week_start",
+            "target_kind",
+            "target_code",
+            name="uq_market_causal_direction_natural_key",
+        ),
+        CheckConstraint(
+            "bias IN ('up', 'down', 'mixed', 'flat')",
+            name="ck_market_causal_direction_bias",
+        ),
+        CheckConstraint(
+            "target_kind IN ('instrument', 'index', 'quote', 'indicator')",
+            name="ck_market_causal_direction_target_kind",
+        ),
+        # 셋 다 경로를 센 값이라 음수가 될 수 없고, 전부 0이면 접을 것이 없었다는 뜻이라
+        # 행이 아예 없어야 한다.
+        CheckConstraint(
+            "up_count >= 0 AND down_count >= 0 AND flat_count >= 0"
+            " AND up_count + down_count + flat_count > 0",
+            name="ck_market_causal_direction_counts",
+        ),
+        table_options(
+            comment="주간 인과 그래프를 대상별로 접은 방향성. 시장 추론의 관측 상태로 나간다",
+            database="default",
+        ),
+    )
+
+    week_start: Mapped[date] = mapped_column(
+        nullable=False,
+        comment="접은 주의 월요일(KST). market_causal_path.week_start와 같은 값이다",
+    )
+    target_kind: Mapped[CausalTargetKind] = mapped_column(
+        _enum_column(CausalTargetKind),
+        nullable=False,
+        comment="대상이 어느 마스터에서 오는지. market_causal_path.target_kind와 같은 값 집합이다",
+    )
+    target_code: Mapped[str] = mapped_column(
+        Text,
+        nullable=False,
+        comment="대상 식별자(005930, KOSPI, US10Y 등). 마스터로 외래키를 걸지 않는다",
+    )
+    bias: Mapped[CausalBias] = mapped_column(
+        _enum_column(CausalBias),
+        nullable=False,
+        comment="그 주 경로들을 모은 방향. **LLM이 정한다** — 세기 다수결로는 갈리지 않는다",
+    )
+    reasoning: Mapped[str] = mapped_column(
+        Text,
+        nullable=False,
+        comment="어느 채널이 우위였는지 한 문장(한국어). LLM이 쓰고 저장 전에 자른다",
+    )
+    up_count: Mapped[int] = mapped_column(
+        Integer,
+        nullable=False,
+        comment="그 대상을 up으로 민 경로 수. 코드가 센다",
+    )
+    down_count: Mapped[int] = mapped_column(
+        Integer,
+        nullable=False,
+        comment="그 대상을 down으로 민 경로 수. 코드가 센다",
+    )
+    flat_count: Mapped[int] = mapped_column(
+        Integer,
+        nullable=False,
+        comment="방향을 못 정한 경로 수. market_causal_path.sign은 up/down뿐이라 지금은 언제나 0이다",
+    )
+    path_ids: Mapped[list[int]] = mapped_column(
+        JSONB,
+        nullable=False,
+        comment=(
+            "이 방향성이 딛고 선 market_causal_path.id 전부(정수 배열). 추론이 "
+            "`causal_path:<id>` 형태로 인용한다. 다중 홉은 경로 여럿을 이은 것이라 그 전부가 들어간다"
+        ),
+    )
+    channels: Mapped[list[dict[str, object]]] = mapped_column(
+        JSONB,
+        nullable=False,
+        comment=(
+            "채널별 방향 집계. `[{\"name\": \"할인율\", \"up\": 2, \"down\": 1}]` 형태다. "
+            "추론이 종합을 못 믿을 때 보는 재료라 종합 문장과 함께 나간다"
+        ),
+    )
+    llm_run_id: Mapped[int | None] = mapped_column(
+        BigInteger,
+        ForeignKey("thesis_llm_run.id", ondelete="SET NULL"),
+        nullable=True,
+        comment="이 행을 만든 대화(thesis_llm_run.kind='causal_direction'). 원장이 지워져도 행은 남는다",
     )

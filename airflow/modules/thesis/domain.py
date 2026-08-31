@@ -135,7 +135,12 @@ logger = logging.getLogger(__name__)
 #     방향이 다음날 정규장 종가로 이어지는 것은 56퍼센트라(±1퍼센트 이상 날은 63퍼센트)
 #     가격 신호가 아니라 "마감 뒤 재료에 대한 첫 반응"으로 읽으라고 두 자리에서 말한다.
 #     설계는 `docs/analysis/market-thesis/18-nxt-precedent.md`.
-PROMPT_VERSION = "15"
+# 16: 관측 상태에 주간 인과 방향성(`causal_direction`)이 실린다(2026-08-31). 절 하나가 늘고
+#     그 절이 셋을 말한다 — 이 값이 예측이 아니라 2주 전 사후 인과라는 것, 키가 없는 것과
+#     `flat`이 다르다는 것, 그리고 `causal_path:<id>`로 인용할 수 있다는 것이다. 새 근거
+#     종류가 생겨 `claims`에 들어올 수 있는 ref가 늘어나므로 판을 가른다.
+#     설계는 `docs/analysis/market-thesis/17-graph-query.md`.
+PROMPT_VERSION = "16"
 
 # 채점 지평. KRX 영업일 수이고 달력일이 아니다. 0은 예측일 세션 하나다.
 HORIZON_DAYS: tuple[int, ...] = (0, 1, 3, 5)
@@ -400,6 +405,10 @@ class ThesisEvidenceKind(StrEnum):
     # 인용하게 만드는 이유는 평가다 — "신호를 근거로 쓴 추론이 안 쓴 추론보다 나았나"를
     # 재려면 어느 추론이 어느 신호를 인용했는지가 엣지로 남아야 한다(문서 14.3절).
     TECHNICAL_SIGNAL = "technical_signal"
+    # 주간 인과 그래프의 경로 하나(`market_causal_path.id`). 방향성은 관측 상태로 실려 오지만
+    # 문맥이 아니라 **주장**이라 인용 대상이다 — 기술 지표와 신호를 가른 것과 같은 판단이다
+    # (`17-graph-query.md` §4.4).
+    CAUSAL_PATH = "causal_path"
 
 
 class LlmRunKind(StrEnum):

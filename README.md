@@ -46,7 +46,7 @@ flowchart LR
     subgraph DB["PostgreSQL"]
         FACT[("시세·봉 · 지표 관측치<br/>문서·공시 · source_record")]
         THESIS[("thesis · thesis_outcome<br/>thesis_llm_run")]
-        CAUSAL[("market_causal_path · step<br/>market_event · market_channel")]
+        CAUSAL[("market_causal_path · step · direction<br/>market_event · market_channel")]
     end
 
     GRAPH["Neo4j — 인과 그래프 투영<br/>Event → Channel → Target"]
@@ -68,6 +68,7 @@ flowchart LR
     THESIS --> ANA
     ANA --> CAUSAL
     CAUSAL --> GRAPH
+    GRAPH --> CAUSAL
 
     FACT --> BRF
     THESIS --> BRF
@@ -128,7 +129,7 @@ flowchart LR
 | 언어 | Python 3.13, uv | 수집·분석·서비스가 한 언어 |
 | 오케스트레이션 | Apache Airflow 3.3 | 제공처마다 다른 주기, 재시도, 백필이 필요 |
 | 저장 | PostgreSQL, SQLAlchemy 2.0 async, asyncpg, Alembic | 시계열도 관계형으로 충분한 규모 |
-| 그래프 | Neo4j (community) | 주간 인과 그래프의 다중 홉 탐색. **Postgres가 원본이고 투영입니다** |
+| 그래프 | Neo4j (community) | 주간 인과 그래프의 다중 홉 탐색. **Postgres가 원본이고 투영입니다.** 매주 대상별 방향성을 뽑아 시장 추론의 관측 상태로 되돌립니다 |
 | 캐시 | Redis | 실시간 수집 버퍼 |
 | LLM | LangChain / LangGraph, xAI Grok, OpenAI 호환 API | 툴 호출 루프와 구조화 출력 |
 | API | FastAPI, dependency-injector | 읽기 전용 조회, 생성자 주입 + provider override 테스트 |

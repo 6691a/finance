@@ -95,6 +95,9 @@ class ThesisEvidenceKind(StrEnum):
     # 신호는 사건이라 인용할 수 있다. 인용을 남기는 이유는 평가다 — 신호를 근거로 쓴
     # 추론이 안 쓴 추론보다 나았는지를 재려면 엣지가 있어야 한다.
     TECHNICAL_SIGNAL = "technical_signal"
+    # 주간 인과 그래프의 경로 하나(`market_causal_path.id`). 관측 상태로 실려 오지만 문맥이
+    # 아니라 **주장**이라 인용 대상이다 — 기술 지표와 신호를 가른 것과 같은 판단이다.
+    CAUSAL_PATH = "causal_path"
 
 
 class LlmRunKind(StrEnum):
@@ -107,7 +110,10 @@ class LlmRunKind(StrEnum):
     NXT_REVIEW = "nxt_review"
     NARRATION = "narration"
     CAUSAL = "causal"
-    """주간 사후 인과 그래프(`docs/analysis/market-causal-graph.md`). 슬롯이 없는 유일한 종류다."""
+    """주간 사후 인과 그래프(`docs/analysis/market-causal-graph.md`)."""
+    CAUSAL_DIRECTION = "causal_direction"
+    """그 그래프를 대상별 방향성으로 접은 대화(`docs/analysis/market-thesis/17-graph-query.md`).
+    `causal`과 같은 주간 DAG에서 그 뒤에 돌고, 역시 슬롯이 없다."""
 
 
 class LlmRunStatus(StrEnum):
@@ -642,7 +648,7 @@ class ThesisEvidence(EntityBase):
         ),
         UniqueConstraint("thesis_id", "outcome_horizon_days", "rank", name="uq_thesis_evidence_rank"),
         CheckConstraint(
-            "evidence_kind IN ('document', 'disclosure', 'macro_change', 'technical_signal')",
+            "evidence_kind IN ('document', 'disclosure', 'macro_change', 'technical_signal', 'causal_path')",
             name="ck_thesis_evidence_kind",
         ),
         CheckConstraint("rank > 0", name="ck_thesis_evidence_rank_positive"),
@@ -752,13 +758,13 @@ class ThesisLlmRun(EntityBase):
     __tablename__ = "thesis_llm_run"
     __table_args__ = (
         CheckConstraint(
-            "kind IN ('forecast', 'review', 'nxt_review', 'narration', 'causal')",
+            "kind IN ('forecast', 'review', 'nxt_review', 'narration', 'causal', 'causal_direction')",
             name="ck_thesis_llm_run_kind",
         ),
-        # 주간 인과 그래프에는 슬롯이 없다. 나머지 종류가 슬롯을 빠뜨리는 것은 그대로 막는다.
+        # 주간 흐름 둘에는 슬롯이 없다. 나머지 종류가 슬롯을 빠뜨리는 것은 그대로 막는다.
         CheckConstraint(
-            "(kind = 'causal' AND run_slot IS NULL)"
-            " OR (kind <> 'causal' AND run_slot IS NOT NULL)",
+            "(kind IN ('causal', 'causal_direction') AND run_slot IS NULL)"
+            " OR (kind NOT IN ('causal', 'causal_direction') AND run_slot IS NOT NULL)",
             name="ck_thesis_llm_run_slot_shape",
         ),
         CheckConstraint(

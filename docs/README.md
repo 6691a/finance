@@ -28,7 +28,7 @@
 
 | 문서 | 무엇 | 상태 |
 | --- | --- | --- |
-| [economic-document-archive-design.md](analysis/economic-document-archive-design.md) | 문서 아카이브 4단계 설계 | 1·2단계 완료. 6.6 섹터 확장은 2026-08-31 구현, **마이그레이션 적용 대기**. 3·4단계 재계획 보류 |
+| [economic-document-archive-design.md](analysis/economic-document-archive-design.md) | 문서 아카이브 4단계 설계 | 1·2단계 완료. 6.6 섹터 확장 2026-08-31 적용 완료, **6.7 업종 축 미구현**. 3·4단계 재계획 보류 |
 | [document-assessment-workflow.md](analysis/document-assessment-workflow.md) | `document_assessment_hourly`의 LangGraph 흐름도 | 구현 완료 |
 | [pdf-parsing-bm25.md](analysis/pdf-parsing-bm25.md) | PyMuPDF 첨부 파싱 → 첨부 텍스트 → 문서 단위 BM25 색인. 외부 호출·임베딩 없음 | **구현 완료, 배포 대기** |
 | [pdf-vision-analysis.md](analysis/pdf-vision-analysis.md) | 텍스트가 안 나오는 영역만 외부 Vision에 보내는 설계 | **보류.** 조건이 관측되면 켠다 |

@@ -83,6 +83,9 @@ PROMPT_HASHES: dict[tuple[str, str], str] = {
     # 판 14는 `## 크기` 절을 통째로 바꿔 해시가 갈린다. 기준선이 `typical_move`로 옮겼고
     # 브레이크가 대칭이 됐으며 오차 폭 두 칸이 붙었다.
     ("thesis_generation", "14"): "7146c65c9150ff8fd600792e9a7f4c4c7c57e12de08911562720379de944c6e8",
+    # 판 15는 애프터마켓을 장전의 재료로 이었다(2026-08-31). `pre_open` 지시문이 관측 상태의
+    # `after_hours`를 설명하고, 과거 추론 절이 `post_nxt_close` 행의 읽는 법을 더한다.
+    ("thesis_generation", "15"): "578f9ada731adaaac23f28355794e21ffdde353baaf60ad802871f19a76b8420",
     ("thesis_narrative", "2"): "1baea1c554c90619576036db58ad42d2a1e24052fc8ab982978e605c6e696b8b",
     # 판 3은 **같은 해시다.** YAML 문장은 그대로이고 자리표시자에 들어가는 값의 줄 수만
     # 늘었다(예측의 축, 밴드 적중). 모델이 보는 글자가 달라져 판을 가른다.

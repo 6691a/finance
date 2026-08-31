@@ -15,7 +15,8 @@ from airflow.sdk.exceptions import AirflowSkipException
 from dags import market_thesis_nxt_review as dag_module
 from modules.technical import base_rate
 from modules.thesis import common, nxt_review
-from modules.thesis.nxt_review import AfterHoursBar, NxtAfterHoursReview
+from modules.thesis.common import AfterHoursBar
+from modules.thesis.nxt_review import NxtAfterHoursReview
 
 DAG = dag_module.market_thesis_nxt_review
 
@@ -141,7 +142,7 @@ def test_the_macro_window_starts_at_the_krx_close():
 
 def test_the_after_hours_window_covers_the_evening_only():
     """프리·주간 봉이 섞이면 애프터 등락이 하루 등락이 된다."""
-    start, end = nxt_review.after_hours_window(RUN_DATE)
+    start, end = common.after_hours_window(RUN_DATE)
 
     assert start == datetime(2026, 8, 21, 6, 30, tzinfo=UTC)
     assert end == datetime(2026, 8, 21, 11, 0, tzinfo=UTC)

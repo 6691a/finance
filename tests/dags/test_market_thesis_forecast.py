@@ -15,7 +15,7 @@ from airflow.sdk.exceptions import AirflowFailException, AirflowSkipException
 
 from dags import market_thesis_forecast as dag_module
 from modules.thesis import common, forecast
-from modules.thesis.state import IndexObservation, ObservedState, StockObservation
+from modules.thesis.state import AfterHoursObservation, IndexObservation, ObservedState, StockObservation
 
 DAG = dag_module.market_thesis_forecast
 KST_MORNING = datetime(2026, 8, 20, 23, 35, tzinfo=UTC)  # KST 08:35
@@ -109,6 +109,9 @@ class FakeCursor:
     def fetchone(self) -> Any:
         return self._row
 
+    def fetchall(self) -> Any:
+        return self._row
+
 
 class FakeConnection:
     def __init__(self, answers: list[Any]) -> None:
@@ -116,6 +119,10 @@ class FakeConnection:
 
     def cursor(self) -> FakeCursor:
         return self._cursor
+
+    @property
+    def calls(self) -> list[tuple[str, tuple]]:
+        return self._cursor.calls
 
 
 def test_the_guard_passes_when_assessment_kept_up():
@@ -188,8 +195,11 @@ def test_an_unfilled_calendar_falls_back_to_the_run_date():
 
 
 class FakeSubject:
-    def __init__(self, code: str) -> None:
+    def __init__(self, code: str, kind: Any = None) -> None:
+        from modules.thesis.domain import ThesisSubjectKind
+
         self.code = code
+        self.kind = kind or ThesisSubjectKind.STOCK
 
 
 class FakeStore:
@@ -204,6 +214,91 @@ class FakeStore:
     def past_theses(self, *, as_of_at: datetime, subject_code: str, n: int) -> tuple:
         del as_of_at, subject_code, n
         return ()
+
+
+def _after_hours_row(
+    stock_code: str = "005930",
+    *,
+    bars: int = 260,
+    final: bool = True,
+    last_close: str = "265000",
+    settled: str | None = "266000",
+    return_pct: str | None = "-0.38",
+) -> tuple:
+    """`select_nxt_after_hours.sql`이 주는 한 줄. 컬럼 순서가 계약이다."""
+    return (
+        stock_code,
+        datetime(2026, 8, 20, 10, 59, tzinfo=UTC),
+        Decimal(last_close),
+        bars,
+        final,
+        Decimal(settled) if settled is not None else None,
+        Decimal(return_pct) if return_pct is not None else None,
+    )
+
+
+def _forecast_with_bars(rows: list[tuple]) -> forecast.PreOpenForecast:
+    return forecast.PreOpenForecast(FakeConnection([rows]), run_date=RUN_DATE)
+
+
+def test_the_pre_open_state_carries_last_nights_nxt_close(monkeypatch):
+    """KRX 종가 옆에 NXT 마감가를 나란히 둔다. 산문 속 숫자보다 칸이 확실하다."""
+    pre_open = _forecast_with_bars([_after_hours_row()])
+
+    state = pre_open.after_hours_state(date(2026, 8, 20), ["005930"])
+
+    assert state["005930"].close == 265000.0
+    assert state["005930"].return_pct == -0.38
+    assert state["005930"].bars == 260
+
+
+def test_the_pre_open_state_reads_the_previous_sessions_window():
+    """창은 **전 영업일** 15:30~20:00이다. 오늘 밤이 아니다."""
+    connection = FakeConnection([[_after_hours_row()]])
+
+    forecast.PreOpenForecast(connection, run_date=RUN_DATE).after_hours_state(date(2026, 8, 20), ["005930"])
+
+    _, parameters = connection.calls[0]
+    assert parameters[0] == datetime(2026, 8, 20, 6, 30, tzinfo=UTC)
+    assert parameters[1] == datetime(2026, 8, 20, 11, 0, tzinfo=UTC)
+    assert parameters[2] == date(2026, 8, 20)
+
+
+def test_a_night_without_after_hours_bars_leaves_the_block_empty():
+    """무거래일과 수집 실패를 응답만으로 못 가른다. 장전은 이 값 없이도 선다."""
+    assert _forecast_with_bars([]).after_hours_state(date(2026, 8, 20), ["005930"]) == {}
+
+
+def test_provisional_only_bars_are_dropped_not_used(caplog):
+    """20:05 백필이 열두 시간 전에 끝났어야 한다. 잠정 값 위에 예측을 세우지 않는다."""
+    pre_open = _forecast_with_bars([_after_hours_row(final=False)])
+
+    with caplog.at_level("WARNING"):
+        assert pre_open.after_hours_state(date(2026, 8, 20), ["005930"]) == {}
+
+    assert "provisional" in caplog.text
+
+
+def test_a_stock_without_a_settled_close_is_left_out_not_zeroed():
+    """등락률의 분모가 없으면 그 종목만 빠진다. 0으로 꾸미지 않는다."""
+    rows = [_after_hours_row(settled=None, return_pct=None), _after_hours_row("000660")]
+
+    state = _forecast_with_bars(rows).after_hours_state(date(2026, 8, 20), ["005930", "000660"])
+
+    assert set(state) == {"000660"}
+
+
+def test_the_shared_state_never_fills_the_after_hours_block():
+    """**채우는 것은 장전뿐이다.** 공유 함수가 채우면 장후 리뷰의 15:30 cutoff가 깨진다."""
+    connection = FakeConnection([[], [], [], []])
+
+    state = common.ThesisRun(connection, run_date=RUN_DATE, as_of_at=AS_OF).observed_state(
+        date(2026, 8, 20), ()
+    )
+
+    assert state.after_hours == {}
+    # JSONB로 저장되고 프롬프트로 나가는 키다. 이름이 바뀌면 프롬프트 문장이 거짓말이 된다.
+    assert "after_hours" in state.model_dump(mode="json")
 
 
 def test_run_hands_build_and_store_every_argument_it_requires(monkeypatch):
@@ -229,6 +324,13 @@ def test_run_hands_build_and_store_every_argument_it_requires(monkeypatch):
         stock={"005930": StockObservation(close=266000.0)},
     )
     monkeypatch.setattr(common.ThesisRun, "observed_state", lambda self, session, targets: observed)
+    monkeypatch.setattr(
+        forecast.PreOpenForecast,
+        "after_hours_state",
+        lambda self, session, codes: {"005930": AfterHoursObservation(
+            close=265000.0, return_pct=-0.38, last_bar_at=datetime(2026, 8, 20, 10, 59, tzinfo=UTC), bars=260
+        )},
+    )
     monkeypatch.setattr(forecast.PreOpenForecast, "check_ready", lambda self: None)
     monkeypatch.setattr(store, "ThesisStore", FakeStore)
     monkeypatch.setattr(common.ThesisRun, "build_and_store", fake_build_and_store)
@@ -244,6 +346,10 @@ def test_run_hands_build_and_store_every_argument_it_requires(monkeypatch):
     assert received["macro_window_start"] == common.close_at(date(2026, 8, 20))
     # **장전만 과거 성적을 싣는다.** 리뷰 두 슬롯은 `past={}`다.
     assert received["past"] == {"005930": ()}
+    # 어젯밤 NXT 마감가가 관측 상태에 실린다. 지수는 NXT에 없어 종목만이다.
+    assert received["observed"].after_hours["005930"].close == 265000.0
+    # 정규장 종가는 그대로다 — 애프터가 그것을 덮지 않는다.
+    assert received["observed"].stock["005930"].close == 266000.0
     assert pre_open._run.as_of_at == forecast.as_of(RUN_DATE)
     # 장전의 축은 전 개장일 마감이고 `return_pct`는 정의상 0이다 — 기준가가 곧 그 종가라
     # 그 사이에 온 것이 없다.

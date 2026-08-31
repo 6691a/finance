@@ -91,6 +91,7 @@ from modules.thesis.outcomes import (
 from modules.thesis.state import (
     FORECAST_SLOTS,
     NARRATED_SLOTS,
+    PRECEDENT_SLOTS,
     NxtObservedState,
     ObservedState,
     PastOutcome,
@@ -450,9 +451,13 @@ class ThesisStore:
     def past_theses(self, *, as_of_at: datetime, subject_code: str, n: int) -> list[PastThesis]:
         """이 대상의 지난 추론과 지평별 결과. **슬롯마다** 최근 것부터 `n`건이다.
 
-        피드백 루프는 이 조회 하나다. 예측 슬롯 다섯과 장후 리뷰(`post_close`)를 함께
-        돌려준다 — 리뷰에 붙는 사후 해설이 "그 인과 주장이 이후 보도로 지지됐나"를 담고 있어
-        다음 예측이 볼 값어치가 크다.
+        피드백 루프는 이 조회 하나다. 예측 슬롯과 리뷰 둘(`post_close`·`post_nxt_close`)을
+        함께 돌려준다 — 장후 리뷰에 붙는 사후 해설이 "그 인과 주장이 이후 보도로 지지됐나"를
+        담고 있고, 애프터마켓 리뷰는 채점도 해설도 없지만 "정규장이 닫힌 뒤 무슨 재료가
+        나왔나"를 담고 있어 다음날 아침이 볼 값어치가 있다.
+
+        **목록은 `PRECEDENT_SLOTS`이지 `NARRATED_SLOTS`가 아니다.** 해설을 받는 슬롯과
+        되돌아보는 슬롯은 뜻이 다르다(`18-nxt-precedent.md` 2.1절).
 
         **`n`은 슬롯마다다.** 총량으로 자르면 장후가 섞여 들어온 만큼 장전 예측 이력이 짧아진다.
         뒤집어 말하면 총 행 수가 슬롯 수배라, 장중 넷이 붙으면서 `PREFETCHED_PAST_THESES`를
@@ -466,7 +471,7 @@ class ThesisStore:
         if n <= 0:
             return []
         with self._connection.cursor() as cursor:
-            cursor.execute(PAST_THESES, (as_of_at, list(NARRATED_SLOTS), subject_code, n))
+            cursor.execute(PAST_THESES, (as_of_at, list(PRECEDENT_SLOTS), subject_code, n))
             rows = cursor.fetchall()
         return [
             PastThesis(

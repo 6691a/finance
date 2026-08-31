@@ -20,6 +20,7 @@ import hashlib
 import pytest
 
 from modules.assessment import PROMPT_VERSION as ASSESSMENT_PROMPT_VERSION
+from modules.causal.domain import DIRECTION_PROMPT_VERSION as CAUSAL_DIRECTION_PROMPT_VERSION
 from modules.causal.domain import PROMPT_VERSION as CAUSAL_PROMPT_VERSION
 from modules.expectation.domain import PROMPT_VERSION as EXPECTATION_PROMPT_VERSION
 from modules.prompt import PROMPT_ROOT
@@ -58,6 +59,9 @@ PROMPT_HASHES: dict[tuple[str, str], str] = {
     # 자리**만 한 번 더 묻는다. 날짜 두 칸을 받아 코드가 종가와 대조하므로
     # `endpoint_observed`는 모델이 주장하고 코드가 확인한다(설계 §11.3).
     ("causal_graph", "10"): "25bc7d180d737da399569376691b1b1405197869abb9bbdbea1fed6aa47ffcd2",
+    # 방향성 요약의 첫 판(2026-08-31, 17단계). 세기를 세지 말라는 것과 `mixed`가 `flat`과
+    # 다르다는 것이 이 프롬프트의 두 축이다 — 다수결로 갈렸으면 모델에게 묻지 않는다.
+    ("causal_direction", "1"): "b063e9a0f851af5dac5e2ed5786f8b4796bf7983dabf1859d52dc2b67cf0dd9b",
     ("expectation_extraction", "1"): "7108eab56e598ff642aeb7269f0f07ab9ef21707798202447db6a6b0a3b52a41",
     # 판 8은 문장이 아니라 **자리표시자에 들어가는 값의 모양**이 바뀐 것이다(2026-08-27).
     # 관측 상태·과거 추론 JSON에서 들여쓰기를 뺐다 — 모델이 보는 입력이 달라지므로 판을
@@ -86,6 +90,10 @@ PROMPT_HASHES: dict[tuple[str, str], str] = {
     # 판 15는 애프터마켓을 장전의 재료로 이었다(2026-08-31). `pre_open` 지시문이 관측 상태의
     # `after_hours`를 설명하고, 과거 추론 절이 `post_nxt_close` 행의 읽는 법을 더한다.
     ("thesis_generation", "15"): "578f9ada731adaaac23f28355794e21ffdde353baaf60ad802871f19a76b8420",
+    # 판 16은 관측 상태에 주간 인과 방향성이 실려 절 하나가 늘었다(2026-08-31, 17단계).
+    # 그 절이 셋을 말한다 — 예측이 아니라 2주 전 사후 인과라는 것, 키가 없는 것과 `flat`이
+    # 다르다는 것, `causal_path:<id>`로 인용할 수 있다는 것이다.
+    ("thesis_generation", "16"): "5a534075cb2c9475d7201c1e999900132fd0a2c7df4f8740e4abc02b67e09884",
     ("thesis_narrative", "2"): "1baea1c554c90619576036db58ad42d2a1e24052fc8ab982978e605c6e696b8b",
     # 판 3은 **같은 해시다.** YAML 문장은 그대로이고 자리표시자에 들어가는 값의 줄 수만
     # 늘었다(예측의 축, 밴드 적중). 모델이 보는 글자가 달라져 판을 가른다.
@@ -99,6 +107,7 @@ PROMPT_HASHES: dict[tuple[str, str], str] = {
 # 현재 판을 어디서 읽는지. 표의 키와 대조하는 데만 쓴다.
 PROMPT_VERSIONS: dict[str, str] = {
     "assessment": ASSESSMENT_PROMPT_VERSION,
+    "causal_direction": CAUSAL_DIRECTION_PROMPT_VERSION,
     "causal_graph": CAUSAL_PROMPT_VERSION,
     "expectation_extraction": EXPECTATION_PROMPT_VERSION,
     "thesis_generation": THESIS_PROMPT_VERSION,

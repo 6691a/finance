@@ -10,7 +10,7 @@
 
 import logging
 from collections.abc import Mapping, Sequence
-from datetime import date
+from datetime import UTC, date, datetime
 
 from modules.causal import domain
 from modules.causal.domain import (
@@ -22,9 +22,12 @@ from modules.causal.domain import (
 )
 from modules.db import TransactionalConnection
 from modules.sql import read_sql
+from modules.utility import atomic
 
 logger = logging.getLogger(__name__)
 
+LLM_RUN_INSERT = read_sql("postgres", "thesis_llm_run", "insert.sql")
+LLM_RUN_FINISH = read_sql("postgres", "thesis_llm_run", "update_finish.sql")
 EVENT_UPSERT = read_sql("postgres", "market_event", "upsert.sql")
 CHANNEL_UPSERT = read_sql("postgres", "market_channel", "upsert.sql")
 PATH_INSERT = read_sql("postgres", "market_causal_path", "insert.sql")
@@ -338,3 +341,93 @@ def _insert_evidence(
     with connection.cursor() as cursor:
         for ref in refs:
             cursor.execute(EVIDENCE_INSERT, (path_id, ref))
+
+
+# ---------------------------------------------------------------------------
+# LLM 실행 원장 — 슬롯이 없는 주간 흐름의 자리
+# ---------------------------------------------------------------------------
+#
+# `thesis/store.py`의 `ThesisStore`가 같은 일을 하지만 그것을 쓰지 않는다. 그쪽은
+# `run_slot`을 필수로 받고(`RunSlot.value`를 부른다) 모듈이 `thesis.generation`·`outcomes`를
+# 통째로 끌고 온다 — 둘 다 LangChain이라 슬롯 없는 주간 흐름이 물 이유가 없는 무게다.
+#
+# SQL은 공유한다. 원장 테이블이 하나이므로 컬럼이 갈리면 안 된다.
+
+
+def start_llm_run(
+    connection: TransactionalConnection,
+    *,
+    kind: str,
+    run_date: date,
+    as_of_at: datetime,
+    dag_run_id: str,
+    try_number: int,
+    llm_model: str,
+    prompt_version: str,
+) -> int:
+    """주간 대화 하나를 `running`으로 열고 그 id를 준다.
+
+    **모델을 부르기 전에 커밋한다.** 대화가 죽어도 "시작했다"는 사실이 남아야 한다 —
+    실패한 대화가 원장에 없으면 패턴 분석이 성공한 실행만 본다.
+
+    `run_slot`은 NULL이다. `ck_thesis_llm_run_slot_shape`가 `causal`·`causal_direction`
+    둘에만 그것을 허용한다.
+    """
+    with atomic(connection) as transaction, transaction.cursor() as cursor:
+        cursor.execute(
+            LLM_RUN_INSERT,
+            (
+                kind,
+                run_date,
+                None,
+                None,
+                as_of_at,
+                dag_run_id,
+                try_number,
+                llm_model,
+                prompt_version,
+                datetime.now(UTC),
+            ),
+        )
+        row = cursor.fetchone()
+    if row is None:
+        raise RuntimeError("failed to open an llm run ledger row")
+    return int(row[0])
+
+
+def finish_llm_run(
+    connection: TransactionalConnection,
+    llm_run_id: int,
+    *,
+    status: str,
+    subjects_requested: int | None = None,
+    subjects_answered: int | None = None,
+    usage: Mapping[str, int] | None = None,
+    error: str | None = None,
+) -> None:
+    """대화를 닫는다. 툴이 없는 흐름이라 왕복·호출 셋은 0이다.
+
+    `usage`가 없으면 토큰 넷이 0이다 — **NULL이 아니다.** 0은 "안 썼다"이고 NULL은
+    "안 쟀다"라 원장에서 그 둘이 갈려야 한다.
+    """
+    counts = usage or {}
+    with atomic(connection) as transaction, transaction.cursor() as cursor:
+        cursor.execute(
+            LLM_RUN_FINISH,
+            (
+                status,
+                datetime.now(UTC),
+                error,
+                0,
+                0,
+                0,
+                False,
+                subjects_requested,
+                subjects_answered,
+                counts.get("prompt", 0),
+                counts.get("cached", 0),
+                counts.get("completion", 0),
+                counts.get("reasoning", 0),
+                llm_run_id,
+            ),
+        )

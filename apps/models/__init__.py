@@ -1,4 +1,5 @@
 from apps.models.analysis import (
+    MarketCausalDirection,
     MarketCausalEvidence,
     MarketCausalPath,
     MarketCausalStep,
@@ -85,6 +86,7 @@ __all__ = [
     "KrxStockCreditBalanceDaily",
     "KrxStockSecuritiesLendingDaily",
     "KrxStockShortSaleDaily",
+    "MarketCausalDirection",
     "MarketCausalEvidence",
     "MarketCausalPath",
     "MarketCausalStep",

@@ -457,3 +457,33 @@ class TestVocabularyOptions:
 
         assert events[0].node_id == "e:1"
         assert channels[0].node_id == "c:1"
+
+
+class TestDirectionTargets:
+    """방향성 대상은 `resolve_targets`의 부분집합이고 추론 subject와 같아야 한다."""
+
+    def test_only_indexes_and_watched_stocks_get_a_direction(self) -> None:
+        """매크로·금리는 그래프에서 **경유지**다(`US10Y → 할인율 → 005930`).
+
+        추론 대상이 아닌 것에 방향성을 만들면 아무도 안 읽는 행이 매주 는다(설계 §1.4).
+        """
+        connection = FakeConnection(rows=[("000660",), ("005930",)])
+
+        targets = candidates.direction_targets(connection)
+
+        assert [target.code for target in targets] == ["KOSPI", "000660", "005930"]
+
+    def test_the_direction_targets_match_the_thesis_subjects(self) -> None:
+        """두 트리가 서로를 import하지 않아 값이 한 벌 더 있다. 어긋나면 여기가 잡는다.
+
+        **어긋나면 조용히 틀린다** — 추론 subject인데 방향성이 없으면 그 대상만 사전 맥락 없이
+        돌고, 반대면 아무도 안 읽는 행이 쌓인다.
+        """
+        from modules.thesis.store import INDEX_SUBJECTS
+
+        connection = FakeConnection(rows=[("005930",)])
+        direction_codes = {target.code for target in candidates.direction_targets(connection)}
+        thesis_index_codes = {code for code, _ in INDEX_SUBJECTS}
+
+        # 종목은 양쪽 다 `instrument.is_watched`에서 오므로 지수만 대조한다.
+        assert direction_codes - {"005930"} == thesis_index_codes

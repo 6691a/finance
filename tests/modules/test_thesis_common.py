@@ -21,6 +21,7 @@ from modules.thesis.state import (
     TechnicalObservation,
     TechnicalState,
 )
+from modules.utility import KST_TIMEZONE
 
 SESSION = date(2026, 8, 21)
 AS_OF = datetime(2026, 8, 21, 6, 30, tzinfo=UTC)  # KST 15:30
@@ -70,6 +71,8 @@ def _key(statement: str) -> str:
         return "signal_base_rate"
     if statement == base_rate.UNCONDITIONAL_RETURNS:
         return "base_rate"
+    if "FROM market_causal_direction" in statement:
+        return "causal_direction"
     if "WITH requested AS" in statement:
         return "technical"
     if "FROM technical_signal" in statement:
@@ -147,6 +150,7 @@ def test_the_state_is_a_model_not_a_bare_dict():
         "after_hours",
         "technical",
         "flat_base_rate",
+        "causal_direction",
     }
     # 장전·장후는 `intraday`를 안 채운다. 장중 슬롯만 쓰는 칸이고 둘은 배타적이다.
     assert payload["intraday"] == {}
@@ -309,3 +313,61 @@ def test_the_prompt_no_longer_hardcodes_the_flat_baseline():
     # 지수·종목을 한 숫자로 묶어 부르던 표현이 남아 있으면 안 된다.
     assert "개별 종목 6%" not in SYSTEM_PROMPT
 
+
+# --- 주간 인과 방향성 -------------------------------------------------------
+
+
+def direction_row(code: str = "KOSPI", week=date(2026, 8, 17)) -> tuple:
+    """`select_for_thesis.sql`의 행 계약. 컬럼 순서가 바뀌면 여기가 먼저 깨진다."""
+    return (
+        code,
+        week,
+        "mixed",
+        "이익 기대와 할인율이 맞섰다",
+        4,
+        4,
+        0,
+        [51, 52],
+        [{"name": "투자심리", "up": 3, "down": 3}],
+    )
+
+
+def test_the_direction_is_read_into_the_observed_state():
+    """툴이 아니라 관측 상태다 — 대상이 곧 subject라 툴로 두면 상한만 먹는다(설계 §4.1)."""
+    result = state(
+        FakeConnection({"technical": both_subjects(), "signals": [], "causal_direction": [direction_row()]})
+    )
+
+    assert set(result.causal_direction) == {"KOSPI"}
+    found = result.causal_direction["KOSPI"]
+    assert found.bias == "mixed"
+    assert found.week_start == date(2026, 8, 17)
+    assert found.path_ids == (51, 52)
+    assert found.channels[0].name == "투자심리"
+
+
+def test_a_target_without_a_direction_row_has_no_key():
+    """**키가 없는 것과 `flat`은 다르다.** 없는 것은 "그래프가 말하지 않았다"다."""
+    result = state(FakeConnection({"technical": both_subjects(), "signals": [], "causal_direction": []}))
+
+    assert result.causal_direction == {}
+
+
+def test_the_direction_query_carries_both_cutoffs():
+    """`created_at`은 미래를 막고 `oldest_week`은 낡은 값을 막는다(설계 §4.2·§4.2.1).
+
+    뒤엣것이 없으면 주간 태스크가 skip돼도 지난 주 행이 남아 추론이 최신인 척 읽는다 —
+    skip이 추론까지 전파되지 않는다.
+    """
+    connection = FakeConnection({"technical": both_subjects(), "signals": [], "causal_direction": []})
+    state(connection)
+
+    _, parameters = next(
+        call for call in connection.calls if "FROM market_causal_direction" in call[0]
+    )
+    assert parameters["as_of_at"] == AS_OF
+    # 상한은 기준 시각(KST)에서 세 주 앞이다. 정상은 W-2이고 한 주 놓치면 W-3이다.
+    assert parameters["oldest_week"] == AS_OF.astimezone(KST_TIMEZONE).date() - timedelta(
+        weeks=common.MAX_DIRECTION_AGE_WEEKS
+    )
+    assert sorted(parameters["codes"]) == ["005930", "KOSPI"]

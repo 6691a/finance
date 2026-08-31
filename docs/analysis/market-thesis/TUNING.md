@@ -112,6 +112,71 @@ WHERE run_date >= current_date - 28
 GROUP BY run_slot;
 ```
 
+### 주간 방향성 쿼리 넷 (17단계, 2026-08-31)
+
+[17-graph-query.md](17-graph-query.md) §7의 관측이다. **예측 품질과 섞지 않는다** — 이 넷은
+"방향성이 값어치를 내나"를 묻고, 그 답이 나쁘면 프롬프트에서 `bias`를 빼고 재료만 남긴다.
+
+**D. `bias`와 실제 주간 등락 방향의 일치율** — 이 값이 무작위와 다르지 않으면 `bias`를
+관측 상태에서 빼고 `channels`만 남긴다. 그 판단이 §4.5가 말한 "LLM 출력이 LLM 입력이 되는"
+위험의 출구다.
+
+```sql
+SELECT d.bias,
+       count(*) AS rows,
+       count(*) FILTER (
+         WHERE (d.bias = 'up' AND p.avg_change > 0) OR (d.bias = 'down' AND p.avg_change < 0)
+       ) AS agreed
+FROM market_causal_direction d
+JOIN (
+      SELECT week_start, target_kind, target_code, avg(return_week_change) AS avg_change
+      FROM market_causal_path
+      GROUP BY 1, 2, 3
+     ) p
+  ON p.week_start = d.week_start
+ AND p.target_kind = d.target_kind
+ AND p.target_code = d.target_code
+GROUP BY d.bias
+ORDER BY d.bias;
+```
+
+**E. `mixed` 비율** — 늘 `mixed`면 종합이 아무 말도 안 하는 것이다. 프롬프트의 "정말 갈리면
+`mixed`다"를 좁힌다.
+
+```sql
+SELECT bias, count(*), round(100.0 * count(*) / sum(count(*)) OVER (), 1) AS pct
+FROM market_causal_direction
+GROUP BY bias
+ORDER BY count(*) DESC;
+```
+
+**F. 대상별로 갈리는가** — 셋이 늘 같으면 대상별 칸이 아니라 시장 전체 한 칸이 맞다.
+2026-08-31 실측에서 005930과 000660의 채널×sign이 글자 그대로 같았다(§6.9).
+
+```sql
+SELECT week_start,
+       count(DISTINCT bias) AS distinct_biases,
+       string_agg(target_code || '=' || bias, ' ' ORDER BY target_code) AS row_summary
+FROM market_causal_direction
+GROUP BY week_start
+ORDER BY week_start DESC;
+```
+
+**G. 방향성이 빈 채로 도는 슬롯 비율** — 나이 상한에 걸린 것과 그 주에 경로가 없던 것을
+나눠 센다. 앞이 늘면 주간 DAG가 밀리는 것이고, 뒤가 늘면 대상 목록이 안 맞는 것이다.
+**`input_state`를 읽는다** — 그 슬롯이 실제로 무엇을 봤는지가 거기 있다.
+
+```sql
+SELECT run_date,
+       run_slot,
+       count(*) AS subjects,
+       count(*) FILTER (WHERE input_state -> 'causal_direction' ? subject_code) AS with_direction
+FROM thesis
+WHERE run_date >= current_date - 28
+GROUP BY run_date, run_slot
+ORDER BY run_date DESC, run_slot;
+```
+
 ### 근거 유효율은 왜 못 읽나
 
 모델이 낸 `evidence_refs` 중 **후보 목록 밖이라 버린 것**의 비율이다. 버리는 것은

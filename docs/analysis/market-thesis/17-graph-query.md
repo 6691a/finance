@@ -4,8 +4,9 @@
 - 의존: [4-graph.md](4-graph.md)(투영)와 [market-causal-graph.md](../market-causal-graph.md)(원본 데이터).
   **그 둘의 결론을 다시 논하지 않는다** — 여기는 "이미 선 그래프를 어떻게 읽나"만 갖는다.
   단 하나, 조회가 투영에 요구한 속성(`created_at`, §2.2)은 4-graph.md가 이미 받았다
-- 상태: **설계. 미구현.** 프로토타입(§6)은 끝났고 그 결과가 §0을 다시 썼다
-- 날짜: 2026-08-30 (2026-08-31 프로토타입 실측 반영해 형태를 바꿨다 — §9)
+- 상태: **구현 완료**(2026-08-31). 프로토타입(§6)이 형태를 바꿨고 그 형태로 만들었다.
+  **리비전 `d7a41f8b2c93`이 운영 반영을 기다린다.** 산출물은 §8에 있다
+- 날짜: 2026-08-30 (2026-08-31 프로토타입 실측 반영해 형태를 바꾸고 구현 — §9)
 
 ## 0. 확정 결정
 
@@ -510,25 +511,34 @@ Q1(`할인율`→대상)의 대상 수가 `as_of`에 따라 갈린다.
 
 1. ~~**투영에 `created_at`**~~ — **끝났다**(2026-08-31). `graph.py`·SQL·`test_graph.py`·
    [4-graph.md](4-graph.md) §2.1. 운영은 `sync_only` 한 번으로 속성만 붙는다.
-2. **모델과 수기 리비전** — `MarketCausalDirection`(§3.2), `CausalBias` `StrEnum`,
-   `LlmRunKind.CAUSAL_DIRECTION`과 `ThesisEvidenceKind.CAUSAL_PATH`의 CHECK 확장.
-   `apps/models/analysis/__init__.py`의 `__all__`도. `writing-migrations` 스킬을 따른다.
-3. **`airflow/modules/graph_query.py`** — 고정 Cypher 둘(§2.4), `MAX_QUERY_DEPTH`, 실행과
-   행 상한. **한 파일이다.** `graph.py`와 둘이라 폴더 기준(한 도메인 파일 셋 이상)에 못
-   미친다 — 셋째가 생기면 `graph/`로 내리되 그 이동은 따로 커밋한다. 최상위 공용 잎이
-   열넷이 되므로 `.claude/CLAUDE.md`·`.codex/AGENTS.md`의 목록을 같은 커밋에서 고친다.
-4. **`airflow/modules/causal/direction.py`** — 호출–교정 그래프(§3.3), 응답 모델, 검증, 저장.
-   `causal/` 폴더에 두는 이유는 주간 인과가 만드는 값이기 때문이다. `writing-llm-flows`를 따른다.
-5. **`airflow/modules/prompts/causal_direction.yaml`** + `DIRECTION_PROMPT_VERSION` +
-   `test_prompt_versions.py` 해시.
-6. **DAG** — `market_causal_weekly`에 `summarize_direction` 태스크와 `sync_graph >> ...`.
-7. **추론 쪽** — `ObservedState.causal_direction`, `CausalDirection` 모델,
-   `ThesisRun.observed_state`의 조회 SQL 하나(`MAX_DIRECTION_AGE_WEEKS` 포함),
-   프롬프트의 관측 상태 절(§4.3)과 `PROMPT_VERSION` 올림, `ThesisEvidenceKind` 등록.
-8. **테스트** — Cypher가 접점 규칙·컷오프·상한을 싣는지(가짜 드라이버), 종합 검증이 목록 밖
-   `path_id`를 버리는지, 대상 일부만 온 응답이 실패인지, 관측 상태 SQL이 `as_of_at`으로
-   자르는지, `KOSDAQ`처럼 없는 대상이 "없음"으로 실리는지, 리비전 오프라인 `head_sql`.
-9. **문서** — [README.md](README.md) §2 표에 17 행, `TUNING.md`에 §7의 쿼리 셋.
+2. ~~**모델과 수기 리비전**~~ — **끝났다.** `MarketCausalDirection`·`CausalBias`,
+   `LlmRunKind.CAUSAL_DIRECTION`과 `ThesisEvidenceKind.CAUSAL_PATH`의 CHECK 확장,
+   리비전 `d7a41f8b2c93`. **`ck_thesis_llm_run_slot_shape`도 함께 넓혔다** — 슬롯이 없는
+   종류가 `causal` 하나에서 둘이 됐다.
+3. ~~**`airflow/modules/graph_query.py`**~~ — **끝났다**(265줄). 고정 Cypher 둘(§2.4),
+   `MAX_QUERY_DEPTH`, 실행·행 상한, `DirectionInput`의 세기와 채널 집계. 최상위 공용 잎이
+   열넷이 되어 `.claude/CLAUDE.md`·`.codex/AGENTS.md`의 목록을 같은 커밋에서 고쳤다.
+
+   **구현 중 하나가 드러났다** — 착지 쿼리의 출발점을 "들어오는 `LEADS_TO`가 없는 노드"로
+   찾으면 2단 체인의 첫 채널이 함께 잡혀 `title`도 `code`도 없는 행이 나온다. 라벨로 건다
+   (`s:Event OR s:Target`). 다중 홉 쿼리에는 `path_id`가 **실제로 바뀌는** 경로만 남기는
+   조건이 하나 더 붙는다 — 안 걸면 주장 하나 안의 2단 체인이 착지 쿼리와 중복된다.
+4. ~~**`airflow/modules/causal/direction.py`**~~ — **끝났다.** 호출–교정 그래프(§3.3),
+   응답 모델, 검증, 저장. 원장 헬퍼 둘은 `causal/store.py`에 뒀다 — `ThesisStore`는
+   `run_slot`을 필수로 받고 `thesis.generation`·`outcomes`를 통째로 끌고 온다.
+5. ~~**`airflow/modules/prompts/causal_direction.yaml`**~~ — **끝났다.**
+   `DIRECTION_PROMPT_VERSION` 1과 해시를 `test_prompt_versions.py`에 잠갔다.
+6. ~~**DAG**~~ — **끝났다.** `sync_graph >> summarize_direction`이고 `trigger_rule`은
+   기본 `all_success`다.
+7. ~~**추론 쪽**~~ — **끝났다.** `ObservedState.causal_direction`,
+   `ThesisRun.causal_direction`(컷오프 둘), `select_for_thesis.sql`,
+   프롬프트의 `## 주간 인과 방향성` 절과 `PROMPT_VERSION` 16, `ThesisEvidenceKind` 등록.
+   `NxtObservedState`에는 안 넣었다 — 애프터마켓 리뷰는 예측이 아니다.
+8. ~~**테스트**~~ — **끝났다.** `tests/modules/test_graph_query.py` 15개,
+   `test_causal_direction.py` 14개, 그리고 기존 파일 넷에 더한 것들(관측 상태의 컷오프 둘,
+   대상 목록 대조, DAG 모양, 리비전 오프라인 SQL). 전체 2,891 통과.
+9. **문서** — [README.md](README.md) §2 표에 17 행과 상태 줄(끝났다), `TUNING.md`에 §7의
+   관측 쿼리 넷(남았다).
 
 배포는 코드와 리비전이다. `neo4j` 드라이버와 `NEO4J_*`는 4단계에서 이미 이미지와 환경에 있다.
 
@@ -572,3 +582,11 @@ requirements 세 곳에서 빼는 것은 **별도 커밋**이다.
     (KOSPI는 4·6개). 같은 조사에서 KOSDAQ이 추론 넷 중 Brier가 제일 나쁘고(T+0 0.708,
     T+1 0.710 — 균등확률 0.667보다 나쁘다) 기술 신호 289건을 아무도 인용하지 않은 것이
     드러나, **사용자가 KOSDAQ을 추론·신호·인과 그래프에서 빼기로 했다**(별도 PR).
+- **2026-08-31(넷)** 구현했다(§8). 설계와 다르게 판단한 것은 없고 구현 중에 둘이 드러났다.
+  - **착지 쿼리의 출발점은 라벨로 건다**(§2.4). "들어오는 `LEADS_TO`가 없는 노드"로 찾으면
+    2단 체인의 첫 채널이 함께 잡힌다 — 그 채널로 들어오는 것이 `Event`라 조건이 참이 된다.
+  - **다중 홉 쿼리는 `path_id`가 실제로 바뀌는 경로만 준다.** 안 걸면 주장 하나 안의 2단
+    체인이 함께 잡히는데 그것은 착지 쿼리가 이미 준 것이라 행만 는다.
+  - 로컬 Neo4j(운영 두 주 투영)로 흐름을 끝까지 돌렸다. 프롬프트가 대상 셋에 4,715자이고,
+    `US10Y → 할인율 → SOX → 투자심리 → KOSPI`처럼 08-10 주 경로에서 08-17 주 경로로
+    이어지는 사슬이 실제로 실린다.

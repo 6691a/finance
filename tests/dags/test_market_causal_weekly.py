@@ -62,13 +62,27 @@ def test_the_params_are_the_target_week_and_the_resync_switch():
 
 
 def test_the_projection_follows_the_build():
-    """후보 조립부터 저장까지가 한 태스크고, Neo4j 투영만 뒤에 붙는다.
+    """후보 조립부터 저장까지가 한 태스크고, Neo4j 투영과 방향성 요약이 뒤에 붙는다.
 
     **두 스토어를 같은 태스크에 넣지 않는다** — Neo4j 쓰기가 실패해도 Postgres 쓰기는 이미
     커밋된 채로 남아야 한다. 분산 트랜잭션을 만들지 않는다.
     """
-    assert sorted(task.task_id for task in DAG.tasks) == ["build_causal_graph", "sync_graph"]
+    assert sorted(task.task_id for task in DAG.tasks) == [
+        "build_causal_graph",
+        "summarize_direction",
+        "sync_graph",
+    ]
     assert DAG.get_task("build_causal_graph").downstream_task_ids == {"sync_graph"}
+    assert DAG.get_task("sync_graph").downstream_task_ids == {"summarize_direction"}
+
+
+def test_the_direction_stops_when_the_projection_is_skipped():
+    """**`sync_graph`와 반대 판단이다**(설계 §3).
+
+    투영이 skip이면(NEO4J_URI 없음) 읽을 그래프가 없으므로 방향성도 서면 안 된다. 그 skip이
+    추론까지 전파되는 것이 §4.2.1이고, 관측 상태의 나이 상한이 그 마지막 자리다.
+    """
+    assert DAG.get_task("summarize_direction").trigger_rule == "all_success"
 
 
 def test_the_projection_runs_even_when_the_build_is_skipped():

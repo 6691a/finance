@@ -62,19 +62,20 @@ def test_step_position_is_bounded_and_ordered(capsys):
     assert "position BETWEEN 1 AND 3" in sql
 
 
-def test_the_llm_ledger_accepts_the_causal_kind(capsys):
-    """원장을 나누지 않고 종류를 하나 더한다(설계 §3.5)."""
+def test_the_llm_ledger_accepts_the_causal_kinds(capsys):
+    """원장을 나누지 않고 종류를 더한다(설계 §3.5). 방향성 요약이 둘째다."""
     sql = head_sql(capsys)
 
-    assert "'forecast', 'review', 'nxt_review', 'narration', 'causal'" in sql
+    assert "'forecast', 'review', 'nxt_review', 'narration', 'causal', 'causal_direction'" in sql
 
 
-def test_the_llm_ledger_slot_becomes_optional_only_for_causal(capsys):
-    """주간 분석에는 슬롯이 없다. 나머지 종류가 슬롯을 빠뜨리는 것은 그대로 막는다."""
+def test_the_llm_ledger_slot_becomes_optional_only_for_the_weekly_kinds(capsys):
+    """주간 흐름 둘에는 슬롯이 없다. 나머지 종류가 슬롯을 빠뜨리는 것은 그대로 막는다."""
     sql = head_sql(capsys)
 
     assert "ALTER TABLE thesis_llm_run ALTER COLUMN run_slot DROP NOT NULL" in sql
     assert "ck_thesis_llm_run_slot_shape" in sql
+    assert "kind IN ('causal', 'causal_direction') AND run_slot IS NULL" in sql
 
 
 def test_the_evidence_table_is_created(capsys):
@@ -144,3 +145,49 @@ def test_the_source_is_exclusive_and_never_itself(capsys):
 
     assert "ck_market_causal_path_source_exclusive" in sql
     assert "ck_market_causal_path_source_not_self" in sql
+
+
+def test_the_direction_table_is_created(capsys):
+    """방향성은 대상 하나에 주 하나다. 설계는 17-graph-query.md §3.2다."""
+    sql = head_sql(capsys)
+
+    assert "CREATE TABLE market_causal_direction" in sql
+    assert (
+        "CONSTRAINT uq_market_causal_direction_natural_key UNIQUE "
+        "(week_start, target_kind, target_code)" in sql
+    )
+
+
+def test_the_direction_bias_has_its_own_value_set(capsys):
+    """`mixed`가 `flat`과 다르다 — 팽팽한 주와 조용한 주를 뭉치면 읽는 쪽이 못 가른다."""
+    sql = head_sql(capsys)
+
+    assert "bias IN ('up', 'down', 'mixed', 'flat')" in sql
+
+
+def test_a_direction_row_always_stands_on_at_least_one_path(capsys):
+    """세기가 전부 0이면 접을 것이 없었다는 뜻이라 행이 아예 없어야 한다."""
+    sql = head_sql(capsys)
+
+    assert "ck_market_causal_direction_counts" in sql
+    assert "up_count + down_count + flat_count > 0" in sql
+
+
+def test_the_direction_survives_its_ledger(capsys):
+    """원장이 지워져도 방향성은 남는다. 원장이 판단을 인질로 잡지 않는다."""
+    sql = head_sql(capsys)
+
+    body = sql[sql.index("CREATE TABLE market_causal_direction") :]
+    body = body[: body.index(";")]
+
+    assert "REFERENCES thesis_llm_run (id) ON DELETE SET NULL" in body
+
+
+def test_the_evidence_accepts_a_causal_path_citation(capsys):
+    """추론이 방향성이 딛고 선 경로를 인용할 수 있어야 한다(설계 §4.4)."""
+    sql = head_sql(capsys)
+
+    assert (
+        "evidence_kind IN ('document', 'disclosure', 'macro_change', "
+        "'technical_signal', 'causal_path')" in sql
+    )

@@ -21,6 +21,7 @@ from modules.collectors.document.body import (
     extract_body,
     find_attachment_urls,
     find_video_urls,
+    is_html_document,
     naver_attachment_urls,
     paragraph_selector,
     pending_bodies,
@@ -381,6 +382,38 @@ def test_a_page_whose_body_lives_in_an_attachment_is_marked_attachment_only(monk
     stored = tmp_path / attachment.storage_path
     assert stored.read_bytes() == b"%PDF-1.7 x"
     assert stored.suffix == ".pdf"
+
+
+def test_a_document_url_that_is_itself_a_file_is_never_read_as_body(monkeypatch, tmp_path):
+    """BOJ의 `canonical_url`이 PDF다. 본문으로 읽으면 PDF 바이트가 그대로 저장된다.
+
+    2026-08-31 운영 실측에서 그렇게 저장된 문서가 22건이었다 — `body`가 `%PDF-1.7 %����`로
+    시작하고 평균 748,010자, 최대 678만 자다. BM25 색인이 그 바이너리를 형태소 분석하느라
+    분당 15행으로 기어갔다.
+    """
+    monkeypatch.setattr(
+        "modules.collectors.document.body.fetch_url",
+        lambda *args, **kwargs: FakeResponse(b"%PDF-1.7 " + b"x" * 5000, {"content-type": "application/pdf"}),
+    )
+
+    result = DocumentBodyCollector(tmp_path).collect(
+        BodyCandidate(id=91547, source_slug="boj", canonical_url="https://www.boj.or.jp/en/mopo/outlook/g.pdf")
+    )
+
+    assert result.body is None
+    # 원문은 그 파일이다. 첨부로 받아 두면 첨부 파서가 텍스트로 바꾼다.
+    assert result.status == "attachment_only"
+    assert result.file_urls == ("https://www.boj.or.jp/en/mopo/outlook/g.pdf",)
+
+
+def test_the_payload_decides_before_the_header_does():
+    """제공처가 PDF에 `text/html`을 붙여 주는 경우가 있다."""
+    assert not is_html_document("text/html; charset=utf-8", b"%PDF-1.7 ...")
+    assert not is_html_document(None, b"PK\x03\x04hwpx")
+    # 헤더가 없으면 예전처럼 HTML로 본다. 스킴 없는 주소 하나 때문에 전체를 막지 않는다.
+    assert is_html_document(None, "<html><body><p>본문</p></body></html>".encode())
+    assert is_html_document("text/html", b"<html>")
+    assert not is_html_document("application/pdf", b"<html>")
 
 
 def test_a_page_with_neither_body_nor_attachment_is_empty_not_a_failure(monkeypatch, tmp_path):

@@ -137,9 +137,18 @@ PRECEDENT_SLOTS: tuple[RunSlot, ...] = (*NARRATED_SLOTS, RunSlot.POST_NXT_CLOSE)
 ### 2.2 프롬프트에 무엇이 실리나
 
 - **슬롯당 `PREFETCHED_PAST_THESES = 2`행이라 종목마다 최대 2행이 는다.** 지수는 NXT 행이
-  없어 0이다. 프롬프트 길이는 슬롯 수에 비례하고([TUNING.md](TUNING.md) 손잡이 장부), 지금
-  실제로 돌고 있는 슬롯은 `pre_open`·`intraday_midday`·`post_close`·`post_nxt_close` 넷이라
-  종목 대상은 6행에서 8행이 된다.
+  없어 0이다. 2026-08-31 운영 DB 실측(장전 `as_of` 08:35 기준, 대상 넷):
+
+  | 대상 | 전 | 후 | 증가 |
+  | --- | --- | --- | --- |
+  | KOSPI·KOSDAQ | 11행 13,900·12,620자 | 같음 | 0자 |
+  | 005930 | 11행 12,933자 | 13행 14,509자 | +1,576자 |
+  | 000660 | 11행 13,098자 | 13행 14,848자 | +1,750자 |
+
+  **행이 넷이 아니라 11인 것은 지금 도는 슬롯이 아니라 여태 돈 슬롯 전부가 오기 때문이다** —
+  2026-08-28에 접은 장중 셋(`intraday_morning`·`intraday_afternoon`·`pre_close`)의 지난 행이
+  아직 창 안에 있다. 그 행들이 빠지면 총량은 줄고 이 변경의 증가분은 그대로다.
+  절 전체는 52,551자에서 55,877자가 된다(+6.3퍼센트).
 - **event-time은 이미 맞다.** SQL이 `thesis.run_date < (as_of_at AT TIME ZONE 'Asia/Seoul')::date`를
   걸어, D일 21:00 리뷰(`run_date = D`)는 D+1 08:35 장전에 보이고 D+1 21:00 리뷰는 안 보인다.
   장전 슬롯을 오후에 재실행해도 그날 저녁 리뷰가 섞이지 않는다.
@@ -220,7 +229,8 @@ class ObservedState(BaseModel):
     after_hours: dict[str, AfterHoursObservation] = Field(default_factory=dict)
 ```
 
-관측 상태 JSON은 이렇게 된다(종목만 — NXT에 지수가 없다).
+관측 상태 JSON은 이렇게 된다(종목만 — NXT에 지수가 없다). 프롬프트에 실리는 이 블록은
+2026-08-28 실측으로 종목 둘에 **190자**다.
 
 ```json
 {
@@ -374,11 +384,12 @@ class ObservedState(BaseModel):
 
 ## 5. 남은 확인(spike)
 
-- **2절 뒤 프롬프트 길이 실측.** 종목 대상 6행 → 8행과 `after_hours` 블록의 토큰 차이를
-  LangSmith에서 읽는다. TUNING.md 손잡이 장부의 `past_theses` 1,370~1,586자(대상당)가 갱신
-  대상이다.
-- **`select_pending_grades.sql`이 장전 행의 `input_state`를 정말 안 읽는지** 구현 때 파일에서
-  확인한다. 2.6절은 15단계 0.1절의 서술("캐내는 것은 장중의 `price`")에 기대고 있다.
+- ~~**2절 뒤 프롬프트 길이 실측.**~~ 쟀다(2026-08-31, 2.2절·2.6절). 과거 추론 절이 종목당
+  +1,576~1,750자, 관측 상태의 `after_hours` 블록이 종목 둘에 190자다. 지수는 0.
+- ~~**`select_pending_grades.sql`이 장전 행의 `input_state`를 읽는지**~~ — 안 읽는다(2026-08-31
+  파일 확인). 그 조회가 JSONB에서 캐내는 것은 `ARRAY['intraday', subject_code, 'price']`
+  하나이고 그것도 15단계 이전 장중 행을 위한 하위 호환 갈래다(`coalesce(thesis.base_price, ...)`).
+  장전 행은 `base_price` 컬럼을 쓰므로 `after_hours` 키가 채점에 닿지 않는다.
 - **2절 뒤 인용 여부.** 장전 이유 문장이 애프터 재료를 실제로 가져다 쓰는지 5영업일 트레이스.
   안 쓰면 3절보다 프롬프트 문장을 먼저 의심한다.
 - **3절의 08:35 경합.** 운영 DAG 로그에서 장전 시작 시각과 reconcile 시작 시각을 며칠 대조한다.

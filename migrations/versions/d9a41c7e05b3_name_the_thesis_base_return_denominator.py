@@ -1,7 +1,7 @@
 """name the thesis base return denominator
 
 Revision ID: d9a41c7e05b3
-Revises: c4e28b71fa09
+Revises: d7a41f8b2c93
 Create Date: 2026-08-31 15:00:00.000000
 
 `thesis.base_return_pct`의 주석만 고친다. 컬럼도 제약도 그대로다.
@@ -25,7 +25,7 @@ from alembic import op
 
 # revision identifiers, used by Alembic.
 revision: str = "d9a41c7e05b3"
-down_revision: str | Sequence[str] | None = "c4e28b71fa09"
+down_revision: str | Sequence[str] | None = "d7a41f8b2c93"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 

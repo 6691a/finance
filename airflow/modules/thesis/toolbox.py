@@ -289,7 +289,7 @@ class MarketFundsArgs(ToolArgs):
 class TypicalMoveArgs(ToolArgs):
     symbol: str = Field(
         description=(
-            "이번 실행의 추론 대상 하나(KOSPI, KOSDAQ, 또는 종목 코드 6자리). "
+            "이번 실행의 추론 대상 하나(KOSPI 또는 종목 코드 6자리). "
             "**대상 목록 밖은 거절된다** — 크기 앵커는 추론 대상에만 뜻이 있다."
         )
     )

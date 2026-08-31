@@ -35,8 +35,10 @@ logger = logging.getLogger(__name__)
 
 SLOT = "post_close"
 
-# readiness guard가 확인하는 지수. 둘 다 마감 봉이 있어야 관측 상태가 선다.
-GUARD_INDEX_SYMBOLS = ["KOSPI", "KOSDAQ"]
+# readiness guard가 확인하는 지수. 마감 봉이 있어야 관측 상태가 선다.
+# **추론 대상과 같은 목록이어야 한다**(`store.INDEX_SUBJECTS`) — 대상이 아닌 지수를 기다리면
+# 그 수집이 밀릴 때 관계없는 추론이 서지 않는다. KOSDAQ은 2026-08-31에 둘 다에서 빠졌다.
+GUARD_INDEX_SYMBOLS = ["KOSPI"]
 
 
 def as_of(run_date: date) -> datetime:

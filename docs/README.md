@@ -30,6 +30,7 @@
 | --- | --- | --- |
 | [economic-document-archive-design.md](analysis/economic-document-archive-design.md) | 문서 아카이브 4단계 설계 | 1·2단계 완료, 3·4단계 재계획 보류 |
 | [document-assessment-workflow.md](analysis/document-assessment-workflow.md) | `document_assessment_hourly`의 LangGraph 흐름도 | 구현 완료 |
+| [pdf-rag-pipeline.md](analysis/pdf-rag-pipeline.md) | PyMuPDF 첨부 파싱 → 선택적 Vision → chunk·embedding 개발 계약 | **미구현. 개발 계약** |
 | [market-technical-indicators.md](analysis/market-technical-indicators.md) | SMA·RSI·MACD 관측값과 매매 신호 검출·채점 | 구현 완료. 남은 것은 적중률 관측 |
 | [market-episode-analysis.md](analysis/market-episode-analysis.md) | 일봉 변화·추정 매물대·시장 근거를 연결하는 `MarketEpisode` 설계 | **미구현. 구현 계약** |
 | [market-causal-graph.md](analysis/market-causal-graph.md) | 주간 사후 인과 그래프. 사건 → 경로 체인 → 대상을 누적해 다중 홉을 만든다 | §1~§8 구현 완료(2026-08-28, 프롬프트 판 5). §7 조회·§9 선반영만 미구현 |

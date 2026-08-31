@@ -28,11 +28,15 @@ transient 오류를 기본 30초 동안 스스로 다시 부르고, 태스크 �
 
 `path_id`가 모든 엣지에 실린다. **채널 노드가 모든 경로에 공유되므로** 이 값이 없으면
 서로 다른 주장이 `할인율`에서 섞인다(§7.8 발견 ①).
+
+`created_at`도 모든 엣지에 실린다 — 그 경로 행이 Postgres에 생긴 시각(UTC)이다. 추론 툴의
+event-time cutoff가 이 값으로 걸린다(17-graph-query.md §5.3). `week_start`로는 안 된다 —
+경로는 그 주가 끝나고 한 주 뒤(`W+2` 월요일)에 생기고, 재실행이면 아무 때나 생긴다.
 """
 
 import logging
 from collections.abc import Sequence
-from datetime import date
+from datetime import date, datetime
 from itertools import pairwise
 from typing import Any
 
@@ -61,6 +65,7 @@ class CausalPathRow(_Row):
 
     path_id: int
     week_start: date
+    created_at: datetime
     event_title: str | None
     event_occurred_on: date | None
     source_target_kind: str | None
@@ -104,6 +109,7 @@ class EventEdge(_Row):
 
     path_id: int
     week_start: date
+    created_at: datetime
     position: int
     title: str
     occurred_on: date
@@ -115,6 +121,7 @@ class TargetEdge(_Row):
 
     path_id: int
     week_start: date
+    created_at: datetime
     position: int
     src_kind: str
     src_code: str
@@ -127,6 +134,7 @@ class ChainEdge(_Row):
 
     path_id: int
     week_start: date
+    created_at: datetime
     position: int
     src: str
     dst: str
@@ -137,6 +145,7 @@ class HitsEdge(_Row):
 
     path_id: int
     week_start: date
+    created_at: datetime
     channel: str
     kind: str
     code: str
@@ -193,7 +202,7 @@ WRITES: tuple[tuple[str, str], ...] = (
             " MATCH (e:Event {title: r.title, occurred_on: r.occurred_on})"
             " MATCH (c:Channel {name: r.channel})"
             " MERGE (e)-[l:LEADS_TO {path_id: r.path_id, position: r.position}]->(c)"
-            " SET l.week_start = r.week_start"
+            " SET l.week_start = r.week_start, l.created_at = r.created_at"
         ),
     ),
     (
@@ -203,7 +212,7 @@ WRITES: tuple[tuple[str, str], ...] = (
             " MATCH (t:Target {kind: r.src_kind, code: r.src_code})"
             " MATCH (c:Channel {name: r.channel})"
             " MERGE (t)-[l:LEADS_TO {path_id: r.path_id, position: r.position}]->(c)"
-            " SET l.week_start = r.week_start, l.sign = r.sign"
+            " SET l.week_start = r.week_start, l.created_at = r.created_at, l.sign = r.sign"
         ),
     ),
     (
@@ -213,7 +222,7 @@ WRITES: tuple[tuple[str, str], ...] = (
             " MATCH (a:Channel {name: r.src})"
             " MATCH (b:Channel {name: r.dst})"
             " MERGE (a)-[l:LEADS_TO {path_id: r.path_id, position: r.position}]->(b)"
-            " SET l.week_start = r.week_start"
+            " SET l.week_start = r.week_start, l.created_at = r.created_at"
         ),
     ),
     (
@@ -223,7 +232,8 @@ WRITES: tuple[tuple[str, str], ...] = (
             " MATCH (c:Channel {name: r.channel})"
             " MATCH (t:Target {kind: r.kind, code: r.code})"
             " MERGE (c)-[h:HITS {path_id: r.path_id}]->(t)"
-            " SET h.week_start = r.week_start, h.sign = r.sign, h.confidence = r.confidence,"
+            " SET h.week_start = r.week_start, h.created_at = r.created_at, h.sign = r.sign,"
+            " h.confidence = r.confidence,"
             " h.reasoning = r.reasoning, h.return_unit = r.return_unit,"
             " h.return_week_change = r.return_week_change,"
             " h.return_t1_change = r.return_t1_change,"
@@ -245,20 +255,21 @@ def read_week(connection: Connection, week_start: date) -> tuple[list[CausalPath
             CausalPathRow(
                 path_id=row[0],
                 week_start=row[1],
-                event_title=row[2],
-                event_occurred_on=row[3],
-                source_target_kind=row[4],
-                source_target_code=row[5],
-                source_sign=row[6],
-                target_kind=row[7],
-                target_code=row[8],
-                sign=row[9],
-                confidence=row[10],
-                reasoning=row[11],
-                return_week_change=row[12],
-                return_t1_change=row[13],
-                return_t5_change=row[14],
-                return_unit=row[15],
+                created_at=row[2],
+                event_title=row[3],
+                event_occurred_on=row[4],
+                source_target_kind=row[5],
+                source_target_code=row[6],
+                source_sign=row[7],
+                target_kind=row[8],
+                target_code=row[9],
+                sign=row[10],
+                confidence=row[11],
+                reasoning=row[12],
+                return_week_change=row[13],
+                return_t1_change=row[14],
+                return_t5_change=row[15],
+                return_unit=row[16],
             )
             for row in cursor.fetchall()
         ]
@@ -311,6 +322,7 @@ def project(paths: Sequence[CausalPathRow], steps: Sequence[CausalStepRow]) -> G
                 EventEdge(
                     path_id=path.path_id,
                     week_start=path.week_start,
+                    created_at=path.created_at,
                     position=0,
                     title=path.event_title,
                     occurred_on=path.event_occurred_on,
@@ -327,6 +339,7 @@ def project(paths: Sequence[CausalPathRow], steps: Sequence[CausalStepRow]) -> G
                 TargetEdge(
                     path_id=path.path_id,
                     week_start=path.week_start,
+                    created_at=path.created_at,
                     position=0,
                     src_kind=path.source_target_kind,
                     src_code=path.source_target_code,
@@ -344,6 +357,7 @@ def project(paths: Sequence[CausalPathRow], steps: Sequence[CausalStepRow]) -> G
                 ChainEdge(
                     path_id=path.path_id,
                     week_start=path.week_start,
+                    created_at=path.created_at,
                     position=current.position,
                     src=previous.channel,
                     dst=current.channel,
@@ -354,6 +368,7 @@ def project(paths: Sequence[CausalPathRow], steps: Sequence[CausalStepRow]) -> G
             HitsEdge(
                 path_id=path.path_id,
                 week_start=path.week_start,
+                created_at=path.created_at,
                 channel=chain_steps[-1].channel,
                 kind=path.target_kind,
                 code=path.target_code,

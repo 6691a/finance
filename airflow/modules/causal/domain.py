@@ -257,10 +257,11 @@ class CausalTarget(BaseModel):
 
 
 # 국내 지수. 종목과 달리 마스터를 훑지 않는다 — 늘어나는 목록이 아니다.
-INDEX_TARGETS: tuple[CausalTarget, ...] = (
-    CausalTarget(kind=CausalTargetKind.INDEX, code="KOSPI"),
-    CausalTarget(kind=CausalTargetKind.INDEX, code="KOSDAQ"),
-)
+#
+# **KOSDAQ은 뺐다**(2026-08-31). 추론 대상에서 빠진 것과 같은 판단이고, 여기서는 실측이
+# 하나 더 있다 — 두 주(08-10·08-17)를 돌린 결과에 KOSDAQ으로 가는 경로가 **0개**였다
+# (KOSPI는 4개·6개). 대상 목록에 있어도 모델이 한 번도 고르지 않았다.
+INDEX_TARGETS: tuple[CausalTarget, ...] = (CausalTarget(kind=CausalTargetKind.INDEX, code="KOSPI"),)
 
 # 매크로 다섯. **이것들이 대상에 있어야 그래프가 깊어진다**(설계 §3.1.1) — 대상이 못 되면
 # `미국 10년물 국채금리 상승` 같은 값이 사건으로만 들어와 사슬이 거기서 끊긴다.

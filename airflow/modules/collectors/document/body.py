@@ -71,6 +71,7 @@ from pydantic import BaseModel, ConfigDict
 from scrapling import Selector
 
 from modules.collectors.document.documents import (
+    DocumentGoneError,
     DocumentPayloadError,
     fetch_url,
     normalize_text,
@@ -158,6 +159,8 @@ VIDEO_PATH = re.compile(r"(?i)/(videos?|tv)/")
 PENDING_BODIES = read_sql("postgres", "document", "select_pending_body.sql")
 BODY_UPDATE = read_sql("postgres", "document", "update_body.sql")
 ATTACHMENT_UPSERT = read_sql("postgres", "document_attachment", "upsert.sql")
+DUPLICATES_UNLINK = read_sql("postgres", "document", "update_unlink_duplicates.sql")
+DOCUMENT_DELETE = read_sql("postgres", "document", "delete.sql")
 
 
 class BodyCandidate(BaseModel):
@@ -319,6 +322,11 @@ def naver_attachment_urls(payload: bytes) -> tuple[str, ...]:
 
     응답이 JSON이 아니면 실패시킨다. 경로가 바뀌면 HTML 안내가 200으로 올 수 있고,
     조용히 0건으로 넘기면 리포트 본문이 몇 달째 비어 있어도 알 수 없다.
+
+    **본문이 빈 객체(`{}`)면 `DocumentGoneError`다** — 지워진 리포트다. 네이버는 없는
+    `researchId`에도 HTTP 404가 아니라 200에 `{}`로 답한다(문서 74244, `invest/40006`,
+    2026-08-31 실측 — 목록에서도 빠져 있었다). 다시 쳐도 같은 답이고 행을 어떻게 할지는 DAG이
+    정한다. 키가 있는데 모양이 다른 것과는 가른다 — 그쪽은 제공처 형식이 바뀐 것이다.
     """
     try:
         body = json.loads(payload)
@@ -326,6 +334,8 @@ def naver_attachment_urls(payload: bytes) -> tuple[str, ...]:
         raise DocumentPayloadError(f"Naver research detail body is not valid JSON: {error}") from None
     if not isinstance(body, dict):
         raise DocumentPayloadError("Naver research detail JSON is not an object")
+    if not body:
+        raise DocumentGoneError("Naver research detail JSON is an empty object; the report was deleted")
     content = body.get("researchContent")
     if not isinstance(content, dict):
         raise DocumentPayloadError("Naver research detail JSON has no 'researchContent' object")
@@ -504,6 +514,21 @@ class DocumentBodyCollector:
         """받아 둔 파일 하나를 문서에 붙인다. 파일 하나가 트랜잭션 하나다."""
         with connection.cursor() as cursor:
             _upsert_attachment(cursor, document_id, attachment)
+
+    @staticmethod
+    def delete_document(connection: Connection, document_id: int) -> None:
+        """제공처가 지운 문서의 행을 지운다. 커밋은 부르는 쪽이 한다.
+
+        이 행을 대표로 가리키던 중복을 먼저 끊는다 — `canonical_document_id`가 RESTRICT라
+        안 끊으면 DELETE가 막히고, 끊긴 중복은 대표로 돌아와 본문·평가 큐에 다시 선다.
+        태그·추출·첨부 행은 CASCADE로 함께 사라지고 `source_record`는 남는다.
+
+        ponytail: 첨부 파일은 디스크에 남는다. 지금 이 경로를 타는 네이버 리서치는 첨부를
+        받기 전에 판정이 나서 파일이 없다. 파일을 받은 뒤 지워지는 출처가 생기면 여기서 폴더도 지운다.
+        """
+        with connection.cursor() as cursor:
+            cursor.execute(DUPLICATES_UNLINK, (document_id,))
+            cursor.execute(DOCUMENT_DELETE, (document_id,))
 
 
 def _upsert_attachment(cursor: Cursor, document_id: int, attachment: Attachment) -> None:

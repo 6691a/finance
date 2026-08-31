@@ -113,6 +113,15 @@ class DocumentPayloadError(ValueError):
     """피드 응답이 우리가 아는 모양이 아니다. 재시도해도 같은 결과다."""
 
 
+class DocumentGoneError(RuntimeError):
+    """제공처가 그 문서를 지웠다. 다시 쳐도 같은 답이다.
+
+    HTTP 404가 아니라 **정상 응답의 모양으로** 없음을 알리는 제공처가 올린다 — 네이버 리서치는
+    지운 `researchId`에 200과 `{}`로 답한다. `DocumentPayloadError`(형식이 바뀌었다, 다음 실행이
+    다시 집는다)와 갈라야 DAG이 행을 지울지 다시 집을지 정할 수 있다.
+    """
+
+
 class FeedSource(BaseModel):
     """`document_source` 한 행. 수집 정책의 원본은 DB다."""
 

@@ -25,7 +25,7 @@ from modules.collectors.document.body import (
     paragraph_selector,
     pending_bodies,
 )
-from modules.collectors.document.documents import DocumentPayloadError
+from modules.collectors.document.documents import DocumentGoneError, DocumentPayloadError
 
 FETCHED_AT = datetime(2026, 8, 30, 9, 15, tzinfo=UTC)
 
@@ -235,6 +235,21 @@ def test_naver_research_reads_the_attachment_from_its_own_json():
 
 def test_naver_research_without_an_attachment_is_not_a_failure():
     assert naver_attachment_urls(b'{"researchContent": {"content": null}}') == ()
+
+
+def test_naver_research_empty_object_means_the_report_is_gone():
+    """지워진 `researchId`에 네이버는 404가 아니라 200에 `{}`로 답한다(문서 74244, 2026-08-31 실측).
+
+    형식이 바뀐 것(`DocumentPayloadError`)과 갈라 올려야 DAG이 행을 지울지 다시 집을지 정한다.
+    """
+    with pytest.raises(DocumentGoneError):
+        naver_attachment_urls(b"{}")
+
+
+def test_naver_research_missing_content_key_is_still_a_failure():
+    """빈 객체가 아닌데 키가 없으면 제공처 형식이 바뀐 것이다."""
+    with pytest.raises(DocumentPayloadError):
+        naver_attachment_urls(b'{"researchId": 40006}')
 
 
 def test_naver_research_html_instead_of_json_is_a_failure():
@@ -559,6 +574,26 @@ def inserted_columns(statement: str) -> tuple[str, ...]:
     assert columns is not None
     names = re.sub(r"--[^\n]*", "", columns.group(1))
     return tuple(name.strip() for name in names.split(",") if name.strip())
+
+
+def test_deleting_a_document_unlinks_its_duplicates_before_the_row_goes():
+    """대표를 지우면 그것을 가리키던 중복이 대표로 돌아와 본문·평가 큐에 다시 선다.
+
+    `canonical_document_id`는 RESTRICT라 먼저 끊지 않으면 DELETE가 막힌다. 지워진 74244를
+    살아 있는 57292(같은 리포트의 첫 게시)가 가리키고 있었다(2026-08-31 실측).
+    """
+    connection = FakeConnection()
+
+    DocumentBodyCollector.delete_document(connection, 74244)
+
+    calls = [(without_comments(statement).split(), parameters) for statement, parameters in connection.recorded_cursor.calls]
+    assert [parameters for _, parameters in calls] == [(74244,), (74244,)]
+    unlink, delete = (words for words, _ in calls)
+    assert unlink[:2] == ["UPDATE", "document"]
+    assert "canonical_document_id = NULL" in " ".join(unlink)
+    assert "WHERE canonical_document_id = %s" in " ".join(unlink)
+    assert delete[:3] == ["DELETE", "FROM", "document"]
+    assert "WHERE id = %s" in " ".join(delete)
 
 
 def test_the_attachment_upsert_matches_the_model_and_its_natural_key():

@@ -3,9 +3,11 @@
 - 상위: [README.md](README.md)
 - 날짜: 2026-08-31 (같은 날 검토 반영 — 장전 관측 상태에 KRX 종가와 NXT 종가를 나란히
   싣는다, 2.6절)
-- 상태: **설계. 미구현.** 2절(과거 추론 목록 + 애프터마켓 관측 블록)부터 한다. 3절(프리마켓
-  관측)은 2절을 운영에 올리고 트레이스를 본 뒤 결정한다 — 2절만으로 문제가 풀리면 3절은
-  안 한다
+- 상태: **2절 구현 완료**(2026-08-31, 브랜치 `worktree-feature-nxt-precedent`). 리비전이 없어
+  운영 반영은 배포뿐이다. 검증은 `uv run pytest tests -q`(2,849건)와
+  `uv run ruff check apps airflow migrations tests`, 그리고 운영 DB 읽기 전용으로 전 영업일
+  창 조회 대조(2026-08-27·28 종목 둘, 260봉 `is_final`). **3절(프리마켓 관측)은 설계만이고**
+  2절을 운영에 올리고 5영업일 트레이스를 본 뒤 결정한다 — 2절만으로 문제가 풀리면 안 한다
 - 의존: [5-followup.md](5-followup.md)(`past_theses`), [7-nxt-review.md](7-nxt-review.md)
   (`post_nxt_close` 슬롯), [9-intraday.md](9-intraday.md)(슬롯 목록 파라미터화),
   [15-return-basis.md](15-return-basis.md)(축 세 칸 — 이 단계가 **건드리지 않는** 것)
@@ -385,6 +387,8 @@ class ObservedState(BaseModel):
 - **0.1절의 상관은 두 종목·1년이다.** 추적 종목이 늘면 다시 잰다.
 
 ## 6. 순서
+
+**1·2는 끝났다**(2026-08-31).
 
 1. 이동 커밋 — 애프터마켓 창·행 모델·SQL 상수를 `nxt_review.py`에서 `common.py`로.
    동작 변화 없음, 리뷰 테스트 그대로 통과.

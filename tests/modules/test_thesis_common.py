@@ -139,7 +139,15 @@ def test_the_state_is_a_model_not_a_bare_dict():
     # JSON 경계에서만 dict가 된다.
     payload = result.model_dump(mode="json")
     assert payload["session"] == "2026-08-21"
-    assert set(payload) == {"session", "index", "stock", "intraday", "technical", "flat_base_rate"}
+    assert set(payload) == {
+        "session",
+        "index",
+        "stock",
+        "intraday",
+        "after_hours",
+        "technical",
+        "flat_base_rate",
+    }
     # 장전·장후는 `intraday`를 안 채운다. 장중 슬롯만 쓰는 칸이고 둘은 배타적이다.
     assert payload["intraday"] == {}
     assert set(payload["technical"]) == {"as_of_date", "subjects"}

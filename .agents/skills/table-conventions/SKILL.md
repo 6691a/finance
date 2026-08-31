@@ -151,13 +151,29 @@ API·크롤링·웹소켓 수집 결과의 출처와 상태를 가볍게 보존�
 
 ## `instrument`
 
-시세·뉴스·시그널이 참조하는 추적 종목 마스터다. **관측값이 아니라 기준 정보이므로
-`source_record_id`로 수집 계보를 연결하지 않는다.**
+**우리가 이름을 아는 종목의 마스터다.** 문서에서 그 종목을 알아보고, 리서치 리포트를 받고,
+시세를 받을지를 여기서 정한다. **관측값이 아니라 기준 정보이므로 `source_record_id`로 수집
+계보를 연결하지 않는다.**
 
 - `(ticker, market)`이 자연키. `id`는 다른 테이블이 참조할 대리키다.
 - **`source_symbol`은 수집 소스 심볼이 티커와 다를 때만 채운다.** 같으면 `NULL`이다.
-- **`is_watched`는 수집·분석 대상 여부만** 나타낸다. 상장폐지·거래정지 같은 생애주기 상태가
-  필요해지면 별도 `status` enum 컬럼으로 분리한다.
+- **행이 있다는 것과 `is_watched`는 다른 뜻이다.** 행이 있으면 "이름을 안다"이고,
+  `is_watched`가 참이면 "시세까지 받는다"이다. 읽는 쪽이 어느 쪽을 물어야 하는지 SQL 둘이
+  가른다.
+
+  | 읽는 SQL | 무엇을 묻나 | 소비자 |
+  | --- | --- | --- |
+  | `instrument/select_taggable.sql` | 이 종목 이름을 아는가 | 문서 평가의 종목 후보, 네이버 기업 리포트 필터 |
+  | `instrument/select_watched.sql` | 이 종목 시세를 받는가 | 투자의견 수집, 추론 subject, 기술지표 조회, 주간 인과 그래프 대상 |
+
+  **시세가 없어도 성립하는 조회만 `select_taggable.sql`을 읽는다.** `is_watched`가 참인
+  종목은 수집기 Enum 다섯(`kis.DomesticStock`, `InvestorFlowStock`, `PositioningStock`,
+  `DartCompany`, `apps.realtime.service.DomesticStock`)과 **정확히 같아야 하고**
+  `tests/migrations/test_instrument_catalog.py`가 그것을 대조한다. 시세 없는 종목을 참으로
+  두면 기술지표 조회는 조인에서 빠지고 추론 baseline 셋은 NULL로 들어간다 —
+  `ck_thesis_base_all_or_none`이 그 조합을 허용해서 **오류 없이 빈 값이 쌓인다.**
+- `is_watched`는 상장폐지·거래정지 같은 생애주기 상태를 뜻하지 않는다. 그것이 필요해지면
+  별도 `status` enum 컬럼으로 분리한다.
 - 한 종목을 여러 소스에서 수집하게 되면 `source_symbol` 한 칸으로 못 버틴다. 그때는
   `instrument_source(instrument_id, source, symbol)` 자식 테이블로 옮긴다.
 

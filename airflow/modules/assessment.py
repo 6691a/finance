@@ -542,7 +542,7 @@ def filter_tags(
 
 PENDING_DOCUMENTS = read_sql("postgres", "document", "select_pending_assessment.sql")
 UPDATE_ASSESSMENT = read_sql("postgres", "document", "update_assessment.sql")
-INSTRUMENT_CANDIDATES = read_sql("postgres", "instrument", "select_watched.sql")
+INSTRUMENT_CANDIDATES = read_sql("postgres", "instrument", "select_taggable.sql")
 INDICATOR_CANDIDATES = read_sql("postgres", "indicator_series", "select_candidates.sql")
 DOCUMENT_INSTRUMENT_UPSERT = read_sql("postgres", "document_instrument", "upsert.sql")
 DOCUMENT_INDICATOR_UPSERT = read_sql("postgres", "document_indicator", "upsert.sql")
@@ -568,12 +568,22 @@ class AssessmentStore:
         self._prompt_revision = prompt_revision
 
     def candidates(self) -> Candidates:
-        """프롬프트에 넣을 허용 값을 마스터에서 읽는다."""
+        """프롬프트에 넣을 허용 값을 마스터에서 읽는다.
+
+        **비어 있으면 실패시킨다.** 후보 목록은 프롬프트 문장이 아니라 런타임 데이터라,
+        마이그레이션 미적용이나 SQL 오타로 0행이 오면 모델이 아무 태그도 못 붙인다.
+        그때 프롬프트의 "태그가 둘 다 비면 relevance는 0" 규칙이 걸려 **아카이브 전체가
+        0점을 받으면서 태스크는 초록으로 끝난다.** 지금 멈추는 편이 낫다.
+        """
         with self._connection.cursor() as cursor:
             cursor.execute(INSTRUMENT_CANDIDATES)
             instruments = tuple((row[0], row[1]) for row in cursor.fetchall())
             cursor.execute(INDICATOR_CANDIDATES)
             indicators = tuple((row[0], row[1], row[2]) for row in cursor.fetchall())
+        if not instruments or not indicators:
+            raise AssessmentError(
+                f"candidate master is empty: instruments={len(instruments)} indicators={len(indicators)}"
+            )
         return Candidates(instruments=instruments, indicators=indicators)
 
     def pending(self, limit: int = DEFAULT_BATCH_SIZE) -> tuple[PendingDocument, ...]:

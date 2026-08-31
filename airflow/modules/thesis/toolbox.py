@@ -928,10 +928,14 @@ class ThesisToolbox:
         추적 목록 밖 종목은 거절한다. `past_theses`의 `subject_code`와 같은 이유다 — 모델이
         아무 종목이나 조회하며 문맥을 채우게 두지 않는다.
         """
-        self._charge()
+        # 종목 검사가 예산 차감보다 앞이다. 뒤에 두면 조회하지도 않은 호출이 왕복 예산을
+        # 깎고, 그 거절이 `handle_tool_errors`를 거쳐 ToolMessage로 성공처럼 끝난다.
+        # 모델은 `recent_documents` 태그에서 추적 밖 종목 코드를 볼 수 있다 — 태그 후보가
+        # 시세 목록보다 넓기 때문이다.
         code = str(ticker or "").strip()
         if code not in self._watched_codes:
             raise ToolLimitExceeded(f"추적 종목 밖이다: {code!r}. 쓸 수 있는 것은 {sorted(self._watched_codes)}")
+        self._charge()
         rows = self._fetch(
             ANALYST_OPINIONS,
             {"stock_code": code, "as_of_at": self._as_of_at, "limit": MAX_TOOL_RESULTS},
@@ -951,10 +955,11 @@ class ThesisToolbox:
 
         추적 목록 밖 종목은 거절한다(`analyst_opinions`와 같은 처리).
         """
-        self._charge()
+        # 검사가 예산 차감보다 앞이다(`analyst_opinions`와 같은 이유).
         code = str(ticker or "").strip()
         if code not in self._watched_codes:
             raise ToolLimitExceeded(f"추적 종목 밖이다: {code!r}. 쓸 수 있는 것은 {sorted(self._watched_codes)}")
+        self._charge()
         parameters = {"stock_code": code, "as_of_at": self._as_of_at, "limit": MAX_TOOL_RESULTS}
         outcomes = self._fetch(EVENT_SURPRISES, parameters)
         pending = self._fetch(EVENT_EXPECTATIONS, parameters)

@@ -539,9 +539,11 @@ init 서비스의 `chown` 목록에도 `files`를 넣었다. 컨테이너는
 
 순서가 곧 의존 관계다. 위가 끝나야 아래가 선다.
 
-1. **첨부 파일 텍스트 변환.** PDF·HWP를 텍스트로 바꾼다. `pypdf` 같은 의존성이 필요하고
-   **운영 Airflow 이미지에 먼저 들어가야 한다.** 스캔 PDF는 OCR이 없어 여전히 빈다.
-   컬럼은 그때 `document_attachment`에 더한다.
+1. **첨부 파일 텍스트 변환.** PDF 구현은
+   [PDF 파싱·외부 분석·RAG 파이프라인](../analysis/pdf-rag-pipeline.md)을 따른다. HWP는 별도다.
+   **운영 Airflow 이미지에 PyMuPDF가 먼저 들어가야 한다.** 스캔·이미지 글자는 로컬 OCR 대신
+   선별한 영역만 외부 분석한다. 컬럼은 실제 파서와 읽는 쪽을 붙일 때 `document_attachment`에
+   더한다.
 2. **`document_chunk`와 임베딩.** 상위 설계 6.2가 이미 모양을 적어 뒀다 —
    `(document_id, position)` 자연키, `RecursiveCharacterTextSplitter(chunk_size=2000,
    chunk_overlap=200)`, HNSW 인덱스. **pgvector 0.8.4가 운영 DB에 이미 설치돼 있다**

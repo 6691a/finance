@@ -1063,12 +1063,12 @@ def test_stock_estimates_are_counted_in_shares_not_won():
         (
             market_data.LATEST_SHORT_POSITIONS,
             KrxStockShortSaleDaily.__table__,
-            ("stock_code", "business_date", "short_sale_quantity", "short_sale_volume_ratio"),
+            ("stock_code", "business_date", "short_sale_quantity", "short_sale_volume_ratio", "updated_at"),
         ),
         (
             market_data.LATEST_SHORT_POSITIONS,
             KrxStockSecuritiesLendingDaily.__table__,
-            ("balance_quantity", "balance_change_quantity"),
+            ("balance_quantity", "balance_change_quantity", "updated_at"),
         ),
         (
             market_data.SPREAD_PAIRS,

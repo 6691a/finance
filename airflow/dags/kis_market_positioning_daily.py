@@ -53,7 +53,7 @@ DAG마다 따로 받지 않는다.
 import logging
 import os
 from contextlib import closing
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
 from typing import Any
 
 import pendulum
@@ -101,19 +101,22 @@ def _connection() -> Any:
     return PostgresHook(postgres_conn_id=CONNECTION_ID).get_conn()
 
 
-def _skip_when_closed(today_kst) -> None:
-    """확정 휴장일이면 태스크를 건너뛴다.
+def _skip_when_closed(session_kst: date) -> None:
+    """관측 대상 거래일이 확정 휴장일이면 태스크를 건너뛴다.
 
-    행이 없거나 아직 판정하지 않았으면 그대로 수집한다. 화~토 스케줄이 주말은 이미 거르므로
-    실효는 평일 공휴일이다.
+    **묻는 날짜는 실행일이 아니라 그 전날이다.** 이 DAG는 전 영업일의 확정치를 다음 날
+    아침에 받으므로, 실행일로 물으면 토요일 08:10 run이 "오늘 KRX 휴장"으로 매주 건너뛰고
+    금요일 값이 화요일까지 확정 전 0으로 남는다(2026-08-29 실측).
+
+    행이 없거나 아직 판정하지 않았으면 그대로 수집한다.
     """
     connection = _connection()
     try:
-        closed = krx_open_day(connection, today_kst) is False
+        closed = krx_open_day(connection, session_kst) is False
     finally:
         connection.close()
     if closed:
-        raise AirflowSkipException(f"KRX is closed on {today_kst}")
+        raise AirflowSkipException(f"KRX was closed on {session_kst}")
 
 
 @dag(
@@ -160,7 +163,7 @@ def kis_market_positioning_daily():
         except PeriodError as error:
             raise AirflowFailException(str(error)) from error
 
-        _skip_when_closed(datetime.now(UTC).astimezone(KST_TIMEZONE).date())
+        _skip_when_closed(datetime.now(UTC).astimezone(KST_TIMEZONE).date() - timedelta(days=1))
 
         app_key, app_secret = _credentials()
         collector = KisPositioningCollector(access_token(Variable, app_key, app_secret), app_key, app_secret)

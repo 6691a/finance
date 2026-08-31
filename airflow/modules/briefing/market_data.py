@@ -592,7 +592,7 @@ class MarketBriefingReader:
             ),
         )
         funds = self._market_funds()
-        # 당일(KST)은 제외한다. KIS가 장중에 당일 공매도 행을 0으로 보낸다(SQL 주석 참고).
+        # 당일(KST)과 확정 전 행은 제외한다. KIS가 장중에 당일 공매도 행을 0으로 보낸다(SQL 주석 참고).
         short_positions = self._fetch(
             LATEST_SHORT_POSITIONS,
             ((self.now - FLOW_LOOKBACK).date(), self.now.astimezone(KST_TIMEZONE).date()),

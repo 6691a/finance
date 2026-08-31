@@ -10,7 +10,7 @@ SQL 컬럼 순서 대조가 하나 더 있다. `read_week`가 인덱스로 읽�
 
 import pathlib
 import re
-from datetime import date
+from datetime import UTC, date, datetime
 from decimal import Decimal
 from typing import Any, Self
 
@@ -22,6 +22,8 @@ from modules import graph
 SQL_ROOT = pathlib.Path(__file__).resolve().parents[2] / "airflow" / "sql" / "postgres"
 
 WEEK = date(2026, 8, 10)
+# 경로가 Postgres에 생긴 시각. `W+2` 월요일 07:00 KST에 돈 것처럼 둔다.
+CREATED = datetime(2026, 8, 23, 22, 0, tzinfo=UTC)
 
 
 def path_row(**overrides: Any) -> graph.CausalPathRow:
@@ -29,6 +31,7 @@ def path_row(**overrides: Any) -> graph.CausalPathRow:
     values: dict[str, Any] = {
         "path_id": 1,
         "week_start": WEEK,
+        "created_at": CREATED,
         "event_title": "미국 물가 둔화",
         "event_occurred_on": date(2026, 8, 12),
         "source_target_kind": None,
@@ -212,10 +215,11 @@ def test_shared_channel_is_one_node_across_paths():
     assert {edge.path_id for edge in payload.hits} == {1, 2}
 
 
-def test_every_edge_carries_path_id_and_week_start():
+def test_every_edge_carries_path_id_week_start_and_created_at():
     """`path_id`가 빠지면 서로 다른 주장이 채널 노드에서 섞인다(설계 §7.8 발견 ①).
 
-    `week_start`가 빠지면 조회가 시각 역행을 막을 수 없다(발견 ②).
+    `week_start`가 빠지면 조회가 시각 역행을 막을 수 없다(발견 ②). `created_at`이 빠지면
+    추론 툴이 슬롯 시각 뒤에 생긴 경로를 본다(17-graph-query.md §5.3).
     """
     payload = graph.project([path_row()], steps("금리 기대", "할인율"))
 
@@ -224,6 +228,7 @@ def test_every_edge_carries_path_id_and_week_start():
     for edge in edges:
         assert edge.path_id == 1
         assert edge.week_start == WEEK
+        assert edge.created_at == CREATED
 
 
 def test_path_without_steps_is_an_error():
@@ -258,7 +263,7 @@ def test_driver_retry_is_disabled(driver: FakeDriver):
 
 
 def test_decimals_become_floats_and_dates_stay_dates(driver: FakeDriver):
-    """드라이버 매핑에 `Decimal`이 없다. `date`는 그대로 간다."""
+    """드라이버 매핑에 `Decimal`이 없다. `date`와 aware `datetime`은 그대로 간다."""
     graph.write_graph("bolt://x:7687", ("neo4j", "pw"), graph.project([path_row()], steps("할인율")))
 
     rows = next(rows for statement, rows in driver.transaction.calls if "HITS" in statement)
@@ -266,6 +271,8 @@ def test_decimals_become_floats_and_dates_stay_dates(driver: FakeDriver):
     assert rows[0]["return_week_change"] == pytest.approx(1.25)
     assert rows[0]["week_start"] == WEEK
     assert isinstance(rows[0]["week_start"], date)
+    assert rows[0]["created_at"] == CREATED
+    assert rows[0]["created_at"].tzinfo is not None
 
 
 def test_empty_row_sets_are_not_sent(driver: FakeDriver):
@@ -335,6 +342,7 @@ def test_read_week_maps_rows_by_position():
             (
                 1,
                 WEEK,
+                CREATED,
                 "미국 물가 둔화",
                 date(2026, 8, 12),
                 None,
@@ -357,6 +365,7 @@ def test_read_week_maps_rows_by_position():
     paths, step_rows = graph.read_week(connection, WEEK)
 
     assert paths[0].target_code == "005930"
+    assert paths[0].created_at == CREATED
     assert paths[0].return_unit == "percent"
     assert step_rows[0].channel == "할인율"
 

@@ -38,6 +38,7 @@ from apps.api.schemas.common import ApiModel, UtcDatetime
 from apps.api.schemas.document import (
     DisclosureItem,
     DisclosureList,
+    DocumentAttachmentItem,
     DocumentDetail,
     DocumentList,
     DocumentSourceItem,
@@ -147,6 +148,7 @@ __all__ = [
     "DailySeries",
     "DisclosureItem",
     "DisclosureList",
+    "DocumentAttachmentItem",
     "DocumentDetail",
     "DocumentList",
     "DocumentSourceItem",

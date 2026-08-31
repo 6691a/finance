@@ -6,6 +6,7 @@
 
 from collections.abc import Sequence
 from datetime import date, datetime
+from typing import Any
 
 from apps.api.repository import (
     DEFAULT_LIMIT,
@@ -17,6 +18,7 @@ from apps.api.repository import (
 from apps.api.schemas import (
     DisclosureItem,
     DisclosureList,
+    DocumentAttachmentItem,
     DocumentDetail,
     DocumentList,
     DocumentSourceItem,
@@ -63,6 +65,21 @@ def summary_of(
     )
 
 
+def attachment_of(row: Any) -> DocumentAttachmentItem:
+    """**저장 경로를 밖으로 내지 않는다.** 마운트 안의 상대경로라 화면이 열 수 있는 주소가
+    아니고, 그 자리를 알릴 이유도 없다 — 있는지 여부만 낸다."""
+    return DocumentAttachmentItem(
+        position=row.position,
+        kind=str(getattr(row.kind, "value", row.kind)),
+        url=row.url,
+        filename=row.filename,
+        media_type=row.media_type,
+        byte_size=row.byte_size,
+        stored=row.storage_path is not None,
+        fetched_at=row.fetched_at,
+    )
+
+
 def detail_of(rows: DocumentDetailRows) -> DocumentDetail:
     document = rows.document
     return DocumentDetail(
@@ -73,6 +90,7 @@ def detail_of(rows: DocumentDetailRows) -> DocumentDetail:
         detected_at=document.detected_at,
         content_hash=document.content_hash,
         assessed_content_hash=document.assessed_content_hash,
+        attachments=tuple(attachment_of(row) for row in rows.attachments),
     )
 
 

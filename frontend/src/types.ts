@@ -295,6 +295,12 @@ export interface BarSeries {
   low: number[];
   close: number[];
   volume: (number | null)[];
+  /**
+   * 그 봉이 **확정**인가. 종목에만 있고 나머지 kind는 빈 배열이다. 국내 종목 분봉은
+   * WebSocket 잠정 봉이 먼저 들어오고 REST가 나중에 덮는다 — **false면 고가·저가가 아직
+   * 바뀔 수 있다.**
+   */
+  settled: boolean[];
 }
 
 export interface DailySeries {
@@ -391,7 +397,11 @@ export interface DocumentSummary {
   document_type: string;
   published_at: UtcText;
   language: string | null;
-  content_level: string;
+  /**
+   * 본문을 받아 봤는가, 못 받았다면 왜인가(ok·empty·attachment_only·unavailable).
+   * **null은 아직 해 보지 않았다는 뜻이고 그 집합이 곧 수집 큐다.**
+   */
+  body_status: string | null;
   canonical_url: string | null;
   /** 평가 전이면 null이고 0이 아니다. */
   value_score: number | null;
@@ -410,13 +420,31 @@ export interface DocumentList {
   has_more: boolean;
 }
 
+/** 문서에 붙은 첨부 하나. **본문이 첨부에만 있는 출처가 있다.** */
+export interface DocumentAttachmentItem {
+  position: number;
+  kind: string;
+  url: string;
+  filename: string | null;
+  media_type: string | null;
+  byte_size: number | null;
+  /** 우리가 파일을 받아 뒀나. **저장 경로 자체는 안 온다.** */
+  stored: boolean;
+  fetched_at: UtcText | null;
+}
+
 export interface DocumentDetail extends DocumentSummary {
   body: string | null;
   summary: string | null;
-  assessment: string | null;
+  /**
+   * LLM 응답 전체(세부 점수·주제·새 사실·판단 근거). **문자열이 아니라 객체다** —
+   * 조회 조건이 굳으면 컬럼으로 빠질 값이라 모양을 고정하지 않는다.
+   */
+  assessment: Record<string, unknown> | null;
   detected_at: UtcText;
   content_hash: string;
   assessed_content_hash: string | null;
+  attachments: DocumentAttachmentItem[];
 }
 
 export interface DisclosureItem {
@@ -463,6 +491,13 @@ export interface InvestorFlowPoint {
   individual_net_buy_amount: number | null;
   pension_fund_net_buy_qty: number | null;
   investment_trust_net_buy_qty: number | null;
+  /** **순매수만으로는 거래 규모를 모른다.** 0이 "안 샀다"인지 "많이 사고 팔았다"인지 가른다. */
+  foreign_sell_qty: number | null;
+  foreign_buy_qty: number | null;
+  institution_sell_qty: number | null;
+  institution_buy_qty: number | null;
+  individual_sell_qty: number | null;
+  individual_buy_qty: number | null;
 }
 
 export interface MarketMovementPoint {
@@ -522,6 +557,12 @@ export interface ShortSaleRow {
   short_sale_amount: number | null;
   short_sale_amount_ratio: number | null;
   short_sale_average_price: number | null;
+  /** 당일과 누적은 다른 값이다. 누적은 제공처가 정한 창의 합이라 더해 만들 수 없다. */
+  accumulated_short_sale_quantity: number | null;
+  accumulated_short_sale_volume_ratio: number | null;
+  accumulated_short_sale_amount: number | null;
+  accumulated_short_sale_amount_ratio: number | null;
+  total_amount: number | null;
 }
 
 export interface StockLendingRow {
@@ -533,6 +574,7 @@ export interface StockLendingRow {
   balance_quantity: number | null;
   balance_amount: number | null;
   balance_change_quantity: number | null;
+  price_change: number | null;
 }
 
 export interface MarketLendingRow {
@@ -564,6 +606,17 @@ export interface CreditBalanceRow {
   short_loan_balance_quantity: number | null;
   short_loan_balance_amount: number | null;
   short_loan_balance_rate: number | null;
+  /** **잔고만 보면 왜 늘었는지 모른다.** 신규·상환이 그 답이다. */
+  loan_new_quantity: number | null;
+  loan_repayment_quantity: number | null;
+  loan_new_amount: number | null;
+  loan_repayment_amount: number | null;
+  loan_supply_rate: number | null;
+  short_loan_new_quantity: number | null;
+  short_loan_repayment_quantity: number | null;
+  short_loan_new_amount: number | null;
+  short_loan_repayment_amount: number | null;
+  short_loan_supply_rate: number | null;
 }
 
 export interface CreditRankingRow {
@@ -577,6 +630,7 @@ export interface CreditRankingRow {
   loan_balance_amount: number | null;
   loan_balance_rate: number | null;
   loan_balance_growth_rate: number | null;
+  short_loan_balance_growth_rate: number | null;
 }
 
 export interface CreditRankingList extends Paged<CreditRankingRow> {
@@ -594,7 +648,11 @@ export interface MarketFundsRow {
   equity_fund_amount: number | null;
   bond_fund_amount: number | null;
   mmf_amount: number | null;
+  mixed_fund_amount: number | null;
   securities_lending_amount: number | null;
+  futures_margin_amount: number | null;
+  index_change: number | null;
+  market_capitalization: number | null;
 }
 
 export interface EventClaimRow {
@@ -655,7 +713,9 @@ export interface AnalystOpinionRow {
   business_date: DayText;
   broker_name: string;
   opinion: string | null;
+  opinion_code: string | null;
   previous_opinion: string | null;
+  previous_opinion_code: string | null;
   target_price: number | null;
   previous_close: number | null;
   gap_amount: number | null;
@@ -689,6 +749,8 @@ export interface SourceRecordRow {
   status: string;
   record_count: number | null;
   has_payload: boolean;
+  /** `source_metadata`가 있나. **내용은 안 온다** — 재현 정보라 목록의 일이 아니다. */
+  has_metadata: boolean;
   payload_uri: string | null;
 }
 
@@ -713,6 +775,10 @@ export interface MarketSessionRow {
   effective_open_day: boolean | null;
   local_settlement_date: DayText | null;
   domestic_settlement_date: DayText | null;
+  kis_weekday_code: string | null;
+  kis_settlement_day: boolean | null;
+  /** **null이면 제공처 값을 그대로 믿고 있다.** */
+  verified_at: UtcText | null;
   verified_by: string | null;
 }
 

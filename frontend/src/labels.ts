@@ -96,3 +96,22 @@ export const CAUSAL_EVIDENCE_KINDS: Labels = {
   disclosure: "공시",
   technical_signal: "기술적 신호",
 };
+
+/**
+ * 문서 본문을 받아 봤는가, 못 받았다면 왜인가.
+ *
+ * **`null`은 여기 없다** — "아직 해 보지 않았다"는 사유가 아니라 큐이고, 화면이 그 둘을
+ * 다른 문장으로 말한다.
+ */
+export const BODY_STATUSES: Labels = {
+  ok: "받음",
+  empty: "본문 없음",
+  attachment_only: "첨부에만 있음",
+  unavailable: "받을 수 없음",
+};
+
+/** 첨부의 종류. 영상은 링크만 남기고 파일은 내려받는다. */
+export const ATTACHMENT_KINDS: Labels = {
+  file: "파일",
+  video: "영상",
+};

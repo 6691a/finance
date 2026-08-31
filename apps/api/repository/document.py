@@ -3,6 +3,12 @@
 **본문은 상세에만 있다.** 3천 건의 `body`를 목록에 실으면 응답이 수십 MB가 된다 —
 실행 원장의 툴 결과를 단건으로 뺀 것과 같은 판단이다.
 
+**그리고 목록 조회는 그 칸을 읽지도 않는다.** 응답에서 빼는 것만으로는 부족하다 —
+`select(Document)`는 `body`·`assessment`까지 TOAST에서 끌어와 DB가 API로 보내고, 우리는
+그것을 버린다. 2026-08-31 실측으로 101행에 **6.8MB·0.65초**였고 칸을 고르면 **59KB·0.011초**다
+(60배). 계획은 둘 다 0.6ms라 **쿼리가 아니라 옮기는 양이 문제였다.** 문서 본문 수집이
+붙기 전에는 그 칸이 비어 있어 이 값이 안 보였다.
+
 **태그는 배치로 읽는다.** `document_instrument`·`document_indicator`가 문서마다 여러 행이라
 목록 한 쪽마다 `WHERE document_id = ANY(:ids)` 두 번이면 끝난다.
 """
@@ -14,10 +20,35 @@ from typing import Any
 from pydantic import Field
 from sqlalchemy import Select, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
+from sqlalchemy.orm import load_only
 
 from apps.api.repository.common import DEFAULT_LIMIT, RowBundle, page_slice
-from apps.models.content import Document, DocumentIndicator, DocumentInstrument, DocumentSource
+from apps.models.content import (
+    Document,
+    DocumentAttachment,
+    DocumentIndicator,
+    DocumentInstrument,
+    DocumentSource,
+)
 from apps.models.market import DisclosureEvent, EarningsFact
+
+# 목록 한 줄이 실제로 쓰는 칸. **`body`와 `assessment`가 여기 없다** — 둘이 이 표의
+# TOAST 22MB를 만든다(2026-08-31 실측).
+LIST_COLUMNS = (
+    Document.source_slug,
+    Document.external_id,
+    Document.title,
+    Document.document_type,
+    Document.published_at,
+    Document.language,
+    Document.body_status,
+    Document.canonical_url,
+    Document.value_score,
+    Document.direction,
+    Document.assessed_at,
+    Document.llm_model,
+    Document.prompt_version,
+)
 
 
 class DocumentListRows(RowBundle):
@@ -32,6 +63,8 @@ class DocumentDetailRows(RowBundle):
     document: Document
     instruments: tuple[str, ...] = ()
     indicators: tuple[str, ...] = ()
+    # **상세에만 싣는다.** 목록 한 쪽에 첨부까지 붙이면 문서 하나에 여러 행이 딸려 온다.
+    attachments: tuple[DocumentAttachment, ...] = ()
 
 
 class SourceRows(RowBundle):
@@ -68,9 +101,15 @@ class DocumentReadRepository:
         순차 스캔이 이미 빠르고 연산자를 들이는 순간 인덱스와 색인 정책이 함께 따라온다 —
         느려지면 그때 옮긴다.
         """
-        statement = select(Document).where(
-            Document.published_at >= published_from,
-            Document.published_at < published_to,
+        statement = (
+            select(Document)
+            # **목록이 쓰는 칸만 읽는다.** `load_only`라 ORM 인스턴스는 그대로여서 매핑이
+            # 안 바뀌고, 빠뜨린 칸을 나중에 건드리면 세션이 닫힌 뒤라 조용히 지나가지 않는다.
+            .options(load_only(*LIST_COLUMNS))
+            .where(
+                Document.published_at >= published_from,
+                Document.published_at < published_to,
+            )
         )
         if sources:
             statement = statement.where(Document.source_slug.in_(sources))
@@ -174,10 +213,20 @@ class DocumentReadRepository:
                 return None
             instruments = await self._instruments(session, [document_id])
             indicators = await self._indicators(session, [document_id])
+            attachments = list(
+                (
+                    await session.execute(
+                        select(DocumentAttachment)
+                        .where(DocumentAttachment.document_id == document_id)
+                        .order_by(DocumentAttachment.position)
+                    )
+                ).scalars()
+            )
         return DocumentDetailRows(
             document=document,
             instruments=instruments.get(document_id, ()),
             indicators=indicators.get(document_id, ()),
+            attachments=tuple(attachments),
         )
 
     async def source_rows(self, *, limit: int = DEFAULT_LIMIT, offset: int = 0) -> SourceRows:

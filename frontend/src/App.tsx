@@ -10,6 +10,7 @@ import { NavLink, Navigate, Route, Routes } from "react-router-dom";
 
 import Boundary from "./components/Boundary";
 import CausalDetailPage from "./pages/CausalDetailPage";
+import DashboardPage from "./pages/DashboardPage";
 import CausalPage from "./pages/CausalPage";
 import CollectionPage from "./pages/CollectionPage";
 import CurvePage from "./pages/CurvePage";
@@ -35,6 +36,7 @@ export default function App() {
       <header>
         <h1>추론 추적</h1>
         <nav aria-label="주요 화면">
+          <NavLink to="/dashboard">대시보드</NavLink>
           <NavLink to="/quotes">시세</NavLink>
           <NavLink to="/indicators">지표</NavLink>
           <NavLink to="/documents">문서</NavLink>
@@ -51,7 +53,10 @@ export default function App() {
         {/* 렌더 예외가 흰 화면이 되지 않게 한다. 무엇이 터졌는지 그 자리에 남는다. */}
         <Boundary>
           <Routes>
-            <Route path="/" element={<Navigate to="/runs" replace />} />
+            {/* **첫 화면이 대시보드다.** 전에는 `/runs`로 보냈는데, 실행 목록은
+                "무슨 일이 있었나"의 한 갈래일 뿐이라 수집·추론·인과가 안 보였다. */}
+            <Route path="/" element={<Navigate to="/dashboard" replace />} />
+            <Route path="/dashboard" element={<DashboardPage />} />
             <Route path="/quotes" element={<QuotesPage />} />
             <Route path="/quotes/:kind/:symbol" element={<QuoteDetailPage />} />
             {/* `/curve`가 `/:provider/:seriesId`보다 먼저 온다 — 정적 경로가 뒤면 provider로 물린다. */}

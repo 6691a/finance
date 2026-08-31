@@ -15,6 +15,7 @@ from dependency_injector import providers
 from apps.api.app import create_app
 from apps.api.repository import MAX_POINTS, SymbolRows
 from apps.api.repository.quote import QuoteReadRepository
+from apps.api.service.quote import build_bars
 from apps.models.reference import QuoteSymbol, QuoteSymbolKind
 from tests.api.conftest import container
 
@@ -286,6 +287,47 @@ def test_every_symbol_kind_has_a_table_on_both_axes():
     covered = set(BAR_TABLES) | {QuoteSymbolKind.EQUITY}
     assert covered == set(QuoteSymbolKind)
     assert set(DAILY_TABLES) | {QuoteSymbolKind.EQUITY} == set(QuoteSymbolKind)
+
+
+def test_only_the_equity_bar_reads_whether_it_is_settled():
+    """`is_final`은 종목 분봉에만 있는 칸이다. 다른 kind 테이블에는 그 컬럼이 없다.
+
+    **`bool_and`다.** 재집계 버킷 안에 잠정이 하나라도 있으면 고가·저가가 아직 바뀔 수
+    있으므로 그 버킷은 잠정이다 — `bool_or`면 잠정을 확정으로 읽는다.
+    """
+    equity = str(
+        QuoteReadRepository.bar_statement(
+            kind=QuoteSymbolKind.EQUITY,
+            symbol="005930",
+            interval="5m",
+            start=datetime(2026, 8, 27, tzinfo=UTC),
+            end=datetime(2026, 8, 28, tzinfo=UTC),
+            exchange="KRX",
+        ).compile()
+    )
+    index = str(
+        QuoteReadRepository.bar_statement(
+            kind=QuoteSymbolKind.INDEX,
+            symbol="KOSPI",
+            interval="5m",
+            start=datetime(2026, 8, 27, tzinfo=UTC),
+            end=datetime(2026, 8, 28, tzinfo=UTC),
+        ).compile()
+    )
+
+    assert "bool_and(stock_bar.is_final)" in equity
+    assert "is_final" not in index
+
+
+def test_the_settled_flag_lands_on_the_bar_not_the_daily():
+    """**자리를 한 번 틀렸다**(2026-08-31) — 확정 칸이 일봉 쪽으로 가서 분봉 응답에 빈 배열이
+    나갔다. Pydantic이 모르는 칸을 조용히 버려서 테스트도 응답도 아무 말을 안 했다."""
+    rows = ((datetime(2026, 8, 27, tzinfo=UTC), 1, 2, 0, 1, 100, False),)
+    series = build_bars(
+        rows, kind="equity", symbol="005930", exchange="KRX", provider="kis", interval="5m"
+    )
+
+    assert series.settled == (False,)
 
 
 def test_only_the_index_future_daily_reads_the_contract_code():

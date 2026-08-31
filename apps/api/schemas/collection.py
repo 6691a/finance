@@ -59,6 +59,13 @@ class SourceRecordRow(ApiModel):
     record_count: int | None = Field(
         default=None, description="이 수집이 만든 정규화 행 수. **0도 정상이다** — 값 없음과 미조회는 다르다."
     )
+    has_metadata: bool = Field(
+        default=False,
+        description=(
+            "`source_metadata`가 있나. **내용은 안 싣는다** — 어느 파일·어느 좌표를 받았는지의 "
+            "재현 정보라 목록의 일이 아니고, 필요하면 그 레코드로 DB에서 본다."
+        ),
+    )
     has_payload: bool = Field(default=False, description="원본 JSON을 함께 보관했나. 본문은 목록에 싣지 않는다.")
     payload_uri: str | None = Field(default=None, description="대용량 원본의 외부 저장 위치.")
 
@@ -100,6 +107,12 @@ class MarketSessionRow(ApiModel):
     )
     local_settlement_date: date | None = Field(default=None, description="현지 결제일.")
     domestic_settlement_date: date | None = Field(default=None, description="국내 결제일.")
+    kis_weekday_code: str | None = Field(default=None, description="제공처가 준 요일 코드.")
+    kis_settlement_day: bool | None = Field(default=None, description="제공처가 준 결제일 여부.")
+    verified_at: UtcDatetime | None = Field(
+        default=None,
+        description="우리가 이 행을 검증한 시각(UTC). **null이면 제공처 값을 그대로 믿고 있다.**",
+    )
     verified_by: str | None = Field(default=None, description="개장 여부를 무엇으로 확인했나.")
 
 

@@ -134,7 +134,7 @@ class QuoteReadRepository:
         # 나가고, `bar_at`이 aware라 Postgres가 둘을 못 뺀다(2026-08-27 운영 DB에서 잡았다).
         origin = literal(BIN_ORIGIN, DateTime(timezone=True))
         bucket = func.date_bin(stride, table.bar_at, origin).label("bucket")
-        statement = select(
+        columns = [
             bucket,
             # Postgres에 first/last 집계가 없다. 정렬한 배열의 양 끝을 쓴다.
             func.array_agg(aggregate_order_by(table.open, table.bar_at.asc()))[1].label("open"),
@@ -142,7 +142,14 @@ class QuoteReadRepository:
             func.min(table.low).label("low"),
             func.array_agg(aggregate_order_by(table.close, table.bar_at.desc()))[1].label("close"),
             func.sum(table.volume).label("volume"),
-        ).where(table.bar_at >= start, table.bar_at < end)
+        ]
+        if kind is QuoteSymbolKind.EQUITY:
+            # **버킷 전부가 확정일 때만 확정이다.** 종목 분봉은 WebSocket 잠정 봉이 먼저
+            # 들어오고 REST가 나중에 덮는다(`stock_bar.is_final`). 하나라도 잠정이면 그
+            # 버킷의 고가·저가가 바뀔 수 있으므로 `bool_and`다 — `bool_or`면 잠정을 확정으로
+            # 읽는다. 매크로 kind에는 그 칸이 아예 없다.
+            columns.append(func.bool_and(StockBar.is_final).label("is_final"))
+        statement = select(*columns).where(table.bar_at >= start, table.bar_at < end)
 
         if kind is QuoteSymbolKind.EQUITY:
             # **거래소가 필수다.** 빼면 KRX와 NXT 체결이 한 봉에 섞여 어느 쪽 값도 아니게 된다.

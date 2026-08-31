@@ -292,6 +292,26 @@ tbody button:hover {
   padding: 18px 0;
 }
 
+/* 대시보드 카드. 폭이 좁아지면 한 줄에 하나로 접힌다. */
+.cards {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  gap: 14px;
+  margin-bottom: 20px;
+}
+
+.cards .panel {
+  margin-bottom: 0;
+}
+
+.cards h3 {
+  margin-top: 0;
+}
+
+.cards .state {
+  padding: 4px 0;
+}
+
 /* 쪽 이동. 표 아래 가운데다. 번호는 아는 만큼만 그린다. */
 .pager {
   display: flex;

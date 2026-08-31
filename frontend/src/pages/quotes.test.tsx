@@ -89,6 +89,7 @@ const BARS: BarSeries = {
   low: [3199, 3203],
   close: [3205, 3210],
   volume: [1000, null],
+  settled: [],
 };
 
 const DAILY: DailySeries = {

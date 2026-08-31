@@ -26,7 +26,7 @@ const DOCUMENTS = {
       document_type: "article",
       published_at: "2026-08-27T04:30:00Z",
       language: "en",
-      content_level: "full_text",
+      body_status: "ok",
       canonical_url: "https://example.test/a",
       value_score: 7,
       direction: "positive",
@@ -44,7 +44,7 @@ const DOCUMENTS = {
       document_type: "press_release",
       published_at: "2026-08-27T03:00:00Z",
       language: "ko",
-      content_level: "metadata_only",
+      body_status: null,
       canonical_url: null,
       value_score: null,
       direction: null,
@@ -62,6 +62,7 @@ const DOCUMENTS = {
 
 const DETAIL = {
   ...DOCUMENTS.items[0],
+  attachments: [],
   body: "본문 <b>전문</b>",
   summary: "요약",
   assessment: "평가 근거",
@@ -232,6 +233,45 @@ it("문서 상세는 본문과 평가를 함께 보이고 본문이 바뀐 것�
   expect(screen.getByText(/본문 <b>전문<\/b>/)).toBeTruthy();
   expect(window.document.querySelector("pre b")).toBeNull();
   expect(screen.getByText(/평가 뒤에 본문이 바뀌었다/)).toBeTruthy();
+});
+
+it("첨부가 있는 문서는 그 목록을 상세에서 보인다", async () => {
+  // **본문이 첨부에만 있는 출처가 있다**(한국은행·금감원·BOJ). 그때 이 목록이 내용 전부다.
+  const withAttachment = {
+    ...DETAIL,
+    body: null,
+    body_status: "attachment_only",
+    attachments: [
+      {
+        position: 0,
+        kind: "file",
+        url: "https://example.test/report.pdf",
+        filename: "report.pdf",
+        media_type: "application/pdf",
+        byte_size: 20480,
+        stored: true,
+        fetched_at: "2026-08-30T01:00:00Z",
+      },
+    ],
+  };
+  stubFetch({ "/api/documents/1": withAttachment });
+  renderAt("/documents/1", "/documents/:documentId", <DocumentDetailPage />);
+
+  await screen.findByRole("heading", { name: "첨부 1개" });
+  expect(screen.getByRole("cell", { name: "report.pdf" })).toBeTruthy();
+  // 본문이 없는 이유를 밝히고 첨부로 안내한다.
+  expect(document.body.textContent).toContain("첨부에만 있음");
+  // **저장 경로는 화면에 없다.**
+  expect(document.body.textContent).not.toContain("documents/boj");
+});
+
+it("본문을 아직 안 받아 본 문서는 큐라고 말한다", async () => {
+  // null은 사유가 아니라 "아직 해 보지 않았다"다. 못 받은 것과 뭉치면 다시 집을 것이 흐려진다.
+  stubFetch({ "/api/documents/1": { ...DETAIL, body: null, body_status: null } });
+  renderAt("/documents/1", "/documents/:documentId", <DocumentDetailPage />);
+
+  await screen.findByRole("heading", { name: /반도체/ });
+  expect(document.body.textContent).toContain("아직 본문을 받아 보지 않았다");
 });
 
 it("수급 화면이 단위를 열 이름에 적는다", async () => {

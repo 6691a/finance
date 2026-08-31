@@ -198,6 +198,10 @@ export default function QuoteDetailPage() {
             const axis = bars ? series.times : series.dates;
             // 월물 배열은 지수선물 일봉에만 온다. 빈 배열이면 "월물 개념이 없다"다.
             const contracts = !bars && series.contracts.length > 0;
+            // 확정 배열은 종목 분봉에만 온다. **false는 그 봉이 아직 바뀔 수 있다는 뜻이다** —
+            // WebSocket 잠정 봉이 먼저 들어오고 REST가 나중에 덮는다.
+            const settled = bars && series.settled.length > 0;
+            const pending = settled ? series.settled.filter((value) => !value).length : 0;
             const last = lastPoint(axis, series.close);
             return series.points === 0 ? (
               <Empty>이 구간에 봉이 없다. 기간을 넓히거나 다른 거래소를 골라 본다.</Empty>
@@ -235,6 +239,13 @@ export default function QuoteDetailPage() {
                 <p className="state">
                   차트만으로는 정확한 숫자를 못 읽는다. 최근 200행만 보이고 나머지는 기간을
                   좁혀 읽는다.
+                  {pending > 0 && (
+                    <>
+                      {" "}
+                      **이 구간에 잠정 봉이 {pending}개 있다** — WebSocket이 먼저 쓴 값이고
+                      REST 확정이 아직 안 덮었다. 고가·저가가 바뀔 수 있다.
+                    </>
+                  )}
                 </p>
                 <table>
                   <caption>
@@ -250,6 +261,7 @@ export default function QuoteDetailPage() {
                       <th scope="col">거래량</th>
                       {/* 지수선물만 월물이 온다. 갭이 급변인지 롤오버인지 이 칸이 가른다. */}
                       {contracts && <th scope="col">월물</th>}
+                      {settled && <th scope="col">확정</th>}
                     </tr>
                   </thead>
                   <tbody>
@@ -266,6 +278,7 @@ export default function QuoteDetailPage() {
                           <td>{numberText(series.close[index], 2)}</td>
                           <td>{integerText(series.volume[index])}</td>
                           {contracts && <td>{series.contracts[index] ?? "—"}</td>}
+                          {settled && <td>{series.settled[index] ? "확정" : "잠정"}</td>}
                         </tr>
                       ))}
                   </tbody>

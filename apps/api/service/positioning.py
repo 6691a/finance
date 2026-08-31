@@ -45,6 +45,12 @@ def flow_of(row: Any) -> InvestorFlowPoint:
         individual_net_buy_amount=number(row.individual_net_buy_amount),
         pension_fund_net_buy_qty=row.pension_fund_net_buy_qty,
         investment_trust_net_buy_qty=row.investment_trust_net_buy_qty,
+        foreign_sell_qty=row.foreign_sell_qty,
+        foreign_buy_qty=row.foreign_buy_qty,
+        institution_sell_qty=row.institution_sell_qty,
+        institution_buy_qty=row.institution_buy_qty,
+        individual_sell_qty=row.individual_sell_qty,
+        individual_buy_qty=row.individual_buy_qty,
     )
 
 
@@ -110,6 +116,11 @@ def short_sale_of(row: Any) -> ShortSaleRow:
         short_sale_amount=number(row.short_sale_amount),
         short_sale_amount_ratio=number(row.short_sale_amount_ratio),
         short_sale_average_price=number(row.short_sale_average_price),
+        accumulated_short_sale_quantity=row.accumulated_short_sale_quantity,
+        accumulated_short_sale_volume_ratio=number(row.accumulated_short_sale_volume_ratio),
+        accumulated_short_sale_amount=number(row.accumulated_short_sale_amount),
+        accumulated_short_sale_amount_ratio=number(row.accumulated_short_sale_amount_ratio),
+        total_amount=number(row.total_amount),
     )
 
 
@@ -123,6 +134,7 @@ def stock_lending_of(row: Any) -> StockLendingRow:
         balance_quantity=row.balance_quantity,
         balance_amount=number(row.balance_amount),
         balance_change_quantity=row.balance_change_quantity,
+        price_change=number(row.price_change),
     )
 
 
@@ -131,6 +143,7 @@ def market_lending_of(row: Any) -> MarketLendingRow:
         market_code=str(getattr(row.market_code, "value", row.market_code)),
         business_date=row.business_date,
         index_close=number(row.index_close),
+        index_change=number(row.index_change),
         new_quantity=row.new_quantity,
         repayment_quantity=row.repayment_quantity,
         balance_quantity=row.balance_quantity,
@@ -150,6 +163,16 @@ def credit_of(row: Any) -> CreditBalanceRow:
         short_loan_balance_quantity=row.short_loan_balance_quantity,
         short_loan_balance_amount=number(row.short_loan_balance_amount),
         short_loan_balance_rate=number(row.short_loan_balance_rate),
+        loan_new_quantity=row.loan_new_quantity,
+        loan_repayment_quantity=row.loan_repayment_quantity,
+        loan_new_amount=number(row.loan_new_amount),
+        loan_repayment_amount=number(row.loan_repayment_amount),
+        loan_supply_rate=number(row.loan_supply_rate),
+        short_loan_new_quantity=row.short_loan_new_quantity,
+        short_loan_repayment_quantity=row.short_loan_repayment_quantity,
+        short_loan_new_amount=number(row.short_loan_new_amount),
+        short_loan_repayment_amount=number(row.short_loan_repayment_amount),
+        short_loan_supply_rate=number(row.short_loan_supply_rate),
     )
 
 
@@ -165,6 +188,7 @@ def ranking_of(row: Any) -> CreditRankingRow:
         loan_balance_amount=number(row.loan_balance_amount),
         loan_balance_rate=number(row.loan_balance_rate),
         loan_balance_growth_rate=number(row.loan_balance_growth_rate),
+        short_loan_balance_growth_rate=number(row.short_loan_balance_growth_rate),
     )
 
 
@@ -180,7 +204,11 @@ def funds_of(row: Any) -> MarketFundsRow:
         equity_fund_amount=number(row.equity_fund_amount),
         bond_fund_amount=number(row.bond_fund_amount),
         mmf_amount=number(row.mmf_amount),
+        mixed_fund_amount=number(row.mixed_fund_amount),
         securities_lending_amount=number(row.securities_lending_amount),
+        futures_margin_amount=number(row.futures_margin_amount),
+        index_change=number(row.index_change),
+        market_capitalization=number(row.market_capitalization),
     )
 
 

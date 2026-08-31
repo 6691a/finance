@@ -39,7 +39,12 @@ function num<T>(key: string, label: string, pick: (row: T) => number | null): Co
   return { key, label, value: (row) => integerText(pick(row)) };
 }
 
-function dec<T>(key: string, label: string, pick: (row: T) => number | null, digits = 2): Column<T> {
+function dec<T>(
+  key: string,
+  label: string,
+  pick: (row: T) => number | null,
+  digits = 2,
+): Column<T> {
   return { key, label, value: (row) => numberText(pick(row), digits) };
 }
 
@@ -65,6 +70,12 @@ const DATASETS: Dataset[] = [
           num<InvestorFlowPoint>("f", "외국인(주)", (row) => row.foreign_net_buy_qty),
           num<InvestorFlowPoint>("i", "기관(주)", (row) => row.institution_net_buy_qty),
           num<InvestorFlowPoint>("p", "개인(주)", (row) => row.individual_net_buy_qty),
+          num<InvestorFlowPoint>("fs", "외국인 매도(주)", (row) => row.foreign_sell_qty),
+          num<InvestorFlowPoint>("fb", "외국인 매수(주)", (row) => row.foreign_buy_qty),
+          num<InvestorFlowPoint>("is", "기관 매도(주)", (row) => row.institution_sell_qty),
+          num<InvestorFlowPoint>("ib", "기관 매수(주)", (row) => row.institution_buy_qty),
+          num<InvestorFlowPoint>("ps", "개인 매도(주)", (row) => row.individual_sell_qty),
+          num<InvestorFlowPoint>("pb", "개인 매수(주)", (row) => row.individual_buy_qty),
           num<InvestorFlowPoint>("fa", "외국인(백만원)", (row) => row.foreign_net_buy_amount),
           num<InvestorFlowPoint>("ia", "기관(백만원)", (row) => row.institution_net_buy_amount),
           num<InvestorFlowPoint>("pension", "연기금(주)", (row) => row.pension_fund_net_buy_qty),
@@ -163,7 +174,11 @@ const DATASETS: Dataset[] = [
         empty: "이 구간에 추정 수급이 없다.",
         rows: data.items,
         columns: [
-          { key: "c", label: "종목", value: (row: InvestorEstimateRow) => stockText(row.stock_code, names) },
+          {
+            key: "c",
+            label: "종목",
+            value: (row: InvestorEstimateRow) => stockText(row.stock_code, names),
+          },
           text<InvestorEstimateRow>("d", "거래일", (row) => row.business_date),
           text<InvestorEstimateRow>("slot", "슬롯", (row) => row.source_time_code),
           num<InvestorEstimateRow>("f", "외국인(주)", (row) => row.foreign_net_buy_qty),
@@ -186,7 +201,11 @@ const DATASETS: Dataset[] = [
         empty: "이 구간에 공매도 행이 없다.",
         rows: data.items,
         columns: [
-          { key: "c", label: "종목", value: (row: ShortSaleRow) => stockText(row.stock_code, names) },
+          {
+            key: "c",
+            label: "종목",
+            value: (row: ShortSaleRow) => stockText(row.stock_code, names),
+          },
           text<ShortSaleRow>("d", "영업일", (row) => row.business_date),
           dec<ShortSaleRow>("close", "종가(원)", (row) => row.close_price, 0),
           num<ShortSaleRow>("q", "공매도(주)", (row) => row.short_sale_quantity),
@@ -194,6 +213,23 @@ const DATASETS: Dataset[] = [
           num<ShortSaleRow>("a", "공매도 대금(원)", (row) => row.short_sale_amount),
           dec<ShortSaleRow>("ar", "대금 비중(%)", (row) => row.short_sale_amount_ratio),
           dec<ShortSaleRow>("avg", "평균가(원)", (row) => row.short_sale_average_price, 0),
+          num<ShortSaleRow>("aq", "누적 공매도(주)", (row) => row.accumulated_short_sale_quantity),
+          dec<ShortSaleRow>(
+            "avr",
+            "누적 거래량 비중(%)",
+            (row) => row.accumulated_short_sale_volume_ratio,
+          ),
+          num<ShortSaleRow>(
+            "aa",
+            "누적 공매도 대금(원)",
+            (row) => row.accumulated_short_sale_amount,
+          ),
+          dec<ShortSaleRow>(
+            "aar",
+            "누적 대금 비중(%)",
+            (row) => row.accumulated_short_sale_amount_ratio,
+          ),
+          num<ShortSaleRow>("ta", "누적 거래대금(원)", (row) => row.total_amount),
         ] as Column<never>[],
       },
     ],
@@ -213,7 +249,11 @@ const DATASETS: Dataset[] = [
           text("m", "시장", (row: { market_code: string }) => row.market_code),
           text("d", "영업일", (row: { business_date: string }) => row.business_date),
           num("n", "신규(주)", (row: { new_quantity: number | null }) => row.new_quantity),
-          num("r", "상환(주)", (row: { repayment_quantity: number | null }) => row.repayment_quantity),
+          num(
+            "r",
+            "상환(주)",
+            (row: { repayment_quantity: number | null }) => row.repayment_quantity,
+          ),
           num("b", "잔고(주)", (row: { balance_quantity: number | null }) => row.balance_quantity),
           num("ba", "잔고(원)", (row: { balance_amount: number | null }) => row.balance_amount),
         ] as Column<never>[],
@@ -223,13 +263,25 @@ const DATASETS: Dataset[] = [
         empty: "이 구간에 종목 대차 행이 없다.",
         rows: data.stock,
         columns: [
-          { key: "c", label: "종목", value: (row: { stock_code: string }) => stockText(row.stock_code, names) },
+          {
+            key: "c",
+            label: "종목",
+            value: (row: { stock_code: string }) => stockText(row.stock_code, names),
+          },
           text("d", "영업일", (row: { business_date: string }) => row.business_date),
           num("n", "신규(주)", (row: { new_quantity: number | null }) => row.new_quantity),
-          num("r", "상환(주)", (row: { repayment_quantity: number | null }) => row.repayment_quantity),
+          num(
+            "r",
+            "상환(주)",
+            (row: { repayment_quantity: number | null }) => row.repayment_quantity,
+          ),
           num("b", "잔고(주)", (row: { balance_quantity: number | null }) => row.balance_quantity),
           num("ba", "잔고(원)", (row: { balance_amount: number | null }) => row.balance_amount),
-          num("ch", "잔고 증감(주)", (row: { balance_change_quantity: number | null }) => row.balance_change_quantity),
+          num(
+            "ch",
+            "잔고 증감(주)",
+            (row: { balance_change_quantity: number | null }) => row.balance_change_quantity,
+          ),
         ] as Column<never>[],
       },
     ],
@@ -246,7 +298,11 @@ const DATASETS: Dataset[] = [
         empty: "이 구간에 신용잔고 행이 없다.",
         rows: data.items,
         columns: [
-          { key: "c", label: "종목", value: (row: CreditBalanceRow) => stockText(row.stock_code, names) },
+          {
+            key: "c",
+            label: "종목",
+            value: (row: CreditBalanceRow) => stockText(row.stock_code, names),
+          },
           text<CreditBalanceRow>("d", "거래일", (row) => row.trade_date),
           text<CreditBalanceRow>("s", "결제일", (row) => row.settlement_date),
           num<CreditBalanceRow>("lq", "융자 잔고(주)", (row) => row.loan_balance_quantity),
@@ -254,6 +310,13 @@ const DATASETS: Dataset[] = [
           dec<CreditBalanceRow>("lr", "융자 비율(%)", (row) => row.loan_balance_rate),
           num<CreditBalanceRow>("sq", "대주 잔고(주)", (row) => row.short_loan_balance_quantity),
           dec<CreditBalanceRow>("sr", "대주 비율(%)", (row) => row.short_loan_balance_rate),
+          // **잔고만 보면 왜 늘었는지 모른다.** 신규와 상환이 그 답이다.
+          num<CreditBalanceRow>("lnq", "융자 신규(주)", (row) => row.loan_new_quantity),
+          num<CreditBalanceRow>("lrq", "융자 상환(주)", (row) => row.loan_repayment_quantity),
+          dec<CreditBalanceRow>("lsr", "융자 공여율(%)", (row) => row.loan_supply_rate),
+          num<CreditBalanceRow>("snq", "대주 신규(주)", (row) => row.short_loan_new_quantity),
+          num<CreditBalanceRow>("srq", "대주 상환(주)", (row) => row.short_loan_repayment_quantity),
+          dec<CreditBalanceRow>("ssr", "대주 공여율(%)", (row) => row.short_loan_supply_rate),
         ] as Column<never>[],
       },
     ],

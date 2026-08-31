@@ -211,6 +211,8 @@ const DATASETS: Dataset[] = [
           text<AnalystOpinionRow>("d", "발표일", (row) => row.business_date),
           text<AnalystOpinionRow>("b", "증권사", (row) => row.broker_name),
           text<AnalystOpinionRow>("o", "의견", (row) => row.opinion),
+          // 증권사마다 말이 달라도 코드는 제공처가 정규화한 값이라 둘이 서로를 검증한다.
+          text<AnalystOpinionRow>("oc", "의견 코드", (row) => row.opinion_code),
           text<AnalystOpinionRow>("po", "직전 의견", (row) => row.previous_opinion),
           num<AnalystOpinionRow>("t", "목표주가(원)", (row) => row.target_price),
           num<AnalystOpinionRow>("pc", "전일 종가(원)", (row) => row.previous_close),

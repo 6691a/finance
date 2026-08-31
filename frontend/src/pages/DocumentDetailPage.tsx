@@ -11,7 +11,8 @@ import { Link, useParams } from "react-router-dom";
 import { useJson } from "../api";
 import { Async } from "../components/AsyncState";
 import DirectionMark from "../components/DirectionMark";
-import { kstText, numberText, safeHref } from "../format";
+import { integerText, jsonText, kstText, numberText, safeHref } from "../format";
+import { ATTACHMENT_KINDS, BODY_STATUSES, labelOf } from "../labels";
 import { stockText, useStockNames } from "../stocks";
 import type { DocumentDetail } from "../types";
 
@@ -54,7 +55,7 @@ export default function DocumentDetailPage() {
                   <time dateTime={document.detected_at}>{kstText(document.detected_at)}</time>
                 </dd>
                 <dt>수집 범위</dt>
-                <dd>{document.content_level}</dd>
+                <dd>{labelOf(BODY_STATUSES, document.body_status)}</dd>
                 <dt>언어</dt>
                 <dd>{document.language ?? "—"}</dd>
                 <dt>태그</dt>
@@ -78,8 +79,8 @@ export default function DocumentDetailPage() {
                 <div className="readout">
                   <span className="value">{numberText(document.value_score, 0)}</span>
                   <span>
-                    방향 <DirectionMark value={document.direction} /> · {document.llm_model ?? "—"} ·{" "}
-                    {document.prompt_version ?? "—"} ·{" "}
+                    방향 <DirectionMark value={document.direction} /> · {document.llm_model ?? "—"}{" "}
+                    · {document.prompt_version ?? "—"} ·{" "}
                     <time dateTime={document.assessed_at}>{kstText(document.assessed_at)}</time>
                   </span>
                 </div>
@@ -88,7 +89,17 @@ export default function DocumentDetailPage() {
                     <dt>요약</dt>
                     <dd className="wrap">{document.summary}</dd>
                     <dt>평가 근거</dt>
-                    <dd className="wrap">{document.assessment ?? "—"}</dd>
+                    <dd className="wrap">
+                      {/* **모양을 고정하지 않는다.** 판이 바뀌며 칸이 늘어나는 값이라
+                          우리가 아는 칸만 그리면 새 칸이 조용히 사라진다. */}
+                      {document.assessment === null ? (
+                        "—"
+                      ) : (
+                        <pre>
+                          <code>{jsonText(document.assessment)}</code>
+                        </pre>
+                      )}
+                    </dd>
                   </dl>
                 )}
                 {stale && (
@@ -102,12 +113,66 @@ export default function DocumentDetailPage() {
             <h3>본문</h3>
             {document.body === null ? (
               <p className="state">
-                본문을 받지 않는 출처다(`{document.content_level}`). 제목과 링크만 있다.
+                {/* **null은 "아직 안 해 봤다"이고 그 집합이 곧 수집 큐다.** 못 받은 사유와
+                    구별해서 말한다 — 둘을 뭉치면 다시 집을 것과 아닌 것이 섞인다. */}
+                {document.body_status === null
+                  ? "아직 본문을 받아 보지 않았다. 다음 실행이 집는다."
+                  : `본문이 없다(${labelOf(BODY_STATUSES, document.body_status)}).`}
+                {document.body_status === "attachment_only" && " 내용은 아래 첨부에 있다."}
               </p>
             ) : (
               <pre>
                 <code>{document.body}</code>
               </pre>
+            )}
+
+            <h3>첨부 {document.attachments.length}개</h3>
+            {document.attachments.length === 0 ? (
+              <p className="state">첨부가 없다.</p>
+            ) : (
+              <table>
+                <caption>
+                  문서 안에 나온 차례다. **저장 경로는 내지 않는다** — 마운트 안의 상대경로라
+                  화면에서 열 수 있는 주소가 아니다.
+                </caption>
+                <thead>
+                  <tr>
+                    <th scope="col">#</th>
+                    <th scope="col">종류</th>
+                    <th scope="col" className="wrap">
+                      이름
+                    </th>
+                    <th scope="col">형식</th>
+                    <th scope="col">크기</th>
+                    <th scope="col">보관</th>
+                    <th scope="col">원본</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {document.attachments.map((row) => {
+                    const href = safeHref(row.url);
+                    return (
+                      <tr key={row.position}>
+                        <td>{row.position}</td>
+                        <td>{labelOf(ATTACHMENT_KINDS, row.kind)}</td>
+                        <td className="wrap">{row.filename ?? "—"}</td>
+                        <td>{row.media_type ?? "—"}</td>
+                        <td>{row.byte_size === null ? "—" : `${integerText(row.byte_size)} B`}</td>
+                        <td>{row.stored ? "받음" : "—"}</td>
+                        <td>
+                          {href === null ? (
+                            "—"
+                          ) : (
+                            <a href={href} target="_blank" rel="noopener noreferrer">
+                              열기
+                            </a>
+                          )}
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
             )}
           </section>
         );

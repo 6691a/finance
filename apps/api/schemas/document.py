@@ -8,6 +8,7 @@
 """
 
 from datetime import date
+from typing import Any
 
 from pydantic import Field
 
@@ -70,8 +71,31 @@ class DocumentSummary(ApiModel):
 DocumentList = Page[DocumentSummary]
 
 
+class DocumentAttachmentItem(ApiModel):
+    """문서에 붙은 첨부 하나.
+
+    **본문이 첨부에만 있는 출처가 있다**(한국은행·금감원·BOJ·네이버 리서치). 그때
+    `body_status`가 `attachment_only`이고, 그 문서에서 읽을 것은 이 목록이 전부다.
+    """
+
+    position: int = Field(description="문서 안에서의 순서(0부터). 페이지에 나온 차례다.")
+    kind: str = Field(description="내려받은 파일(file)인지 링크만 남긴 영상(video)인지.")
+    url: str = Field(description="첨부 원본 URL. **영상은 이 값이 전부다.**")
+    filename: str | None = Field(default=None, description="제공처가 준 파일 이름.")
+    media_type: str | None = Field(default=None, description="응답의 Content-Type(application/pdf 등).")
+    byte_size: int | None = Field(default=None, description="받은 파일의 바이트 수. 영상은 null이다.")
+    stored: bool = Field(
+        default=False,
+        description=(
+            "우리가 파일을 받아 뒀나. **경로 자체는 내지 않는다** — 마운트 안의 상대경로라 "
+            "화면에서 열 수 있는 주소가 아니고, 그 자리를 밖으로 알릴 이유도 없다."
+        ),
+    )
+    fetched_at: UtcDatetime | None = Field(default=None, description="파일을 내려받은 시각(UTC).")
+
+
 class DocumentDetail(DocumentSummary):
-    """문서 하나. 목록 한 줄에 본문과 평가 전문을 더한 것이다."""
+    """문서 하나. 목록 한 줄에 본문·평가 전문과 첨부를 더한 것이다."""
 
     body: str | None = Field(
         default=None,
@@ -81,12 +105,26 @@ class DocumentDetail(DocumentSummary):
         ),
     )
     summary: str | None = Field(default=None, description="LLM이 쓴 요약.")
-    assessment: str | None = Field(default=None, description="LLM이 쓴 평가 근거.")
+    assessment: dict[str, Any] | None = Field(
+        default=None,
+        description=(
+            "LLM 응답 전체(세부 점수·주제·새 사실·판단 근거·근거 청크). **문자열이 아니라 "
+            "jsonb다** — 조회 조건이 굳으면 컬럼으로 빠질 값이라 지금은 모양을 고정하지 않는다. "
+            "화면은 이것을 원문 그대로 보인다."
+        ),
+    )
     detected_at: UtcDatetime = Field(description="우리가 이 문서를 처음 본 시각(UTC).")
     content_hash: str = Field(description="본문 해시. 바뀌면 같은 행을 갱신한다.")
     assessed_content_hash: str | None = Field(
         default=None,
         description="평가 당시의 본문 해시. 현재 `content_hash`와 다르면 재평가 대상이다.",
+    )
+    attachments: tuple[DocumentAttachmentItem, ...] = Field(
+        default=(),
+        description=(
+            "이 문서의 첨부. **본문이 첨부에만 있는 출처가 있어**(`body_status`가 "
+            "`attachment_only`) 그때는 이 목록이 문서의 내용 전부다."
+        ),
     )
 
 

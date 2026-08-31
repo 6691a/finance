@@ -129,7 +129,7 @@ it("404는 목록으로 돌아가는 링크가 있는 화면이다", async () =>
   expect(screen.getByRole("link", { name: "목록으로" })).toBeTruthy();
 });
 
-it("상단 내비게이션은 원자료 여섯과 인과, 그리고 추론 셋이다", () => {
+it("상단 내비게이션은 대시보드와 원자료 여섯, 인과, 추론 셋이다", () => {
   // 15단계가 원자료 여섯을 더했다. **추론이 딛고 선 원자료라 앞에 둔다.**
   // 인과 그래프는 원자료를 사후에 엮은 것이라 원자료 뒤, 추론 앞이다.
   stubFetch({});
@@ -137,6 +137,7 @@ it("상단 내비게이션은 원자료 여섯과 인과, 그리고 추론 셋�
 
   const nav = screen.getByRole("navigation", { name: "주요 화면" });
   expect([...nav.querySelectorAll("a")].map((link) => link.textContent)).toEqual([
+    "대시보드",
     "시세",
     "지표",
     "문서",

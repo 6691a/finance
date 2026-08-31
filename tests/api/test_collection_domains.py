@@ -46,7 +46,8 @@ def document_row(document_id: int = 1, score: int | None = 7) -> Document:
         prompt_version="3" if score is not None else None,
         body="본문 전문",
         summary="요약",
-        assessment="평가 근거",
+        # **평가는 jsonb다.** 문자열로 두면 상세가 통째로 500이 된다(2026-08-31 운영에서 잡았다).
+        assessment={"reason": "평가 근거", "topics": ["반도체"]},
         detected_at=AT,
         content_hash="abc",
         assessed_content_hash="abc",
@@ -207,6 +208,29 @@ async def test_the_document_list_never_carries_the_body():
     assert item["instruments"] == ["005930"]
 
 
+def test_the_document_list_never_reads_the_body():
+    """**응답에서 빼는 것만으로는 부족하다.** `select(Document)`는 `body`·`assessment`까지
+    TOAST에서 끌어와 DB가 API로 보내고 우리는 그것을 버린다.
+
+    2026-08-31 실측: 101행에 6.8MB·0.65초였고 칸을 고르면 59KB·0.011초다(60배). 계획은 둘 다
+    0.6ms라 **쿼리가 아니라 옮기는 양이 문제였다.** 화면에서는 1.13초가 0.07초가 됐다.
+    """
+    compiled = str(
+        DocumentReadRepository.list_statement(
+            published_from=AT, published_to=AT, limit=100
+        ).compile()
+    )
+
+    # `body_status`가 `body`를 부분 문자열로 갖는다. 칸 단위로 본다.
+    selected = compiled.split("FROM")[0]
+    assert "document.body," not in selected and not selected.rstrip().endswith("document.body")
+    assert "document.assessment" not in selected
+    assert "document.body_status" in selected
+    # 목록이 쓰는 칸은 그대로 있다.
+    assert "document.title" in compiled
+    assert "document.value_score" in compiled
+
+
 @pytest.mark.asyncio
 async def test_the_document_detail_carries_the_body_and_the_assessment():
     """원문과 평가를 한 화면에서 맞춰 봐야 "왜 근거로 뽑혔나"가 읽힌다."""
@@ -214,7 +238,7 @@ async def test_the_document_detail_carries_the_body_and_the_assessment():
         payload = (await http.get("/api/documents/1")).json()
 
     assert payload["body"] == "본문 전문"
-    assert payload["assessment"] == "평가 근거"
+    assert payload["assessment"] == {"reason": "평가 근거", "topics": ["반도체"]}
     assert payload["value_score"] == 7
 
 
@@ -314,6 +338,7 @@ async def test_lending_splits_market_and_stock_into_two_arrays():
                 market_code="KOSPI",
                 business_date=date(2026, 8, 26),
                 index_close=Decimal(3200),
+                index_change=Decimal(12),
                 new_quantity=10,
                 repayment_quantity=5,
                 balance_quantity=100,
@@ -330,6 +355,7 @@ async def test_lending_splits_market_and_stock_into_two_arrays():
                 balance_quantity=3,
                 balance_amount=Decimal(4),
                 balance_change_quantity=-1,
+                price_change=Decimal(-500),
             )
         ],
     }
@@ -357,6 +383,7 @@ async def test_the_credit_ranking_picks_one_day_and_offers_the_rest():
                 loan_balance_amount=Decimal(700000),
                 loan_balance_rate=Decimal("0.5"),
                 loan_balance_growth_rate=Decimal("1.2"),
+                short_loan_balance_growth_rate=Decimal("0.4"),
             )
         ],
         "dates": [date(2026, 8, 26), date(2026, 8, 25)],
@@ -474,7 +501,7 @@ async def test_the_record_list_says_whether_a_payload_exists_without_sending_it(
     """jsonb 원본이라 행 하나가 수백 KB일 수 있다."""
     rows = {
         "records": [
-            (1, "api", "kis", "005930", AT, AT, "succeeded", 390, True, None),
+            (1, "api", "kis", "005930", AT, AT, "succeeded", 390, True, True, None),
         ]
     }
     async with client(collection=FakeCollection(**rows)) as http:

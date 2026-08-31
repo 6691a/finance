@@ -80,6 +80,15 @@ class BarSeries(ApiModel):
             "제공처가 0을 실어 보낸다."
         ),
     )
+    settled: tuple[bool, ...] = Field(
+        default=(),
+        description=(
+            "그 봉이 **확정**인가. 종목(`equity`)에만 있고 나머지 kind에서는 빈 배열이다. "
+            "국내 종목 분봉은 WebSocket 잠정 봉이 먼저 들어오고 REST가 나중에 덮는다 — "
+            "**false면 고가·저가가 아직 바뀔 수 있다.** 재집계 버킷은 그 안이 전부 확정일 "
+            "때만 true다."
+        ),
+    )
 
 
 class DailySeries(ApiModel):

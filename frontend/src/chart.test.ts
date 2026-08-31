@@ -25,6 +25,7 @@ const BARS: BarSeries = {
   low: [3199, 3203, 3208],
   close: [3205, 3210, 3212],
   volume: [1000, 0, null],
+  settled: [],
 };
 
 describe("barChartData", () => {

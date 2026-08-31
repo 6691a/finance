@@ -118,6 +118,7 @@ const DATASETS: Dataset[] = [
           },
           num<SourceRecordRow>("rc", "만든 행", (row) => row.record_count),
           flag<SourceRecordRow>("p", "원본 보관", (row) => row.has_payload),
+          flag<SourceRecordRow>("m", "메타", (row) => row.has_metadata),
         ] as Column<never>[],
       },
     ],
@@ -166,6 +167,8 @@ const DATASETS: Dataset[] = [
           flag<MarketSessionRow>("e", "개장(우리 판정)", (row) => row.effective_open_day),
           text<MarketSessionRow>("ls", "현지 결제일", (row) => row.local_settlement_date),
           text<MarketSessionRow>("v", "확인 방법", (row) => row.verified_by),
+          // **null이면 제공처 값을 그대로 믿고 있다.** 확인한 적 없음과 확인해서 같음은 다르다.
+          at<MarketSessionRow>("va", "확인 시각(KST)", (row) => row.verified_at),
         ] as Column<never>[],
       },
     ],

@@ -82,6 +82,7 @@ class CollectionReadRepository:
             SourceRecord.status,
             SourceRecord.record_count,
             SourceRecord.payload.is_not(None).label("has_payload"),
+            SourceRecord.source_metadata.is_not(None).label("has_metadata"),
             SourceRecord.payload_uri,
         ).where(SourceRecord.started_at >= start, SourceRecord.started_at <= end)
         if sources:

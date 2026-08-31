@@ -27,6 +27,14 @@ class InvestorFlowPoint(ApiModel):
     individual_net_buy_amount: float | None = Field(default=None, description="개인 누적 순매수 대금(백만원).")
     pension_fund_net_buy_qty: int | None = Field(default=None, description="연기금 누적 순매수 수량(주).")
     investment_trust_net_buy_qty: int | None = Field(default=None, description="투신 누적 순매수 수량(주).")
+    # **순매수만으로는 거래 규모를 모른다.** 순매수 0이 "안 샀다"인지 "1억 주씩 사고 팔았다"인지
+    # 가르는 것이 이 여섯 칸이다. 제공처가 상위 셋에만 매도·매수를 준다.
+    foreign_sell_qty: int | None = Field(default=None, description="외국인 누적 매도 수량(주).")
+    foreign_buy_qty: int | None = Field(default=None, description="외국인 누적 매수 수량(주).")
+    institution_sell_qty: int | None = Field(default=None, description="기관 누적 매도 수량(주).")
+    institution_buy_qty: int | None = Field(default=None, description="기관 누적 매수 수량(주).")
+    individual_sell_qty: int | None = Field(default=None, description="개인 누적 매도 수량(주).")
+    individual_buy_qty: int | None = Field(default=None, description="개인 누적 매수 수량(주).")
 
 
 InvestorFlowList = Page[InvestorFlowPoint]
@@ -111,6 +119,16 @@ class ShortSaleRow(ApiModel):
     short_sale_amount: float | None = Field(default=None, description="공매도 거래대금(원).")
     short_sale_amount_ratio: float | None = Field(default=None, description="거래대금 대비 공매도 비중(%).")
     short_sale_average_price: float | None = Field(default=None, description="공매도 평균가(원).")
+    # **당일과 누적은 다른 값이다.** 누적은 제공처가 정한 창의 합이라 우리가 더해 만들 수 없다.
+    accumulated_short_sale_quantity: int | None = Field(default=None, description="누적 공매도 수량(주).")
+    accumulated_short_sale_volume_ratio: float | None = Field(
+        default=None, description="누적 거래량 대비 공매도 비중(%)."
+    )
+    accumulated_short_sale_amount: float | None = Field(default=None, description="누적 공매도 대금(원).")
+    accumulated_short_sale_amount_ratio: float | None = Field(
+        default=None, description="누적 거래대금 대비 공매도 비중(%)."
+    )
+    total_amount: float | None = Field(default=None, description="누적 거래대금(원).")
 
 
 ShortSaleList = Page[ShortSaleRow]
@@ -127,6 +145,7 @@ class StockLendingRow(ApiModel):
     balance_quantity: int | None = Field(default=None, description="잔고 수량(주).")
     balance_amount: float | None = Field(default=None, description="잔고 금액(원).")
     balance_change_quantity: int | None = Field(default=None, description="잔고 증감(주).")
+    price_change: float | None = Field(default=None, description="종가 전일 대비(원).")
 
 
 class MarketLendingRow(ApiModel):
@@ -135,6 +154,7 @@ class MarketLendingRow(ApiModel):
     market_code: str = Field(description="시장(KOSPI·KOSDAQ).")
     business_date: date = Field(description="영업일.")
     index_close: float | None = Field(default=None, description="지수 종가.")
+    index_change: float | None = Field(default=None, description="지수 전일 대비.")
     new_quantity: int | None = Field(default=None, description="신규 체결 수량(주).")
     repayment_quantity: int | None = Field(default=None, description="상환 수량(주).")
     balance_quantity: int | None = Field(default=None, description="잔고 수량(주).")
@@ -169,6 +189,17 @@ class CreditBalanceRow(ApiModel):
     short_loan_balance_quantity: int | None = Field(default=None, description="대주 잔고 수량(주).")
     short_loan_balance_amount: float | None = Field(default=None, description="대주 잔고 금액(원).")
     short_loan_balance_rate: float | None = Field(default=None, description="대주 잔고 비율(%).")
+    # **잔고만 보면 왜 늘었는지 모른다.** 신규와 상환이 그 답이고, 공여율은 제공처가 준 값이다.
+    loan_new_quantity: int | None = Field(default=None, description="융자 신규 수량(주).")
+    loan_repayment_quantity: int | None = Field(default=None, description="융자 상환 수량(주).")
+    loan_new_amount: float | None = Field(default=None, description="융자 신규 금액(원).")
+    loan_repayment_amount: float | None = Field(default=None, description="융자 상환 금액(원).")
+    loan_supply_rate: float | None = Field(default=None, description="융자 공여율(%).")
+    short_loan_new_quantity: int | None = Field(default=None, description="대주 신규 수량(주).")
+    short_loan_repayment_quantity: int | None = Field(default=None, description="대주 상환 수량(주).")
+    short_loan_new_amount: float | None = Field(default=None, description="대주 신규 금액(원).")
+    short_loan_repayment_amount: float | None = Field(default=None, description="대주 상환 금액(원).")
+    short_loan_supply_rate: float | None = Field(default=None, description="대주 공여율(%).")
 
 
 CreditBalanceList = Page[CreditBalanceRow]
@@ -187,6 +218,9 @@ class CreditRankingRow(ApiModel):
     loan_balance_amount: float | None = Field(default=None, description="융자 잔고 금액(원).")
     loan_balance_rate: float | None = Field(default=None, description="융자 잔고 비율(%).")
     loan_balance_growth_rate: float | None = Field(default=None, description="융자 잔고 증감률(%).")
+    short_loan_balance_growth_rate: float | None = Field(
+        default=None, description="대주 잔고 증감률(%)."
+    )
 
 
 class CreditRankingList(Page[CreditRankingRow]):
@@ -210,7 +244,11 @@ class MarketFundsRow(ApiModel):
     equity_fund_amount: float | None = Field(default=None, description="주식형 펀드(억원).")
     bond_fund_amount: float | None = Field(default=None, description="채권형 펀드(억원).")
     mmf_amount: float | None = Field(default=None, description="MMF(억원).")
+    mixed_fund_amount: float | None = Field(default=None, description="혼합형 펀드(억원).")
     securities_lending_amount: float | None = Field(default=None, description="대차 잔고(억원).")
+    futures_margin_amount: float | None = Field(default=None, description="선물 예치금(억원).")
+    index_change: float | None = Field(default=None, description="지수 전일 대비.")
+    market_capitalization: float | None = Field(default=None, description="시가총액(억원).")
 
 
 MarketFundsList = Page[MarketFundsRow]

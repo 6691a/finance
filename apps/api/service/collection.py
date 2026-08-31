@@ -66,6 +66,7 @@ def record_of(row: tuple[Any, ...]) -> SourceRecordRow:
         status,
         record_count,
         has_payload,
+        has_metadata,
         payload_uri,
     ) = row
     return SourceRecordRow(
@@ -78,6 +79,7 @@ def record_of(row: tuple[Any, ...]) -> SourceRecordRow:
         status=_text(status),
         record_count=record_count,
         has_payload=bool(has_payload),
+        has_metadata=bool(has_metadata),
         payload_uri=payload_uri,
     )
 
@@ -106,6 +108,9 @@ def session_of(row: Any) -> MarketSessionRow:
         effective_open_day=row.effective_open_day,
         local_settlement_date=row.local_settlement_date,
         domestic_settlement_date=row.domestic_settlement_date,
+        kis_weekday_code=row.kis_weekday_code,
+        kis_settlement_day=row.kis_settlement_day,
+        verified_at=row.verified_at,
         verified_by=None if row.verified_by is None else _text(row.verified_by),
     )
 

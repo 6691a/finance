@@ -140,7 +140,13 @@ logger = logging.getLogger(__name__)
 #     `flat`이 다르다는 것, 그리고 `causal_path:<id>`로 인용할 수 있다는 것이다. 새 근거
 #     종류가 생겨 `claims`에 들어올 수 있는 ref가 늘어나므로 판을 가른다.
 #     설계는 `docs/analysis/market-thesis/17-graph-query.md`.
-PROMPT_VERSION = "16"
+# 17: **같은 해시다.** YAML 문장은 그대로이고 `macro_changes`가 돌려주는 행에 전일 종가
+#     축이 붙는다(2026-08-31). 창 변화(`change_pct`)만 주던 것이 `previous_close`와
+#     `prev_close_change_pct`를 함께 주고 제목이 두 축을 글자로 밝힌다. 판 13이 부호가
+#     뒤집힌 국내 지수를 툴에서 뺀 것과 같은 문제의 나머지 절반이다 — 남은 심볼도 창
+#     변화가 하루 등락이 아닌데 모델과 Slack 근거 줄이 그렇게 읽고 있었다. 예측의 기준가와
+#     채점 축이 전일 종가라 그 축을 함께 준다. 모델이 보는 글자가 달라져 판을 가른다.
+PROMPT_VERSION = "17"
 
 # 채점 지평. KRX 영업일 수이고 달력일이 아니다. 0은 예측일 세션 하나다.
 HORIZON_DAYS: tuple[int, ...] = (0, 1, 3, 5)

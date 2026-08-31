@@ -156,6 +156,20 @@ MEDIA_URL = re.compile(r"https?://[^\s\"'<>]+\.(?:mp4|m3u8)(?:\?[^\s\"'<>]*)?")
 # 단서다(BBC `/news/videos/...`).
 VIDEO_PATH = re.compile(r"(?i)/(videos?|tv)/")
 
+# 문서 주소 자체가 파일인 출처가 있다. BOJ의 `canonical_url`이 그렇다 —
+# `https://www.boj.or.jp/en/mopo/outlook/gor2607b.pdf`가 문서 화면이 아니라 PDF다.
+HTML_MEDIA_TYPES = ("text/html", "application/xhtml+xml", "text/plain")
+
+# 응답이 파일이라는 것을 내용으로 아는 표식. 제공처가 `Content-Type`을 틀리게 주는 경우가 있어
+# 헤더보다 이것을 먼저 본다.
+FILE_MAGIC = (
+    b"%PDF-",          # PDF
+    b"PK\x03\x04",     # ZIP 계열(hwpx·docx·xlsx)
+    b"\xd0\xcf\x11\xe0",  # OLE 계열(hwp·doc·xls)
+    b"\xff\xd8\xff",    # JPEG
+    b"\x89PNG",         # PNG
+)
+
 PENDING_BODIES = read_sql("postgres", "document", "select_pending_body.sql")
 BODY_UPDATE = read_sql("postgres", "document", "update_body.sql")
 ATTACHMENT_UPSERT = read_sql("postgres", "document_attachment", "upsert.sql")
@@ -209,6 +223,25 @@ class DocumentBody(BaseModel):
     body: str | None = None
     file_urls: tuple[str, ...] = ()
     video_urls: tuple[str, ...] = ()
+
+
+def is_html_document(media_type: str | None, payload: bytes) -> bool:
+    """이 응답을 HTML 본문으로 읽어도 되나.
+
+    **아니면 문서 주소 자체가 파일이라는 뜻이다.** 그때 본문을 뽑으려 들면 PDF 바이트가
+    문자열로 들어와 문단 길이 하한을 쓰레기로 넘긴다. 2026-08-31 운영 실측에서 BOJ 22건이
+    그렇게 저장돼 있었다 — `body`가 `%PDF-1.7 %����...`로 시작하고 길이가 평균 748,010자,
+    최대 678만 자다. 검색 색인이 그 바이너리를 형태소 분석하느라 기어갔다.
+
+    **내용을 헤더보다 먼저 본다.** 제공처가 PDF에 `text/html`을 붙여 주는 경우가 있고,
+    그 반대(파일인데 헤더가 없는 경우)도 있다. `Content-Type`이 아예 없으면 예전처럼
+    HTML로 본다 — 스킴 없는 주소 하나 때문에 전체를 막지 않는다.
+    """
+    if payload.startswith(FILE_MAGIC):
+        return False
+    if not media_type:
+        return True
+    return media_type.split(";", 1)[0].strip().lower() in HTML_MEDIA_TYPES
 
 
 def paragraph_selector(source_slug: str) -> str:
@@ -417,14 +450,23 @@ class DocumentBodyCollector:
             return DocumentBody(document_id=candidate.id, status="unavailable")
 
         response = fetch_url(candidate.source_slug, detail_url(candidate.source_slug, candidate.canonical_url))
-        raw = response.body.decode("utf-8", errors="replace")
 
         if candidate.source_slug.startswith(NAVER_RESEARCH_PREFIX):
             # 화면이 JavaScript라 본문이 없다. 리포트 원문은 첨부 PDF다.
+            # (응답이 JSON이라 아래 HTML 판정에 걸리므로 이 갈래가 먼저다.)
             body = None
             file_urls = naver_attachment_urls(response.body)
             video_urls: tuple[str, ...] = ()
+        elif not is_html_document(_header(response, "content-type"), response.body):
+            # **문서 주소가 곧 파일이다.** 본문을 뽑지 않고 그 파일을 첨부로 남긴다.
+            # 원문은 첨부 파서가 텍스트로 바꾼다(`collectors/document/pdf.py`).
+            return DocumentBody(
+                document_id=candidate.id,
+                status="attachment_only",
+                file_urls=(absolute_url(candidate.canonical_url),),
+            )
         else:
+            raw = response.body.decode("utf-8", errors="replace")
             body = extract_body(raw, paragraph_selector(candidate.source_slug))
             file_urls = find_attachment_urls(raw, candidate.canonical_url)
             video_urls = find_video_urls(raw, candidate.canonical_url)

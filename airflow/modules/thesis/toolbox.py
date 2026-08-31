@@ -331,7 +331,10 @@ TOOL_DESCRIPTIONS: dict[str, str] = {
     "recent_disclosures": "추적 종목에 대해 최근 접수된 DART 공시. 회사명, 보고서명, 접수일, 감지 시각을 준다.",
     "macro_changes": (
         "분석 창 동안 해외 지수·선물·환율·금리·채권선물·원자재·암호화폐가 얼마나 움직였나. "
-        "첫 봉 대비 마지막 봉의 변화를 준다. 금리 계열은 퍼센트가 아니라 bp 차이로 준다. "
+        "**축이 둘이다** — `change_pct`는 창 첫 봉 대비이고 `prev_close_change_pct`는 "
+        "직전 정규장 종가 대비다. 네 예측의 기준가와 채점 축은 전일 종가이므로 하루 등락으로 "
+        "읽을 값은 뒤쪽이다. 금리 계열은 퍼센트가 아니라 bp 차이로 준다(`*_bp`). "
+        "전일 종가가 봉에 없는 심볼은 뒤쪽 칸이 통째로 빠진다 — 0이라는 뜻이 아니다. "
         "**국내 지수(코스피·코스닥)는 여기 안 나온다** — 창이 당일 09:00부터라 개장 갭이 빠져 "
         "값이 하루 등락과 어긋난다. 국내 지수는 관측 상태가 전일 종가 기준으로 이미 준다. "
         "**밤사이 미국장이 얼마나 움직였나는 us_market_close로 본다** — 이 툴의 창 변화는 창 첫 봉 "
@@ -1263,7 +1266,7 @@ class ThesisToolbox:
             Evidence(
                 kind=ThesisEvidenceKind.MACRO_CHANGE,
                 ref=evidence_ref(ThesisEvidenceKind.MACRO_CHANGE, row[1]),
-                title=f"{row[2]} {_change_label(row[3], row[5], row[6])}",
+                title=_macro_title(row),
                 url=None,
                 detail=_macro_detail(row),
             )
@@ -1382,13 +1385,18 @@ def _pending_expectation_detail(row: Sequence[Any]) -> PendingExpectationDetail:
 
 
 def _macro_detail(row: Sequence[Any]) -> MacroDetail:
-    """심볼 하나의 창 변화.
+    """심볼 하나의 변화. **축이 둘이다** — 분석 창과 전일 종가.
+
+    전일 종가 대비를 함께 주는 이유는 추론과 채점의 기준가가 그것이기 때문이다. 창 변화만
+    주면 창 밖으로 빠진 개장 갭이 사라진 값을 모델이 하루 등락으로 읽는다.
 
     **금리는 퍼센트가 아니라 bp로 준다.** 4.65→4.70을 `+1.08%`로 주면 모델이 급등으로 읽는다
-    (`briefing/market.py`의 `QUOTED_KINDS`와 같은 이유).
+    (`briefing/market.py`의 `QUOTED_KINDS`와 같은 이유). 두 축에 같은 규칙을 쓴다.
+
+    `previous_close`는 봉에 실려 오는 값이라 심볼에 따라 없을 수 있다. 없으면 그 축의 칸
+    셋이 통째로 빠진다 — 창 종가로 대신 채우면 전일 대비가 늘 0으로 보인다.
     """
-    kind, first_close, last_close = row[3], row[5], row[6]
-    basis_points = kind in BASIS_POINT_KINDS
+    kind, first_close, last_close, previous_close = row[3], row[5], row[6], row[10]
     return MacroDetail(
         kind=kind,
         country=row[4],
@@ -1397,13 +1405,26 @@ def _macro_detail(row: Sequence[Any]) -> MacroDetail:
         window_start=row[7].isoformat(),
         window_end=row[8].isoformat(),
         bar_count=row[9],
-        change_bp=round(float(last_close - first_close) * 100, 1) if basis_points else None,
-        change_pct=(
-            round(float((last_close - first_close) / first_close) * 100, 2)
-            if not basis_points and first_close
-            else None
-        ),
+        change_bp=_change_bp(kind, first_close, last_close),
+        change_pct=_change_pct(kind, first_close, last_close),
+        previous_close=float(previous_close) if previous_close is not None else None,
+        prev_close_change_bp=_change_bp(kind, previous_close, last_close),
+        prev_close_change_pct=_change_pct(kind, previous_close, last_close),
     )
+
+
+def _change_bp(kind: str, base: Decimal | None, value: Decimal) -> float | None:
+    """금리 계열만 bp를 갖는다. 기준값이 없으면 잰 것이 없다."""
+    if kind not in BASIS_POINT_KINDS or base is None:
+        return None
+    return round(float(value - base) * 100, 1)
+
+
+def _change_pct(kind: str, base: Decimal | None, value: Decimal) -> float | None:
+    """금리가 아닌 계열의 퍼센트 변화. 기준값이 없거나 0이면 잰 것이 없다."""
+    if kind in BASIS_POINT_KINDS or not base:
+        return None
+    return round(float((value - base) / base) * 100, 2)
 
 
 def _us_close_detail(row: Sequence[Any]) -> UsCloseDetail:
@@ -1414,28 +1435,37 @@ def _us_close_detail(row: Sequence[Any]) -> UsCloseDetail:
     정하는 데 쓰므로 표시 시간대로 준다(`kst_label`).
     """
     kind, close, previous_close = row[3], row[4], row[5]
-    basis_points = kind in BASIS_POINT_KINDS
     return UsCloseDetail(
         kind=kind,
         close=float(close),
         previous_close=float(previous_close),
         closed_at_kst=kst_label(row[6]),
-        change_bp=round(float(close - previous_close) * 100, 1) if basis_points else None,
-        change_pct=(
-            round(float((close - previous_close) / previous_close) * 100, 2)
-            if not basis_points and previous_close
-            else None
-        ),
+        change_bp=_change_bp(kind, previous_close, close),
+        change_pct=_change_pct(kind, previous_close, close),
     )
 
 
-def _change_label(kind: str, first_close: Decimal, last_close: Decimal) -> str:
+def _macro_title(row: Sequence[Any]) -> str:
+    """`macro_changes` 한 줄의 제목. **축을 글자로 밝힌다.**
+
+    Slack 근거 줄이 이 문자열만 그리므로 여기서 안 밝히면 읽는 쪽이 창 변화를 하루 등락으로
+    읽는다(`thesis/render.py`의 `_baseline_line`과 같은 이유). 전일 종가가 봉에 없으면 창
+    축만 적는다 — 없는 값을 "0.00%"로 지어내지 않는다.
+    """
+    kind, label, first_close, last_close, previous_close = row[3], row[2], row[5], row[6], row[10]
+    title = f"{label} 창 {_change_label(kind, first_close, last_close)}"
+    if previous_close:
+        title += f" · 전일 종가 대비 {_change_label(kind, previous_close, last_close)}"
+    return title
+
+
+def _change_label(kind: str, base: Decimal, value: Decimal) -> str:
     """제목 뒤에 붙는 변화 표기. Slack 근거 줄에도 그대로 쓰인다."""
     if kind in BASIS_POINT_KINDS:
-        return f"{float(last_close - first_close) * 100:+.1f}bp"
-    if not first_close:
+        return f"{float(value - base) * 100:+.1f}bp"
+    if not base:
         return "변화 없음"
-    return f"{float((last_close - first_close) / first_close) * 100:+.2f}%"
+    return f"{float((value - base) / base) * 100:+.2f}%"
 
 
 def _technical_snapshot(subject_code: str, rows: Sequence[Sequence[Any]]) -> indicators.TechnicalSnapshot | None:

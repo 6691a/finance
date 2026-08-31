@@ -94,6 +94,9 @@ PROMPT_HASHES: dict[tuple[str, str], str] = {
     # 그 절이 셋을 말한다 — 예측이 아니라 2주 전 사후 인과라는 것, 키가 없는 것과 `flat`이
     # 다르다는 것, `causal_path:<id>`로 인용할 수 있다는 것이다.
     ("thesis_generation", "16"): "5a534075cb2c9475d7201c1e999900132fd0a2c7df4f8740e4abc02b67e09884",
+    # 판 17은 **같은 해시다.** YAML 문장은 그대로이고 `macro_changes`가 창 변화 옆에 전일
+    # 종가 대비를 함께 준다. 모델이 보는 글자가 달라져 판을 가른다.
+    ("thesis_generation", "17"): "5a534075cb2c9475d7201c1e999900132fd0a2c7df4f8740e4abc02b67e09884",
     ("thesis_narrative", "2"): "1baea1c554c90619576036db58ad42d2a1e24052fc8ab982978e605c6e696b8b",
     # 판 3은 **같은 해시다.** YAML 문장은 그대로이고 자리표시자에 들어가는 값의 줄 수만
     # 늘었다(예측의 축, 밴드 적중). 모델이 보는 글자가 달라져 판을 가른다.

@@ -16,11 +16,12 @@ from apps.api.repository import DEFAULT_LIMIT, MAX_LIMIT
 from apps.api.schemas import (
     CausalChannelList,
     CausalEventList,
+    CausalGraph,
     CausalPathDetail,
     CausalPathList,
 )
 from apps.api.service import MarketCausalReadService
-from apps.api.service.causal import UnknownPath
+from apps.api.service.causal import GraphOffline, UnknownPath
 from apps.core.utility import kst_today
 
 router = APIRouter(prefix="/api/causal", tags=["causal"])
@@ -100,6 +101,42 @@ async def read_channels(
     """전달 경로 이름과 그것을 거친 단계 수. 주가 쌓이면서 같은 채널을 공유한다."""
     from_day, to_day = _days(start, end)
     return await service.channels(start=from_day, end=to_day, limit=limit, offset=offset)
+
+
+@router.get("/graph", response_model=CausalGraph)
+@inject
+async def read_graph(
+    service: ServiceDep,
+    week: Annotated[date, Query(description="그 주의 시작일(월요일). 엣지가 이 값으로 잘린다")],
+) -> CausalGraph:
+    """그 주의 **투영**. 모양만 온다 — 실현 등락·근거는 경로 응답이 갖는다.
+
+    **그래프 DB가 없으면 503이다.** 빈 그래프로 위장하면 "그 주에 경로가 없다"와 구별되지
+    않는다. 화면은 이 응답을 보고 경로 목록으로 그림을 조립한다.
+    """
+    try:
+        return await service.week_graph(week)
+    except GraphOffline as error:
+        raise HTTPException(status_code=503, detail=str(error)) from error
+
+
+@router.get("/graph/targets/{kind}/{code}", response_model=CausalGraph)
+@inject
+async def read_target_chain(
+    kind: str,
+    code: str,
+    service: ServiceDep,
+    limit: Annotated[int, Query(ge=1, le=200, description="탐색할 경로 수 상한")] = 50,
+) -> CausalGraph:
+    """대상 하나에서 **주를 넘어** 뻗은 사슬.
+
+    **경로 목록으로는 못 만드는 답이다** — 그쪽은 한 주의 행이라 주를 넘는 사슬이 안 보인다.
+    시각이 역행하는 경로(뒤 주에 닿은 대상이 앞 주의 원인이 되는 것)는 조회가 뺀다.
+    """
+    try:
+        return await service.target_chain(kind=kind, code=code, limit=limit)
+    except GraphOffline as error:
+        raise HTTPException(status_code=503, detail=str(error)) from error
 
 
 @router.get("/paths/{path_id}", response_model=CausalPathDetail)

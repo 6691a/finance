@@ -49,9 +49,9 @@ def summary_of(
         else str(document.document_type),
         published_at=document.published_at,
         language=document.language,
-        content_level=document.content_level.value
-        if hasattr(document.content_level, "value")
-        else str(document.content_level),
+        body_status=None
+        if document.body_status is None
+        else str(getattr(document.body_status, "value", document.body_status)),
         canonical_url=document.canonical_url,
         value_score=document.value_score,
         direction=None if document.direction is None else str(getattr(document.direction, "value", document.direction)),

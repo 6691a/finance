@@ -9,6 +9,12 @@
 """
 
 from apps.api.repository.causal import MarketCausalReadRepository, PathRows
+from apps.api.repository.causal_graph import (
+    CausalGraphReadRepository,
+    GraphRows,
+    UnsafeCypher,
+    ensure_read_only,
+)
 from apps.api.repository.collection import CollectionReadRepository
 from apps.api.repository.common import (
     DEFAULT_LIMIT,
@@ -69,6 +75,7 @@ __all__ = [
     "LLM_RUN_STATUSES",
     "MAX_LIMIT",
     "MAX_POINTS",
+    "CausalGraphReadRepository",
     "CollectionReadRepository",
     "CurveRows",
     "DocumentDetailRows",
@@ -77,6 +84,7 @@ __all__ = [
     "EventReadRepository",
     "ForecastGrade",
     "ForecastRunStat",
+    "GraphRows",
     "IndicatorReadRepository",
     "IndicatorSeriesRows",
     "LlmRunDetailRows",
@@ -96,5 +104,7 @@ __all__ = [
     "ThesisGraphRows",
     "ThesisListRows",
     "ThesisReadRepository",
+    "UnsafeCypher",
     "bar_provider",
+    "ensure_read_only",
 ]

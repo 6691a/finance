@@ -446,10 +446,16 @@ WHERE all(i IN range(1, size(rels) - 1)
 **지금 저장소에 남는 것은 없다.** 로컬 Neo4j는 이미 compose에 있었고, 스크립트는
 스크래치패드에 있으며, 이 문서만 늘었다.
 
-## 8. LLM이 Cypher를 쓰는 조회 층 (예정, 2026-08-30)
+## 8. Cypher를 쓰는 조회 층
 
-**미구현이다.** 패키지(`langchain-neo4j`)만 넣어 뒀고 import하는 코드는 없다. 여기 적는 것은
-그때 이미 정해져 있는 제약들이다 — §2·§7.8이 만든 것이라 설계를 다시 하지 않는다.
+**조회 API 쪽은 구현했다**(2026-08-30, [17단계](17-collection-browser.md) §8.5).
+`apps/api/repository/causal_graph.py`가 그 자리이고 라우트는 `/api/causal/graph`와
+`/api/causal/graph/targets/{kind}/{code}` 둘이다. §8.2의 두 방법 중 **"파라미터만 받고
+Cypher는 우리가 갖는"** 쪽을 골랐다 — 질문이 둘뿐이라 그쪽이 짧고, §8.1의 검사를 상수
+쿼리에 대해 테스트로 못 박을 수 있다.
+
+**LLM이 Cypher를 쓰는 쪽은 아직 미구현이다.** `langchain-neo4j`를 import하는 코드는 없다.
+아래 제약은 그때도 그대로다 — §2·§7.8이 만든 것이라 설계를 다시 하지 않는다.
 
 ### 8.1 community 판에는 읽기 전용 계정이 없다
 

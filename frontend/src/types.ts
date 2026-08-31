@@ -802,3 +802,32 @@ export interface CausalChannelRow {
   first_seen_week: DayText;
   steps: number;
 }
+
+/** 그래프 DB가 준 노드 하나. **키는 Postgres의 자연키를 편 문자열이다.** */
+export interface CausalGraphNode {
+  id: string;
+  kind: string;
+  label: string;
+}
+
+/** 엣지 하나. `path_id`와 `week_start`가 가드의 값이다. */
+export interface CausalGraphEdge {
+  source: string;
+  target: string;
+  type: string;
+  path_id: number | null;
+  week_start: DayText | null;
+  position: number | null;
+}
+
+/**
+ * 탐색용 서브그래프. **원본이 아니라 투영이다** — 실현 등락·근거는 경로 응답이 갖는다.
+ *
+ * 그래프 DB가 꺼져 있으면 이 응답 대신 503이 오고, 화면은 경로 목록으로 그림을 조립한다.
+ */
+export interface CausalGraph {
+  source: string;
+  week_start: DayText | null;
+  nodes: CausalGraphNode[];
+  edges: CausalGraphEdge[];
+}

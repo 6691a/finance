@@ -9,10 +9,10 @@
 import { useMemo, useRef, useState } from "react";
 import { Link, useParams } from "react-router-dom";
 
-import { useJson } from "../api";
+import { ApiError, useJson } from "../api";
 import { Async } from "../components/AsyncState";
 import GraphView, { type GraphViewHandle } from "../components/GraphView";
-import { causalElements } from "../causal";
+import { causalElements, graphElements } from "../causal";
 import {
   CAUSAL_CONFIDENCES,
   CAUSAL_EVIDENCE_KINDS,
@@ -21,7 +21,7 @@ import {
   CAUSAL_TARGET_KINDS,
   labelOf,
 } from "../labels";
-import type { CausalEvidenceRow, CausalPathDetail, CausalPathRow } from "../types";
+import type { CausalEvidenceRow, CausalGraph, CausalPathDetail, CausalPathRow } from "../types";
 import { changeText, chainText, sourceText } from "./CausalPage";
 
 /** 근거 한 줄의 보일 이름. 문서만 제목이 오고 나머지는 식별자가 곧 읽을 수 있는 값이다. */
@@ -37,14 +37,35 @@ export function claimText(row: CausalPathRow): string {
 export default function CausalDetailPage() {
   const { pathId } = useParams();
   const resource = useJson<CausalPathDetail>(`/api/causal/paths/${pathId}`);
+  const week = resource.data?.path.week_start ?? null;
+  const target = resource.data?.path ?? null;
+  const [scope, setScope] = useState<"week" | "target">("week");
+
+  // **그림은 그래프 DB에서 온다.** 투영은 노드를 주를 넘어 공유해서, 경로 목록이 못 잇는
+  // 사슬(08-10 주에 닿은 `SOX`가 08-17 주의 원인이 되는 것)을 함께 준다.
+  const graphPath =
+    week === null
+      ? null
+      : scope === "target" && target !== null
+        ? `/api/causal/graph/targets/${target.target_kind}/${encodeURIComponent(target.target_code)}`
+        : `/api/causal/graph?week=${week}`;
+  const graph = useJson<CausalGraph>(graphPath);
+  // 503은 "그래프 DB가 이 실행에 없다"다. **오류 화면이 아니라 폴백이다** — 경로 목록으로
+  // 같은 주의 그림을 조립할 수 있고, 그때 잃는 것은 주를 넘는 사슬뿐이다.
+  const offline = graph.error instanceof ApiError && graph.error.status === 503;
+
   const [selected, setSelected] = useState<string | null>(null);
   const handle = useRef<GraphViewHandle | null>(null);
 
-  const elements = useMemo(
-    () =>
-      resource.data === null ? [] : causalElements(resource.data.siblings, resource.data.path),
-    [resource.data],
-  );
+  const elements = useMemo(() => {
+    if (graph.data !== null) {
+      return graphElements(graph.data, resource.data?.path.id ?? null, resource.data?.path.sign);
+    }
+    if (offline && resource.data !== null) {
+      return causalElements(resource.data.siblings, resource.data.path);
+    }
+    return [];
+  }, [graph.data, offline, resource.data]);
 
   return (
     <Async resource={resource} what="인과 경로" back="/causal">
@@ -84,6 +105,27 @@ export default function CausalDetailPage() {
           </dl>
 
           <div className="filters">
+            <fieldset>
+              <legend>그래프 범위</legend>
+              <label>
+                <input
+                  type="radio"
+                  name="scope"
+                  checked={scope === "week"}
+                  onChange={() => setScope("week")}
+                />
+                이 주
+              </label>
+              <label>
+                <input
+                  type="radio"
+                  name="scope"
+                  checked={scope === "target"}
+                  onChange={() => setScope("target")}
+                />
+                {detail.path.target_code}의 사슬(주를 넘어)
+              </label>
+            </fieldset>
             <button type="button" onClick={() => handle.current?.fit()}>
               화면에 맞추기
             </button>
@@ -91,6 +133,13 @@ export default function CausalDetailPage() {
               초기화
             </button>
           </div>
+
+          {offline && (
+            <p className="state">
+              그래프 DB가 이 실행에 붙어 있지 않다 — 경로 목록으로 **이 주만** 그렸다. 주를 넘는
+              사슬은 `NEO4J_URI`가 있어야 보인다.
+            </p>
+          )}
 
           <div className="graph-layout">
             <GraphView

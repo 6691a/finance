@@ -43,8 +43,13 @@ class DocumentSummary(ApiModel):
     document_type: str = Field(description="문서 종류(news·report·release 등).")
     published_at: UtcDatetime = Field(description="발행 시각(UTC).")
     language: str | None = Field(default=None, description="본문 언어.")
-    content_level: str = Field(
-        description="본문을 어디까지 받았나. `metadata_only`면 `body`가 null이고 CHECK가 그것을 강제한다."
+    body_status: str | None = Field(
+        default=None,
+        description=(
+            "본문을 받아 봤는가, 못 받았다면 왜인가(ok·empty·attachment_only·unavailable). "
+            "**null은 아직 해 보지 않았다는 뜻이고 그 집합이 곧 수집 큐다** — 실패를 상태로 "
+            "남기지 않아서 연결 오류와 5xx는 여기 없다."
+        ),
     )
     canonical_url: str | None = Field(default=None, description="원문 URL.")
     value_score: int | None = Field(
@@ -70,7 +75,10 @@ class DocumentDetail(DocumentSummary):
 
     body: str | None = Field(
         default=None,
-        description="본문 전문. `content_level`이 `metadata_only`면 null이다. **HTML로 해석하지 않는다.**",
+        description=(
+            "본문 전문. 아직 못 받았으면 null이고 그 사유는 `body_status`가 갖는다. "
+            "**HTML로 해석하지 않는다.**"
+        ),
     )
     summary: str | None = Field(default=None, description="LLM이 쓴 요약.")
     assessment: str | None = Field(default=None, description="LLM이 쓴 평가 근거.")

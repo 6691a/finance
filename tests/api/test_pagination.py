@@ -23,7 +23,9 @@ EXEMPT: dict[str, str] = {
     "/api/llm-runs/{llm_run_id}/tool-calls/{seq}": "단건",
     "/api/theses/{thesis_id}": "단건",
     "/api/theses/{thesis_id}/graph": "한 추론의 그래프 하나다",
-    "/api/causal/paths/{path_id}": "단건과 그 사건의 형제 경로 전부. 한 사건이 한 판이다",
+    "/api/causal/paths/{path_id}": "단건과 그 주의 경로 전부. 한 주가 한 판이다",
+    "/api/causal/graph": "그래프 투영이다. 노드·엣지 묶음이라 행 목록이 아니다",
+    "/api/causal/graph/targets/{kind}/{code}": "대상 하나에서 뻗은 사슬. 상한은 `limit` 하나다",
 }
 
 

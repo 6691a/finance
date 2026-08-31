@@ -44,6 +44,27 @@ DB_ALIAS = "prod"
 # `tests/config/test_api_stack.py`가 운영 compose에 이 값이 있는지 검사한다.
 SENTRY_ENABLED_ENV = "SENTRY_ENABLED"
 
+# 그래프 DB 접속. **`config.yaml`이 아니라 환경변수다** — 4단계 설계 §5가 Airflow 쪽에
+# 정한 것과 같은 방식이고(값 셋뿐이라 새 설정 층을 만들지 않는다), 같은 이유로 여기도
+# 그렇다. **없으면 그래프 라우트만 503이고 나머지 화면은 그대로 돈다** — 로컬에서 Neo4j를
+# 안 띄우고도 개발할 수 있어야 한다.
+NEO4J_URI_ENV = "NEO4J_URI"
+NEO4J_USER_ENV = "NEO4J_USER"
+NEO4J_PASSWORD_ENV = "NEO4J_PASSWORD"
+
+
+def neo4j_settings(environ: dict[str, str] | None = None) -> tuple[str, str, str] | None:
+    """`(uri, user, password)` 또는 `None`. **셋이 다 있어야 켠다.**
+
+    반쯤 준 설정으로 붙으면 인증 실패가 조회 시점에 나고, 그때는 "그래프가 비었다"와
+    구별되지 않는다. 시작할 때 갈라 두는 편이 낫다.
+    """
+    values = os.environ if environ is None else environ
+    uri = values.get(NEO4J_URI_ENV, "")
+    user = values.get(NEO4J_USER_ENV, "")
+    password = values.get(NEO4J_PASSWORD_ENV, "")
+    return (uri, user, password) if uri and user and password else None
+
 
 def sentry_enabled(environ: dict[str, str] | None = None) -> bool:
     """`SENTRY_ENABLED=1`일 때만 참. 그 밖의 값과 미설정은 전부 거짓이다."""
@@ -74,6 +95,7 @@ def main() -> int:
     # config.yaml이 필요한 import는 실행 시점으로 미룬다.
     import sentry_sdk
     import uvicorn
+    from dependency_injector import providers
 
     from apps.api.app import create_app
     from apps.api.container import ApiContainer
@@ -106,6 +128,23 @@ def main() -> int:
     # **composition root는 여기 하나다.** 컨테이너가 설정을 스스로 읽지 않고 여기서
     # 받는다 — 그래야 `apps.api.container`가 config.yaml 없이 import된다.
     container = ApiContainer(settings=settings, db_alias=DB_ALIAS)
+
+    # **드라이버는 프로세스에 한 벌이고 여기서 만든다.** 컨테이너가 만들면 종료할 때 닫을
+    # 자리가 없다. 드라이버 자체 재시도는 켜 두지 않는다 — `airflow/modules/graph.py`가
+    # 같은 이유로 껐다(로그의 시도 횟수와 실제 호출 횟수가 어긋난다).
+    graph = neo4j_settings()
+    driver = None
+    if graph is not None:
+        from neo4j import GraphDatabase
+
+        uri, user, password = graph
+        driver = GraphDatabase.driver(uri, auth=(user, password), max_transaction_retry_time=0)
+        container.neo4j_driver.override(providers.Object(driver))
+        logger.info("causal graph reads from neo4j at %s", uri)
+    else:
+        # 조용히 끄지 않는다. 운영에서 이 줄이 보이면 compose에 값이 빠진 것이다.
+        logger.warning("neo4j is not configured — the causal graph routes answer 503")
+
     app = create_app(container)
     logger.info("serving the thesis read API from alias %s", DB_ALIAS)
     uvicorn.run(
@@ -115,6 +154,8 @@ def main() -> int:
         # uvicorn 기본 dictConfig가 root 핸들러를 갈아치워 realtime과 로그 형식이 갈린다.
         log_config=None,
     )
+    if driver is not None:
+        driver.close()
     return 0
 
 

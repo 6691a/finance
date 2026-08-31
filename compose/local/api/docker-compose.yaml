@@ -16,6 +16,12 @@ services:
     restart: unless-stopped
     ports:
       - "18000:8000"
+    environment:
+      # 인과 그래프 투영을 읽는다. **셋이 다 있어야 켜지고**, 없으면 그래프 라우트만 503이다.
+      # `just dev`의 neo4j가 호스트 17687에 있고 컨테이너는 그것을 `host.docker.internal`로 본다.
+      NEO4J_URI: bolt://host.docker.internal:17687
+      NEO4J_USER: neo4j
+      NEO4J_PASSWORD: finance1234
     # 읽기 요청이라 길 필요가 없다.
     stop_grace_period: 10s
     volumes:

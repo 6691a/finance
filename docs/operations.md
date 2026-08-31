@@ -436,6 +436,12 @@ just web-build  # tsc --noEmit && vite build
 - `apps/`는 마운트지만 컨테이너에 `--reload`가 없어 **그것도 다시 띄워야** 반영됩니다.
   파이썬은 import 시점에 읽습니다.
 
+**인과 그래프의 그림은 Neo4j에서 읽습니다.** `NEO4J_URI`·`NEO4J_USER`·`NEO4J_PASSWORD`
+셋이 다 있어야 켜지고, 없으면 그래프 라우트만 503이며 화면은 경로 목록으로 그 주만 그립니다
+(주를 넘는 사슬만 사라집니다). 로컬은 `just dev`의 neo4j(호스트 17687)를 보고, 운영은
+database 스택의 컨테이너 이름(`bolt://neo4j:7687`)을 봅니다. **비밀번호는 저장소에 두지
+않습니다** — 운영 compose가 `.env`에서 받습니다.
+
 조회 API는 `config.yaml`의 **`read_only` 별칭에만** 붙고, 그 별칭이 아니면 시작을 거부합니다.
 연결에 `default_transaction_read_only = on`이 걸려 실수로 쓰기가 들어가도 PostgreSQL이
 거절합니다. Sentry는 **`SENTRY_ENABLED=1`일 때만** 리포트합니다(운영 compose에만 켜져 있습니다).

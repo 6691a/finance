@@ -5,7 +5,16 @@
 
 import { describe, expect, it } from "vitest";
 
-import { causalElements, channelId, edgeIds, eventId, sourceId, targetId, walk } from "./causal";
+import {
+  causalElements,
+  channelId,
+  edgeIds,
+  eventId,
+  graphElements,
+  sourceId,
+  targetId,
+  walk,
+} from "./causal";
 import type { CausalPathRow } from "./types";
 
 function row(overrides: Partial<CausalPathRow> = {}): CausalPathRow {
@@ -125,5 +134,66 @@ describe("causalElements", () => {
   it("경로가 없으면 아무 것도 그리지 않는다", () => {
     // 빈 canvas는 오해만 만든다. 화면이 노드 0개를 보고 안 그린다.
     expect(causalElements([], null)).toEqual([]);
+  });
+});
+
+describe("graphElements", () => {
+  const graph = {
+    source: "neo4j",
+    week_start: "2026-08-10",
+    nodes: [
+      { id: "event:물가:2026-08-12", kind: "event", label: "물가 둔화" },
+      { id: "channel:할인율", kind: "channel", label: "할인율" },
+      { id: "target:quote:SOX", kind: "target", label: "SOX" },
+      { id: "target:instrument:005930", kind: "target", label: "005930" },
+    ],
+    edges: [
+      {
+        source: "event:물가:2026-08-12",
+        target: "channel:할인율",
+        type: "LEADS_TO",
+        path_id: 1,
+        week_start: "2026-08-10",
+        position: 1,
+      },
+      {
+        source: "channel:할인율",
+        target: "target:quote:SOX",
+        type: "HITS",
+        path_id: 1,
+        week_start: "2026-08-10",
+        position: null,
+      },
+      {
+        source: "target:quote:SOX",
+        target: "target:instrument:005930",
+        type: "HITS",
+        path_id: 9,
+        week_start: "2026-08-17",
+        position: null,
+      },
+    ],
+  };
+
+  it("노드 종류가 곧 스타일이다", () => {
+    const classes = graphElements(graph, null)
+      .filter((element) => element.group === "nodes")
+      .map((element) => element.classes);
+    expect(classes).toEqual(["event", "channel", "target", "target"]);
+  });
+
+  it("주를 넘는 엣지도 그대로 그린다", () => {
+    // **이것이 그래프 DB를 들인 이유다.** 경로 응답은 그 주의 행이라 08-17 엣지가 없다.
+    const ids = graphElements(graph, null)
+      .filter((element) => element.group === "edges")
+      .map((element) => element.data["id"]);
+    expect(ids).toContain("target:quote:SOX->target:instrument:005930");
+  });
+
+  it("지금 보는 경로의 엣지만 방향 색을 받는다", () => {
+    const marked = graphElements(graph, 1, "down").filter((element) =>
+      element.classes?.includes("direction-down"),
+    );
+    expect(marked.length).toBe(2);
   });
 });

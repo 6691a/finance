@@ -12,7 +12,7 @@
 
 import type { CytoscapeElement } from "./graph";
 import { CAUSAL_TARGET_KINDS, labelOf } from "./labels";
-import type { CausalPathRow } from "./types";
+import type { CausalGraph, CausalPathRow } from "./types";
 
 /** 사건 노드 id. 한 주에 사건이 여럿이라 id에 사건 번호가 들어간다. */
 export function eventId(row: CausalPathRow): string {
@@ -128,4 +128,42 @@ export function causalElements(
   }
 
   return [...nodes.values(), ...edges.values()];
+}
+
+/**
+ * **그래프 DB가 준 투영**을 그대로 그린다.
+ *
+ * 경로 목록에서 조립하는 `causalElements`와 다른 점은 하나다 — 투영은 노드를 **주를 넘어**
+ * 공유하므로 08-10 주에 닿은 `SOX`가 08-17 주의 원인으로 이어지는 사슬이 함께 온다.
+ * 그 사슬이 Neo4j를 들인 이유이고(4단계 설계 §1), 조회가 시각 역행을 이미 걸러 준다.
+ *
+ * `pickedPathId`가 있으면 그 경로의 엣지만 방향 색을 받는다. 색을 전부에 주면 한 화면에서
+ * 위·아래가 뒤섞여 어느 것이 이 경로의 주장인지 사라진다.
+ */
+export function graphElements(
+  graph: CausalGraph,
+  pickedPathId: number | null,
+  pickedSign: string = "up",
+): CytoscapeElement[] {
+  const nodes = graph.nodes.map((node) => ({
+    group: "nodes" as const,
+    data: { id: node.id, label: node.label },
+    classes: node.kind,
+  }));
+
+  const edges = new Map<string, CytoscapeElement>();
+  for (const edge of graph.edges) {
+    const mine = pickedPathId !== null && edge.path_id === pickedPathId;
+    const key = `${edge.source}->${edge.target}`;
+    // 엣지는 한 번만 그린다. 여러 경로가 같은 두 노드를 잇는 일이 흔하고, 그때 겹쳐
+    // 그리면 화살표가 굵어질 뿐 새 사실이 없다. 다만 강조는 덮어쓴다.
+    if (edges.has(key) && !mine) continue;
+    edges.set(key, {
+      group: "edges",
+      data: { id: key, source: edge.source, target: edge.target, label: "" },
+      classes: mine ? `cites direction-${pickedSign}` : "cites",
+    });
+  }
+
+  return [...nodes, ...edges.values()];
 }

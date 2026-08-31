@@ -7,13 +7,22 @@
 from datetime import date
 from typing import Any
 
-from apps.api.repository import DEFAULT_LIMIT, MarketCausalReadRepository, PathRows
+from apps.api.repository import (
+    DEFAULT_LIMIT,
+    CausalGraphReadRepository,
+    GraphRows,
+    MarketCausalReadRepository,
+    PathRows,
+)
 from apps.api.schemas import (
     CausalChannelList,
     CausalChannelRow,
     CausalEventList,
     CausalEventRow,
     CausalEvidenceRow,
+    CausalGraph,
+    CausalGraphEdge,
+    CausalGraphNode,
     CausalPathDetail,
     CausalPathList,
     CausalPathRow,
@@ -72,6 +81,36 @@ def build_paths(rows: PathRows, *, limit: int, offset: int) -> CausalPathList:
 
 class UnknownPath(Exception):
     """없는 경로 id. 라우트가 404로 바꾼다."""
+
+
+class GraphOffline(Exception):
+    """그래프 DB가 이 실행에 붙어 있지 않다. 라우트가 503으로 바꾼다.
+
+    **빈 그래프로 위장하지 않는다** — "그 주에 경로가 없다"와 "그래프 DB가 꺼져 있다"는
+    화면이 다르게 말해야 한다. 화면은 이 응답을 보고 경로 목록으로 그림을 조립한다.
+    """
+
+
+def graph_of(rows: GraphRows, week: date | None) -> CausalGraph:
+    """투영을 응답 계약으로. **모양만 옮긴다** — 숫자는 경로 응답이 갖는다."""
+    return CausalGraph(
+        source="neo4j",
+        week_start=week,
+        nodes=tuple(
+            CausalGraphNode(id=node.id, kind=node.kind, label=node.label) for node in rows.nodes
+        ),
+        edges=tuple(
+            CausalGraphEdge(
+                source=edge.source,
+                target=edge.target,
+                type=edge.type,
+                path_id=edge.path_id,
+                week_start=edge.week_start,
+                position=edge.position,
+            )
+            for edge in rows.edges
+        ),
+    )
 
 
 def evidence_of(path_id: int, ref: str, titles: dict[int, str]) -> CausalEvidenceRow:
@@ -135,8 +174,15 @@ def channel_of(row: tuple[Any, ...]) -> CausalChannelRow:
 class MarketCausalReadService:
     """인과 그래프를 읽어 응답 계약으로 준다."""
 
-    def __init__(self, repository: MarketCausalReadRepository) -> None:
+    def __init__(
+        self,
+        repository: MarketCausalReadRepository,
+        graph_repository: CausalGraphReadRepository,
+    ) -> None:
         self._repository = repository
+        # **저장소가 둘이다.** 숫자·근거는 Postgres가 원본이고 모양은 Neo4j 투영이 낫다 —
+        # 투영은 주를 넘어 노드를 공유해서 경로 목록이 못 잇는 사슬을 잇는다.
+        self._graph = graph_repository
 
     async def paths(
         self,
@@ -166,6 +212,18 @@ class MarketCausalReadService:
             raise UnknownPath(str(path_id))
         return build_detail(rows, path_id)
 
+    async def week_graph(self, week: date) -> CausalGraph:
+        """그 주의 투영. 그래프 DB가 없으면 `GraphOffline`이다."""
+        if not self._graph.enabled:
+            raise GraphOffline("neo4j is not configured for this process")
+        return graph_of(self._graph.week_graph(week), week)
+
+    async def target_chain(self, *, kind: str, code: str, limit: int = 50) -> CausalGraph:
+        """대상 하나에서 **주를 넘어** 뻗은 사슬. 경로 목록으로는 못 만드는 답이다."""
+        if not self._graph.enabled:
+            raise GraphOffline("neo4j is not configured for this process")
+        return graph_of(self._graph.target_chain(kind=kind, code=code, limit=limit), None)
+
     async def events(
         self, *, start: date, end: date, limit: int = DEFAULT_LIMIT, offset: int = 0
     ) -> CausalEventList:
@@ -194,6 +252,7 @@ class MarketCausalReadService:
 
 
 __all__ = [
+    "GraphOffline",
     "MarketCausalReadService",
     "UnknownPath",
     "build_detail",
@@ -201,5 +260,6 @@ __all__ = [
     "channel_of",
     "event_of",
     "evidence_of",
+    "graph_of",
     "path_of",
 ]

@@ -31,6 +31,9 @@ api = [
     "asyncpg",
     "dependency-injector",
     "fastapi",
+    # 인과 그래프 투영을 읽는다(4단계 §8.3의 소비자 둘 중 하나). **`langchain-neo4j`는 아직
+    # 아무도 import하지 않아 여기 없다** — 드라이버 하나면 되고, 그쪽은 scipy까지 끌고 온다.
+    "neo4j",
     "pydantic",
     "pydantic-settings",
     "pyyaml",

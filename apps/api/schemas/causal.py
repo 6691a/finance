@@ -153,3 +153,42 @@ class CausalChannelRow(ApiModel):
 
 
 CausalChannelList = Page[CausalChannelRow]
+
+
+class CausalGraphNode(ApiModel):
+    """그래프 노드 하나. **키는 Postgres의 자연키를 편 문자열이다.**"""
+
+    id: str = Field(description="노드 식별자(`event:<제목>:<날짜>`·`channel:<이름>`·`target:<종류>:<코드>`).")
+    kind: str = Field(description="노드 종류(event·channel·target).")
+    label: str = Field(description="화면에 보일 이름.")
+
+
+class CausalGraphEdge(ApiModel):
+    """엣지 하나. **`path_id`와 `week_start`를 반드시 싣는다.**
+
+    채널 노드가 모든 경로에 공유되므로 `path_id`가 없으면 서로 다른 주장이 `할인율`에서
+    섞이고, `Target` 노드가 주를 넘어 하나라 `week_start`가 없으면 시각이 역행하는 경로가
+    나온다(4단계 설계 §2.1·§8.2).
+    """
+
+    source: str = Field(description="출발 노드 id.")
+    target: str = Field(description="도착 노드 id.")
+    type: str = Field(description="관계 종류(LEADS_TO·HITS).")
+    path_id: int | None = Field(default=None, description="이 엣지가 속한 경로.")
+    week_start: date | None = Field(default=None, description="그 경로가 관찰된 주.")
+    position: int | None = Field(default=None, description="체인 안에서의 자리(1부터).")
+
+
+class CausalGraph(ApiModel):
+    """탐색용 서브그래프. **원본이 아니라 투영이다** — 숫자는 경로 응답이 갖는다.
+
+    Postgres가 원본이고 Neo4j는 파생물이라, 실현 등락·근거·`input_hash`는 여기 없다.
+    화면은 이 응답으로 **모양**을 그리고 표는 경로 응답으로 채운다.
+    """
+
+    source: str = Field(
+        default="neo4j", description="어디서 읽었나. 그래프 DB가 꺼져 있으면 이 응답이 없다."
+    )
+    week_start: date | None = Field(default=None, description="주로 자른 조회면 그 주.")
+    nodes: tuple[CausalGraphNode, ...] = ()
+    edges: tuple[CausalGraphEdge, ...] = ()

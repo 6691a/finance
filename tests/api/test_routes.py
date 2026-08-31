@@ -131,6 +131,8 @@ async def test_the_route_set_is_what_we_meant_to_publish():
         "/api/causal/events",
         "/api/causal/channels",
         "/api/causal/paths/{path_id}",
+        "/api/causal/graph",
+        "/api/causal/graph/targets/{kind}/{code}",
     }
 
 

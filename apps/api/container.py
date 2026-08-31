@@ -16,6 +16,7 @@ from dependency_injector import containers, providers
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from apps.api.repository import (
+    CausalGraphReadRepository,
     CollectionReadRepository,
     DocumentReadRepository,
     EventReadRepository,
@@ -175,9 +176,20 @@ class ApiContainer(containers.DeclarativeContainer):
         session_factory=session_factory,
     )
 
+    # **`main.py`가 채운다.** 드라이버는 연결 풀이라 프로세스에 한 벌이고, 그 수명은
+    # 여기가 아니라 진입점이 쥔다 — 종료할 때 닫아야 하기 때문이다. 안 주면 `None`이고
+    # 그때는 그래프 라우트만 503이다.
+    neo4j_driver = providers.Object(None)
+
+    causal_graph_repository = providers.Factory(
+        CausalGraphReadRepository,
+        driver=neo4j_driver,
+    )
+
     causal_service = providers.Factory(
         MarketCausalReadService,
         repository=causal_repository,
+        graph_repository=causal_graph_repository,
     )
 
     collection_repository = providers.Factory(

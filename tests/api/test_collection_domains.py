@@ -20,7 +20,7 @@ from apps.api.app import create_app
 from apps.api.repository import DocumentDetailRows, DocumentListRows, SourceRows
 from apps.api.repository.collection import CollectionReadRepository
 from apps.api.repository.document import DocumentReadRepository
-from apps.models.content import CollectionMode, Direction, Document, DocumentType
+from apps.models.content import BodyStatus, Direction, Document, DocumentType
 from tests.api.conftest import container
 
 AT = datetime(2026, 8, 27, 4, 30, tzinfo=UTC)
@@ -37,7 +37,7 @@ def document_row(document_id: int = 1, score: int | None = 7) -> Document:
         document_type=DocumentType.ARTICLE,
         published_at=AT,
         language="en",
-        content_level=CollectionMode.FULL_TEXT,
+        body_status=BodyStatus.OK,
         canonical_url="https://example.test/a",
         value_score=score,
         direction=Direction.POSITIVE if score is not None else None,

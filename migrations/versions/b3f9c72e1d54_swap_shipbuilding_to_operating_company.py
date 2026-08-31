@@ -1,7 +1,7 @@
 """swap shipbuilding to operating company
 
 Revision ID: b3f9c72e1d54
-Revises: a2f7c31e9b64
+Revises: f1a47d0c62b8
 Create Date: 2026-08-31 17:10:00.000000
 
 조선 대표 종목을 HD한국조선해양(009540)에서 HD현대중공업(329180)으로 바꾼다.
@@ -27,7 +27,7 @@ from alembic import op
 
 # revision identifiers, used by Alembic.
 revision: str = "b3f9c72e1d54"
-down_revision: str | Sequence[str] | None = "a2f7c31e9b64"
+down_revision: str | Sequence[str] | None = "f1a47d0c62b8"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 

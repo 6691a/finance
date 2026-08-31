@@ -2407,6 +2407,29 @@ def test_the_prompt_names_the_slot_the_targets_came_from():
     assert "장전" not in prompt
 
 
+def test_a_narration_call_names_the_after_hours_review():
+    """애프터마켓 리뷰의 해설 프롬프트가 그 슬롯 이름을 쓴다.
+
+    7단계가 이 슬롯을 해설에서 뺀 이유가 **여기였다** — 그때는 부르는 쪽이 슬롯을
+    `pre_open`으로 하드코딩해 어젯밤 리뷰가 "장전에 쓴 추론"으로 실렸다. 2026-08-23에
+    슬롯이 대상에서 오게 바뀌었고, 19단계가 그 위에서 이 슬롯을 루프에 넣었다.
+    """
+    model = scripted(narrative_message(narrative_payload()))
+    built = narrator(model, FakeConnection())
+
+    built.run(
+        run_date=date(2026, 8, 21),
+        horizon_days=1,
+        as_of_at=REVIEW_AS_OF,
+        targets=(narrative_target(run_slot=RunSlot.POST_NXT_CLOSE),),
+    )
+
+    prompt = model.calls[0][1].content
+    assert prompt.startswith("2026-08-21 애프터마켓 리뷰에 쓴 추론을")
+    assert "장전" not in prompt
+    assert "장후" not in prompt
+
+
 def test_a_narration_call_refuses_mixed_slots():
     """같은 날 장전·장후 추론이 같은 대상을 갖는다. 섞이면 응답을 대상에 되돌릴 수 없다."""
     built = narrator(scripted(), FakeConnection())
@@ -2639,6 +2662,24 @@ def test_pending_narratives_carry_their_slot():
     assert [(t.thesis_id, t.run_slot) for t in targets] == [(11, RunSlot.POST_CLOSE), (12, RunSlot.PRE_OPEN)]
 
 
+def test_pending_narratives_ask_for_every_narrated_slot():
+    """넘기는 슬롯 목록의 원본이 `thesis.state.NARRATED_SLOTS` 하나다.
+
+    조회에 리터럴이 없다는 것은 위 테스트가 보고, 여기서는 **부르는 쪽이 실제로 무엇을
+    넘기는지**를 본다. 목록에서 빠진 슬롯은 조용히 영영 미해설로 남는다 — 조회에 날짜
+    상한이 없어 오류로도 안 드러난다.
+    """
+    connection = FakeConnection({"select_by_run": []})
+
+    ThesisStore(connection).pending_narratives(run_date=date(2026, 8, 21), horizon_days=1)
+
+    parameters = next(params for statement, params in connection.calls if statement == PENDING_NARRATIVES)
+
+    assert parameters == (1, date(2026, 8, 21), list(NARRATED_SLOTS))
+    # 애프터마켓 리뷰가 그 목록에 든 것이 19단계다.
+    assert RunSlot.POST_NXT_CLOSE in parameters[2]
+
+
 def test_the_after_hours_query_isolates_the_nxt_evening():
     """NXT는 프리·주간도 체결한다. 거래소만 걸면 하루 전체가 섞인다."""
     query = body(NXT_AFTER_HOURS)
@@ -2683,22 +2724,32 @@ def test_narratives_and_backlog_watch_the_same_slots():
     assert "due.run_slot = ANY(%s)" in backlog
     assert "'pre_open'" not in narratives
     assert "'pre_open'" not in backlog
-    # NXT 애프터마켓 리뷰는 아직 해설 루프 밖이다(`docs/analysis/market-thesis/7-nxt-review.md` 3절).
-    assert RunSlot.POST_NXT_CLOSE not in NARRATED_SLOTS
+    # NXT 애프터마켓 리뷰도 해설을 받는다(`docs/analysis/market-thesis/19-nxt-narration.md`).
+    # 이 줄은 전에 `not in`이었다 — 7단계가 뺐던 이유(해설 호출의 슬롯 하드코딩)가
+    # 2026-08-23에 사라져서 뒤집혔다.
+    assert RunSlot.POST_NXT_CLOSE in NARRATED_SLOTS
     # 채점 슬롯은 예측만이다. 리뷰 둘은 맞고 틀림을 물을 대상이 아니다.
     assert set(FORECAST_SLOTS) == {RunSlot.PRE_OPEN, *INTRADAY_SLOTS}
-    assert set(NARRATED_SLOTS) == {*FORECAST_SLOTS, RunSlot.POST_CLOSE}
+    assert set(NARRATED_SLOTS) == {*FORECAST_SLOTS, RunSlot.POST_CLOSE, RunSlot.POST_NXT_CLOSE}
 
 
-def test_the_precedent_slots_add_the_after_hours_review_to_the_narrated_ones():
-    """목록이 둘인 이유. 해설을 받는 슬롯과 장전이 되돌아보는 슬롯은 다르다.
+def test_the_precedent_slots_and_the_narrated_ones_hold_the_same_slots_for_now():
+    """목록이 둘인 이유. 해설을 받는 슬롯과 장전이 되돌아보는 슬롯은 **뜻이** 다르다.
 
-    애프터마켓 리뷰는 채점도 해설도 없지만 "장 마감 뒤 무슨 재료가 나왔나"를 담고 있어
-    다음날 아침이 볼 값어치가 있다(`docs/analysis/market-thesis/18-nxt-precedent.md` 2.1절).
-    한 상수로 두 뜻을 지면 해설 루프를 늘리지 않고는 그것을 못 보여 준다.
+    2026-08-31에 애프터마켓 리뷰가 해설 루프로 들어오면서 두 목록의 **값이 같아졌다**
+    (`docs/analysis/market-thesis/19-nxt-narration.md` 2.1절). 그래도 상수를 합치지 않는다 —
+    해설을 안 받되 되돌아보기만 할 슬롯이 생기면 `PRECEDENT_SLOTS`만 늘어야 하고, 한
+    상수로 두 뜻을 지면 그것을 보여 주려고 해설 루프까지 늘리게 된다(18단계 2.1절이 하루
+    동안 실제로 그 상태였다).
+
+    **파생 정의로 쓰면 안 된다는 것도 여기서 지킨다** — `(*NARRATED_SLOTS, POST_NXT_CLOSE)`는
+    이제 같은 슬롯을 두 번 넣는다. 중복이 들어가면 `= ANY(%s)` 조회는 조용히 통과하고
+    슬롯 수를 세는 곳만 틀린다.
     """
-    assert set(PRECEDENT_SLOTS) == {*NARRATED_SLOTS, RunSlot.POST_NXT_CLOSE}
-    assert RunSlot.POST_NXT_CLOSE not in NARRATED_SLOTS
+    assert set(PRECEDENT_SLOTS) == set(NARRATED_SLOTS)
+    assert len(set(PRECEDENT_SLOTS)) == len(PRECEDENT_SLOTS)
+    assert len(set(NARRATED_SLOTS)) == len(NARRATED_SLOTS)
+    assert RunSlot.POST_NXT_CLOSE in PRECEDENT_SLOTS
 
 
 def test_the_narrative_write_never_overwrites():

@@ -62,18 +62,38 @@ INTRADAY_SLOTS: tuple[RunSlot, ...] = (
     RunSlot.PRE_CLOSE,
 )
 
-# 사후 해설을 받는 슬롯. 애프터마켓은 아직 빠져 있다(`7-nxt-review.md` 3절).
-NARRATED_SLOTS: tuple[RunSlot, ...] = (*FORECAST_SLOTS, RunSlot.POST_CLOSE)
-
-# 장전·장중이 프롬프트에 되돌아보는 슬롯. 해설 대상보다 애프터마켓 리뷰 하나가 더 있다.
+# 사후 해설을 받는 슬롯. **채점 슬롯보다 리뷰 둘이 더 있다** — 리뷰는 예측이 아니라
+# 채점할 대상이 없지만, "오늘 이래서 움직였다"는 인과 주장이라 며칠 뒤 보도로 검증할
+# 값어치가 오히려 크다.
 #
-# **목록이 둘인 이유는 뜻이 둘이기 때문이다.** 애프터마켓 리뷰는 채점도 해설도 없어 해설
-# 루프 밖이지만(`NARRATED_SLOTS`), "정규장이 닫힌 뒤 무슨 재료가 나왔고 시장이 처음에 어느
-# 쪽으로 읽었나"를 담고 있어 다음날 아침이 볼 값어치가 있다. 한 상수로 두 뜻을 지면 그것을
-# 보여 주려고 해설 루프까지 늘려야 한다(`18-nxt-precedent.md` 2.1절).
+# 애프터마켓 리뷰(`post_nxt_close`)는 2026-08-31에 들어왔다(`19-nxt-narration.md`).
+# 7단계가 뺐던 이유는 값어치 판단이 아니라 해설 호출이 슬롯을 `pre_open`으로 하드코딩하던
+# 결함이었고, 그것은 2026-08-23에 풀렸다(`7-nxt-review.md` 9절).
+#
+# `select_pending_narratives.sql`과 `select_backlog.sql`의 `unnarrated`가 파라미터로 받는다.
+# **둘이 같은 목록을 봐야 한다** — 어긋나면 한쪽은 해설을 안 만들고 다른 쪽은 그것을
+# 밀림으로 세서 ops 브리핑이 매일 거짓 경보를 낸다.
+NARRATED_SLOTS: tuple[RunSlot, ...] = (
+    *FORECAST_SLOTS,
+    RunSlot.POST_CLOSE,
+    RunSlot.POST_NXT_CLOSE,
+)
+
+# 장전·장중이 프롬프트에 되돌아보는 슬롯. **지금 `NARRATED_SLOTS`와 값이 같다.**
+#
+# **그래도 목록이 둘인 이유는 뜻이 둘이기 때문이다.** 이쪽은 "다음 추론이 되돌아보는 것"이고
+# 저쪽은 "사후 해설을 받는 것"이다. 해설을 안 받되 되돌아보기만 할 슬롯이 다시 생기면 여기만
+# 는다 — 한 상수로 두 뜻을 지면 그것을 보여 주려고 해설 루프까지 늘려야 한다
+# (`18-nxt-precedent.md` 2.1절). 2026-08-31 하루 동안 실제로 그 상태였다.
+#
+# **파생 정의(`(*NARRATED_SLOTS, ...)`)를 쓰지 않는다** — 같은 슬롯이 두 번 들어간다.
 #
 # `select_past_with_outcomes.sql`이 파라미터로 받는다.
-PRECEDENT_SLOTS: tuple[RunSlot, ...] = (*NARRATED_SLOTS, RunSlot.POST_NXT_CLOSE)
+PRECEDENT_SLOTS: tuple[RunSlot, ...] = (
+    *FORECAST_SLOTS,
+    RunSlot.POST_CLOSE,
+    RunSlot.POST_NXT_CLOSE,
+)
 
 # 장중 슬롯의 기준 시각(KST). **분기가 아니라 표다** — 슬롯 값이 인자로 흘러 시각 하나를
 # 고르는 것이고, 슬롯으로 코드 경로가 갈리지 않는다.

@@ -64,10 +64,10 @@ Neo4j 쓰기가 실패해도 Postgres 쓰기는 이미 커밋된 채로 남는�
 엣지는 둘이다. 경로 헤더 한 행 + 단계 N행이 **엣지 N+1개**가 된다.
 
 ```cypher
-(:Event)-[:LEADS_TO  {path_id, week_start, position}]->(:Channel)
-(:Target)-[:LEADS_TO {path_id, week_start, position, sign}]->(:Channel)
-(:Channel)-[:LEADS_TO {path_id, week_start, position}]->(:Channel)
-(:Channel)-[:HITS {path_id, week_start, sign, confidence, reasoning,
+(:Event)-[:LEADS_TO  {path_id, week_start, created_at, position}]->(:Channel)
+(:Target)-[:LEADS_TO {path_id, week_start, created_at, position, sign}]->(:Channel)
+(:Channel)-[:LEADS_TO {path_id, week_start, created_at, position}]->(:Channel)
+(:Channel)-[:HITS {path_id, week_start, created_at, sign, confidence, reasoning,
                    return_unit, return_week_change, return_t1_change,
                    return_t5_change}]->(:Target)
 ```
@@ -81,9 +81,10 @@ Neo4j 쓰기가 실패해도 Postgres 쓰기는 이미 커밋된 채로 남는�
 싣는 이유는 원본과 같다: percent와 basis_point가 한 칸에 섞이면 크기 비교가 조용히
 무의미해진다.
 
-### 2.1 모든 엣지가 `path_id`와 `week_start`를 싣는다
+### 2.1 모든 엣지가 `path_id`·`week_start`·`created_at`을 싣는다
 
-학습 실행에서 나온 발견 둘이 이 두 속성을 강제한다(§7.8).
+학습 실행에서 나온 발견 둘이 앞의 두 속성을 강제한다(§7.8). 셋째는 조회 층이 요구했다
+(2026-08-31, [17-graph-query.md](17-graph-query.md) §2.2).
 
 - **`path_id` — 채널 노드가 모든 경로에 공유된다.** 제약 없이 걸으면 서로 다른 주장이
   `할인율`에서 섞인다. Cypher의 가변 길이 매치는 이것을 안 쓰면 **조용히 더 많은 답**을 준다.
@@ -92,7 +93,12 @@ Neo4j 쓰기가 실패해도 Postgres 쓰기는 이미 커밋된 채로 남는�
   08-10 주의 원인으로 이어지는 경로가 실제로 만들어진다. 조회하는 쪽이 단조 증가를 걸어야
   하고, **그것이 기본값이어야 한다** — 옵션으로 두면 안 건 사람이 미래→과거 인과를 읽는다.
 
-둘 다 Neo4j만의 문제가 아니다. Postgres 재귀 CTE도 같은 답을 낸다.
+- **`created_at` — 경로 행이 Postgres에 생긴 시각(UTC).** 추론 툴은 슬롯이 정한 `as_of_at`까지만
+  보는데, 경로는 그 주가 끝나고 한 주 뒤(`W+2` 월요일)에 생기고 재실행이면 아무 때나 생긴다
+  (2026-08-30 운영의 두 주가 전부 그날 재실행 시각이다). `week_start`로는 그 시각을 알 수 없어
+  행의 값을 그대로 싣는다. 조회하는 쪽이 `all(x IN r WHERE x.created_at <= $as_of_at)`를 건다.
+
+앞의 둘은 Neo4j만의 문제가 아니다. Postgres 재귀 CTE도 같은 답을 낸다.
 
 ### 2.2 멱등과 제약
 
@@ -130,7 +136,8 @@ def write_graph(uri, auth, payload) -> None: ...
 - **오가는 값은 전부 Pydantic 모델이고 `frozen=True`다.** 재시도 경로에서 값이 바뀌면 원본과
   저장값이 어긋난다. `dict`가 되는 자리는 `session.run`에 넘기기 직전 한 번뿐이다.
 - **`Decimal`을 `float`로 바꾼다.** 드라이버 매핑에 `Decimal`이 없다. 모델 필드를 `float`로
-  선언해 Pydantic이 경계에서 한 번에 바꾼다. `date`는 그대로 `neo4j.time.Date`가 된다.
+  선언해 Pydantic이 경계에서 한 번에 바꾼다. `date`는 그대로 `neo4j.time.Date`가 되고, aware
+  `datetime`(`created_at`)은 `neo4j.time.DateTime`이 된다.
 - **드라이버 자체 재시도를 끈다**(`max_transaction_retry_time=0`). 켜 두면 `execute_write`가
   transient 오류를 기본 30초 동안 스스로 다시 부르고, 태스크 로그의 시도 횟수와 실제 호출
   횟수가 어긋난다. 재시도는 Airflow가 한다.
@@ -208,7 +215,7 @@ DAG이 그것이기 때문이다.** thesis DAG에는 안 붙인다.
 
 - `tests/modules/test_graph.py` — 가짜 드라이버/세션/트랜잭션으로 **무엇이 실렸는지**를 본다.
   체인 1단·2단이 엣지 N+1개가 되는지, 대상 출발 경로가 `Target`에서 시작하는지, 채널이 여러
-  경로에서 노드 하나인지, **모든 엣지가 `path_id`·`week_start`를 싣는지**, 제약이 MERGE보다
+  경로에서 노드 하나인지, **모든 엣지가 `path_id`·`week_start`·`created_at`을 싣는지**, 제약이 MERGE보다
   먼저 같은 세션에 실리는지, 제약문이 `IS UNIQUE`이고 `NODE KEY`가 아닌지,
   `max_transaction_retry_time=0`인지, `Decimal`이 `float`로·`date`가 그대로 가는지, 빈 행
   묶음을 안 보내는지, transient → `ConnectionError` / client → `GraphError`인지.
@@ -538,3 +545,7 @@ WHERE all(i IN range(1, size(rels) - 1)
   썼다** — 거기서 하나가 드러났다: **community 판에는 읽기 전용 계정이 없다**(RBAC가
   Enterprise 전용). 그래서 "LLM에게 읽기 전용 계정을 준다"는 이 배포에서 성립하지 않고,
   가드가 코드로 가야 한다.
+- **2026-08-31** — 모든 엣지에 `created_at`을 더했다(§2.1). 17단계 조회 층이 추론의 event-time
+  cutoff를 `week_start`로 걸 수 없다는 것을 운영 실측으로 보여 줬기 때문이다
+  ([17-graph-query.md](17-graph-query.md) §1.1·§5.3). 운영 그래프는 `sync_only` 한 번으로
+  전부 다시 민다 — MERGE라 노드·엣지 수는 그대로이고 속성만 붙는다.

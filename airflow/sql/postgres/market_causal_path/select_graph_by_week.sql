@@ -9,8 +9,13 @@
 --
 -- 실현 등락 셋은 `HITS` 엣지의 속성이 된다. **`return_unit`을 함께 싣는다** — percent와
 -- basis_point가 한 칸에 섞이면 크기 비교가 조용히 무의미해진다.
+--
+-- `created_at`은 모든 엣지에 실린다. 추론 툴이 "그 슬롯 시각에 이미 있던 경로"만 보게 하는
+-- event-time cutoff의 축이다(17-graph-query.md §5.3). `week_start`는 그 용도로 못 쓴다 —
+-- 경로는 그 주가 끝나고 한 주 뒤에, 재실행이면 아무 때나 생긴다.
 SELECT p.id AS path_id,
        p.week_start,
+       p.created_at,
        e.title AS event_title,
        e.occurred_on AS event_occurred_on,
        p.source_target_kind,

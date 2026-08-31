@@ -3,7 +3,7 @@ from airflow.sdk.exceptions import AirflowFailException
 
 from dags import document_body_hourly as module
 from modules.collectors.document.body import BodyCandidate, DocumentBody
-from modules.collectors.document.documents import DocumentHTTPError
+from modules.collectors.document.documents import DocumentGoneError, DocumentHTTPError
 
 CANDIDATE = BodyCandidate(id=11, source_slug="bbc_business", canonical_url="https://b.example/a")
 
@@ -23,8 +23,8 @@ class FakeConnection:
         self.closed = True
 
 
-def run_collect(monkeypatch, tmp_path, *, waiting, collect, download=None, batch_size=200):
-    """태스크 하나를 실제 DAG 코드로 돌린다. HTTP와 DB만 가짜다."""
+def run_collect(monkeypatch, tmp_path, *, waiting, collect, download=None, batch_size=200, deleted=None):
+    """태스크 하나를 실제 DAG 코드로 돌린다. HTTP와 DB만 가짜다. 지운 문서 id는 `deleted`에 쌓인다."""
     connections: list[FakeConnection] = []
     stored_bodies: list[DocumentBody] = []
     stored_attachments: list[tuple[int, object]] = []
@@ -48,6 +48,11 @@ def run_collect(monkeypatch, tmp_path, *, waiting, collect, download=None, batch
         @staticmethod
         def store_attachment(connection, document_id, attachment):
             stored_attachments.append((document_id, attachment))
+
+        @staticmethod
+        def delete_document(connection, document_id):
+            assert deleted is not None
+            deleted.append(document_id)
 
     def fake_connection():
         connection = FakeConnection()
@@ -86,6 +91,27 @@ def test_a_dead_url_is_settled_as_unavailable_instead_of_being_retried_forever(m
 
     assert stored == 1
     assert bodies == [DocumentBody(document_id=CANDIDATE.id, status="unavailable")]
+
+
+def test_a_report_the_provider_deleted_is_removed_instead_of_settled(monkeypatch, tmp_path):
+    """원본이 사라진 문서는 행을 지운다(2026-08-31 사용자 결정, 지금은 네이버 리서치만).
+
+    네이버는 지운 리포트에 404가 아니라 200 `{}`로 답해 `unavailable` 분기를 못 탄다. 큐에 그
+    하나뿐이어도 "전부 실패"가 아니다 — 2026-08-30 밤 그 판정으로 태스크가 죽었다.
+    """
+    deleted: list[int] = []
+
+    def collect(candidate):
+        raise DocumentGoneError("Naver research detail JSON is an empty object")
+
+    stored, bodies, _, connections = run_collect(
+        monkeypatch, tmp_path, waiting=(CANDIDATE,), collect=collect, deleted=deleted
+    )
+
+    assert stored == 0
+    assert bodies == []
+    assert deleted == [CANDIDATE.id]
+    assert connections[-1].commits == 1
 
 
 def test_a_server_error_leaves_the_document_in_the_queue(monkeypatch, tmp_path):

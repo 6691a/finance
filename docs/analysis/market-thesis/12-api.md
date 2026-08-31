@@ -58,7 +58,7 @@ GET /api/theses/{thesis_id}/graph
 **`/api/theses/quality`는 정적 경로라 `/api/theses/{thesis_id}`보다 먼저 등록한다** —
 순서가 뒤집히면 `quality`가 동적 id의 422로 잡힌다.
 
-[17-collection-browser.md](17-collection-browser.md)가 수집 원자료 여섯을 더했다
+[18-collection-browser.md](18-collection-browser.md)가 수집 원자료 여섯을 더했다
 (`/api/quotes/symbols`·`/bars`·`/daily`, `/api/indicators/series`·`/curve`·`/observations`).
 **시세 봉만 컬럼 지향 응답이다** — 5,000점에 키 이름이 3만 번 반복되는 것을 피하고 화면의
 차트가 먹는 모양이 그것이기 때문이고, 그 예외의 근거는 그 문서 2.4절에 있다.

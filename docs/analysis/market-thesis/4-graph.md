@@ -448,14 +448,18 @@ WHERE all(i IN range(1, size(rels) - 1)
 
 ## 8. Cypher를 쓰는 조회 층
 
-**조회 API 쪽은 구현했다**(2026-08-30, [17단계](17-collection-browser.md) §8.5).
-`apps/api/repository/causal_graph.py`가 그 자리이고 라우트는 `/api/causal/graph`와
-`/api/causal/graph/targets/{kind}/{code}` 둘이다. §8.2의 두 방법 중 **"파라미터만 받고
-Cypher는 우리가 갖는"** 쪽을 골랐다 — 질문이 둘뿐이라 그쪽이 짧고, §8.1의 검사를 상수
-쿼리에 대해 테스트로 못 박을 수 있다.
+**LLM이 Cypher를 쓰는 쪽의 설계는 [17-graph-query.md](17-graph-query.md)로 옮겼다.** 배포
+단위가 따로라 단계 문서를 하나 받았고, **아직 미구현이다**(`langchain-neo4j`를 import하는
+코드가 없다). 17단계의 프로토타입이 착수 게이트다.
 
-**LLM이 Cypher를 쓰는 쪽은 아직 미구현이다.** `langchain-neo4j`를 import하는 코드는 없다.
-아래 제약은 그때도 그대로다 — §2·§7.8이 만든 것이라 설계를 다시 하지 않는다.
+**화면이 쓰는 고정 Cypher 조회는 구현했다**(2026-08-30,
+[18단계](18-collection-browser.md) §8.5). `apps/api/repository/causal_graph.py`가 그 자리이고
+라우트는 `/api/causal/graph`와 `/api/causal/graph/targets/{kind}/{code}` 둘이다. §8.2의 두
+방법 중 **"파라미터만 받고 Cypher는 우리가 갖는"** 쪽이라 LLM이 없다 — 질문이 둘뿐이라
+그쪽이 짧고, §8.1의 검사를 상수 쿼리에 대해 테스트로 못 박을 수 있다.
+
+**이 절에는 투영이 만든 제약만 남긴다.** §2·§7.8이 발견한 것이고, 두 조회 층 모두 설계를
+다시 하지 말아야 하는 사실들이다.
 
 ### 8.1 community 판에는 읽기 전용 계정이 없다
 
@@ -475,7 +479,13 @@ Cypher는 우리가 갖는"** 쪽을 골랐다 — 질문이 둘뿐이라 그쪽
 3. Enterprise로 갈 일이 생기면 그때 읽기 전용 role로 옮기고 이 검사를 남긴다(둘은 배타가
    아니다).
 
+> 검사 항목과 **그 순서**, 그리고 가드가 못 보는 것은
+> [17-graph-query.md](17-graph-query.md) §3이 갖는다.
+
 ### 8.2 프롬프트가 아니라 코드가 걸어야 하는 것 둘
+
+> 이 둘을 **어떻게** 거는지는 [17-graph-query.md](17-graph-query.md) §3이 갖는다.
+> 여기는 "왜 둘이 필요한가"만 남긴다.
 
 §2.1의 둘이다. **프롬프트로 부탁하지 않는다** — LLM이 빠뜨리면 조용히 더 많은/틀린 답이 된다.
 
@@ -488,6 +498,9 @@ Cypher는 우리가 갖는"** 쪽을 골랐다 — 질문이 둘뿐이라 그쪽
 후보다.
 
 ### 8.3 소비자는 둘이다 (2026-08-30 결정)
+
+> **첫 소비자는 market-thesis 추론 툴로 정해졌다**(2026-08-30, [17-graph-query.md](17-graph-query.md) §5).
+> 아래 둘은 그 뒤에 온다.
 
 | 소비자 | 자리 | 의존성 |
 | --- | --- | --- |

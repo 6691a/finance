@@ -387,7 +387,7 @@ restart 흐름을 따른다. 운영 포트는 12단계의 `8000:8000`, 로컬 AP
 
 ### 4.1 의존성
 
-런타임 프런트 의존성은 넷이다(17단계가 `uplot`을 더해 다섯이 됐다).
+런타임 프런트 의존성은 넷이다(18단계가 `uplot`을 더해 다섯이 됐다).
 
 ```text
 react
@@ -630,7 +630,7 @@ fetch는 페이지 이동 시 `AbortController`로 취소한다. retry library�
 - client cache·global state store
 - ~~chart~~·icon·CSS framework — **chart는 15단계에서 뒤집혔다**(2026-08-27).
   이 화면의 대상은 추론 상세와 주별 집계 표라 차트가 없어도 읽혔지만,
-  [17-collection-browser.md](17-collection-browser.md)가 다루는 분봉 53만 행은 표로만 두면
+  [18-collection-browser.md](18-collection-browser.md)가 다루는 분봉 53만 행은 표로만 두면
   아무도 못 읽는다. 그래서 uPlot 하나가 들어왔다. icon·CSS framework는 그대로 안 넣는다.
 - Cytoscape React wrapper
 - 전체 tool result 선조회

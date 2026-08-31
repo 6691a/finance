@@ -1,6 +1,6 @@
 ---
 name: writing-llm-flows
-description: Use when writing or changing code that calls an LLM in this repo — LangChain, LangGraph, StateGraph, ChatXAI, ToolNode, StructuredTool, response_format, or a prompt YAML under airflow/modules/prompts/. Covers 호출–교정 그래프 모양, 툴 정의, 프롬프트를 코드에서 분리하는 규칙, PROMPT_VERSION 잠금. Also use when a LangSmith trace shows an unnamed ChatOpenAI run, when a tool error is being swallowed as "no result", or when editing a prompt sentence.
+description: Use when writing or changing code that calls an LLM in this repo — LangChain, LangGraph, StateGraph, ChatXAI, ToolNode, StructuredTool, response_format, or a prompt YAML under airflow/modules/prompts/. Covers 호출–교정 그래프 모양, 툴 정의, 프롬프트를 코드에서 분리하는 규칙, PROMPT_VERSION 잠금, 조용한 성공을 만들지 않는 규칙 여덟. Also use when a LangSmith trace shows an unnamed ChatOpenAI run, when a tool error is being swallowed as "no result", or when editing a prompt sentence. 새 LLM 기능을 붙이기 전에도 부른다.
 ---
 
 # LLM 흐름 작성
@@ -125,6 +125,163 @@ ToolNode(tools, handle_tool_errors=(ToolLimitExceeded,))
 - **체크포인터·persistence는 붙이지 않는다.** 재실행 단위는 Airflow 태스크다.
 - **추적은 `LANGSMITH_*` 환경변수로 켠다.** 코드에 추적 호출을 심지 않는다.
   **켜면 프롬프트와 원문이 외부로 나간다는 사실을 문서에 남긴다.**
+
+---
+
+# 조용한 성공을 만들지 않는 LLM 흐름
+
+**모델이 값을 돌려줬다고 그 값이 맞는 것이 아니다.** 이 저장소에서 LLM이 실제로 만든 사고는
+틀린 답이 아니라 **성공으로 끝난 실행**이었다.
+
+| 실제로 있었던 일 | 어떻게 보였나 |
+| --- | --- |
+| 대상 넷을 조사해 놓고 하나만 답함 | `written=1` 성공, Slack에 한 줄 |
+| 툴 결과가 상한을 넘음 | `ToolMessage`가 되어 태스크 성공, `thesis` 행에도 안 남음 |
+| 조사가 왕복 상한에 잘림 | 그대로 답변으로 넘어가 스스로 끝낸 실행과 구별 안 됨 |
+| 툴이 DB 연결 끊김을 만남 | `handle_tool_errors=True`면 "그 창에 데이터 없음"으로 읽힘 |
+
+아래 여덟은 이것을 **막는** 규칙이 아니라 **일어났을 때 빨리 알고 원인을 좁히는** 규칙이다.
+셋으로 묶인다 — **파악**(뭔가 잘못됐다) · **이유**(어디서) · **수정**(무엇을 당기나).
+
+`.claude/CLAUDE.md`의 "오류 처리"가 저장소 전체의 같은 규칙이고, 이 절은 **LLM이 낸 값에만
+있는 얼굴**을 다룬다.
+
+## 파악 — 잘못됐다는 것을 그날 안다
+
+### 1. 조용한 성공을 칸으로 센다. 분모까지
+
+**자기보고 확신도를 신뢰 신호로 쓰지 않는다.** 실측으로 안 맞았다 — `prob_flat` 평균 0.31에
+실제 flat 13%다(`TUNING.md` 2026-08-28). 프롬프트가 실제 기준선을 주는데도 두 배 넘게
+부른다. 대신 **시스템이 관측한 결함**을 센다.
+
+| 세는 것 | 없으면 안 보이는 것 |
+| --- | --- |
+| 요청 수 / 응답 수 | "넷 중 하나만 답했다" |
+| 폐기 수 / **전체 수** | 근거 유효율 |
+| 근거 0건 여부 | 지어낸 답 |
+| 상한 절단 여부 | 스스로 끝낸 조사와 잘린 조사의 구별 |
+| 표본 부족 | "재지 않았다"와 "0이다" |
+| 교정 재요청 횟수 | 첫 답이 얼마나 자주 못 쓰는가 |
+
+- **분모 없는 카운터는 카운터가 아니다.** 지금 `thesis_evidence` 행 수(남은 것)만 있고 버린
+  수가 없어 근거 유효율을 못 읽는다 — `TUNING.md` 2절이 그 사실을 적어 놨다.
+- **`logger.warning`은 세는 것이 아니다.** 폐기하는 자리마다 건수를 원장 칸이나 반환값으로
+  올린다. 로그는 보존 기간에 묶이고 SQL로 채점과 조인할 수 없다.
+- 기준: `thesis_llm_run`의 `subjects_requested`·`subjects_answered`·`investigation_truncated`,
+  `technical/base_rate.py`의 `MIN_BASE_RATE_SAMPLE`(미만이면 비율을 전부 `None`으로 두고 0으로
+  안 채운다 — 모델은 숫자가 보이면 쓴다).
+
+### 2. 약한 답은 출력에서 티가 나게 한다
+
+- 근거 0건 / 조사 절단 / 밴드가 중심값만큼 넓음 — 이 셋은 Slack·API에서 정상 답과
+  **구별되게** 낸다.
+- **저장소가 이미 이 패턴을 쓴다.** `18-nxt-precedent.md`는 애프터마켓 방향 지속이 56%라
+  "**라벨 없이 싣지 않는다**"고 정했다. 같은 규칙을 **자기 출력에도** 적용한다.
+- 기준: `thesis/render.py`의 `VERDICT_TIE_GAP` — 확률이 붙으면 결론을 둘 다 보인다.
+  "하나로 접으면 모델이 고르지 못한 것을 우리가 대신 골라 주는 셈이다."
+- 어기면: 매일 읽는 사람이 이상한 날을 못 고른다. 사후에 SQL로만 보이고 그때는 지나갔다.
+
+**확신도로 자동·사람을 가르는 라우팅은 만들지 않는다** — 이 저장소의 출력은 종착지가 이미
+사람이다. 남는 일은 라벨이다.
+
+### 3. 임계는 문서가 아니라 쿼리에 둔다
+
+- 손잡이를 당길 조건을 정했으면 그 조건을 쿼리로 옮기고 **어긋난 줄만** ops 브리핑이 낸다.
+  문서에만 적으면 사람이 매일 그 표를 기억해야 하고, **기억은 관측이 아니다.**
+- 기준선은 상수로 두고 비교는 부르는 쪽이 한다 — 같은 숫자를 SQL과 파이썬에 두 벌로 두지
+  않는다. `briefing/ops.py`의 `UNIFORM_BRIER`·`THESIS_CALIBRATION`·`THESIS_BACKLOG`가 그 자리다.
+- 임계가 있는데 쿼리가 없는 자리: `TUNING.md` 4절 "조건 발동" 표.
+
+## 이유 — 어디서 틀렸는지 좁힌다
+
+### 4. 모델은 값만 낸다. 판정은 코드가 한다
+
+- 계산·분류·채점·정규화는 **순수 함수**로 둔다. DB 없이 경계값을 테스트할 수 있어야 한다.
+- 모델이 판정까지 하면 틀렸을 때 나눌 데가 "모델이 틀렸다" 하나뿐이다. 값과 판정을 가르면
+  **확률이 나빴는지 임계가 나빴는지**가 갈리고, 그래야 `FLAT_THRESHOLD_PCT` 같은 상수를
+  손잡이로 따로 당길 수 있다.
+- 기준: `thesis/domain.py`의 `brier_score`·`classify_outcome`, `expectation/domain.py`의
+  `classify_surprise`(`judgment.py`가 부른다 — 판정에 LLM이 없다).
+
+### 5. 가드레일은 층마다 막고, 층마다 센다
+
+- 층 넷이 **서로 다른 것을 막는다**: 프롬프트 → 파싱 검증 → 정규화 → DB CHECK.
+  `apps/models/analysis/thesis.py`의 CHECK 주석이 분담을 적어 놨다 — DB CHECK은 폭주만 받는
+  안전망이고 정합성은 저장 전 검증이 본다. DB로 막으면 경계값 하나에 행 전체가 사라진다.
+- **프롬프트에만 있는 금지는 가드레일이 아니다.** 코드가 안 보면 어겼는지도 모른다.
+- **정규화는 clamp하지 않고 `None`으로 둔다.** clamp하면 모델이 부르지 않은 숫자가 저장되고
+  채점이 그것을 모델의 판단으로 센다. 확률도 저장 전에 비틀지 않는다 — 손잡이는 프롬프트다.
+- **어느 층이 몇 개를 걸렀는지 남긴다**(1번과 한 몸이다). 없으면 "프롬프트를 고칠 문제"와
+  "검증을 고칠 문제"를 못 가른다.
+- 기준: `thesis/generation.py`의 `_known_claims`(레지스트리 밖 ref 폐기)와 `normalize_*`,
+  `thesis/outcomes.py`의 `_grounded_verdict`(근거 없는 판정을 `unresolved`로 강등).
+
+### 6. 호출 하나가 행 하나다. 실패해도 남는다
+
+- **원장 행을 모델 호출 전에 별도 트랜잭션으로 커밋**하고 끝에서 닫는다. 실패 경로는
+  `except BaseException`으로 닫고 **반드시 다시 올린다.**
+- 실패한 대화가 행조차 안 생기면 **"안 돌았다"와 "돌다 죽었다"를 못 가른다.**
+- 남길 것: 모델명 / 프롬프트 판 / 기준 시각 / `dag_run_id`·`try_number` / 토큰 / 절단 여부 /
+  요청·응답 수 / 툴 인자(**검증 전 원본과 검증 후 둘 다**)와 결과 전문. 결과 전문이 필요한
+  이유는 `document`가 upsert로 덮어써서 **모델이 실제로 본 스냅샷이 그 행 말고는 남지
+  않기** 때문이다.
+- **판을 안 올리면 이 원장이 거짓말을 한다.** 문장을 고치고 `PROMPT_VERSION`을 안 올리면
+  서로 다른 프롬프트의 결과가 한 판으로 섞여 원장 전체가 못 읽는 값이 된다.
+- **트레이스는 원장의 대체물이 아니다** — 켜졌을 때만 있고, 보존 기간이 우리 것이 아니고,
+  SQL로 채점과 조인할 수 없다.
+- 기준: `thesis/common.py`의 `start_llm_run`·`finish_llm_run`, `thesis_llm_run`과
+  `thesis_tool_call` 테이블.
+
+## 수정 — 무엇을 당기면 되는지 안다
+
+### 7. 손잡이는 하나고, 되돌릴 수 있고, 한 커밋에 하나다
+
+- **점진적 롤아웃(카나리)은 쓰지 않는다.** 하루 실행 넷에 대상 넷이라 트래픽을 나누면
+  판별에 걸리는 시간이 배로 는다. 이미 표본이 모자라 판을 2주 동결하는 판이다. 여기서
+  폭발 반경을 줄이는 것은 트래픽 비율이 아니라 **되돌리기 비용**이다.
+- 새 기능은 **상수 하나로 꺼진다**(`PREFETCHED_PAST_THESES = 0`이 그 예). 되돌릴 수 있음이
+  그 방식을 고른 이유가 된다.
+- **진 변형을 지우지 않는다.** `NarrativeVariant.BLIND`가 남아 있고 `prompt_version`에
+  `4/informed` 형태로 실려 분기 재검증이 노트북 재실행으로 끝난다.
+- 상한 셋(호출 수·결과 문자·시간)을 코드 상수로 둔다. 배치 Param에는 `maximum`을 건다.
+  첫 성공본은 불변이다 — 같은 (날짜, 슬롯)에 값이 있으면 모델을 다시 부르지 않는다.
+- **한 커밋에 손잡이 하나.** 둘을 같이 당기면 효과를 못 가른다. 어쩔 수 없이 둘을 당겼으면
+  **그 사실을 문서에 적는다**(`TUNING.md` 2026-08-27이 그 형태다).
+- 기준: `thesis/domain.py`의 `MAX_TOOL_CALLS`·`MAX_TOOL_RESULT_CHARS`, `llm.py`의
+  `THESIS_TIMEOUT_SECONDS`, `event_expectation_hourly`의 `batch_size` `maximum=500`.
+
+### 8. 기준선과 접는 조건을 먼저 적는다
+
+- 새 LLM 기능의 설계 문서에는 **기준선**(무작위·균등 추측·기존 규칙 중 무엇과 견주나)과
+  **무엇을 보면 이 기능을 끄나**를 함께 적는다.
+- 기준선이 없으면 절대값을 보고 "0.6이면 좋은가"에 답할 수 없다. 이 저장소가 Brier를
+  절대값으로만 보다가 균등 추측 0.667을 긋고 나서야 그림이 달라졌다(2026-08-28).
+- `TUNING.md`가 그 형태다 — "슬롯별 Brier가 그 아래로 안 내려가면 … **예측을 접고
+  기록·설명으로 전환한다**"까지 미리 적어 뒀다.
+- **모델은 안전하게, 관측 가능하게, 가드레일 안에서, 계속 쓸모없을 수 있다.**
+
+## 사람이 하는 일과 하지 않는 일
+
+- 사람은 **레이블러가 아니다.** 정답은 T+0~5 종가가 준다 — 공짜이고 편향이 없다.
+- 사람이 하는 것은 **센서와 평가자**다. 손잡이를 당기고, `PROMPT_VERSION`을 승급하고, 기능의
+  존폐를 정한다. 2026-08-28에 사람이 Brier 0.668 대 균등 0.667을 보고 예측 슬롯 넷을 둘로
+  줄인 것이 그 자리다.
+- **개별 판단에 승인 게이트를 만들지 않는다.** 사람이 판단을 고치면 채점이 그것을 모델의
+  성적으로 센다. 잘못된 판단도 고치지 않는 것이 이 저장소의 규칙이다.
+- **모델이 자기 프롬프트를 고치는 층도, 해설에서 규칙을 뽑아 쌓는 층도 만들지 않는다**
+  (`5-followup.md` 10절 — 규칙이 틀리면 예측을 조용히 망친다).
+
+## 지금 비어 있는 자리 (2026-08-31)
+
+새 코드는 위를 따르되 **아래는 기존 코드에 아직 없다.** "이미 되어 있다"고 읽지 않는다.
+
+| 규칙 | 무엇이 비었나 | 증상 |
+| --- | --- | --- |
+| 1 | 폐기 건수의 **분모** | 근거 유효율을 못 읽는다. 남은 수만 있고 버린 수가 없다 |
+| 1 | `causal`의 절단 칸 | 왕복 절단이 로그만 남고 DB에 안 남는다. `thesis`의 `investigation_truncated`와 대칭이 깨져 있다 |
+| 2 | 약한 답 라벨 | 근거 0건·조사 절단·넓은 밴드가 Slack에서 정상 답과 같아 보인다 |
+| 3 | 임계 알람 | `TUNING.md` 4절 표의 임계를 사람이 기억해서 눈으로 대조한다 |
+| 5 | 출력 금지어 검사 | 투자 조언·목표가 금지가 프롬프트에만 있고 코드가 안 본다 |
 
 ---
 

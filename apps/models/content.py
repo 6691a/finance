@@ -59,6 +59,22 @@ class AttachmentKind(StrEnum):
     VIDEO = "video"
 
 
+class AttachmentParseStatus(StrEnum):
+    """첨부 파일에서 텍스트를 뽑아 봤는가, 못 뽑았다면 왜인가.
+
+    **컬럼이 NULL이면 "아직 해 보지 않았다"이고 그 집합이 곧 파싱 큐다.** `BodyStatus`와 같은
+    규칙이라, 연결·I/O 실패처럼 다시 해 볼 값어치가 있는 것은 상태를 남기지 않는다.
+    """
+
+    OK = "ok"
+    # 페이지 일부가 실패했다. 읽은 만큼은 저장하고 색인한다 — 일부라도 찾히는 편이 낫다.
+    PARTIAL = "partial"
+    # 파일을 열지 못했다. 손상됐거나 PDF가 아니다. 다시 열어도 같은 답이다.
+    FAILED = "failed"
+    # 암호가 걸렸거나 우리가 다루지 않는 형식이다.
+    UNSUPPORTED = "unsupported"
+
+
 class DocumentType(StrEnum):
     ARTICLE = "article"
     REPORT = "report"
@@ -422,6 +438,10 @@ class DocumentAttachment(EntityBase):
             "kind <> 'video' OR storage_path IS NULL",
             name="ck_document_attachment_video_has_no_path",
         ),
+        CheckConstraint(
+            "parse_status IS NULL OR parse_status IN ('ok', 'partial', 'failed', 'unsupported')",
+            name="ck_document_attachment_parse_status",
+        ),
         Index("ix_document_attachment_document_id", "document_id"),
         table_options(
             comment="문서에 붙은 첨부 파일과 영상 링크",
@@ -483,4 +503,47 @@ class DocumentAttachment(EntityBase):
         DateTime(timezone=True),
         nullable=True,
         comment="파일을 내려받은 시각(UTC). 영상은 NULL이다",
+    )
+    parse_status: Mapped[AttachmentParseStatus | None] = mapped_column(
+        SqlEnum(
+            AttachmentParseStatus,
+            native_enum=False,
+            length=20,
+            values_callable=lambda enum: [member.value for member in enum],
+        ),
+        nullable=True,
+        comment="첨부 파일에서 텍스트를 뽑아 본 결과. NULL은 아직 해 보지 않았다는 뜻이고 그 집합이 파싱 큐다",
+    )
+    extracted_text: Mapped[str | None] = mapped_column(
+        Text,
+        nullable=True,
+        comment="첨부에서 뽑은 본문. 페이지 표식(<!-- page:n -->)을 유지하고 길이 상한을 두지 않는다",
+    )
+    parsed_sha256: Mapped[str | None] = mapped_column(
+        Text,
+        nullable=True,
+        comment="이 텍스트를 만든 파일의 SHA-256. sha256과 다르면 파일이 바뀐 것이라 다시 파싱한다",
+    )
+    parser_version: Mapped[str | None] = mapped_column(
+        Text,
+        nullable=True,
+        comment="텍스트를 만든 파서의 이름과 판(예: pymupdf/1). 규칙이 바뀌면 올라가고 재처리 대상 판정에 쓴다",
+    )
+    parsed_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True,
+        comment="파싱한 시각(UTC)",
+    )
+    page_count: Mapped[int | None] = mapped_column(
+        Integer,
+        nullable=True,
+        comment="PDF의 전체 페이지 수. 아래 값의 분모다",
+    )
+    unreadable_page_count: Mapped[int | None] = mapped_column(
+        Integer,
+        nullable=True,
+        comment=(
+            "글자가 나오지 않은 페이지 수(스캔·이미지 페이지). 이 비율이 외부 Vision을 켤지 정하는 "
+            "유일한 근거다 — docs/analysis/pdf-vision-analysis.md 5절"
+        ),
     )

@@ -92,9 +92,10 @@
 - 문서 분할(`langchain-text-splitters`)은 임베딩과 함께 붙일 때 넣는다. **아직 없다** —
   `document_chunk` 테이블도 HNSW 인덱스도 0건이다.
 - PDF 본문 추출은 여전히 구현 범위 밖이고 구현 계약은
-  [pdf-rag-pipeline.md](pdf-rag-pipeline.md)에 있다. PyMuPDF를 사용하며 Docling·로컬 OCR은
-  쓰지 않는다. **검색은 BM25(`pg_search`)가 1단계이고 청크·임베딩은 미룬다**
-  (2026-08-31 결정, 켜는 조건은 그 문서 11.4).
+  [pdf-parsing-bm25.md](pdf-parsing-bm25.md)에 있다. PyMuPDF를 사용하며 Docling·로컬 OCR은
+  쓰지 않는다. **검색은 BM25(`pg_search`)가 1단계이고 외부 Vision·청크·임베딩은 미룬다**
+  (2026-08-31 결정, 켜는 조건은 그 문서 12절. Vision 설계는
+  [pdf-vision-analysis.md](pdf-vision-analysis.md)에 보류로 남겼다).
 
 노트북과 배포가 같은 코드를 쓴다는 성질은 그대로다. `notebooks/narrator_ab.ipynb`가
 `modules/llm.py`의 모델 팩토리를 그대로 import한다.

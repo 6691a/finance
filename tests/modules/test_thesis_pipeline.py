@@ -734,8 +734,8 @@ def _statement_key(statement: str) -> str:
     if "FROM disclosure_event" in query:
         return "disclosures"
     if "FROM quote_bar" in query:
-        # 둘 다 quote_bar를 읽는다. 마감 쿼리만 previous_close를 고른다.
-        return "us_close" if "previous_close" in query else "macro"
+        # 둘 다 quote_bar를 읽고 둘 다 previous_close를 고른다. 창 변화 쿼리만 봉을 묶는다.
+        return "macro" if "windowed AS" in query else "us_close"
     # 기술지표 조회는 두 원천을 UNION해서 `FROM stock_investor_trade_daily`와 `FROM quote_daily`를
     # 둘 다 품는다. 그 둘보다 먼저 보지 않으면 수급 조회 결과를 받는다.
     if "WITH requested AS" in query:
@@ -797,7 +797,14 @@ def disclosure_row(rcept_no: str = "20260821000123") -> tuple:
     )
 
 
-def macro_row(symbol: str = "SP500_FUT", kind: str = "index_future", first: str = "100", last: str = "101") -> tuple:
+def macro_row(
+    symbol: str = "SP500_FUT",
+    kind: str = "index_future",
+    first: str = "100",
+    last: str = "101",
+    previous_close: str | None = "98",
+) -> tuple:
+    """`quote_bar/select_window_changes.sql`의 한 행. 마지막 칸이 마지막 봉의 전일 종가다."""
     return (
         "yahoo",
         symbol,
@@ -809,6 +816,7 @@ def macro_row(symbol: str = "SP500_FUT", kind: str = "index_future", first: str 
         MACRO_WINDOW_START,
         AS_OF,
         120,
+        None if previous_close is None else Decimal(previous_close),
     )
 
 
@@ -1014,6 +1022,47 @@ def test_non_rate_changes_are_reported_in_percent():
     item = box.registry["macro_change:SP500_FUT"]
     assert item.detail.change_pct == pytest.approx(1.0)
     assert "change_bp" not in item.detail
+
+
+def test_macro_changes_carry_the_previous_close_axis_next_to_the_window_axis():
+    """추론과 채점의 기준가가 전일 종가라 창 변화만으로는 하루 등락을 못 읽는다."""
+    connection = FakeConnection({"macro": [macro_row("SP500_FUT", "index_future", "100", "101", "98")]})
+    box = toolbox(connection)
+
+    body_text = box.run("macro_changes", {})
+
+    item = box.registry["macro_change:SP500_FUT"]
+    assert item.detail.change_pct == pytest.approx(1.0)
+    assert item.detail.previous_close == pytest.approx(98.0)
+    assert item.detail.prev_close_change_pct == pytest.approx(3.06, abs=0.01)
+    # Slack 근거 줄은 제목만 그린다. 두 축을 글자로 밝히지 않으면 창 변화가 하루 등락으로 읽힌다.
+    assert "창 +1.00%" in item.title
+    assert "전일 종가 대비 +3.06%" in item.title
+    assert "prev_close_change_pct" in body_text
+
+
+def test_a_missing_previous_close_drops_that_axis_instead_of_showing_a_flat_zero():
+    connection = FakeConnection({"macro": [macro_row("SP500_FUT", "index_future", "100", "101", None)]})
+    box = toolbox(connection)
+
+    box.run("macro_changes", {})
+
+    item = box.registry["macro_change:SP500_FUT"]
+    assert "previous_close" not in item.detail
+    assert "prev_close_change_pct" not in item.detail
+    assert "전일 종가" not in item.title
+
+
+def test_the_previous_close_axis_of_a_rate_is_reported_in_basis_points():
+    connection = FakeConnection({"macro": [macro_row("US10Y", "rate", "4.65", "4.70", "4.60")]})
+    box = toolbox(connection)
+
+    box.run("macro_changes", {})
+
+    item = box.registry["macro_change:US10Y"]
+    assert item.detail.change_bp == pytest.approx(5.0)
+    assert item.detail.prev_close_change_bp == pytest.approx(10.0)
+    assert "prev_close_change_pct" not in item.detail
 
 
 def test_a_long_document_is_trimmed_so_one_item_cannot_eat_the_context():
@@ -3398,7 +3447,7 @@ def test_every_evidence_detail_keeps_its_stored_key_set():
             "receipt_date",
             "detected_at",
         },
-        # 금리라 `change_bp`만 있고 `change_pct`는 키째 없다.
+        # 금리라 `*_bp`만 있고 `*_pct`는 키째 없다. 축은 둘 — 창과 전일 종가다.
         "macro_change:US10Y": {
             "kind",
             "country",
@@ -3408,6 +3457,8 @@ def test_every_evidence_detail_keeps_its_stored_key_set():
             "window_end",
             "bar_count",
             "change_bp",
+            "previous_close",
+            "prev_close_change_bp",
         },
         "macro_change:SP500@close": {
             "kind",

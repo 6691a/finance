@@ -84,12 +84,23 @@ class DisclosureDetail(ToolModel):
 
 
 class MacroDetail(OptionalKeyModel):
-    """심볼 하나의 창 변화. **금리는 `change_bp`, 나머지는 `change_pct`다.**
+    """심볼 하나의 변화. **축이 둘이다** — 분석 창과 전일 종가.
 
-    기준값이 0이면 둘 다 없다 — 변화를 0으로 꾸미지 않는다.
+    `change_*`는 창 첫 봉 대비이고 `prev_close_change_*`는 봉에 실려 온 직전 정규장 종가
+    대비다. 추론과 채점의 기준가가 전일 종가라 그 축이 없으면 모델이 창 변화를 하루
+    등락으로 읽는다(2026-08-27 실측: 코스피 창 -1.15에 전일 종가 대비 +1.53).
+
+    **금리는 `*_bp`, 나머지는 `*_pct`다.** 기준값이 0이거나 없으면 그 칸이 통째로 빠진다 —
+    변화를 0으로 꾸미지 않는다.
     """
 
-    OMIT_WHEN_NONE: ClassVar[tuple[str, ...]] = ("change_bp", "change_pct")
+    OMIT_WHEN_NONE: ClassVar[tuple[str, ...]] = (
+        "change_bp",
+        "change_pct",
+        "previous_close",
+        "prev_close_change_bp",
+        "prev_close_change_pct",
+    )
 
     kind: str
     country: str
@@ -100,6 +111,9 @@ class MacroDetail(OptionalKeyModel):
     bar_count: int
     change_bp: float | None = None
     change_pct: float | None = None
+    previous_close: float | None = None
+    prev_close_change_bp: float | None = None
+    prev_close_change_pct: float | None = None
 
 
 class UsCloseDetail(OptionalKeyModel):

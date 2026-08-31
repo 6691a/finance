@@ -296,7 +296,7 @@ class FollowupNarrator:
         if target.base_price is not None and target.base_at is not None:
             at = target.base_at.astimezone(KST_TIMEZONE)
             progress = (
-                f" (직전 종가 대비 {target.base_return_pct:+.2f}퍼센트)"
+                f" (전일 종가 대비 {target.base_return_pct:+.2f}퍼센트)"
                 if target.base_return_pct
                 else ""
             )

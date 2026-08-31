@@ -74,6 +74,7 @@ from modules.thesis.state import (
     FORECAST_SLOTS,
     INTRADAY_SLOTS,
     NARRATED_SLOTS,
+    PRECEDENT_SLOTS,
     IndexObservation,
     ObservedState,
     RunSlot,
@@ -2574,7 +2575,7 @@ def test_past_theses_returns_reviews_beside_forecasts():
     query = body(PAST_THESES)
 
     # 장후 리뷰의 사후 해설이 다음 예측으로 돌아오는 길이 이것 하나다. 슬롯 목록은
-    # 파라미터이고 원본은 `thesis.state.NARRATED_SLOTS`다.
+    # 파라미터이고 원본은 `thesis.state.PRECEDENT_SLOTS`다.
     assert "thesis.run_slot = ANY(%s)" in query
     assert "'post_close'" not in query
     # 건수 상한은 슬롯마다다. 총량으로 자르면 장후가 들어온 만큼 장전 예측 이력이 짧아진다.
@@ -2687,6 +2688,17 @@ def test_narratives_and_backlog_watch_the_same_slots():
     # 채점 슬롯은 예측만이다. 리뷰 둘은 맞고 틀림을 물을 대상이 아니다.
     assert set(FORECAST_SLOTS) == {RunSlot.PRE_OPEN, *INTRADAY_SLOTS}
     assert set(NARRATED_SLOTS) == {*FORECAST_SLOTS, RunSlot.POST_CLOSE}
+
+
+def test_the_precedent_slots_add_the_after_hours_review_to_the_narrated_ones():
+    """목록이 둘인 이유. 해설을 받는 슬롯과 장전이 되돌아보는 슬롯은 다르다.
+
+    애프터마켓 리뷰는 채점도 해설도 없지만 "장 마감 뒤 무슨 재료가 나왔나"를 담고 있어
+    다음날 아침이 볼 값어치가 있다(`docs/analysis/market-thesis/18-nxt-precedent.md` 2.1절).
+    한 상수로 두 뜻을 지면 해설 루프를 늘리지 않고는 그것을 못 보여 준다.
+    """
+    assert set(PRECEDENT_SLOTS) == {*NARRATED_SLOTS, RunSlot.POST_NXT_CLOSE}
+    assert RunSlot.POST_NXT_CLOSE not in NARRATED_SLOTS
 
 
 def test_the_narrative_write_never_overwrites():
@@ -3019,7 +3031,7 @@ def test_past_theses_carries_the_id_the_edge_needs():
     assert rows[0].outcomes[0].verdict == "contradicted"
     assert rows[0].run_date == date(2026, 8, 20)
     _, parameters = connection.calls[0]
-    assert parameters == (AS_OF, list(NARRATED_SLOTS), "KOSPI", PREFETCHED_PAST_THESES)
+    assert parameters == (AS_OF, list(PRECEDENT_SLOTS), "KOSPI", PREFETCHED_PAST_THESES)
 
 
 def test_past_theses_zero_is_the_off_switch():
@@ -3049,6 +3061,24 @@ def test_the_prompt_carries_the_past_theses_it_was_given():
     assert "contradicted" in prompt
     # 해설은 사실이 아니라 그때의 해석이라고 프롬프트가 직접 말한다(사후확신 순환 방지).
     assert "그때의 해석" in prompt
+
+
+def test_the_prompt_names_the_after_hours_review_slot_it_was_given():
+    """채점 칸이 빈 리뷰를 빗나간 예측으로 읽지 않으려면 슬롯이 값으로 실려야 한다."""
+    source = FakeConnection({"past": [past_thesis_row(run_slot="post_nxt_close")]})
+    past = {"005930": ThesisStore(source).past_theses(as_of_at=AS_OF, subject_code="005930", n=3)}
+
+    prompt = ThesisBuilder.build_messages(
+        run_slot=RunSlot.PRE_OPEN,
+        as_of_at=AS_OF,
+        subjects=SUBJECTS,
+        observed_state=OBSERVED,
+        past_theses=past,
+    )[1].content
+
+    assert '"run_slot":"post_nxt_close"' in prompt
+    # 프롬프트가 그 슬롯이 무엇인지 설명한다. 안 하면 모델이 채점 없는 행을 예측 실패로 읽는다.
+    assert "`post_nxt_close`" in prompt
 
 
 def test_the_prompt_keeps_the_section_when_there_is_nothing_to_show():

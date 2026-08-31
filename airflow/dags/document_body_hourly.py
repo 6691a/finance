@@ -25,6 +25,11 @@
 
 - HTTP 400/401/403/404는 주소가 죽은 것이라 그 문서를 `unavailable`로 **확정**하고 넘어간다.
   다시 쳐도 같은 답이므로 실패로 세지 않는다.
+- **제공처가 지운 문서는 행을 지운다**(`DocumentGoneError`, 2026-08-31 사용자 결정). 원본이
+  없는 행은 남길 이유가 없다. 지금 이것을 올리는 곳은 네이버 리서치뿐이다 — 지운 리포트에
+  404가 아니라 200 `{}`로 답해 위 분기를 못 타고, 목록에서도 빠져 다시 발견되지 않는다. 다른
+  출처는 같은 현상이 확인되는 대로 하나씩 더한다. 그 행을 대표로 가리키던 중복은 연결을 끊어
+  대표로 돌려보낸다. 실패로 세지 않는다.
 - 연결 실패와 5xx는 `body_status`를 NULL로 남긴다. 다음 실행이 다시 집는다.
 - **첨부 다운로드 실패가 본문 저장을 되돌리지 않는다.** 본문을 먼저 커밋하고 파일을 하나씩
   뒤따라 커밋한다. 어렵게 받은 본문을 파일 하나 때문에 버리지 않는다.
@@ -55,7 +60,7 @@ from modules.collectors.document.body import (
     DocumentBodyCollector,
     pending_bodies,
 )
-from modules.collectors.document.documents import DocumentHTTPError, DocumentPayloadError
+from modules.collectors.document.documents import DocumentGoneError, DocumentHTTPError, DocumentPayloadError
 from modules.utility import CONNECTION_ID, KST_TIMEZONE, UNRECOVERABLE_STATUSES, atomic
 
 logger = logging.getLogger(__name__)
@@ -127,6 +132,12 @@ def document_body_hourly():
                 # 주소가 죽은 것이다. 다시 쳐도 같은 답이라 확정하고 넘어간다.
                 logger.info("%s is gone (HTTP %s); settling as unavailable", candidate.canonical_url, error.status)
                 result = DocumentBody(document_id=candidate.id, status="unavailable")
+            except DocumentGoneError as error:
+                # 제공처가 지운 문서다. 원본이 없는 행은 남길 이유가 없어 지운다. 실패로 세지 않는다.
+                logger.info("%s was deleted by its provider (%s); removing the document", candidate.canonical_url, error)
+                with closing(_connection()) as connection, atomic(connection):
+                    collector.delete_document(connection, candidate.id)
+                continue
             except DocumentPayloadError as error:
                 # 제공처 응답 형식이 바뀌었다. 상태를 남기지 않아 다음 실행이 다시 집는다.
                 logger.warning("%s returned something we cannot read: %s", candidate.canonical_url, error)

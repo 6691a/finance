@@ -64,6 +64,28 @@ PROMPT_VERSION = "10"
 # 결과가 실제로는 안 바뀐 것이 된다.
 DIRECTION_PROMPT_VERSION = "1"
 
+class Direction(BaseModel):
+    """저장할 방향성 하나. **모델의 답과 코드가 센 값이 여기서 만난다.**
+
+    **여기 있는 이유는 저장하는 쪽이 이 모양을 알아야 하기 때문이다.** `causal/store.py`는
+    LangChain을 import하지 않는 자리라, 이 모델이 `direction.py`(LangChain을 끄는 쪽)에
+    있으면 저장 코드가 그 무게를 물게 된다. `thesis/state.py`가 같은 이유로 있다.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    target_kind: str
+    target_code: str
+    week_start: date
+    bias: str
+    reasoning: str
+    up_count: int
+    down_count: int
+    flat_count: int
+    path_ids: tuple[int, ...]
+    channels: tuple[dict[str, object], ...]
+
+
 # 방향성 한 문장의 상한. 그래프 경로의 `reasoning`과 같은 값이고 이유도 같다 — 관측 상태에
 # 대상마다 한 줄씩 실리므로 길면 프롬프트 예산을 대상 수만큼 먹는다.
 MAX_DIRECTION_REASONING_CHARS = 200

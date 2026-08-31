@@ -524,8 +524,11 @@ Q1(`할인율`→대상)의 대상 수가 `as_of`에 따라 갈린다.
    (`s:Event OR s:Target`). 다중 홉 쿼리에는 `path_id`가 **실제로 바뀌는** 경로만 남기는
    조건이 하나 더 붙는다 — 안 걸면 주장 하나 안의 2단 체인이 착지 쿼리와 중복된다.
 4. ~~**`airflow/modules/causal/direction.py`**~~ — **끝났다.** 호출–교정 그래프(§3.3),
-   응답 모델, 검증, 저장. 원장 헬퍼 둘은 `causal/store.py`에 뒀다 — `ThesisStore`는
-   `run_slot`을 필수로 받고 `thesis.generation`·`outcomes`를 통째로 끌고 온다.
+   응답 모델, 검증. **저장과 원장은 `causal/store.py`가 갖는다** — 그 모듈이 연결과 SQL만
+   아는 자리이고, 저장이 `direction.py`(LangChain을 끄는 쪽)에 있으면 DAG이 저장만 하려
+   해도 그 무게를 문다. 그래서 `Direction` 모델도 `causal/domain.py`에 둔다.
+   (원장을 `ThesisStore`로 안 쓴 이유는 따로다 — 그쪽은 `run_slot`을 필수로 받고
+   `thesis.generation`·`outcomes`를 통째로 끌고 온다.)
 5. ~~**`airflow/modules/prompts/causal_direction.yaml`**~~ — **끝났다.**
    `DIRECTION_PROMPT_VERSION` 1과 해시를 `test_prompt_versions.py`에 잠갔다.
 6. ~~**DAG**~~ — **끝났다.** `sync_graph >> summarize_direction`이고 `trigger_rule`은
@@ -590,3 +593,17 @@ requirements 세 곳에서 빼는 것은 **별도 커밋**이다.
   - 로컬 Neo4j(운영 두 주 투영)로 흐름을 끝까지 돌렸다. 프롬프트가 대상 셋에 4,715자이고,
     `US10Y → 할인율 → SOX → 투자심리 → KOSPI`처럼 08-10 주 경로에서 08-17 주 경로로
     이어지는 사슬이 실제로 실린다.
+- **2026-08-31(다섯)** 운영 첫 실행이 둘을 드러냈다.
+  - **`AttributeError: module 'modules.causal.store' has no attribute 'store_directions'`** —
+    저장 함수를 `direction.py`에 두고 DAG은 `store.store_directions`로 불렀다. 단위 테스트가
+    정의된 자리를 직접 import해 통과했고, **태스크가 LLM을 부르고 나서 저장 단계에서 죽었다.**
+    함수를 `store.py`로 옮기고(`Direction` 모델은 `domain.py`로) 같은 실수를 잡는 테스트를
+    더했다 — `tests/dags/test_dag_module_attributes.py`가 DAG이 `모듈.이름()` 꼴로 부르는
+    속성이 실제로 있는지 본다. **DAG의 import는 전부 태스크 안이라 DagBag도 import error
+    검사도 그 이름을 안 본다.**
+  - **스케줄러가 새 DAG 버전의 태스크를 안 만들었다.** dag_run이 만들어지자마자
+    `Marking run successful`로 닫히고 `task_instance`가 0행이었다. 직렬화본에는 태스크 셋이
+    정확히 있었고 `airflow tasks list`도 셋을 냈다 — **DB와 CLI는 맞고 스케줄러 프로세스만
+    옛 상태였다.** `docker compose restart airflow-scheduler airflow-dag-processor`로 풀렸다.
+    저장소 코드 문제가 아니라 배포 절차의 것이라 [operations.md](../../operations.md)에 적을
+    후보다.

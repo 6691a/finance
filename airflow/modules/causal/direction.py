@@ -24,7 +24,6 @@ Cypher 결과에서 만든다(설계 §3.1). 저장소 규칙대로 숫자는 �
 내려가고, 그것은 "그 주에 경로가 없었다"와 구별되지 않는다.
 """
 
-import json
 import logging
 from collections.abc import Sequence
 from datetime import date
@@ -33,10 +32,10 @@ from typing import Any, TypedDict
 from langchain_core.language_models import BaseChatModel
 from langchain_core.messages import BaseMessage, HumanMessage, SystemMessage
 from langgraph.graph import END, START, StateGraph
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, Field
 
 from modules import llm
-from modules.causal.domain import DIRECTION_PROMPT_VERSION, MAX_DIRECTION_REASONING_CHARS
+from modules.causal.domain import DIRECTION_PROMPT_VERSION, MAX_DIRECTION_REASONING_CHARS, Direction
 
 # `generation`에서 가져온다. 같은 일을 하는 함수가 이미 둘이라(`briefing/disclosure_picks._text`)
 # 셋째를 만들지 않는다. 둘 다 LangChain을 import하는 흐름이라 무게가 늘지 않는다 — 셋째
@@ -68,23 +67,6 @@ class DirectionAnswer(BaseModel):
 
 class DirectionReply(BaseModel):
     directions: list[DirectionAnswer] = Field(description="받은 대상 전부. 하나도 빠뜨리지 않는다")
-
-
-class Direction(BaseModel):
-    """저장할 방향성 하나. **모델의 답과 코드가 센 값이 여기서 만난다.**"""
-
-    model_config = ConfigDict(frozen=True)
-
-    target_kind: str
-    target_code: str
-    week_start: date
-    bias: str
-    reasoning: str
-    up_count: int
-    down_count: int
-    flat_count: int
-    path_ids: tuple[int, ...]
-    channels: tuple[dict[str, object], ...]
 
 
 class DirectionState(TypedDict):
@@ -251,35 +233,3 @@ class DirectionSummarizer:
             return END
         # 교정은 한 번뿐이고 재시도는 Airflow가 한다.
         return "repair" if state["attempts"] == 0 else END
-
-
-def store_directions(connection, directions: Sequence[Direction], *, llm_run_id: int | None) -> int:
-    """방향성을 한 트랜잭션에 쓴다. 저장한 행 수를 준다.
-
-    **`DO UPDATE`다**(설계 §3.2). 그래프의 파생 요약이라 그래프가 다시 밀리면 따라간다.
-    """
-    from modules.sql import read_sql
-
-    statement = read_sql("postgres", "market_causal_direction", "upsert.sql")
-    stored = 0
-    with connection.cursor() as cursor:
-        for direction in directions:
-            cursor.execute(
-                statement,
-                {
-                    "week_start": direction.week_start,
-                    "target_kind": direction.target_kind,
-                    "target_code": direction.target_code,
-                    "bias": direction.bias,
-                    "reasoning": direction.reasoning,
-                    "up_count": direction.up_count,
-                    "down_count": direction.down_count,
-                    "flat_count": direction.flat_count,
-                    # JSONB는 드라이버가 dict/list를 안 받는다. 경계에서 한 번만 문자열로 만든다.
-                    "path_ids": json.dumps(list(direction.path_ids)),
-                    "channels": json.dumps(list(direction.channels), ensure_ascii=False),
-                    "llm_run_id": llm_run_id,
-                },
-            )
-            stored += 1
-    return stored

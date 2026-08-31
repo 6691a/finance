@@ -62,8 +62,38 @@ INTRADAY_SLOTS: tuple[RunSlot, ...] = (
     RunSlot.PRE_CLOSE,
 )
 
-# 사후 해설을 받는 슬롯. 애프터마켓은 아직 빠져 있다(`7-nxt-review.md` 3절).
-NARRATED_SLOTS: tuple[RunSlot, ...] = (*FORECAST_SLOTS, RunSlot.POST_CLOSE)
+# 사후 해설을 받는 슬롯. **채점 슬롯보다 리뷰 둘이 더 있다** — 리뷰는 예측이 아니라
+# 채점할 대상이 없지만, "오늘 이래서 움직였다"는 인과 주장이라 며칠 뒤 보도로 검증할
+# 값어치가 오히려 크다.
+#
+# 애프터마켓 리뷰(`post_nxt_close`)는 2026-08-31에 들어왔다(`19-nxt-narration.md`).
+# 7단계가 뺐던 이유는 값어치 판단이 아니라 해설 호출이 슬롯을 `pre_open`으로 하드코딩하던
+# 결함이었고, 그것은 2026-08-23에 풀렸다(`7-nxt-review.md` 9절).
+#
+# `select_pending_narratives.sql`과 `select_backlog.sql`의 `unnarrated`가 파라미터로 받는다.
+# **둘이 같은 목록을 봐야 한다** — 어긋나면 한쪽은 해설을 안 만들고 다른 쪽은 그것을
+# 밀림으로 세서 ops 브리핑이 매일 거짓 경보를 낸다.
+NARRATED_SLOTS: tuple[RunSlot, ...] = (
+    *FORECAST_SLOTS,
+    RunSlot.POST_CLOSE,
+    RunSlot.POST_NXT_CLOSE,
+)
+
+# 장전·장중이 프롬프트에 되돌아보는 슬롯. **지금 `NARRATED_SLOTS`와 값이 같다.**
+#
+# **그래도 목록이 둘인 이유는 뜻이 둘이기 때문이다.** 이쪽은 "다음 추론이 되돌아보는 것"이고
+# 저쪽은 "사후 해설을 받는 것"이다. 해설을 안 받되 되돌아보기만 할 슬롯이 다시 생기면 여기만
+# 는다 — 한 상수로 두 뜻을 지면 그것을 보여 주려고 해설 루프까지 늘려야 한다
+# (`18-nxt-precedent.md` 2.1절). 2026-08-31 하루 동안 실제로 그 상태였다.
+#
+# **파생 정의(`(*NARRATED_SLOTS, ...)`)를 쓰지 않는다** — 같은 슬롯이 두 번 들어간다.
+#
+# `select_past_with_outcomes.sql`이 파라미터로 받는다.
+PRECEDENT_SLOTS: tuple[RunSlot, ...] = (
+    *FORECAST_SLOTS,
+    RunSlot.POST_CLOSE,
+    RunSlot.POST_NXT_CLOSE,
+)
 
 # 장중 슬롯의 기준 시각(KST). **분기가 아니라 표다** — 슬롯 값이 인자로 흘러 시각 하나를
 # 고르는 것이고, 슬롯으로 코드 경로가 갈리지 않는다.
@@ -204,6 +234,39 @@ class TechnicalObservation(BaseModel):
     recent_signals: tuple[SignalObservation, ...] = ()
 
 
+class CausalChannel(BaseModel):
+    """방향성 재료 한 줄 — 채널 하나가 그 대상을 어느 쪽으로 얼마나 밀었나."""
+
+    model_config = ConfigDict(frozen=True)
+
+    name: str
+    up: int = 0
+    down: int = 0
+
+
+class CausalDirection(BaseModel):
+    """대상 하나가 주간 인과 그래프에서 받은 방향. 설계는
+    `docs/analysis/market-thesis/17-graph-query.md` §4다.
+
+    **예측이 아니라 사전 맥락이다.** 주 `W`를 `W+2` 월요일에 분석하므로 최소 9일 전 인과다.
+    `week_start`를 함께 싣는 이유가 그것이고, 프롬프트가 며칠 전인지 밝힌다.
+
+    **`bias`는 LLM이 낸 값이고 `channels`가 그 재료다.** 종합을 못 믿으면 채널 집계를 보고
+    다르게 판단하라고 프롬프트가 적는다 — LLM 출력이 LLM 입력이 되는 자리의 완화다(§4.5).
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    week_start: date
+    bias: str
+    reasoning: str
+    up_count: int
+    down_count: int
+    flat_count: int
+    channels: tuple[CausalChannel, ...] = ()
+    path_ids: tuple[int, ...] = ()
+
+
 class TechnicalState(BaseModel):
     """기술적 관측 블록 전체.
 
@@ -236,6 +299,14 @@ class ObservedState(BaseModel):
     index: dict[str, IndexObservation] = Field(default_factory=dict)
     stock: dict[str, StockObservation] = Field(default_factory=dict)
     intraday: dict[str, IntradayObservation] = Field(default_factory=dict)
+    # 그 세션 정규장이 닫힌 뒤 NXT 애프터마켓(15:30~20:00) 마감가. **장전만 채운다** —
+    # 장후·장중은 기준 시각이 15:30 이전이라 이 값이 미래다.
+    #
+    # 등락률의 분모는 `stock`과 같은 정규 종가라 두 칸을 나란히 읽을 수 있다. 애프터 방향이
+    # 다음날 정규장으로 이어지는 것은 56퍼센트라(2026-08-31 실측) 가격 신호가 아니라 "마감 뒤
+    # 재료에 대한 첫 반응"으로 읽어야 하고, 그 사실은 프롬프트가 말한다
+    # (`18-nxt-precedent.md` 0.1절). NXT에 지수가 없어 종목만이다.
+    after_hours: dict[str, AfterHoursObservation] = Field(default_factory=dict)
     technical: TechnicalState = TechnicalState()
     # 심볼별 `flat` 기준선(최근 `base_rate.FLAT_BASE_RATE_BARS`봉의 하루 등락 분포).
     #
@@ -246,6 +317,15 @@ class ObservedState(BaseModel):
     # `input_state`에 함께 저장되므로 "그때 어떤 기준선을 줬나"가 기록에 남는다. 봉이 모자란
     # 심볼은 키가 없다.
     flat_base_rate: dict[str, HorizonBaseRate] = Field(default_factory=dict)
+    # 대상별 주간 인과 방향성. **키가 없는 것과 `flat`은 다르다** — 없는 것은 "그 그래프가
+    # 말하지 않았다"이고 `flat`은 "민 쪽이 없다"다. 프롬프트가 그 둘을 갈라 적는다.
+    #
+    # 나이 상한(`MAX_DIRECTION_AGE_WEEKS`)에 걸린 대상도 키가 없다. 주간 태스크가 밀리면
+    # 낡은 방향성을 최신인 척 읽는 것이 아니라 아예 안 보는 것이 맞다(설계 §4.2.1).
+    #
+    # **`NxtObservedState`에는 두지 않는다.** 애프터마켓 리뷰는 예측이 아니라 채점 대상이
+    # 아니고, 사전 맥락을 줄 자리가 없다.
+    causal_direction: dict[str, CausalDirection] = Field(default_factory=dict)
 
 
 class NxtObservedState(BaseModel):

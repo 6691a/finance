@@ -173,6 +173,15 @@ def content_hash(title: str, summary: str | None) -> str:
 | `attachment_only` | 본문이 첨부에만 있다. 첨부는 받았다 | bok, fss, boj, naver_research |
 | `unavailable` | 받을 수 없다 | krx(딥링크 없음), HTTP 4xx |
 
+상태 값이 아닌 결말이 하나 더 있다. **제공처가 지운 문서는 행을 지운다**(2026-08-31 사용자
+결정). 원본이 없는 행은 남길 이유가 없다. 지금은 네이버 리서치만 그 판정을 낸다 — 지운
+`researchId`에 404가 아니라 200 `{}`로 답하고(`invest/40006`, 문서 74244 실측) 목록에서도
+빠져 다시 발견되지 않는다. 다른 출처는 같은 현상이 확인되는 대로 하나씩 더한다. 태그·추출·
+첨부 행은 CASCADE로 함께 사라지고 `source_record`는 남는다. 그 행을 대표로 가리키던 중복은
+`canonical_document_id`를 NULL로 되돌려 대표로 돌려보낸다(RESTRICT라 끊지 않으면 DELETE가
+막히기도 한다) — 실제로 같은 리포트의 첫 게시(`invest/39973`)가 살아 있는데 나중 게시가
+대표로 뽑힌 뒤 지워져 있었다.
+
 `failed`를 두지 않는다. 연결 실패·5xx는 **`body_status`를 NULL로 남겨** 다음 실행이 다시
 집게 한다. 상태를 남기면 재시도 규칙을 따로 써야 하고, NULL로 두면 큐가 그 일을 이미 한다.
 
@@ -425,6 +434,8 @@ courtlistener·cdt.org·parliament.uk·nfcc.org.uk, BEA 보도자료가 건 cens
 
 되돌릴 수 없는 오류(HTTP 4xx)는 그 문서를 `unavailable`로 **확정**하고 넘어간다.
 다시 쳐도 같은 답이므로 **실패로 세지 않는다** — 세면 죽은 링크 하나가 매시간 경보를 낸다.
+제공처가 지운 문서(`DocumentGoneError`, 5.1절)는 행을 지우고 넘어가며 역시 실패로 세지
+않는다. 2026-08-30 밤 큐에 그 하나만 남아 "전부 실패"로 태스크가 죽은 것이 계기다.
 재시도할 값어치가 있는 것(`ConnectionError`, 5xx)은 `body_status`를 NULL로 남겨 다음 실행이
 다시 집고, 그때는 실패로 센다.
 
@@ -528,9 +539,11 @@ init 서비스의 `chown` 목록에도 `files`를 넣었다. 컨테이너는
 
 순서가 곧 의존 관계다. 위가 끝나야 아래가 선다.
 
-1. **첨부 파일 텍스트 변환.** PDF·HWP를 텍스트로 바꾼다. `pypdf` 같은 의존성이 필요하고
-   **운영 Airflow 이미지에 먼저 들어가야 한다.** 스캔 PDF는 OCR이 없어 여전히 빈다.
-   컬럼은 그때 `document_attachment`에 더한다.
+1. **첨부 파일 텍스트 변환.** PDF 구현은
+   [PDF 파싱·외부 분석·RAG 파이프라인](../analysis/pdf-rag-pipeline.md)을 따른다. HWP는 별도다.
+   **운영 Airflow 이미지에 PyMuPDF가 먼저 들어가야 한다.** 스캔·이미지 글자는 로컬 OCR 대신
+   선별한 영역만 외부 분석한다. 컬럼은 실제 파서와 읽는 쪽을 붙일 때 `document_attachment`에
+   더한다.
 2. **`document_chunk`와 임베딩.** 상위 설계 6.2가 이미 모양을 적어 뒀다 —
    `(document_id, position)` 자연키, `RecursiveCharacterTextSplitter(chunk_size=2000,
    chunk_overlap=200)`, HNSW 인덱스. **pgvector 0.8.4가 운영 DB에 이미 설치돼 있다**

@@ -28,10 +28,12 @@ NXT 애프터마켓 20:00에 끝나는데, 장후 리뷰(`market_thesis_review`)
 
     build_thesis >> notify_slack
 
-채점도 사후 해설도 없다. 리뷰는 예측이 아니라 채점할 대상이 없고(기존 `post_close`와 같은
-이유), 해설은 아직 붙이지 않았다 — 붙이려면 `NarrativeTarget`이 슬롯을 들고 슬롯마다
-호출을 나눠야 한다. 새 슬롯이 그 루프에 조용히 들어가지 않도록
-`thesis_outcome/select_pending_narratives.sql`과 `select_backlog.sql`이 슬롯을 열거한다.
+**채점은 없다.** 리뷰는 예측이 아니라 채점할 대상이 없다(기존 `post_close`와 같은 이유).
+
+**사후 해설은 이 DAG가 아니라 `market_thesis_review`가 붙인다**(2026-08-31,
+`19-nxt-narration.md`). 며칠 뒤 보도가 쌓여야 판정할 수 있어 T+1·3·5의 장후 리뷰가
+`narrate_followups`에서 슬롯마다 호출을 나눠 처리한다. 이 슬롯이 그 대상이라는 것은
+`thesis.state.NARRATED_SLOTS` 하나가 정하고, 해설 조회와 밀림 조회가 그 목록을 함께 받는다.
 
 ## readiness guard
 

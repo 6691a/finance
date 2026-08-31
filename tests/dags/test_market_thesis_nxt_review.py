@@ -15,7 +15,8 @@ from airflow.sdk.exceptions import AirflowSkipException
 from dags import market_thesis_nxt_review as dag_module
 from modules.technical import base_rate
 from modules.thesis import common, nxt_review
-from modules.thesis.nxt_review import AfterHoursBar, NxtAfterHoursReview
+from modules.thesis.common import AfterHoursBar
+from modules.thesis.nxt_review import NxtAfterHoursReview
 
 DAG = dag_module.market_thesis_nxt_review
 
@@ -44,8 +45,14 @@ def _row(
 
 
 
-# 기저율 조회 둘. 관측 상태를 만들 때마다 불리므로 가짜 커서가 순번 큐 밖으로 뺀다.
-BASE_RATE_QUERIES = frozenset({base_rate.FORWARD_RETURNS, base_rate.UNCONDITIONAL_RETURNS})
+# 관측 상태를 만들 때마다 불리는 조회들. 가짜 커서가 순번 큐 밖으로 뺀다.
+#
+# 기저율 둘과 주간 인과 방향성이다. 방향성은 애프터마켓 리뷰가 쓰지 않지만
+# `common.observed_state`를 재사용하기 때문에 함께 불린다 — `NxtObservedState`에는
+# 그 칸이 없어 값이 버려진다.
+BASE_RATE_QUERIES = frozenset(
+    {base_rate.FORWARD_RETURNS, base_rate.UNCONDITIONAL_RETURNS, common.CAUSAL_DIRECTION}
+)
 
 class FakeCursor:
     def __init__(self, answers: list[Any]) -> None:
@@ -106,7 +113,12 @@ def test_the_dag_owns_one_slot_only():
 
 
 def test_the_tasks_run_in_one_line():
-    """채점도 해설도 없다. 리뷰는 예측이 아니고 해설 루프는 이 슬롯을 빼 둔다."""
+    """채점이 없어 태스크가 둘뿐이다.
+
+    **해설은 이 DAG의 태스크가 아니다.** 며칠 뒤 보도가 쌓여야 판정할 수 있어
+    `market_thesis_review`의 `narrate_followups`가 붙인다
+    (`docs/analysis/market-thesis/19-nxt-narration.md`).
+    """
     assert set(DAG.task_dict) == {"build_thesis", "notify_slack"}
     assert DAG.task_dict["notify_slack"].upstream_task_ids == {"build_thesis"}
 
@@ -141,7 +153,7 @@ def test_the_macro_window_starts_at_the_krx_close():
 
 def test_the_after_hours_window_covers_the_evening_only():
     """프리·주간 봉이 섞이면 애프터 등락이 하루 등락이 된다."""
-    start, end = nxt_review.after_hours_window(RUN_DATE)
+    start, end = common.after_hours_window(RUN_DATE)
 
     assert start == datetime(2026, 8, 21, 6, 30, tzinfo=UTC)
     assert end == datetime(2026, 8, 21, 11, 0, tzinfo=UTC)

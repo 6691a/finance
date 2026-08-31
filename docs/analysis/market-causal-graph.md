@@ -14,7 +14,7 @@
 - 목표: 한 주에 일어난 사건이 어떤 경로로 어떤 대상에 닿았는지를 LLM이 사후에 정리해
   **노드와 엣지로 누적**한다. 주가 쌓이면서 같은 노드를 공유해 다중 홉 탐색이 가능해진다.
 - 조회: `GET /api/causal/paths`·`/events`·`/channels`·`/paths/{id}`와 화면 `/causal`,
-  `/causal/:pathId`가 붙었다([18단계](market-thesis/18-collection-browser.md) §8.3).
+  `/causal/:pathId`가 붙었다([20단계](market-thesis/20-collection-browser.md) §8.3).
   **목록은 표, 상세는 그래프다.**
 - 산출물: `apps/models/analysis/causal.py`, 수기 리비전 `b4e91c72a3d5`와
   `a7c4e1b93f28`(근거 저장), `d51c9a7be402`(대상 출발 경로),

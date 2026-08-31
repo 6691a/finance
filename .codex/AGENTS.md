@@ -227,7 +227,7 @@ npm --prefix frontend run build
 
 - **한 도메인의 파일이 셋 이상이면 폴더로 내리고 접두어를 뗀다.** `collectors/`·`briefing/`·`expectation/`·`technical/`·`thesis/`가 그 형태다(뒤의 셋은 2026-08-27). `modules.thesis.thesis_domain`이 아니라 `modules.thesis.domain`이다 — `collectors/`가 파일 이름에 남긴 접두어는 **제공처**라 뜻이 있고, `thesis_`는 **폴더가 될 것**이 이름에 붙어 있던 것이다.
 - **하위 패키지 `__init__.py`는 빈 파일이다.** 재수출하면 `modules.thesis.domain` 하나를 import해도 LangChain이 딸려 와 DagBag이 그 무게를 문다. `tests/modules/test_import_weight.py`가 그 경계를 재고 있어 재수출은 그 테스트를 즉시 깬다.
-- **최상위에 남는 것은 공용 잎 열셋이다**(`db`·`sql`·`upsert`·`utility`·`period`·`schema`·`slack`·`llm`·`prompt`·`market_session`·`assessment`·`dedup`·`graph`). 열은 300줄 미만이고 셋이 넘는다(`assessment` 637, `graph` 414, `llm` 350 — 2026-08-30 실측). **`core/` 같은 폴더로 모으지 않는다** — 114개 파일 226줄을 고치고 얻는 것이 목록 열 줄이다(2026-08-27 실측). **줄 수는 폴더로 내리는 기준이 아니다** — 기준은 "한 도메인의 파일이 셋 이상인가"이고, 잎 하나가 길어진 것은 그 파일을 나눌 문제다.
+- **최상위에 남는 것은 공용 잎 열넷이다**(`db`·`sql`·`upsert`·`utility`·`period`·`schema`·`slack`·`llm`·`prompt`·`market_session`·`assessment`·`dedup`·`graph`·`graph_query`). 열은 300줄 미만이고 넷이 넘는다(`assessment` 637, `graph` 429, `llm` 350, `graph_query` 265 — 2026-08-31 실측). `graph`와 `graph_query`가 둘이라 폴더로 안 내린다 — 셋째가 생기면 `graph/`로 내리되 그 이동은 따로 커밋한다. **`core/` 같은 폴더로 모으지 않는다** — 114개 파일 226줄을 고치고 얻는 것이 목록 열 줄이다(2026-08-27 실측). **줄 수는 폴더로 내리는 기준이 아니다** — 기준은 "한 도메인의 파일이 셋 이상인가"이고, 잎 하나가 길어진 것은 그 파일을 나눌 문제다.
 - **접두어를 떼면 바인딩 이름이 짧아져 지역 변수와 겹칠 수 있다**(`from modules import technical` → `from modules.technical import indicators`). `ruff`의 `F823`이 그것을 잡는 유일한 장치이므로 기계적 치환 직후에 `ruff`를 먼저 돌린다. 2026-08-27 이동에서 셋이 걸렸다.
 - **이동과 파일 분리를 같은 커밋에 두지 않는다.** 어느 쪽이 회귀를 만들었는지 못 가른다. `thesis/toolbox.py`가 1,440줄로 저장소 최대이고 다음 분리 후보다.
 - **`dags/`는 폴더로 나누지 않는다.** DagBag은 하위 폴더를 재귀로 훑지만 `dag_id`가 경로와 무관해 UI에 그룹이 생기지 않는다(그 일은 `tags`가 한다). DAG은 파일당 얇고 접두어가 이미 정렬을 해 준다.
@@ -310,6 +310,7 @@ npm --prefix frontend run build
 - **로그는 예외를 대체하지 않는다.** `logger.warning`만 남기고 정상 반환하면 Airflow는 그 태스크를 성공으로 표시한다. 아무도 보지 않는 경고가 되고, 다음 실행도 같은 자리에서 같은 경고를 남긴다.
 - **부분 실패를 결과로 바꾸는 것은 그것이 정상 흐름일 때만 한다.** 문서 하나가 실패해도 나머지를 저장하는 것처럼 설계가 그렇게 정해진 경우다. 그때도 실패한 건수와 원인을 올리고, 전부 실패하면 태스크를 실패시킨다.
 - **조용한 성공을 만들지 않는다.** 잘린 응답, 0건, 빈 본문이 오류를 가릴 수 있으면 실패로 만든다. `writing-collectors` 스킬의 "전체 건수와 받은 행 수를 대조한다"와 같은 이유다.
+- **LLM이 낸 값의 조용한 성공은 얼굴이 따로 있다.** 대상 넷 중 하나만 온 응답, 왕복 상한에 잘린 조사, `ToolMessage`가 되어 성공으로 끝난 상한 초과, "결과 없음"으로 위장한 DB 연결 끊김 — 넷 다 태스크가 초록으로 끝난다. 그 자리의 규칙은 `writing-llm-flows` 스킬의 **"조용한 성공을 만들지 않는 LLM 흐름"** 여덟이고, 축은 **파악·이유·수정**이다.
 - **재시도 여부 판단을 위에 맡기려면 판단할 것을 위로 올려야 한다.** 아래에서 분류해 놓고 위로 문자열만 보내면 그 분류는 존재하지 않는 것과 같다.
 
 ### DAG의 실패 판정

@@ -59,6 +59,37 @@ from modules.utility import KST_TIMEZONE
 # 종가와 정확히 맞았다(설계 §11.5).
 PROMPT_VERSION = "10"
 
+# 방향성 요약(`causal/direction.py`)의 프롬프트 판. **그래프 생성과 따로 센다** — 두 흐름이
+# 서로 다른 프롬프트를 쓰고, 한쪽 문장을 고쳤다고 다른 쪽 판까지 올리면 그 판으로 묶인
+# 결과가 실제로는 안 바뀐 것이 된다.
+DIRECTION_PROMPT_VERSION = "1"
+
+class Direction(BaseModel):
+    """저장할 방향성 하나. **모델의 답과 코드가 센 값이 여기서 만난다.**
+
+    **여기 있는 이유는 저장하는 쪽이 이 모양을 알아야 하기 때문이다.** `causal/store.py`는
+    LangChain을 import하지 않는 자리라, 이 모델이 `direction.py`(LangChain을 끄는 쪽)에
+    있으면 저장 코드가 그 무게를 물게 된다. `thesis/state.py`가 같은 이유로 있다.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    target_kind: str
+    target_code: str
+    week_start: date
+    bias: str
+    reasoning: str
+    up_count: int
+    down_count: int
+    flat_count: int
+    path_ids: tuple[int, ...]
+    channels: tuple[dict[str, object], ...]
+
+
+# 방향성 한 문장의 상한. 그래프 경로의 `reasoning`과 같은 값이고 이유도 같다 — 관측 상태에
+# 대상마다 한 줄씩 실리므로 길면 프롬프트 예산을 대상 수만큼 먹는다.
+MAX_DIRECTION_REASONING_CHARS = 200
+
 # 대상 주 `W`와 실행 주 `W+2`의 거리. 설계 §2.
 RUN_LAG_WEEKS = 2
 
@@ -257,10 +288,11 @@ class CausalTarget(BaseModel):
 
 
 # 국내 지수. 종목과 달리 마스터를 훑지 않는다 — 늘어나는 목록이 아니다.
-INDEX_TARGETS: tuple[CausalTarget, ...] = (
-    CausalTarget(kind=CausalTargetKind.INDEX, code="KOSPI"),
-    CausalTarget(kind=CausalTargetKind.INDEX, code="KOSDAQ"),
-)
+#
+# **KOSDAQ은 뺐다**(2026-08-31). 추론 대상에서 빠진 것과 같은 판단이고, 여기서는 실측이
+# 하나 더 있다 — 두 주(08-10·08-17)를 돌린 결과에 KOSDAQ으로 가는 경로가 **0개**였다
+# (KOSPI는 4개·6개). 대상 목록에 있어도 모델이 한 번도 고르지 않았다.
+INDEX_TARGETS: tuple[CausalTarget, ...] = (CausalTarget(kind=CausalTargetKind.INDEX, code="KOSPI"),)
 
 # 매크로 다섯. **이것들이 대상에 있어야 그래프가 깊어진다**(설계 §3.1.1) — 대상이 못 되면
 # `미국 10년물 국채금리 상승` 같은 값이 사건으로만 들어와 사슬이 거기서 끊긴다.

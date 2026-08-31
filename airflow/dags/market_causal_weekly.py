@@ -48,6 +48,7 @@
   초기 적재와 밀린 주 복구가 이것 하나다. MERGE라 몇 번을 돌려도 같은 그래프다.
 """
 
+import logging
 import os
 from datetime import UTC, datetime, timedelta
 from typing import Any
@@ -58,6 +59,8 @@ from airflow.sdk.exceptions import AirflowFailException, AirflowSkipException
 
 from modules.utility import KST_TIMEZONE
 
+logger = logging.getLogger(__name__)
+
 DEFAULT_ARGS: dict[str, Any] = {"retries": 3, "retry_delay": timedelta(minutes=10)}
 
 # 대화 하나가 대상 열한 개를 한 번에 본다. 교정이 붙으면 왕복이 둘이다.
@@ -65,6 +68,10 @@ BUILD_TIMEOUT = timedelta(minutes=20)
 
 # 주 하나가 경로 수십 개다. 왕복은 트랜잭션 하나뿐이라 오래 걸릴 것이 없다.
 SYNC_TIMEOUT = timedelta(minutes=10)
+
+# 주마다 대화 하나이고 툴이 없다. `sync_only` 백필이 주 여러 개를 한 태스크에서 도는 것이
+# 이 값의 상한을 정한다.
+DIRECTION_TIMEOUT = timedelta(minutes=20)
 
 WEEK_START_PARAM = "week_start"
 SYNC_ONLY_PARAM = "sync_only"
@@ -183,7 +190,104 @@ def market_causal_weekly():
 
         return {"weeks": [week.isoformat() for week in weeks], "edges": projected}
 
-    sync_graph(build_causal_graph())
+    @task(
+        task_display_name="대상별 방향성 요약",
+        execution_timeout=DIRECTION_TIMEOUT,
+        # **기본 `all_success`다.** `sync_graph`와 반대 판단이고 이유가 있다 — 투영이 skip이면
+        # (NEO4J_URI 없음) 읽을 그래프가 없으므로 방향성도 skip이어야 맞다. 그 skip이
+        # 추론까지 전파되는 것이 설계 §4.2.1이고 나이 상한이 그 마지막 자리다.
+    )
+    def summarize_direction(projection: dict[str, Any] | None, **context: Any) -> dict[str, Any]:
+        from contextlib import closing
+        from datetime import UTC, date, datetime
+
+        from modules import graph_query, llm
+        from modules.causal import store
+        from modules.causal.candidates import direction_targets
+        from modules.causal.direction import DirectionError, DirectionSummarizer
+        from modules.causal.domain import DIRECTION_PROMPT_VERSION
+        from modules.causal.run import connection
+        from modules.graph_query import GraphQueryError
+        from modules.prompt import PromptError
+
+        weeks = [date.fromisoformat(value) for value in (projection or {}).get("weeks", [])]
+        if not weeks:
+            # 투영이 아무 주도 안 밀었다. 접을 것이 없다.
+            raise AirflowSkipException("the projection pushed no week; nothing to summarise")
+
+        uri = os.environ.get("NEO4J_URI")
+        user = os.environ.get("NEO4J_USER")
+        password = os.environ.get("NEO4J_PASSWORD")
+        if not uri or not user or not password:
+            # 여기 오려면 `sync_graph`가 성공했어야 하고, 그러면 셋이 다 있었다.
+            raise AirflowFailException("NEO4J_URI, NEO4J_USER and NEO4J_PASSWORD are required")
+
+        dag_run = context.get("dag_run")
+        task_instance = context.get("ti")
+        as_of_at = datetime.now(UTC)
+
+        model = llm.direction_model()
+        summarizer = DirectionSummarizer(model)
+
+        written = 0
+        graph = graph_query.driver(uri, (user, password))
+        try:
+            with closing(connection()) as conn:
+                targets = direction_targets(conn)
+                for week in weeks:
+                    found = [
+                        graph_query.read_direction_input(
+                            graph, kind=target.kind, code=target.code, week_start=week, as_of_at=as_of_at
+                        )
+                        for target in targets
+                    ]
+                    # 그 주에 경로가 하나도 안 닿은 대상은 접을 것이 없다. **행을 안 만든다** —
+                    # 빈 행은 "방향이 없다"로 읽히는데 그것은 "그래프가 말하지 않았다"와 다르다.
+                    usable = [item for item in found if item.landings]
+                    if not usable:
+                        logger.warning("no causal path landed on any direction target in %s", week)
+                        continue
+
+                    run_id = store.start_llm_run(
+                        conn,
+                        kind="causal_direction",
+                        run_date=week,
+                        as_of_at=as_of_at,
+                        dag_run_id=getattr(dag_run, "run_id", ""),
+                        try_number=getattr(task_instance, "try_number", 1),
+                        llm_model=getattr(model, "model_name", ""),
+                        prompt_version=DIRECTION_PROMPT_VERSION,
+                    )
+                    try:
+                        directions = summarizer.summarize(usable, week_start=week)
+                    except (DirectionError, PromptError) as error:
+                        store.finish_llm_run(
+                            conn,
+                            run_id,
+                            status="failed",
+                            subjects_requested=len(usable),
+                            subjects_answered=0,
+                            error=str(error),
+                        )
+                        # 프롬프트 문제이거나 모델이 두 번 다 못 냈다. 다시 불러도 같은 답이다.
+                        raise AirflowFailException(str(error)) from error
+                    store.finish_llm_run(
+                        conn,
+                        run_id,
+                        status="succeeded",
+                        subjects_requested=len(usable),
+                        subjects_answered=len(directions),
+                    )
+                    written += store.store_directions(conn, directions, llm_run_id=run_id)
+        except GraphQueryError as error:
+            # 인증·쿼리 오류·timeout. 다시 불러도 같은 답이다.
+            raise AirflowFailException(str(error)) from error
+        finally:
+            graph.close()
+
+        return {"weeks": [week.isoformat() for week in weeks], "directions": written}
+
+    summarize_direction(sync_graph(build_causal_graph()))
 
 
 market_causal_weekly = market_causal_weekly()

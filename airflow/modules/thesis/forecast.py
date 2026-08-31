@@ -5,6 +5,7 @@
 """
 
 import logging
+from collections.abc import Sequence
 from contextlib import closing
 from datetime import UTC, date, datetime, time, timedelta
 from typing import Any
@@ -12,7 +13,7 @@ from typing import Any
 from airflow.sdk import get_current_context
 
 from modules.thesis import common
-from modules.thesis.state import RunSlot, ThesisRunResult
+from modules.thesis.state import AfterHoursObservation, RunSlot, ThesisRunResult
 from modules.utility import KST_TIMEZONE
 
 logger = logging.getLogger(__name__)
@@ -75,6 +76,32 @@ class PreOpenForecast:
             return
         raise common.ThesisNotReady(f"document assessment has not caught up to {as_of_at}")
 
+    def after_hours_state(self, session: date, stock_codes: Sequence[str]) -> dict[str, AfterHoursObservation]:
+        """그 세션 정규장이 닫힌 뒤 NXT 애프터마켓 마감가. **장전만 이것을 본다.**
+
+        어젯밤 무엇이 움직였나가 오늘 아침 판단의 재료다. 리뷰 슬롯이 같은 창을 당일로 읽는
+        것과 세션 날짜만 다르다(조회는 `common.ThesisRun.after_hours_bars` 한 벌).
+
+        **어느 것도 재시도하지 않는다.** 장전은 08:35에 묶여 있고 이 값은 선택 입력이라
+        없어도 전망이 선다 — 리뷰가 같은 상황에서 기다리는 것과 다른 판단이다
+        (`18-nxt-precedent.md` 2.6절).
+
+        - 봉이 0개면 빈 dict. 애프터마켓 무거래일과 수집 실패를 응답만으로 가를 수 없다.
+        - 전부 잠정이면 빈 dict에 **경고**. 20:05 REST 백필이 열두 시간 전에 끝났어야 한다.
+          잠정 값 위에 예측을 세우면 **첫 성공본 불변** 때문에 나중에 못 고친다.
+        - 확정 종가가 없는 종목은 그 종목만 뺀다. 등락률의 분모다. 0으로 꾸미지 않는다.
+        """
+        bars = self._run.after_hours_bars(session, stock_codes)
+        if not bars:
+            logger.info("no NXT after-hours bars for %s; the pre-open state leaves that block empty", session)
+            return {}
+        if not any(bar.all_final for bar in bars):
+            logger.warning("NXT bars for %s are all provisional at the pre-open run; left out of the state", session)
+            return {}
+        # `is not None`이다. `if bar.return_pct`로 두면 **보합(정확히 0)인 종목이 통째로 빠져**
+        # 모델이 그것을 '애프터마켓 데이터 없음'으로 읽는다.
+        return {bar.stock_code: common.after_hours_entry(bar) for bar in bars if bar.return_pct is not None}
+
     def macro_window_start(self) -> datetime:
         """매크로 창의 시작 = 전 개장일 마감.
 
@@ -85,7 +112,7 @@ class PreOpenForecast:
 
     def run(self, *, dag_run_id: str, try_number: int) -> int:
         """휴장 판정 → readiness guard → 관측 상태 → LLM → 저장. 저장한 행 수를 준다."""
-        from modules.thesis.domain import PREFETCHED_PAST_THESES, LlmRunKind
+        from modules.thesis.domain import PREFETCHED_PAST_THESES, LlmRunKind, ThesisSubjectKind
         from modules.thesis.store import ThesisStore
 
         self._run.skip_unless_open()
@@ -108,6 +135,11 @@ class PreOpenForecast:
         }
         # 관측 상태를 두 번 만들지 않는다 — 축은 그 상태에서 파생하므로 값이 갈리면 안 된다.
         observed = self._run.observed_state(session, targets)
+        # 어젯밤 NXT 마감가를 얹는다. **`common.observed_state`에 넣지 않는다** — 장후 리뷰가
+        # 같은 함수를 부르는데 그쪽 기준 시각(15:30)에는 이 값이 미래다.
+        if session is not None:
+            stock_codes = [target.code for target in targets if target.kind is ThesisSubjectKind.STOCK]
+            observed = observed.model_copy(update={"after_hours": self.after_hours_state(session, stock_codes)})
         return self._run.build_and_store(
             try_number=try_number,
             run_kind=LlmRunKind.FORECAST,

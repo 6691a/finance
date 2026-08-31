@@ -91,6 +91,7 @@ from modules.thesis.outcomes import (
 from modules.thesis.state import (
     FORECAST_SLOTS,
     NARRATED_SLOTS,
+    PRECEDENT_SLOTS,
     NxtObservedState,
     ObservedState,
     PastOutcome,
@@ -158,7 +159,12 @@ WATCHED_INSTRUMENTS = read_sql("postgres", "instrument", "select_watched.sql")
 # 추론 대상 지수. `quote_symbol`이 아니라 여기 두는 이유는 이것이 "무엇을 추론할지"의
 # 목록이지 "어떤 심볼을 수집할지"가 아니기 때문이다. KOSPI200은 코스피와 거의 같이 움직여
 # 대상에서 뺀다 — 같은 판단을 두 번 적는 것이 된다.
-INDEX_SUBJECTS: tuple[tuple[str, str], ...] = (("KOSPI", "코스피"), ("KOSDAQ", "코스닥"))
+#
+# **KOSDAQ도 뺐다**(2026-08-31). 사용자가 실제로 유심히 보지 않는 지수인데 "지수라서" 넣어
+# 뒀던 것이고, 운영 실측이 그 값어치를 부정했다 — T+0 Brier 0.708·T+1 0.710으로 넷 중
+# 제일 나쁘고 균등확률 기준선 0.667보다도 나쁘다(표본 14·12). 수집·브리핑 표는 그대로다.
+# 여기서 빼면 새 추론이 안 생기고, 이미 쓴 22건과 그 채점은 남아 T+5까지 돌고 끝난다.
+INDEX_SUBJECTS: tuple[tuple[str, str], ...] = (("KOSPI", "코스피"),)
 
 
 def _store_evidence(
@@ -450,9 +456,13 @@ class ThesisStore:
     def past_theses(self, *, as_of_at: datetime, subject_code: str, n: int) -> list[PastThesis]:
         """이 대상의 지난 추론과 지평별 결과. **슬롯마다** 최근 것부터 `n`건이다.
 
-        피드백 루프는 이 조회 하나다. 예측 슬롯 다섯과 장후 리뷰(`post_close`)를 함께
-        돌려준다 — 리뷰에 붙는 사후 해설이 "그 인과 주장이 이후 보도로 지지됐나"를 담고 있어
-        다음 예측이 볼 값어치가 크다.
+        피드백 루프는 이 조회 하나다. 예측 슬롯과 리뷰 둘(`post_close`·`post_nxt_close`)을
+        함께 돌려준다 — 리뷰에 붙는 사후 해설이 "그 인과 주장이 이후 보도로 지지됐나"를
+        담고 있어 다음 예측이 볼 값어치가 있다. 애프터마켓 리뷰는 거기에 더해 "정규장이
+        닫힌 뒤 무슨 재료가 나왔나"를 담는다.
+
+        **목록은 `PRECEDENT_SLOTS`이지 `NARRATED_SLOTS`가 아니다.** 지금 값은 같지만 해설을
+        받는 슬롯과 되돌아보는 슬롯은 뜻이 다르다(`18-nxt-precedent.md` 2.1절).
 
         **`n`은 슬롯마다다.** 총량으로 자르면 장후가 섞여 들어온 만큼 장전 예측 이력이 짧아진다.
         뒤집어 말하면 총 행 수가 슬롯 수배라, 장중 넷이 붙으면서 `PREFETCHED_PAST_THESES`를
@@ -466,7 +476,7 @@ class ThesisStore:
         if n <= 0:
             return []
         with self._connection.cursor() as cursor:
-            cursor.execute(PAST_THESES, (as_of_at, list(NARRATED_SLOTS), subject_code, n))
+            cursor.execute(PAST_THESES, (as_of_at, list(PRECEDENT_SLOTS), subject_code, n))
             rows = cursor.fetchall()
         return [
             PastThesis(

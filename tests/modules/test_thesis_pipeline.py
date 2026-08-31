@@ -74,6 +74,7 @@ from modules.thesis.state import (
     FORECAST_SLOTS,
     INTRADAY_SLOTS,
     NARRATED_SLOTS,
+    PRECEDENT_SLOTS,
     IndexObservation,
     ObservedState,
     RunSlot,
@@ -1335,6 +1336,23 @@ def test_analyst_opinions_refuses_a_stock_outside_the_watch_list_without_touchin
 
     assert "005930" in str(error.value)
     assert connection.calls == []
+    # **왕복 예산을 깎지 않는다.** 검사가 `_charge()`보다 앞이라야 한다 — 뒤에 두면 조회하지도
+    # 않은 호출이 예산을 먹고, 그 거절은 `handle_tool_errors`를 거쳐 ToolMessage로 성공처럼
+    # 끝난다. 모델은 `recent_documents` 태그에서 추적 밖 코드를 볼 수 있다(태그 후보가 시세
+    # 목록보다 넓다).
+    assert box.call_count == 0
+
+
+def test_event_surprises_refuses_a_stock_outside_the_watch_list_without_spending_the_budget():
+    """`analyst_opinions`와 같은 처리다. 둘이 같은 순서를 지켜야 한다."""
+    connection = FakeConnection()
+    box = toolbox(connection)
+
+    with pytest.raises(ToolLimitExceeded, match="추적 종목 밖"):
+        box.run("event_surprises", {"ticker": "003550"})
+
+    assert connection.calls == []
+    assert box.call_count == 0
 
 
 def test_analyst_opinions_keeps_the_broker_wording_and_does_not_cite():
@@ -2406,6 +2424,29 @@ def test_the_prompt_names_the_slot_the_targets_came_from():
     assert "장전" not in prompt
 
 
+def test_a_narration_call_names_the_after_hours_review():
+    """애프터마켓 리뷰의 해설 프롬프트가 그 슬롯 이름을 쓴다.
+
+    7단계가 이 슬롯을 해설에서 뺀 이유가 **여기였다** — 그때는 부르는 쪽이 슬롯을
+    `pre_open`으로 하드코딩해 어젯밤 리뷰가 "장전에 쓴 추론"으로 실렸다. 2026-08-23에
+    슬롯이 대상에서 오게 바뀌었고, 19단계가 그 위에서 이 슬롯을 루프에 넣었다.
+    """
+    model = scripted(narrative_message(narrative_payload()))
+    built = narrator(model, FakeConnection())
+
+    built.run(
+        run_date=date(2026, 8, 21),
+        horizon_days=1,
+        as_of_at=REVIEW_AS_OF,
+        targets=(narrative_target(run_slot=RunSlot.POST_NXT_CLOSE),),
+    )
+
+    prompt = model.calls[0][1].content
+    assert prompt.startswith("2026-08-21 애프터마켓 리뷰에 쓴 추론을")
+    assert "장전" not in prompt
+    assert "장후" not in prompt
+
+
 def test_a_narration_call_refuses_mixed_slots():
     """같은 날 장전·장후 추론이 같은 대상을 갖는다. 섞이면 응답을 대상에 되돌릴 수 없다."""
     built = narrator(scripted(), FakeConnection())
@@ -2574,7 +2615,7 @@ def test_past_theses_returns_reviews_beside_forecasts():
     query = body(PAST_THESES)
 
     # 장후 리뷰의 사후 해설이 다음 예측으로 돌아오는 길이 이것 하나다. 슬롯 목록은
-    # 파라미터이고 원본은 `thesis.state.NARRATED_SLOTS`다.
+    # 파라미터이고 원본은 `thesis.state.PRECEDENT_SLOTS`다.
     assert "thesis.run_slot = ANY(%s)" in query
     assert "'post_close'" not in query
     # 건수 상한은 슬롯마다다. 총량으로 자르면 장후가 들어온 만큼 장전 예측 이력이 짧아진다.
@@ -2638,6 +2679,24 @@ def test_pending_narratives_carry_their_slot():
     assert [(t.thesis_id, t.run_slot) for t in targets] == [(11, RunSlot.POST_CLOSE), (12, RunSlot.PRE_OPEN)]
 
 
+def test_pending_narratives_ask_for_every_narrated_slot():
+    """넘기는 슬롯 목록의 원본이 `thesis.state.NARRATED_SLOTS` 하나다.
+
+    조회에 리터럴이 없다는 것은 위 테스트가 보고, 여기서는 **부르는 쪽이 실제로 무엇을
+    넘기는지**를 본다. 목록에서 빠진 슬롯은 조용히 영영 미해설로 남는다 — 조회에 날짜
+    상한이 없어 오류로도 안 드러난다.
+    """
+    connection = FakeConnection({"select_by_run": []})
+
+    ThesisStore(connection).pending_narratives(run_date=date(2026, 8, 21), horizon_days=1)
+
+    parameters = next(params for statement, params in connection.calls if statement == PENDING_NARRATIVES)
+
+    assert parameters == (1, date(2026, 8, 21), list(NARRATED_SLOTS))
+    # 애프터마켓 리뷰가 그 목록에 든 것이 19단계다.
+    assert RunSlot.POST_NXT_CLOSE in parameters[2]
+
+
 def test_the_after_hours_query_isolates_the_nxt_evening():
     """NXT는 프리·주간도 체결한다. 거래소만 걸면 하루 전체가 섞인다."""
     query = body(NXT_AFTER_HOURS)
@@ -2682,11 +2741,32 @@ def test_narratives_and_backlog_watch_the_same_slots():
     assert "due.run_slot = ANY(%s)" in backlog
     assert "'pre_open'" not in narratives
     assert "'pre_open'" not in backlog
-    # NXT 애프터마켓 리뷰는 아직 해설 루프 밖이다(`docs/analysis/market-thesis/7-nxt-review.md` 3절).
-    assert RunSlot.POST_NXT_CLOSE not in NARRATED_SLOTS
+    # NXT 애프터마켓 리뷰도 해설을 받는다(`docs/analysis/market-thesis/19-nxt-narration.md`).
+    # 이 줄은 전에 `not in`이었다 — 7단계가 뺐던 이유(해설 호출의 슬롯 하드코딩)가
+    # 2026-08-23에 사라져서 뒤집혔다.
+    assert RunSlot.POST_NXT_CLOSE in NARRATED_SLOTS
     # 채점 슬롯은 예측만이다. 리뷰 둘은 맞고 틀림을 물을 대상이 아니다.
     assert set(FORECAST_SLOTS) == {RunSlot.PRE_OPEN, *INTRADAY_SLOTS}
-    assert set(NARRATED_SLOTS) == {*FORECAST_SLOTS, RunSlot.POST_CLOSE}
+    assert set(NARRATED_SLOTS) == {*FORECAST_SLOTS, RunSlot.POST_CLOSE, RunSlot.POST_NXT_CLOSE}
+
+
+def test_the_precedent_slots_and_the_narrated_ones_hold_the_same_slots_for_now():
+    """목록이 둘인 이유. 해설을 받는 슬롯과 장전이 되돌아보는 슬롯은 **뜻이** 다르다.
+
+    2026-08-31에 애프터마켓 리뷰가 해설 루프로 들어오면서 두 목록의 **값이 같아졌다**
+    (`docs/analysis/market-thesis/19-nxt-narration.md` 2.1절). 그래도 상수를 합치지 않는다 —
+    해설을 안 받되 되돌아보기만 할 슬롯이 생기면 `PRECEDENT_SLOTS`만 늘어야 하고, 한
+    상수로 두 뜻을 지면 그것을 보여 주려고 해설 루프까지 늘리게 된다(18단계 2.1절이 하루
+    동안 실제로 그 상태였다).
+
+    **파생 정의로 쓰면 안 된다는 것도 여기서 지킨다** — `(*NARRATED_SLOTS, POST_NXT_CLOSE)`는
+    이제 같은 슬롯을 두 번 넣는다. 중복이 들어가면 `= ANY(%s)` 조회는 조용히 통과하고
+    슬롯 수를 세는 곳만 틀린다.
+    """
+    assert set(PRECEDENT_SLOTS) == set(NARRATED_SLOTS)
+    assert len(set(PRECEDENT_SLOTS)) == len(PRECEDENT_SLOTS)
+    assert len(set(NARRATED_SLOTS)) == len(NARRATED_SLOTS)
+    assert RunSlot.POST_NXT_CLOSE in PRECEDENT_SLOTS
 
 
 def test_the_narrative_write_never_overwrites():
@@ -3019,7 +3099,7 @@ def test_past_theses_carries_the_id_the_edge_needs():
     assert rows[0].outcomes[0].verdict == "contradicted"
     assert rows[0].run_date == date(2026, 8, 20)
     _, parameters = connection.calls[0]
-    assert parameters == (AS_OF, list(NARRATED_SLOTS), "KOSPI", PREFETCHED_PAST_THESES)
+    assert parameters == (AS_OF, list(PRECEDENT_SLOTS), "KOSPI", PREFETCHED_PAST_THESES)
 
 
 def test_past_theses_zero_is_the_off_switch():
@@ -3049,6 +3129,24 @@ def test_the_prompt_carries_the_past_theses_it_was_given():
     assert "contradicted" in prompt
     # 해설은 사실이 아니라 그때의 해석이라고 프롬프트가 직접 말한다(사후확신 순환 방지).
     assert "그때의 해석" in prompt
+
+
+def test_the_prompt_names_the_after_hours_review_slot_it_was_given():
+    """채점 칸이 빈 리뷰를 빗나간 예측으로 읽지 않으려면 슬롯이 값으로 실려야 한다."""
+    source = FakeConnection({"past": [past_thesis_row(run_slot="post_nxt_close")]})
+    past = {"005930": ThesisStore(source).past_theses(as_of_at=AS_OF, subject_code="005930", n=3)}
+
+    prompt = ThesisBuilder.build_messages(
+        run_slot=RunSlot.PRE_OPEN,
+        as_of_at=AS_OF,
+        subjects=SUBJECTS,
+        observed_state=OBSERVED,
+        past_theses=past,
+    )[1].content
+
+    assert '"run_slot":"post_nxt_close"' in prompt
+    # 프롬프트가 그 슬롯이 무엇인지 설명한다. 안 하면 모델이 채점 없는 행을 예측 실패로 읽는다.
+    assert "`post_nxt_close`" in prompt
 
 
 def test_the_prompt_keeps_the_section_when_there_is_nothing_to_show():
@@ -3863,11 +3961,45 @@ def test_an_intraday_row_says_what_the_size_is_measured_against():
     rendered = json.dumps(render_blocks(RunSlot.INTRADAY_MIDDAY, date(2026, 8, 28), [thesis], {}), ensure_ascii=False)
 
     # 봉의 시각을 KST로 적는다. `as_of_at`(12:35)이 아니라 실제로 본 봉(12:30)이다.
-    assert "12:30 KST 6,825.11 기준 · 오늘 여기까지 -1.26%" in rendered
+    assert "12:30 KST 6,825.11 기준 · 전일 종가 대비 현재까지 -1.26%" in rendered
+
+
+def test_an_intraday_row_adds_up_the_two_axes_into_a_close_forecast():
+    """`현재까지`와 결론 크기는 축이 달라 그대로 읽으면 하루 등락이 안 나온다.
+
+    -1.26퍼센트에서 1.2퍼센트 더 빠진다는 예측이니 마감은 전일 종가 대비 -2.46퍼센트다.
+    """
+    thesis = _stored_for_render(
+        run_slot=RunSlot.INTRADAY_MIDDAY,
+        base_price=Decimal("6825.11000000"),
+        base_at=datetime(2026, 8, 28, 3, 30, tzinfo=UTC),
+        base_return_pct=Decimal("-1.2600"),
+    )
+
+    rendered = json.dumps(render_blocks(RunSlot.INTRADAY_MIDDAY, date(2026, 8, 28), [thesis], {}), ensure_ascii=False)
+
+    assert "전일 종가 대비 마감 예상 -2.46%" in rendered
+
+
+def test_an_intraday_row_without_a_size_keeps_the_close_forecast_off():
+    """판 7 이전 행은 더할 크기가 없다. 지어내는 것보다 줄이 없는 편이 낫다."""
+    thesis = _stored_for_render(
+        None,
+        None,
+        run_slot=RunSlot.INTRADAY_MIDDAY,
+        base_price=Decimal("6825.11000000"),
+        base_at=datetime(2026, 8, 28, 3, 30, tzinfo=UTC),
+        base_return_pct=Decimal("-1.2600"),
+    )
+
+    rendered = json.dumps(render_blocks(RunSlot.INTRADAY_MIDDAY, date(2026, 8, 28), [thesis], {}), ensure_ascii=False)
+
+    assert "현재까지 -1.26%" in rendered
+    assert "마감 예상" not in rendered
 
 
 def test_a_pre_open_row_names_the_previous_close_and_no_progress():
-    """장전은 기준가가 곧 전일 종가라 '여기까지'가 정의상 0이다 — 적으면 같은 말을 두 번 한다."""
+    """장전은 기준가가 곧 전일 종가라 '현재까지'가 정의상 0이다 — 적으면 같은 말을 두 번 한다."""
     thesis = _stored_for_render(
         base_price=Decimal("6912.32000000"),
         base_at=datetime(2026, 8, 20, 6, 30, tzinfo=UTC),
@@ -3877,7 +4009,9 @@ def test_a_pre_open_row_names_the_previous_close_and_no_progress():
     rendered = json.dumps(render_blocks(RunSlot.PRE_OPEN, date(2026, 8, 21), [thesis], {}), ensure_ascii=False)
 
     assert "전일 종가 6,912.32 기준 (08/20 15:30 KST)" in rendered
-    assert "여기까지" not in rendered
+    assert "현재까지" not in rendered
+    # 장전은 기준가가 전일 종가라 마감 예상이 결론 줄의 크기와 같은 값이 된다.
+    assert "마감 예상" not in rendered
 
 
 def test_a_row_without_an_axis_renders_exactly_as_it_did_before():

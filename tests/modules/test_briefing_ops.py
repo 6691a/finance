@@ -8,6 +8,7 @@ from sqlalchemy import Table
 from apps.models.analysis import ThesisOutcome
 from apps.models.raw import SourceRecord
 from modules.briefing import ops
+from modules.thesis.state import NARRATED_SLOTS, RunSlot
 
 # KST 2026-08-18(화) 08:00. 전 영업일은 월요일이다.
 TUESDAY = datetime(2026, 8, 17, 23, 0, tzinfo=UTC)
@@ -73,6 +74,25 @@ def summary(
         thesis_backlog,
     )
     return ops.OpsBriefingReader(connection, now).summary()
+
+
+def test_the_thesis_backlog_counts_the_slots_the_narration_loop_actually_makes():
+    """밀림을 세는 목록과 해설을 만드는 목록이 같아야 한다.
+
+    어긋나면 한쪽은 해설을 안 만들고 다른 쪽은 그것을 밀림으로 세서, 목표일이 지난 뒤
+    `unnarrated`가 영영 줄지 않는 거짓 경보가 된다. 상수 하나(`NARRATED_SLOTS`)를 양쪽이
+    보게 만드는 것이 그 방법이고, 이 테스트는 ops 쪽이 정말 그것을 넘기는지를 본다.
+    """
+    connection = FakeConnection(HEALTHY_ROWS, [], NO_BACKLOG, NO_THESIS, NO_THESIS_BACKLOG)
+
+    ops.OpsBriefingReader(connection, TUESDAY).summary()
+
+    calls = [call for cursor in connection.cursors for call in cursor.calls]
+    _, parameters = next(call for call in calls if "unnarrated" in call[0])
+
+    # (지평 목록, 창의 시작, 채점 슬롯, 해설 슬롯, 오늘)
+    assert parameters[3] == list(NARRATED_SLOTS)
+    assert RunSlot.POST_NXT_CLOSE in parameters[3]
 
 
 def test_all_green_reports_every_source_as_healthy():

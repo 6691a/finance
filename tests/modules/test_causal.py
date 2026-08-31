@@ -162,7 +162,10 @@ class TestInputHash:
 
 
 class TestResolveTargets:
-    """대상 아홉. 종목만 마스터에서 읽고 나머지는 코드 상수다(설계 §0)."""
+    """종목만 마스터에서 읽고 나머지는 코드 상수다(설계 §0).
+
+    지수는 KOSPI 하나다 — KOSDAQ은 2026-08-31에 빠졌다(두 주 실행에 경로 0개).
+    """
 
     def test_watched_stocks_join_the_fixed_targets(self) -> None:
         connection = FakeConnection(rows=[("000660",), ("005930",)])  # SQL은 ticker 순이다
@@ -171,7 +174,6 @@ class TestResolveTargets:
 
         assert [target.code for target in targets] == [
             "KOSPI",
-            "KOSDAQ",
             "000660",
             "005930",
             "USDKRW",
@@ -201,7 +203,7 @@ class TestResolveTargets:
         targets = candidates.resolve_targets(connection)
 
         assert "373220" in [target.code for target in targets]
-        assert len(targets) == 12
+        assert len(targets) == 11
 
     def test_indicator_targets_carry_their_provider(self) -> None:
         """`indicator_observation`은 (provider, series_id)가 키다. series_id 하나로 걸면
@@ -455,3 +457,33 @@ class TestVocabularyOptions:
 
         assert events[0].node_id == "e:1"
         assert channels[0].node_id == "c:1"
+
+
+class TestDirectionTargets:
+    """방향성 대상은 `resolve_targets`의 부분집합이고 추론 subject와 같아야 한다."""
+
+    def test_only_indexes_and_watched_stocks_get_a_direction(self) -> None:
+        """매크로·금리는 그래프에서 **경유지**다(`US10Y → 할인율 → 005930`).
+
+        추론 대상이 아닌 것에 방향성을 만들면 아무도 안 읽는 행이 매주 는다(설계 §1.4).
+        """
+        connection = FakeConnection(rows=[("000660",), ("005930",)])
+
+        targets = candidates.direction_targets(connection)
+
+        assert [target.code for target in targets] == ["KOSPI", "000660", "005930"]
+
+    def test_the_direction_targets_match_the_thesis_subjects(self) -> None:
+        """두 트리가 서로를 import하지 않아 값이 한 벌 더 있다. 어긋나면 여기가 잡는다.
+
+        **어긋나면 조용히 틀린다** — 추론 subject인데 방향성이 없으면 그 대상만 사전 맥락 없이
+        돌고, 반대면 아무도 안 읽는 행이 쌓인다.
+        """
+        from modules.thesis.store import INDEX_SUBJECTS
+
+        connection = FakeConnection(rows=[("005930",)])
+        direction_codes = {target.code for target in candidates.direction_targets(connection)}
+        thesis_index_codes = {code for code, _ in INDEX_SUBJECTS}
+
+        # 종목은 양쪽 다 `instrument.is_watched`에서 오므로 지수만 대조한다.
+        assert direction_codes - {"005930"} == thesis_index_codes

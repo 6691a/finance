@@ -95,6 +95,9 @@ class ThesisEvidenceKind(StrEnum):
     # 신호는 사건이라 인용할 수 있다. 인용을 남기는 이유는 평가다 — 신호를 근거로 쓴
     # 추론이 안 쓴 추론보다 나았는지를 재려면 엣지가 있어야 한다.
     TECHNICAL_SIGNAL = "technical_signal"
+    # 주간 인과 그래프의 경로 하나(`market_causal_path.id`). 관측 상태로 실려 오지만 문맥이
+    # 아니라 **주장**이라 인용 대상이다 — 기술 지표와 신호를 가른 것과 같은 판단이다.
+    CAUSAL_PATH = "causal_path"
 
 
 class LlmRunKind(StrEnum):
@@ -107,7 +110,10 @@ class LlmRunKind(StrEnum):
     NXT_REVIEW = "nxt_review"
     NARRATION = "narration"
     CAUSAL = "causal"
-    """주간 사후 인과 그래프(`docs/analysis/market-causal-graph.md`). 슬롯이 없는 유일한 종류다."""
+    """주간 사후 인과 그래프(`docs/analysis/market-causal-graph.md`)."""
+    CAUSAL_DIRECTION = "causal_direction"
+    """그 그래프를 대상별 방향성으로 접은 대화(`docs/analysis/market-thesis/17-graph-query.md`).
+    `causal`과 같은 주간 DAG에서 그 뒤에 돌고, 역시 슬롯이 없다."""
 
 
 class LlmRunStatus(StrEnum):
@@ -331,8 +337,9 @@ class Thesis(EntityBase):
         Numeric(8, 4),
         nullable=True,
         comment=(
-            "직전 세션 확정 종가에서 base_price까지 **이미 온** 등락률(퍼센트). 장중이면 "
-            "'오늘 여기까지'이고 장전·장후는 정의상 0이다. 예측 크기와 더하면 하루 등락이 된다"
+            "**전일(직전 세션) 확정 종가 대비** base_price까지 **이미 온** 등락률(퍼센트). "
+            "오늘 시가 대비가 아니다 — 개장 갭이 이 값에 들어 있다. 장중이면 '전일 종가 대비 "
+            "현재까지'이고 장전·장후는 정의상 0이다. 예측 크기와 더하면 하루 등락이 된다"
         ),
     )
     up_reasoning: Mapped[str] = mapped_column(
@@ -380,16 +387,18 @@ class ThesisOutcome(EntityBase):
     두 종류의 값이 한 행에 있고 **채우는 주체가 다르다.**
 
     - **채점**(`evaluated_at`·`actual_return_pct`·`actual_outcome`·`brier_score`)은 SQL과
-      순수 함수가 만든다. LLM이 없다. `pre_open` 추론에만 붙는다 — `post_close` 리뷰는
-      이미 일어난 일의 해석이라 예측이 아니고 채점할 대상이 없다.
+      순수 함수가 만든다. LLM이 없다. **예측 슬롯에만 붙는다** — 리뷰 둘
+      (`post_close`·`post_nxt_close`)은 이미 일어난 일의 해석이라 예측이 아니고 채점할
+      대상이 없다.
     - **해설**(`narrative`·`verdict`·`narrative_at`·`llm_model`·`prompt_version`)은 LLM이
-      만든다. **두 슬롯 모두** 붙는다 — 장후 리뷰는 "오늘 이래서 움직였다"는 인과 주장이라
-      며칠 뒤 보도로 검증할 값어치가 오히려 크다.
+      만든다. **리뷰에도 붙는다** — "오늘 이래서 움직였다"는 인과 주장이라 며칠 뒤 보도로
+      검증할 값어치가 오히려 크다. 애프터마켓 리뷰는 2026-08-31에 들어왔다
+      (`docs/analysis/market-thesis/19-nxt-narration.md`).
 
     그래서 채점 칸이 nullable이다. 대신 **둘 다 비어 있는 행을 CHECK로 막는다** — 채점도
     해설도 없으면 그 행은 없는 것과 같다.
 
-    "`post_close` 행에는 채점이 없다"는 `thesis.run_slot`을 봐야 알 수 있어 CHECK로 못 막는다.
+    "리뷰 행에는 채점이 없다"는 `thesis.run_slot`을 봐야 알 수 있어 CHECK로 못 막는다.
     코드와 테스트가 지킨다(`thesis_evidence`가 마스터로 FK를 걸지 않는 것과 같은 판단).
     """
 
@@ -642,7 +651,7 @@ class ThesisEvidence(EntityBase):
         ),
         UniqueConstraint("thesis_id", "outcome_horizon_days", "rank", name="uq_thesis_evidence_rank"),
         CheckConstraint(
-            "evidence_kind IN ('document', 'disclosure', 'macro_change', 'technical_signal')",
+            "evidence_kind IN ('document', 'disclosure', 'macro_change', 'technical_signal', 'causal_path')",
             name="ck_thesis_evidence_kind",
         ),
         CheckConstraint("rank > 0", name="ck_thesis_evidence_rank_positive"),
@@ -752,13 +761,13 @@ class ThesisLlmRun(EntityBase):
     __tablename__ = "thesis_llm_run"
     __table_args__ = (
         CheckConstraint(
-            "kind IN ('forecast', 'review', 'nxt_review', 'narration', 'causal')",
+            "kind IN ('forecast', 'review', 'nxt_review', 'narration', 'causal', 'causal_direction')",
             name="ck_thesis_llm_run_kind",
         ),
-        # 주간 인과 그래프에는 슬롯이 없다. 나머지 종류가 슬롯을 빠뜨리는 것은 그대로 막는다.
+        # 주간 흐름 둘에는 슬롯이 없다. 나머지 종류가 슬롯을 빠뜨리는 것은 그대로 막는다.
         CheckConstraint(
-            "(kind = 'causal' AND run_slot IS NULL)"
-            " OR (kind <> 'causal' AND run_slot IS NOT NULL)",
+            "(kind IN ('causal', 'causal_direction') AND run_slot IS NULL)"
+            " OR (kind NOT IN ('causal', 'causal_direction') AND run_slot IS NOT NULL)",
             name="ck_thesis_llm_run_slot_shape",
         ),
         CheckConstraint(

@@ -1,4 +1,4 @@
-# 18단계 — 수집 데이터 조회 API와 화면 Implementation Plan
+# 20단계 — 수집 데이터 조회 API와 화면 Implementation Plan
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development
 > (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use

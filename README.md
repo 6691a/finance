@@ -46,7 +46,7 @@ flowchart LR
     subgraph DB["PostgreSQL"]
         FACT[("시세·봉 · 지표 관측치<br/>문서·공시 · source_record")]
         THESIS[("thesis · thesis_outcome<br/>thesis_llm_run")]
-        CAUSAL[("market_causal_path · step<br/>market_event · market_channel")]
+        CAUSAL[("market_causal_path · step · direction<br/>market_event · market_channel")]
     end
 
     GRAPH["Neo4j — 인과 그래프 투영<br/>Event → Channel → Target"]
@@ -68,6 +68,7 @@ flowchart LR
     THESIS --> ANA
     ANA --> CAUSAL
     CAUSAL --> GRAPH
+    GRAPH --> CAUSAL
 
     FACT --> BRF
     THESIS --> BRF
@@ -87,7 +88,7 @@ flowchart LR
 | 07:00 | 거래일 캘린더(KIS·NYSE), 미국 지수 마감 분봉, Yahoo 일봉 |
 | 07:30 ~ 08:50 | 매크로·금리 수집 — FRED, ECOS, 분데스방크, 일본 재무성, BoE, ECB, 국내 수급·포지셔닝 |
 | 08:00 | **미국장 브리핑** — 밤사이 지수·선물·원자재·금리, 전일 국내 복기 |
-| 08:35 | **장전 전망 추론** — 관측 상태 + 모델이 툴로 조회한 근거로 오늘의 방향·확률·기대 등락률 |
+| 08:35 | **장전 전망 추론** — 관측 상태(전일 KRX 종가 + 그 뒤 NXT 애프터마켓 마감가) + 모델이 툴로 조회한 근거로 오늘의 방향·확률·기대 등락률 |
 | 08:00 ~ 20:00 | 장중: 5분마다 시세·투자자 수급 스냅샷, 2분마다 DART 공시, 매시 문서 수집·LLM 평가, 시간별 국내장 브리핑 |
 | 12:35 | **장중 전망 추론** — 개장 뒤 나온 공시·기사·수급을 반영해 마감까지를 다시 본다 |
 | 18:10 ~ 18:40 | 투자자별 매매동향 확정, 기술 신호 검출·채점 |
@@ -128,7 +129,7 @@ flowchart LR
 | 언어 | Python 3.13, uv | 수집·분석·서비스가 한 언어 |
 | 오케스트레이션 | Apache Airflow 3.3 | 제공처마다 다른 주기, 재시도, 백필이 필요 |
 | 저장 | PostgreSQL, SQLAlchemy 2.0 async, asyncpg, Alembic | 시계열도 관계형으로 충분한 규모 |
-| 그래프 | Neo4j (community) | 주간 인과 그래프의 다중 홉 탐색. **Postgres가 원본이고 투영입니다** |
+| 그래프 | Neo4j (community) | 주간 인과 그래프의 다중 홉 탐색. **Postgres가 원본이고 투영입니다.** 매주 대상별 방향성을 뽑아 시장 추론의 관측 상태로 되돌립니다 |
 | 캐시 | Redis | 실시간 수집 버퍼 |
 | LLM | LangChain / LangGraph, xAI Grok, OpenAI 호환 API | 툴 호출 루프와 구조화 출력 |
 | API | FastAPI, dependency-injector | 읽기 전용 조회, 생성자 주입 + provider override 테스트 |

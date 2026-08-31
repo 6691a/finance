@@ -112,6 +112,71 @@ WHERE run_date >= current_date - 28
 GROUP BY run_slot;
 ```
 
+### 주간 방향성 쿼리 넷 (17단계, 2026-08-31)
+
+[17-graph-query.md](17-graph-query.md) §7의 관측이다. **예측 품질과 섞지 않는다** — 이 넷은
+"방향성이 값어치를 내나"를 묻고, 그 답이 나쁘면 프롬프트에서 `bias`를 빼고 재료만 남긴다.
+
+**D. `bias`와 실제 주간 등락 방향의 일치율** — 이 값이 무작위와 다르지 않으면 `bias`를
+관측 상태에서 빼고 `channels`만 남긴다. 그 판단이 §4.5가 말한 "LLM 출력이 LLM 입력이 되는"
+위험의 출구다.
+
+```sql
+SELECT d.bias,
+       count(*) AS rows,
+       count(*) FILTER (
+         WHERE (d.bias = 'up' AND p.avg_change > 0) OR (d.bias = 'down' AND p.avg_change < 0)
+       ) AS agreed
+FROM market_causal_direction d
+JOIN (
+      SELECT week_start, target_kind, target_code, avg(return_week_change) AS avg_change
+      FROM market_causal_path
+      GROUP BY 1, 2, 3
+     ) p
+  ON p.week_start = d.week_start
+ AND p.target_kind = d.target_kind
+ AND p.target_code = d.target_code
+GROUP BY d.bias
+ORDER BY d.bias;
+```
+
+**E. `mixed` 비율** — 늘 `mixed`면 종합이 아무 말도 안 하는 것이다. 프롬프트의 "정말 갈리면
+`mixed`다"를 좁힌다.
+
+```sql
+SELECT bias, count(*), round(100.0 * count(*) / sum(count(*)) OVER (), 1) AS pct
+FROM market_causal_direction
+GROUP BY bias
+ORDER BY count(*) DESC;
+```
+
+**F. 대상별로 갈리는가** — 셋이 늘 같으면 대상별 칸이 아니라 시장 전체 한 칸이 맞다.
+2026-08-31 실측에서 005930과 000660의 채널×sign이 글자 그대로 같았다(§6.9).
+
+```sql
+SELECT week_start,
+       count(DISTINCT bias) AS distinct_biases,
+       string_agg(target_code || '=' || bias, ' ' ORDER BY target_code) AS row_summary
+FROM market_causal_direction
+GROUP BY week_start
+ORDER BY week_start DESC;
+```
+
+**G. 방향성이 빈 채로 도는 슬롯 비율** — 나이 상한에 걸린 것과 그 주에 경로가 없던 것을
+나눠 센다. 앞이 늘면 주간 DAG가 밀리는 것이고, 뒤가 늘면 대상 목록이 안 맞는 것이다.
+**`input_state`를 읽는다** — 그 슬롯이 실제로 무엇을 봤는지가 거기 있다.
+
+```sql
+SELECT run_date,
+       run_slot,
+       count(*) AS subjects,
+       count(*) FILTER (WHERE input_state -> 'causal_direction' ? subject_code) AS with_direction
+FROM thesis
+WHERE run_date >= current_date - 28
+GROUP BY run_date, run_slot
+ORDER BY run_date DESC, run_slot;
+```
+
 ### 근거 유효율은 왜 못 읽나
 
 모델이 낸 `evidence_refs` 중 **후보 목록 밖이라 버린 것**의 비율이다. 버리는 것은
@@ -140,11 +205,11 @@ GROUP BY run_slot;
 | `INDEX_SUBJECTS` + `instrument.is_watched` | KOSPI·코스닥 + watched 종목 | `thesis/store.py` / `instrument` 테이블 | 표본 수 | **표본을 늘리는 가장 싼 손잡이다.** LLM 호출 수는 그대로고 날짜당 건수만 는다([5-followup.md](5-followup.md) 12절). 단 독립 사건 수는 안 는다 — 1절 |
 | `NarrativeVariant` 기본 | `INFORMED` | `thesis/outcomes.py`, `FollowupNarrator.__init__` | 분기 Brier + `verdict` 분포 | 노트북 재실행으로 재검증. `BLIND`가 남아 있어 되돌리기가 인자 하나다 |
 | `HORIZON_DAYS` | `(0,1,3,5)` | `thesis/domain.py` `HORIZON_DAYS`·`NARRATED_HORIZON_DAYS`, `ops.py` `THESIS_HORIZONS`, DB CHECK — **네 곳** | LLM 호출 비용 | 비용이 문제면 **해설만** T+5 하나로 줄인다. 채점은 SQL이라 공짜다. 네 곳을 같은 커밋에서 만진다 |
-| `PREFETCHED_PAST_THESES` | 2 | `thesis/domain.py` | 도입 전후 지평별 Brier 추이 | 장전·장중 프롬프트에 미리 싣는 과거 추론 수. **슬롯마다다** — 2026-08-28 슬롯 축소로 장중이 넷에서 `intraday_midday` 하나가 됐으므로(6절) 그만큼 줄었고 프롬프트 길이도 그만큼이다. 5에서 2로 내린 것이 2026-08-26 장중 슬롯 추가 때다(그대로 두면 30행). **효과가 관측되지 않으면 0으로 끈다**([5-followup.md](5-followup.md) 5절) — 절은 `(없음)`이 되고 `thesis_precedent` 엣지도 안 남는다. `past_theses` 툴은 그대로다. 분기 판단 |
+| `PREFETCHED_PAST_THESES` | 2 | `thesis/domain.py` | 도입 전후 지평별 Brier 추이 | 장전·장중 프롬프트에 미리 싣는 과거 추론 수. **슬롯마다다** — 2026-08-28 슬롯 축소로 장중이 넷에서 `intraday_midday` 하나가 됐으므로(6절) 그만큼 줄었고 프롬프트 길이도 그만큼이다. 5에서 2로 내린 것이 2026-08-26 장중 슬롯 추가 때다(그대로 두면 30행). **효과가 관측되지 않으면 0으로 끈다**([5-followup.md](5-followup.md) 5절) — 절은 `(없음)`이 되고 `thesis_precedent` 엣지도 안 남는다. `past_theses` 툴은 그대로다. 분기 판단. **2026-08-31 실측**: 대상 넷의 이 절이 합계 52,551자이고, 애프터마켓 리뷰 슬롯을 더하면서(18단계) 종목당 +1,576~1,750자로 55,877자가 됐다(지수는 NXT 행이 없어 0). 행 수는 대상당 11 → 13인데, 넷이 아니라 11인 것은 2026-08-28에 접은 장중 셋의 지난 행이 아직 창 안이기 때문이다 |
 | 툴 개수 | 15 | 같은 곳 | **어떤 툴을 실제로 부르는지**와 `tool_rounds` 분포. 앞의 것은 **DB로 못 읽는다** — `thesis_evidence`는 열넷 중 다섯 툴만 ref를 남기고 그것도 "불렀다"가 아니라 "인용됐다"라, 안 불림·빈 결과·인용 안 함이 전부 0으로 보인다. LangSmith 트레이스(`run_name = build_theses`)를 사람이 열어 센다 | 한 번도 안 불리는 툴은 뺀다(문맥만 먹는다). 반대로 상한에 붙어 있으면 왕복을 늘린다. **툴을 더 열기 전에 `MAX_TOOL_CALLS`부터 본다** — 세어야 할 것은 툴 개수가 아니라 **대상 수 × 대상별 툴 수**다(5절 실측은 26호출). **서브 에이전트로 나누는 것은 여기서 판단한다** — 5절 참고 |
 | `verdict` 값 셋 | `supported`/`contradicted`/`unresolved` | `apps/models/analysis/thesis.py` + CHECK | `contradicted` 비율 | 60% 위가 유지되면 "반박"과 "다른 원인 지목"을 가를지 본다. **지금은 안 가른다** |
 | `MAX_TOOL_ROUNDS` / `MAX_TOOL_CALLS` / `MAX_TOOL_RESULT_CHARS` | 5 / 36 / 250,000 | `thesis/domain.py` | **`thesis_llm_run.investigation_truncated`가 이제 직접 센다**(2026-08-27 추가). 그 전에는 쿼리 B의 `tool_rounds` 분포로 추정할 수밖에 없었다 | **끊긴 실행 비율이 다시 보이면 왕복을 올린다.** 왕복 상한이 곧 빌드 길이라 `BUILD_TIMEOUT`(30분)이 아니라 **장전 창**(08:35 시작, 09:00 개장)이 실질 울타리다 — 왕복당 약 2분이라 5왕복이 12~14분, 7왕복이면 창에 붙는다. 호출 상한은 인자 모델의 `Field(description=...)`에 f-string으로 실려 프롬프트가 따라간다. 문자 상한은 폭주만 받는 안전망이라 **호출 상한을 다 써도 남아야 한다** |
-| `PROMPT_VERSION` / `NARRATIVE_PROMPT_VERSION` | `"14"` / `"3"` | `thesis/domain.py` / `thesis/outcomes.py` | — | 프롬프트를 고치면 올린다. 올린 뒤 28일은 ops 창이 두 판에 걸친다. **판마다 무엇이 바뀌었는지는 `thesis.domain.PROMPT_VERSION` 위 주석이 원본이다** — 여기 옮겨 적으면 두 벌이 어긋난다. 요약하면 `"3"` 기술적 보조지표(2026-08-24), `"4"` 과거 추론 절에 장후 리뷰(2026-08-25), `"5"` `## 확률` 절 정의(2026-08-25), `"6"` 숫자 표기 규칙 + 장중 슬롯(2026-08-26), `"7"` 조건부 기저율 + 동적 `flat` 기준선 + 방향별 기대 등락률(2026-08-26), `"8"` JSON 들여쓰기 제거(2026-08-27, 문장은 그대로이고 자리표시자 값의 모양만 바뀌었다), `"9"` 모자란 답을 한 번 다시 묻기(2026-08-27), `"10"` 크기 자리표시자 `0.0` → `null`(2026-08-27), `"11"`·`"12"`는 그 주석에서 읽는다 |
+| `PROMPT_VERSION` / `NARRATIVE_PROMPT_VERSION` | `"15"` / `"3"` | `thesis/domain.py` / `thesis/outcomes.py` | — | 프롬프트를 고치면 올린다. 올린 뒤 28일은 ops 창이 두 판에 걸친다. **판마다 무엇이 바뀌었는지는 `thesis.domain.PROMPT_VERSION` 위 주석이 원본이다** — 여기 옮겨 적으면 두 벌이 어긋난다. 요약하면 `"3"` 기술적 보조지표(2026-08-24), `"4"` 과거 추론 절에 장후 리뷰(2026-08-25), `"5"` `## 확률` 절 정의(2026-08-25), `"6"` 숫자 표기 규칙 + 장중 슬롯(2026-08-26), `"7"` 조건부 기저율 + 동적 `flat` 기준선 + 방향별 기대 등락률(2026-08-26), `"8"` JSON 들여쓰기 제거(2026-08-27, 문장은 그대로이고 자리표시자 값의 모양만 바뀌었다), `"9"` 모자란 답을 한 번 다시 묻기(2026-08-27), `"10"` 크기 자리표시자 `0.0` → `null`(2026-08-27), `"11"`·`"12"`는 그 주석에서 읽는다 |
 | 밴드 적중률 | 목표대 **60~80%** | 값이 아니라 판정 기준이다. 재는 곳은 `ops.py`의 `THESIS_CALIBRATION` 지평 0 행 | `abs(return_error_pct) <= predicted_band_pct` 비율 | **높아도 문제다.** 95%면 폭을 너무 넓게 불러 구간이 아무 것도 말하지 않는다는 뜻이고, 40% 아래면 반대다. 어느 쪽이든 손대는 것은 프롬프트 `### 오차` 절의 출발점(`baseline`의 `p75 - p25`의 절반)이다. **60~80은 실측이 아니라 시작값이다** — 판 14 배포 4주 뒤 분포를 보고 정한다(15-return-basis.md 4.6절) |
 | 크기 기준선의 브레이크 배수 | 절반 / `p90_abs_pct` | `prompts/thesis_generation.yaml`의 `## 크기` 절 산문 | `return_error_pct` 평균의 부호 | 기준선에서 벗어날 때 근거를 요구하는 경계다. **양쪽에 건다** — 한쪽만 걸어 둔 것이 판 13까지의 체계적 과소를 만들었다(지평 0 크기 채점 3건 전부 과소, 평균 +0.50%p). 평균이 여전히 양수로 쏠리면 하한 배수를 올리고(절반 → 3분의 2), 음수로 뒤집히면 내린다. **산문에 적는 배수라 판을 함께 올린다** |
 | `RULE_VERSION` | `"1"` | `technical/indicators.py` | `kind`·`direction`별 지평 적중률(기술지표 문서 12.6절) | 신호 검출 규칙을 고치면 올린다. `PROMPT_VERSION`과 같은 역할이고 축이 다르다 — 저쪽은 "모델이 잘 읽었나", 이쪽은 "신호가 좋았나"다 |

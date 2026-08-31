@@ -113,6 +113,15 @@ class DocumentPayloadError(ValueError):
     """피드 응답이 우리가 아는 모양이 아니다. 재시도해도 같은 결과다."""
 
 
+class DocumentGoneError(RuntimeError):
+    """제공처가 그 문서를 지웠다. 다시 쳐도 같은 답이다.
+
+    HTTP 404가 아니라 **정상 응답의 모양으로** 없음을 알리는 제공처가 올린다 — 네이버 리서치는
+    지운 `researchId`에 200과 `{}`로 답한다. `DocumentPayloadError`(형식이 바뀌었다, 다음 실행이
+    다시 집는다)와 갈라야 DAG이 행을 지울지 다시 집을지 정할 수 있다.
+    """
+
+
 class FeedSource(BaseModel):
     """`document_source` 한 행. 수집 정책의 원본은 DB다."""
 
@@ -398,7 +407,7 @@ SOURCE_RECORD_INSERT = read_sql("postgres", "source_record", "insert.sql")
 DOCUMENT_UPSERT = read_sql("postgres", "document", "upsert.sql")
 ENABLED_SOURCES = read_sql("postgres", "document_source", "select_enabled.sql")
 EXISTING_EXTERNAL_IDS = read_sql("postgres", "document", "select_existing_external_ids.sql")
-WATCHED_INSTRUMENTS = read_sql("postgres", "instrument", "select_watched.sql")
+TAGGABLE_INSTRUMENTS = read_sql("postgres", "instrument", "select_taggable.sql")
 
 
 def enabled_sources(connection: Connection) -> tuple[FeedSource, ...]:
@@ -433,14 +442,15 @@ def existing_external_ids(connection: Connection, slug: str, external_ids: Seque
         return frozenset(str(row[0]) for row in cursor.fetchall())
 
 
-def watched_tickers(connection: Connection) -> frozenset[str]:
-    """수집·분석 대상 종목 코드. 종목이 붙은 문서를 거를 때 쓴다.
+def taggable_tickers(connection: Connection) -> frozenset[str]:
+    """문서에서 알아볼 종목 코드. 종목이 붙은 문서를 거를 때 쓴다.
 
-    추론 대상(`thesis.subjects`)·투자의견 수집과 같은 SQL이다. 추적 종목이 늘 때 수집기를
-    고치지 않는다.
+    **`is_watched`를 안 본다**(`select_taggable.sql`). 그 플래그는 시세까지 받는 종목이고,
+    여기서 묻는 것은 "이 종목 이름을 아는가"다. 문서 평가의 종목 후보와 같은 목록이라
+    한쪽만 아는 종목이 생기지 않는다. 마스터가 늘 때 수집기를 고치지 않는다.
     """
     with connection.cursor() as cursor:
-        cursor.execute(WATCHED_INSTRUMENTS)
+        cursor.execute(TAGGABLE_INSTRUMENTS)
         return frozenset(str(row[0]) for row in cursor.fetchall())
 
 

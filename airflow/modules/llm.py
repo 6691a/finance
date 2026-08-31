@@ -157,6 +157,25 @@ def causal_model() -> BaseChatModel:
     )
 
 
+def direction_model() -> BaseChatModel:
+    """주간 방향성 요약(`modules/causal/direction.py`)이 쓰는 모델.
+
+    그래프를 만든 `causal_model`과 같은 모델이지만 함수를 나눠 둔다 — 저쪽은 툴을 돌며
+    경로를 만드는 일이고 이쪽은 이미 만들어진 경로를 읽고 어느 채널이 우위인지 한 문장을
+    쓰는 일이라, 한쪽만 옮기고 싶어질 때 그 함수만 고친다.
+
+    **툴이 없어서 `use_responses_api`가 필요 없다.** 경로는 코드가 Cypher로 뽑아 프롬프트에
+    싣는다(설계 §3.1) — 그래서 이 흐름은 왕복이 하나이고, 자유 Cypher 프로토타입이 물던
+    호출당 45~104초가 여기 없다.
+    """
+    return ChatOpenAI(
+        model="gpt-5.6-luna",
+        timeout=REQUEST_TIMEOUT_SECONDS,
+        # 재시도는 Airflow가 한다. 위 모듈 docstring 참고.
+        max_retries=0,
+    )
+
+
 def expectation_model() -> BaseChatModel:
     """이벤트 기대치 추출(`modules/expectation/extraction.py`)이 쓰는 모델.
 

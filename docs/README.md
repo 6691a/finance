@@ -28,12 +28,13 @@
 
 | 문서 | 무엇 | 상태 |
 | --- | --- | --- |
-| [economic-document-archive-design.md](analysis/economic-document-archive-design.md) | 문서 아카이브 4단계 설계 | 1·2단계 완료, 3·4단계 재계획 보류 |
+| [economic-document-archive-design.md](analysis/economic-document-archive-design.md) | 문서 아카이브 4단계 설계 | 1·2단계 완료. 6.6 섹터 확장은 2026-08-31 구현, **마이그레이션 적용 대기**. 3·4단계 재계획 보류 |
 | [document-assessment-workflow.md](analysis/document-assessment-workflow.md) | `document_assessment_hourly`의 LangGraph 흐름도 | 구현 완료 |
+| [pdf-rag-pipeline.md](analysis/pdf-rag-pipeline.md) | PyMuPDF 첨부 파싱 → 가치 판정 게이트 → Vision 호출 → BM25 색인 개발 계약(임베딩은 미룬다) | **미구현. 개발 계약** |
 | [market-technical-indicators.md](analysis/market-technical-indicators.md) | SMA·RSI·MACD 관측값과 매매 신호 검출·채점 | 구현 완료. 남은 것은 적중률 관측 |
 | [market-episode-analysis.md](analysis/market-episode-analysis.md) | 일봉 변화·추정 매물대·시장 근거를 연결하는 `MarketEpisode` 설계 | **미구현. 구현 계약** |
-| [market-causal-graph.md](analysis/market-causal-graph.md) | 주간 사후 인과 그래프. 사건 또는 대상 → 경로 체인 → 대상을 누적해 다중 홉을 만든다 | §1~§8·§11 구현 완료(프롬프트 판 10). **조회 API와 화면은 18단계가 갖는다** |
-| [market-thesis/](analysis/market-thesis/README.md) | 시장 추론 기록. 단계마다 문서 하나 | 16과 17(LLM 그래프 조회)을 뺀 전부 구현 완료. 4(그래프 투영)는 2026-08-30 운영 기동. 12·14·18은 함께 배포한다 — 그 README가 원본 |
+| [market-causal-graph.md](analysis/market-causal-graph.md) | 주간 사후 인과 그래프. 사건 또는 대상 → 경로 체인 → 대상을 누적해 다중 홉을 만든다 | §1~§8·§11 구현 완료(프롬프트 판 10). **조회 API와 화면은 20단계가 갖는다** |
+| [market-thesis/](analysis/market-thesis/README.md) | 시장 추론 기록. 단계마다 문서 하나 | 16과 18의 §3(프리마켓)을 뺀 전부 구현 완료. 17(그래프 조회)·19(애프터마켓 해설)은 2026-08-31 구현이고 17의 리비전 `d7a41f8b2c93`이 운영 반영 대기. 4(그래프 투영)는 2026-08-30 운영 기동. 12·14·20은 함께 배포한다 — 그 README가 원본 |
 
 ## `briefing/` — 읽어서 내보내기만 하는 DAG
 

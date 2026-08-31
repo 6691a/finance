@@ -144,7 +144,7 @@ def test_indicator_series_documents_table_and_column_purposes():
 def test_instrument_documents_table_and_column_purposes():
     from apps.models.reference import Instrument
 
-    assert Instrument.__table__.comment == "시세·뉴스·시그널이 참조하는 추적 종목 마스터"
+    assert Instrument.__table__.comment == "우리가 이름을 아는 종목의 마스터. is_watched가 참인 종목만 시세를 받는다"
     assert {column.name: column.comment for column in Instrument.__table__.columns} == {
         "id": "레코드 고유 식별자",
         "created_at": "레코드 생성 시각(UTC)",
@@ -155,5 +155,5 @@ def test_instrument_documents_table_and_column_purposes():
         "kind": "가격 수집 소스를 가르는 유형(equity, etf 또는 index)",
         "currency": "종목 가격의 표시 통화(ISO 4217, 예: KRW 또는 USD)",
         "source_symbol": "수집 소스에서 쓰는 심볼. 티커와 다를 때만 채운다(예: KOSPI → ^KS11)",
-        "is_watched": "신규 데이터 수집과 분석을 수행할 추적 대상 여부",
+        "is_watched": "시세를 수집할 대상 여부. 거짓이면 문서 태그 후보로만 쓴다",
     }

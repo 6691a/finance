@@ -662,6 +662,19 @@ def test_the_pending_query_needs_an_assessment_and_a_ticker_tag():
     assert "prompt_version = %s" in query
 
 
+def test_the_pending_query_only_takes_watched_stock_tags():
+    """태그 후보(`instrument` 전체)보다 좁다.
+
+    실제값이 오는 `earnings_fact`를 DART 수집기가 자기 Enum의 종목만 채우고 판정 툴도 추적
+    종목 밖 코드를 거절한다. 후보와 같은 넓이로 두면 아무도 읽지 않는 주장이 LLM 비용과 함께
+    쌓인다. 대상 조건과 `tickers` 목록 **둘 다** 좁아야 한다 — 목록만 넓으면 주장이
+    만들어졌다가 판정 단계에서 조용히 버려진다.
+    """
+    query = re.sub(r"--[^\n]*", "", PENDING_EXTRACTION)
+
+    assert query.count("JOIN instrument i ON i.ticker = di.ticker AND i.is_watched") == 2
+
+
 # --- 판정 흐름 ----------------------------------------------------------------
 
 

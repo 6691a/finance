@@ -244,7 +244,12 @@ class InstrumentKind(StrEnum):
 
 
 class Instrument(EntityBase):
-    """시세·뉴스·시그널이 참조할 추적 종목의 기준 정보를 저장한다."""
+    """우리가 이름을 아는 종목의 기준 정보를 저장한다.
+
+    **행이 있다는 것과 `is_watched`는 다른 뜻이다.** 행이 있으면 문서에서 그 종목을 알아보고
+    리서치 리포트를 받는다. `is_watched`가 참이어야 시세까지 받는다. 읽는 쪽은
+    `instrument/select_taggable.sql`(전체)과 `select_watched.sql`(시세 대상) 중 하나를 고른다.
+    """
 
     __tablename__ = "instrument"
     __table_args__ = (
@@ -262,7 +267,7 @@ class Instrument(EntityBase):
             name="ck_instrument_kind",
         ),
         table_options(
-            comment="시세·뉴스·시그널이 참조하는 추적 종목 마스터",
+            comment="우리가 이름을 아는 종목의 마스터. is_watched가 참인 종목만 시세를 받는다",
             database="default",
         ),
     )
@@ -312,5 +317,5 @@ class Instrument(EntityBase):
         nullable=False,
         default=True,
         server_default=text("true"),
-        comment="신규 데이터 수집과 분석을 수행할 추적 대상 여부",
+        comment="시세를 수집할 대상 여부. 거짓이면 문서 태그 후보로만 쓴다",
     )

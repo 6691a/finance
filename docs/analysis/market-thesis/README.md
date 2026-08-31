@@ -9,7 +9,9 @@
   12단계는 마이그레이션이 없고 코드·테스트·`justfile deploy-api`까지 있으나 **배포는 14단계
   화면과 함께 한다**(부를 클라이언트가 아직 없다). 4단계는 미착수, 14·16단계는 **설계만**.
   16단계는 실측이 끝났고(해설 48건·예측 20건, 총 $0.54) 구현만 남았다.
-  **17단계(그래프 조회)는 설계만이고 프로토타입이 착수 게이트다**(2026-08-30).
+  **17단계(그래프 조회)는 구현했다**(2026-08-31) — 프로토타입이 자유 Cypher를 접고 주간
+  DAG의 방향성 요약으로 형태를 바꿨다. **리비전 하나가 운영 반영을 기다린다**
+  (`d7a41f8b2c93`, `market_causal_direction`).
   **18단계는 2절(장전이 어젯밤 애프터마켓을 본다)까지 구현했고 3절(프리마켓)은 설계만이다**
   (2026-08-31). 리비전이 없어 운영 반영은 배포뿐이다. 남은 확인은 5절
   **19단계(애프터마켓 해설)도 구현했다**(2026-08-31). 리비전이 없고 상수 둘이라 되돌리는
@@ -96,6 +98,7 @@ requirements) **배포 단위(worktree/PR 하나)마다 문서를 나눴다.** �
 | 14 | [14-web-ui.md](14-web-ui.md) | React·TypeScript 실행 추적·추론 상세·주간 품질 화면, Cytoscape.js 관계 그래프, FastAPI 정적 자산 제공, Grafana 로컬 서비스·대시보드·테스트·문서 제거 | 11, 12, 13 | 없음(조회만) |
 | 15 | [15-return-basis.md](15-return-basis.md) | `thesis`에 축 세 칸과 크기 오차 두 칸, `thesis_outcome`에 오차 스냅샷, 수기 리비전, Slack 기준 줄과 `±` 표기, API 다섯 칸, 크기 앵커 툴 `typical_move`, 프롬프트 `## 크기` 절(앵커 + 오차), `select_window_changes.sql`의 국내 지수 제외 | 9, 10, 11, 12 | 있음(크기·오차 추정만 — 채점은 순수 함수) |
 | 16 | [16-narration-model.md](16-narration-model.md) | 사후 해설만 `gpt-5.6-luna`로 옮긴다 — `narration_model()` 하나, `thesis_narrative.yaml`에 조사 규칙·표기 절, `NARRATIVE_PROMPT_VERSION` 4. **예측은 `grok-4.6`에 그대로 둔다**(백테스트가 반대로 나왔다) | 5, 13 | 있음(해설만) |
+| 17 | [17-graph-query.md](17-graph-query.md) | `market_causal_direction`과 수기 리비전, `airflow/modules/graph_query.py`(고정 Cypher 둘), `causal/direction.py`의 호출–교정 그래프, `prompts/causal_direction.yaml`, `market_causal_weekly`의 `summarize_direction` 태스크, `ObservedState.causal_direction`과 나이 상한, `ThesisEvidenceKind.CAUSAL_PATH`, 프롬프트 `PROMPT_VERSION` 16 | 4 (그리고 `market-causal-graph.md`) | 있음(엇갈린 방향의 종합만 — 세기와 경로는 코드가 만든다) |
 | 18 | [18-nxt-precedent.md](18-nxt-precedent.md) | 장전이 되돌아보는 슬롯 목록 `PRECEDENT_SLOTS`(해설 목록과 분리, `post_nxt_close` 포함), 장전 관측 상태의 `after_hours` 블록(KRX 종가 옆에 NXT 마감가 — 창·모델·SQL을 `nxt_review.py`에서 `common.py`로 옮겨 두 슬롯이 공유), 프롬프트 두 자리와 `PROMPT_VERSION` 15. 게이트 뒤: `pre_market` 블록과 `select_nxt_pre_market.sql`. **채점 축은 정규장 그대로** | 5, 7, 9, 15 | 있음(장전이 리뷰와 애프터 종가를 읽는다) |
 | 19 | [19-nxt-narration.md](19-nxt-narration.md) | `post_nxt_close`를 해설 루프에 넣는다 — `thesis/state.py`의 `NARRATED_SLOTS`·`PRECEDENT_SLOTS` 둘과 SQL 머리말, 테스트. **채점은 계속 안 붙인다.** 동작 코드·프롬프트·리비전 없음(9단계가 슬롯 목록을 이미 파라미터로 바꿔 뒀다). 낡아진 docstring 넷과 SQL 머리말 셋이 함께 간다 | 5, 7, 9, 16, 18 | 있음(해설만 — 하루 호출 3, 대상 6) |
 

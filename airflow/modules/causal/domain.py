@@ -59,6 +59,15 @@ from modules.utility import KST_TIMEZONE
 # 종가와 정확히 맞았다(설계 §11.5).
 PROMPT_VERSION = "10"
 
+# 방향성 요약(`causal/direction.py`)의 프롬프트 판. **그래프 생성과 따로 센다** — 두 흐름이
+# 서로 다른 프롬프트를 쓰고, 한쪽 문장을 고쳤다고 다른 쪽 판까지 올리면 그 판으로 묶인
+# 결과가 실제로는 안 바뀐 것이 된다.
+DIRECTION_PROMPT_VERSION = "1"
+
+# 방향성 한 문장의 상한. 그래프 경로의 `reasoning`과 같은 값이고 이유도 같다 — 관측 상태에
+# 대상마다 한 줄씩 실리므로 길면 프롬프트 예산을 대상 수만큼 먹는다.
+MAX_DIRECTION_REASONING_CHARS = 200
+
 # 대상 주 `W`와 실행 주 `W+2`의 거리. 설계 §2.
 RUN_LAG_WEEKS = 2
 

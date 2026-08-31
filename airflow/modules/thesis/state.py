@@ -234,6 +234,39 @@ class TechnicalObservation(BaseModel):
     recent_signals: tuple[SignalObservation, ...] = ()
 
 
+class CausalChannel(BaseModel):
+    """방향성 재료 한 줄 — 채널 하나가 그 대상을 어느 쪽으로 얼마나 밀었나."""
+
+    model_config = ConfigDict(frozen=True)
+
+    name: str
+    up: int = 0
+    down: int = 0
+
+
+class CausalDirection(BaseModel):
+    """대상 하나가 주간 인과 그래프에서 받은 방향. 설계는
+    `docs/analysis/market-thesis/17-graph-query.md` §4다.
+
+    **예측이 아니라 사전 맥락이다.** 주 `W`를 `W+2` 월요일에 분석하므로 최소 9일 전 인과다.
+    `week_start`를 함께 싣는 이유가 그것이고, 프롬프트가 며칠 전인지 밝힌다.
+
+    **`bias`는 LLM이 낸 값이고 `channels`가 그 재료다.** 종합을 못 믿으면 채널 집계를 보고
+    다르게 판단하라고 프롬프트가 적는다 — LLM 출력이 LLM 입력이 되는 자리의 완화다(§4.5).
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    week_start: date
+    bias: str
+    reasoning: str
+    up_count: int
+    down_count: int
+    flat_count: int
+    channels: tuple[CausalChannel, ...] = ()
+    path_ids: tuple[int, ...] = ()
+
+
 class TechnicalState(BaseModel):
     """기술적 관측 블록 전체.
 
@@ -284,6 +317,15 @@ class ObservedState(BaseModel):
     # `input_state`에 함께 저장되므로 "그때 어떤 기준선을 줬나"가 기록에 남는다. 봉이 모자란
     # 심볼은 키가 없다.
     flat_base_rate: dict[str, HorizonBaseRate] = Field(default_factory=dict)
+    # 대상별 주간 인과 방향성. **키가 없는 것과 `flat`은 다르다** — 없는 것은 "그 그래프가
+    # 말하지 않았다"이고 `flat`은 "민 쪽이 없다"다. 프롬프트가 그 둘을 갈라 적는다.
+    #
+    # 나이 상한(`MAX_DIRECTION_AGE_WEEKS`)에 걸린 대상도 키가 없다. 주간 태스크가 밀리면
+    # 낡은 방향성을 최신인 척 읽는 것이 아니라 아예 안 보는 것이 맞다(설계 §4.2.1).
+    #
+    # **`NxtObservedState`에는 두지 않는다.** 애프터마켓 리뷰는 예측이 아니라 채점 대상이
+    # 아니고, 사전 맥락을 줄 자리가 없다.
+    causal_direction: dict[str, CausalDirection] = Field(default_factory=dict)
 
 
 class NxtObservedState(BaseModel):

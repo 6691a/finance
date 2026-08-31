@@ -80,6 +80,11 @@ KRX 마감                          NXT 애프터 마감    DAG 실행
 
 ## 3. 채점도 해설도 붙이지 않는다
 
+> **해설 쪽은 [19-nxt-narration.md](19-nxt-narration.md)가 뒤집는다**(2026-08-31, 설계).
+> 아래에서 해설을 뺀 이유는 값어치 판단이 아니라 당시의 하드코딩 결함이었고, 그것은
+> 2026-08-23에 풀렸다(9절 취소선). 18단계가 이 리뷰를 장전 프롬프트로 이으면서 읽는
+> 소비자도 생겼다. **채점 쪽은 그대로 유효하다.**
+
 **채점 없음** — 리뷰는 이미 일어난 일의 해석이라 예측이 아니다. 기존 `post_close`와 같다.
 `thesis_outcome/select_pending_grades.sql`이 이미 `run_slot = 'pre_open'` 리터럴이라 새 슬롯은
 **자동으로** 빠진다. 손댈 것이 없다.
@@ -340,8 +345,10 @@ CHECK 문자열과 두 enum의 일치를 강제한다.
 
 - **애프터마켓 분봉 툴** — 첫 컷은 관측 상태만. 5절.
 - **채점** — 리뷰는 예측이 아니다. 3절.
-- **사후 해설** — 3절. 붙이려면 `NarrativeTarget`에 `run_slot`을 싣고 슬롯별로 호출을
-  나눠야 한다.
+- ~~**사후 해설**~~ — 3절. 붙이려면 `NarrativeTarget`에 `run_slot`을 싣고 슬롯별로 호출을
+  나눠야 한다. **그 선행 조건은 2026-08-23에 끝났고, 붙이는 것은
+  [19-nxt-narration.md](19-nxt-narration.md)가 설계했다**(2026-08-31). 9단계가 슬롯 목록을
+  파라미터로 바꿔 둬서 이제 손댈 자리는 `thesis/state.py`의 상수 둘이다.
 - **NXT 휴장 캘린더** — `market_session`에 NXT market_code가 없다. NXT 달력이 KRX와 다른
   날이 실제로 생기면 그때 만든다. 지금은 `krx_open_day` 하나를 본다.
 - ~~**`thesis.review.narrate_followups`의 `RunSlot.PRE_OPEN` 하드코딩**~~ — 2026-08-23에

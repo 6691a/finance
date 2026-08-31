@@ -15,6 +15,7 @@ from apps.api.container import ApiContainer
 from apps.api.repository import DEFAULT_LIMIT, MAX_LIMIT
 from apps.api.schemas import (
     CausalChannelList,
+    CausalDirectionList,
     CausalEventList,
     CausalGraph,
     CausalPathDetail,
@@ -70,6 +71,31 @@ async def read_paths(
         target_kinds=tuple(target_kind or ()),
         target_codes=tuple(target_code or ()),
         event_id=event_id,
+        limit=limit,
+        offset=offset,
+    )
+
+
+@router.get("/directions", response_model=CausalDirectionList)
+@inject
+async def read_directions(
+    service: ServiceDep,
+    start: FromDay = None,
+    end: ToDay = None,
+    target_code: Annotated[list[str] | None, Query(description="대상 식별자")] = None,
+    limit: Limit = DEFAULT_LIMIT,
+    offset: Offset = 0,
+) -> CausalDirectionList:
+    """그 주의 경로를 대상별로 접은 방향성. 추론이 관측 상태로 읽는 값이다.
+
+    **예측이 아니라 사전 맥락이다** — 주 `W`를 `W+2` 월요일에 접으므로 최소 9일 전 인과다.
+    `bias`는 LLM이 정하고 세기는 코드가 세므로 **둘이 어긋나는 것이 정상이다.**
+    """
+    from_day, to_day = _days(start, end)
+    return await service.directions(
+        start=from_day,
+        end=to_day,
+        target_codes=tuple(target_code or ()),
         limit=limit,
         offset=offset,
     )

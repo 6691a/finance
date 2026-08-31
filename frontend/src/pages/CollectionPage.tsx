@@ -126,7 +126,7 @@ const DATASETS: Dataset[] = [
   {
     id: "instruments",
     label: "추적 종목",
-    note: "시세·뉴스·시그널이 참조하는 마스터. `is_watched`가 수집·분석 대상 여부다.",
+    note: "우리가 이름을 아는 종목. **행이 있다는 것과 시세를 받는 것은 다르다** — 행이 있으면 문서에서 그 종목을 알아보고 리서치를 받고, `시세 수집`이 참이어야 봉까지 받는다(2026-08-31 기준 20종목 중 2종목).",
     filters: [],
     path: () => "/api/collection/instruments",
     tables: (data: Items<InstrumentRow>) => [
@@ -141,7 +141,7 @@ const DATASETS: Dataset[] = [
           text<InstrumentRow>("k", "종류", (row) => row.kind),
           text<InstrumentRow>("c", "통화", (row) => row.currency),
           text<InstrumentRow>("s", "소스 심볼", (row) => row.source_symbol),
-          flag<InstrumentRow>("w", "추적", (row) => row.is_watched),
+          flag<InstrumentRow>("w", "시세 수집", (row) => row.is_watched),
         ] as Column<never>[],
       },
     ],

@@ -17,6 +17,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from apps.api.repository.common import DEFAULT_LIMIT, RowBundle, page_slice
 from apps.models.analysis import (
+    MarketCausalDirection,
     MarketCausalEvidence,
     MarketCausalPath,
     MarketCausalStep,
@@ -91,6 +92,36 @@ class MarketCausalReadRepository:
             select(MarketCausalEvidence.path_id, MarketCausalEvidence.ref)
             .where(MarketCausalEvidence.path_id.in_(path_ids))
             .order_by(MarketCausalEvidence.path_id, MarketCausalEvidence.ref)
+        )
+
+    @staticmethod
+    def direction_statement(
+        *,
+        start: date,
+        end: date,
+        target_codes: Sequence[str] = (),
+        limit: int = DEFAULT_LIMIT,
+        offset: int = 0,
+    ) -> Select[Any]:
+        """대상별 방향성. 축은 **접은 주**다.
+
+        **최신 주가 먼저다.** 이 값은 예측이 아니라 사전 맥락이고, 읽는 쪽이 가장 먼저
+        묻는 것이 "지금 기준으로 얼마나 오래된 이야기인가"다.
+        """
+        statement = select(MarketCausalDirection).where(
+            MarketCausalDirection.week_start >= start,
+            MarketCausalDirection.week_start <= end,
+        )
+        if target_codes:
+            statement = statement.where(MarketCausalDirection.target_code.in_(target_codes))
+        return (
+            statement.order_by(
+                MarketCausalDirection.week_start.desc(),
+                MarketCausalDirection.target_kind,
+                MarketCausalDirection.target_code,
+            )
+            .limit(limit + 1)
+            .offset(offset)
         )
 
     @staticmethod
@@ -245,6 +276,11 @@ class MarketCausalReadRepository:
             evidence=evidence,
             document_titles=titles,
         )
+
+    async def direction_rows(self, **filters: Any) -> tuple[tuple[Any, ...], bool]:
+        async with self._session_factory() as session:
+            found = list((await session.execute(self.direction_statement(**filters))).scalars())
+        return page_slice(found, filters.get("limit", DEFAULT_LIMIT))
 
     async def event_rows(self, **filters: Any) -> tuple[tuple[Any, ...], bool]:
         async with self._session_factory() as session:

@@ -192,3 +192,56 @@ class CausalGraph(ApiModel):
     week_start: date | None = Field(default=None, description="주로 자른 조회면 그 주.")
     nodes: tuple[CausalGraphNode, ...] = ()
     edges: tuple[CausalGraphEdge, ...] = ()
+
+
+class CausalChannelTally(ApiModel):
+    """채널 하나가 그 대상을 어느 쪽으로 몇 번 밀었나.
+
+    **종합 문장과 함께 나간다.** 읽는 쪽이 종합을 못 믿을 때 보는 재료라, 접기 전의 세기를
+    감추지 않는다.
+    """
+
+    name: str = Field(description="채널 이름.")
+    up: int = Field(default=0, description="위로 민 경로 수.")
+    down: int = Field(default=0, description="아래로 민 경로 수.")
+
+
+class CausalDirectionRow(ApiModel):
+    """한 주의 인과 그래프를 대상 하나로 접은 방향성.
+
+    **경로의 파생 요약이다** — `market_causal_path`가 원본이고, 그래프가 다시 밀리면 이 행도
+    따라 갱신된다. 추론이 그때 무엇을 봤나는 `thesis.input_state`에 박혀 이미 남는다.
+
+    **예측이 아니라 사전 맥락이다.** 주 `W`를 `W+2` 월요일에 분석하므로 추론이 보는 방향성은
+    최소 9일 전 인과다 — 화면이 그 나이를 함께 보여야 한다.
+    """
+
+    week_start: date = Field(description="접은 주의 월요일(KST).")
+    target_kind: str = Field(description="대상이 어느 마스터에서 오는지.")
+    target_code: str = Field(description="대상 식별자.")
+    bias: str = Field(
+        description=(
+            "그 주 경로들을 모은 방향(up·down·mixed·flat). **LLM이 정한다** — 세기 다수결로는 "
+            "갈리지 않아서다. 그래서 `up_count`가 더 많은데 `bias`가 `mixed`일 수 있다."
+        )
+    )
+    reasoning: str = Field(description="어느 채널이 우위였는지 한 문장. LLM이 쓴다.")
+    up_count: int = Field(description="위로 민 경로 수. **코드가 센다.**")
+    down_count: int = Field(description="아래로 민 경로 수. 코드가 센다.")
+    flat_count: int = Field(
+        default=0,
+        description="방향을 못 정한 경로 수. `sign`이 up·down뿐이라 지금은 언제나 0이다.",
+    )
+    path_ids: tuple[int, ...] = Field(
+        default=(),
+        description="이 방향성이 딛고 선 경로 전부. **다중 홉은 경로 여럿을 이은 것이라 그 전부가 들어간다.**",
+    )
+    channels: tuple[CausalChannelTally, ...] = Field(
+        default=(), description="채널별 방향 집계. 종합을 못 믿을 때 보는 재료다."
+    )
+    llm_run_id: int | None = Field(
+        default=None, description="이 행을 만든 대화(`kind='causal_direction'`)."
+    )
+
+
+CausalDirectionList = Page[CausalDirectionRow]

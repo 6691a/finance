@@ -17,6 +17,9 @@ from apps.api.repository import (
 from apps.api.schemas import (
     CausalChannelList,
     CausalChannelRow,
+    CausalChannelTally,
+    CausalDirectionList,
+    CausalDirectionRow,
     CausalEventList,
     CausalEventRow,
     CausalEvidenceRow,
@@ -150,6 +153,31 @@ def build_detail(rows: PathRows, path_id: int) -> CausalPathDetail:
     )
 
 
+def direction_of(row: Any) -> CausalDirectionRow:
+    """**세기와 종합을 함께 낸다.** `bias`는 LLM이 정하고 세기는 코드가 센 값이라, 둘이
+    어긋나는 것이 정상이다 — `up_count`가 더 많은데 `mixed`일 수 있다."""
+    return CausalDirectionRow(
+        week_start=row.week_start,
+        target_kind=_text(row.target_kind),
+        target_code=row.target_code,
+        bias=_text(row.bias),
+        reasoning=row.reasoning,
+        up_count=row.up_count,
+        down_count=row.down_count,
+        flat_count=row.flat_count,
+        path_ids=tuple(row.path_ids or ()),
+        channels=tuple(
+            CausalChannelTally(
+                name=str(item.get("name", "")),
+                up=int(item.get("up", 0) or 0),
+                down=int(item.get("down", 0) or 0),
+            )
+            for item in (row.channels or ())
+        ),
+        llm_run_id=row.llm_run_id,
+    )
+
+
 def event_of(row: tuple[Any, ...]) -> CausalEventRow:
     event, paths = row
     return CausalEventRow(
@@ -224,6 +252,25 @@ class MarketCausalReadService:
             raise GraphOffline("neo4j is not configured for this process")
         return graph_of(self._graph.target_chain(kind=kind, code=code, limit=limit), None)
 
+    async def directions(
+        self,
+        *,
+        start: date,
+        end: date,
+        target_codes: tuple[str, ...] = (),
+        limit: int = DEFAULT_LIMIT,
+        offset: int = 0,
+    ) -> CausalDirectionList:
+        rows, has_more = await self._repository.direction_rows(
+            start=start, end=end, target_codes=target_codes, limit=limit, offset=offset
+        )
+        return CausalDirectionList(
+            items=tuple(direction_of(row) for row in rows),
+            limit=limit,
+            offset=offset,
+            has_more=has_more,
+        )
+
     async def events(
         self, *, start: date, end: date, limit: int = DEFAULT_LIMIT, offset: int = 0
     ) -> CausalEventList:
@@ -258,6 +305,7 @@ __all__ = [
     "build_detail",
     "build_paths",
     "channel_of",
+    "direction_of",
     "event_of",
     "evidence_of",
     "graph_of",

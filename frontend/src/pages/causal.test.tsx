@@ -86,7 +86,6 @@ it("데이터셋을 바꾸면 사건·채널 경로를 부른다", async () => {
   expect(log.paths.some((path) => path.startsWith("/api/causal/channels"))).toBe(true);
 });
 
-
 it("경로를 누르면 상세로 간다", async () => {
   stubFetch({ "/api/causal/paths": PATHS });
   renderAt("/causal", "/causal", <CausalPage />);
@@ -126,4 +125,36 @@ it("대상에서 출발한 경로는 원인의 방향까지 보인다", async ()
   expect(screen.getByRole("link", { name: "US10Y(하락) → 할인율 → 005930" })).toBeTruthy();
   expect(screen.getByRole("cell", { name: "대상" })).toBeTruthy();
   expect(screen.getByRole("cell", { name: "양 끝 값" })).toBeTruthy();
+});
+
+it("방향성은 세기와 종합을 함께 보인다", async () => {
+  // **방향은 LLM이 정하고 세기는 코드가 센다.** 둘이 어긋나는 것이 정상이라 둘 다 보인다 —
+  // 위로 4, 아래로 2인데 종합이 `엇갈림`인 행이 실제로 있다(2026-08-31 운영).
+  const directions = {
+    items: [
+      {
+        week_start: "2026-08-17",
+        target_kind: "index",
+        target_code: "KOSPI",
+        bias: "mixed",
+        reasoning: "자사주와 성장 기대가 받쳤지만 미국 국가부채가 눌러 엇갈렸다.",
+        up_count: 4,
+        down_count: 2,
+        flat_count: 0,
+        path_ids: [59, 68, 73],
+        channels: [{ name: "투자심리", up: 3, down: 2 }],
+        llm_run_id: 12,
+      },
+    ],
+    limit: 50,
+    offset: 0,
+    has_more: false,
+  };
+  stubFetch({ "/api/causal/directions": directions });
+  renderAt("/causal?dataset=directions", "/causal", <CausalPage />);
+
+  await screen.findByRole("table");
+  expect(screen.getByRole("cell", { name: "엇갈림" })).toBeTruthy();
+  expect(screen.getByRole("cell", { name: "4 / 2" })).toBeTruthy();
+  expect(screen.getByRole("cell", { name: "투자심리 3↑2↓" })).toBeTruthy();
 });

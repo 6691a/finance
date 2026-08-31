@@ -11,7 +11,9 @@ import { Link } from "react-router-dom";
 
 import { query, useJson } from "../api";
 import { integerText, kstText } from "../format";
+import { CAUSAL_BIASES, labelOf } from "../labels";
 import type {
+  CausalDirectionRow,
   CausalPathRow,
   DocumentList,
   LlmRunList,
@@ -56,6 +58,10 @@ export default function DashboardPage() {
     `/api/causal/paths${query({ from: daysAgo(21), limit: 5 })}`,
   );
   const documents = useJson<DocumentList>(`/api/documents${query({ from: daysAgo(1), limit: 5 })}`);
+  // **추론이 실제로 읽는 값이 이것이다.** 경로가 아니라 대상별로 접은 방향성이 관측 상태로 간다.
+  const directions = useJson<Paged<CausalDirectionRow>>(
+    `/api/causal/directions${query({ from: daysAgo(28), limit: 5 })}`,
+  );
 
   const stale = health.data?.items[0] ?? null;
   const failed = (health.data?.items ?? []).filter((item) => item.failed > 0);
@@ -63,6 +69,7 @@ export default function DashboardPage() {
   const latestRun = runs.data?.items[0] ?? null;
   const latestThesis = theses.data?.items[0] ?? null;
   const latestPath = causal.data?.items[0] ?? null;
+  const latestDirection = directions.data?.items[0] ?? null;
   const unassessed = (documents.data?.items ?? []).filter((item) => item.assessed_at === null);
 
   return (
@@ -138,6 +145,16 @@ export default function DashboardPage() {
           ) : (
             <>
               <Line label="마지막 주" value={latestPath.week_start} />
+              {/* **예측이 아니라 사전 맥락이다** — 주 W를 W+2 월요일에 접으므로 추론이 보는
+                  것은 최소 9일 전 인과다. 그 나이를 화면이 밝힌다. */}
+              <Line
+                label="접힌 방향성"
+                value={
+                  latestDirection === null
+                    ? "아직 없음"
+                    : `${latestDirection.week_start} · ${latestDirection.target_code} ${labelOf(CAUSAL_BIASES, latestDirection.bias)}`
+                }
+              />
               {/* 대상에서 출발한 경로가 있어야 주를 넘는 사슬이 선다. */}
               <Line
                 label="대상에서 출발한 경로"

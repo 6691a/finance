@@ -897,3 +897,30 @@ export interface CausalGraph {
   nodes: CausalGraphNode[];
   edges: CausalGraphEdge[];
 }
+
+/** 채널 하나가 그 대상을 어느 쪽으로 몇 번 밀었나. */
+export interface CausalChannelTally {
+  name: string;
+  up: number;
+  down: number;
+}
+
+/**
+ * 한 주의 인과 그래프를 대상 하나로 접은 방향성.
+ *
+ * **예측이 아니라 사전 맥락이다** — 주 `W`를 `W+2` 월요일에 접으므로 최소 9일 전 인과다.
+ * `bias`는 LLM이 정하고 세기는 코드가 세므로 **둘이 어긋나는 것이 정상이다.**
+ */
+export interface CausalDirectionRow {
+  week_start: DayText;
+  target_kind: string;
+  target_code: string;
+  bias: string;
+  reasoning: string;
+  up_count: number;
+  down_count: number;
+  flat_count: number;
+  path_ids: number[];
+  channels: CausalChannelTally[];
+  llm_run_id: number | null;
+}

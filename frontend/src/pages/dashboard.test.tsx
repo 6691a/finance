@@ -46,6 +46,16 @@ const HEALTH = {
 
 const EMPTY = { items: [], limit: 5, offset: 0, has_more: false };
 
+/** 나머지 카드는 비워 두고 한 카드만 본다. 대시보드는 조회 여섯을 나란히 부른다. */
+const ALL_EMPTY = {
+  "/api/collection/health": EMPTY,
+  "/api/llm-runs": EMPTY,
+  "/api/theses": EMPTY,
+  "/api/causal/paths": EMPTY,
+  "/api/causal/directions": EMPTY,
+  "/api/documents": EMPTY,
+};
+
 it("이미 있는 조회를 나란히 부른다", async () => {
   // **대시보드 전용 집계 라우트를 만들지 않는다.** 그 라우트만 아는 규칙이 생기면 화면이
   // 바뀔 때마다 서버를 고쳐야 한다.
@@ -55,6 +65,7 @@ it("이미 있는 조회를 나란히 부른다", async () => {
     "/api/theses": EMPTY,
     "/api/causal/paths": EMPTY,
     "/api/documents": EMPTY,
+    "/api/causal/directions": EMPTY,
   });
   renderAt("/dashboard", "/dashboard", <DashboardPage />);
 
@@ -64,6 +75,7 @@ it("이미 있는 조회를 나란히 부른다", async () => {
     "/api/llm-runs",
     "/api/theses",
     "/api/causal/paths",
+    "/api/causal/directions",
     "/api/documents",
   ]) {
     expect(log.paths.some((path) => path.startsWith(prefix))).toBe(true);
@@ -72,13 +84,7 @@ it("이미 있는 조회를 나란히 부른다", async () => {
 
 it("가장 오래 소식 없는 출처가 먼저다", async () => {
   // 이 화면의 질문이 "무엇이 안 들어오고 있나"라서 요약의 첫 줄이 곧 답이다.
-  stubFetch({
-    "/api/collection/health": HEALTH,
-    "/api/llm-runs": EMPTY,
-    "/api/theses": EMPTY,
-    "/api/causal/paths": EMPTY,
-    "/api/documents": EMPTY,
-  });
+  stubFetch({ ...ALL_EMPTY, "/api/collection/health": HEALTH });
   renderAt("/dashboard", "/dashboard", <DashboardPage />);
 
   expect(await screen.findByText(/mof/)).toBeTruthy();
@@ -87,13 +93,7 @@ it("가장 오래 소식 없는 출처가 먼저다", async () => {
 });
 
 it("없는 것을 0으로 채우지 않는다", async () => {
-  stubFetch({
-    "/api/collection/health": EMPTY,
-    "/api/llm-runs": EMPTY,
-    "/api/theses": EMPTY,
-    "/api/causal/paths": EMPTY,
-    "/api/documents": EMPTY,
-  });
+  stubFetch(ALL_EMPTY);
   renderAt("/dashboard", "/dashboard", <DashboardPage />);
 
   await screen.findByRole("heading", { name: "대시보드" });
@@ -103,13 +103,7 @@ it("없는 것을 0으로 채우지 않는다", async () => {
 });
 
 it("카드 제목이 그 화면으로 가는 링크다", async () => {
-  stubFetch({
-    "/api/collection/health": EMPTY,
-    "/api/llm-runs": EMPTY,
-    "/api/theses": EMPTY,
-    "/api/causal/paths": EMPTY,
-    "/api/documents": EMPTY,
-  });
+  stubFetch(ALL_EMPTY);
   renderAt("/dashboard", "/dashboard", <DashboardPage />);
 
   await screen.findByRole("heading", { name: "대시보드" });

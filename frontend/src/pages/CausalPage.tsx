@@ -13,6 +13,7 @@ import DatasetBrowser, { type Dataset } from "../components/DatasetBrowser";
 import type { Column } from "../components/DataTable";
 import { integerText, numberText } from "../format";
 import {
+  CAUSAL_BIASES,
   CAUSAL_CONFIDENCES,
   CAUSAL_SIGNS,
   CAUSAL_SOURCE_KINDS,
@@ -20,7 +21,13 @@ import {
   DIRECTIONS,
   labelOf,
 } from "../labels";
-import type { CausalChannelRow, CausalEventRow, CausalPathRow, Items } from "../types";
+import type {
+  CausalChannelRow,
+  CausalDirectionRow,
+  CausalEventRow,
+  CausalPathRow,
+  Items,
+} from "../types";
 
 /** 실현 등락 한 칸. 단위가 퍼센트면 `%`, 금리면 `bp`다. */
 export function changeText(value: number, unit: string): string {
@@ -105,6 +112,57 @@ const DATASETS: Dataset[] = [
           change<CausalPathRow>("r1", "T+1", (row) => row.return_t1_change),
           change<CausalPathRow>("r5", "T+5", (row) => row.return_t5_change),
           { key: "why", label: "설명", value: (row: CausalPathRow) => row.reasoning },
+        ] as Column<never>[],
+      },
+    ],
+  },
+  {
+    id: "directions",
+    label: "방향성",
+    note: "그 주 경로를 대상별로 접은 것. **예측이 아니라 사전 맥락이다** — 주 W를 W+2 월요일에 접으므로 추론이 보는 것은 최소 9일 전 인과다.",
+    filters: ["dates"],
+    path: (params) => `/api/causal/directions?${params}`,
+    tables: (data: Items<CausalDirectionRow>) => [
+      {
+        caption:
+          "주 내림차순 · **방향은 LLM이 정하고 세기는 코드가 센다** — 둘이 어긋나는 것이 정상이다",
+        empty: "이 구간에 방향성이 없다.",
+        rows: data.items,
+        columns: [
+          { key: "w", label: "주", value: (row: CausalDirectionRow) => row.week_start },
+          {
+            key: "t",
+            label: "대상",
+            value: (row: CausalDirectionRow) =>
+              `${row.target_code} (${labelOf(CAUSAL_TARGET_KINDS, row.target_kind)})`,
+          },
+          {
+            key: "b",
+            label: "방향",
+            value: (row: CausalDirectionRow) => (
+              <span className={row.bias === "up" ? "up" : row.bias === "down" ? "down" : ""}>
+                {labelOf(CAUSAL_BIASES, row.bias)}
+              </span>
+            ),
+          },
+          {
+            key: "c",
+            label: "세기(위/아래)",
+            value: (row: CausalDirectionRow) => `${row.up_count} / ${row.down_count}`,
+          },
+          {
+            key: "ch",
+            label: "채널",
+            value: (row: CausalDirectionRow) =>
+              row.channels.map((item) => `${item.name} ${item.up}↑${item.down}↓`).join(" · ") ||
+              "—",
+          },
+          {
+            key: "p",
+            label: "경로",
+            value: (row: CausalDirectionRow) => integerText(row.path_ids.length),
+          },
+          { key: "why", label: "종합", value: (row: CausalDirectionRow) => row.reasoning },
         ] as Column<never>[],
       },
     ],

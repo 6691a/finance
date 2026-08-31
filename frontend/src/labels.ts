@@ -115,3 +115,16 @@ export const ATTACHMENT_KINDS: Labels = {
   file: "파일",
   video: "영상",
 };
+
+/**
+ * 한 주를 대상 하나로 접은 방향.
+ *
+ * **`mixed`는 "모른다"가 아니라 "밀고 당겼다"이다** — 세기가 갈린 것을 LLM이 그렇게 읽은
+ * 것이라 `up_count`가 더 많아도 `mixed`일 수 있다.
+ */
+export const CAUSAL_BIASES: Labels = {
+  up: "위로",
+  down: "아래로",
+  mixed: "엇갈림",
+  flat: "정체",
+};

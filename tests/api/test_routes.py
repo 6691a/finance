@@ -128,6 +128,7 @@ async def test_the_route_set_is_what_we_meant_to_publish():
         "/api/collection/instruments",
         "/api/collection/sessions",
         "/api/causal/paths",
+        "/api/causal/directions",
         "/api/causal/events",
         "/api/causal/channels",
         "/api/causal/paths/{path_id}",

@@ -380,16 +380,18 @@ class ThesisOutcome(EntityBase):
     두 종류의 값이 한 행에 있고 **채우는 주체가 다르다.**
 
     - **채점**(`evaluated_at`·`actual_return_pct`·`actual_outcome`·`brier_score`)은 SQL과
-      순수 함수가 만든다. LLM이 없다. `pre_open` 추론에만 붙는다 — `post_close` 리뷰는
-      이미 일어난 일의 해석이라 예측이 아니고 채점할 대상이 없다.
+      순수 함수가 만든다. LLM이 없다. **예측 슬롯에만 붙는다** — 리뷰 둘
+      (`post_close`·`post_nxt_close`)은 이미 일어난 일의 해석이라 예측이 아니고 채점할
+      대상이 없다.
     - **해설**(`narrative`·`verdict`·`narrative_at`·`llm_model`·`prompt_version`)은 LLM이
-      만든다. **두 슬롯 모두** 붙는다 — 장후 리뷰는 "오늘 이래서 움직였다"는 인과 주장이라
-      며칠 뒤 보도로 검증할 값어치가 오히려 크다.
+      만든다. **리뷰에도 붙는다** — "오늘 이래서 움직였다"는 인과 주장이라 며칠 뒤 보도로
+      검증할 값어치가 오히려 크다. 애프터마켓 리뷰는 2026-08-31에 들어왔다
+      (`docs/analysis/market-thesis/19-nxt-narration.md`).
 
     그래서 채점 칸이 nullable이다. 대신 **둘 다 비어 있는 행을 CHECK로 막는다** — 채점도
     해설도 없으면 그 행은 없는 것과 같다.
 
-    "`post_close` 행에는 채점이 없다"는 `thesis.run_slot`을 봐야 알 수 있어 CHECK로 못 막는다.
+    "리뷰 행에는 채점이 없다"는 `thesis.run_slot`을 봐야 알 수 있어 CHECK로 못 막는다.
     코드와 테스트가 지킨다(`thesis_evidence`가 마스터로 FK를 걸지 않는 것과 같은 판단).
     """
 

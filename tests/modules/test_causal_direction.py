@@ -14,13 +14,14 @@ from typing import Any, Self
 import pytest
 
 from modules.causal import direction as flow
+from modules.causal import store
 from modules.causal.direction import (
-    Direction,
     DirectionAnswer,
     DirectionError,
     DirectionReply,
     DirectionSummarizer,
 )
+from modules.causal.domain import Direction
 from modules.graph_query import Chain, DirectionInput, Landing
 
 WEEK = date(2026, 8, 17)
@@ -192,9 +193,17 @@ class FakeCursor:
 class FakeConnection:
     def __init__(self) -> None:
         self.calls: list[tuple[str, Any]] = []
+        self.committed = 0
+        self.rolled_back = 0
 
     def cursor(self) -> FakeCursor:
         return FakeCursor(self)
+
+    def commit(self) -> None:
+        self.committed += 1
+
+    def rollback(self) -> None:
+        self.rolled_back += 1
 
 
 def direction_row(**overrides: Any) -> Direction:
@@ -218,7 +227,7 @@ def test_jsonb_columns_go_out_as_text():
     """드라이버가 dict/list를 JSONB로 안 받는다. 경계에서 한 번만 문자열로 만든다."""
     connection = FakeConnection()
 
-    flow.store_directions(connection, [direction_row()], llm_run_id=7)
+    store.store_directions(connection, [direction_row()], llm_run_id=7)
 
     _, parameters = connection.calls[0]
     assert json.loads(parameters["path_ids"]) == [1, 2]
@@ -230,7 +239,7 @@ def test_korean_channel_names_are_not_escaped():
     """`ensure_ascii=True`면 `\\ud560\\uc778\\uc728`이 저장돼 psql로 읽을 수 없다."""
     connection = FakeConnection()
 
-    flow.store_directions(connection, [direction_row()], llm_run_id=None)
+    store.store_directions(connection, [direction_row()], llm_run_id=None)
 
     _, parameters = connection.calls[0]
     assert "이익 기대" in parameters["channels"]
@@ -240,7 +249,22 @@ def test_the_upsert_updates_instead_of_doing_nothing():
     """경로와 반대 판단이다. 그래프가 다시 밀리면 요약도 따라간다(설계 §3.2)."""
     connection = FakeConnection()
 
-    flow.store_directions(connection, [direction_row()], llm_run_id=None)
+    store.store_directions(connection, [direction_row()], llm_run_id=None)
 
     statement, _ = connection.calls[0]
     assert "ON CONFLICT (week_start, target_kind, target_code) DO UPDATE" in statement
+
+
+def test_the_rows_land_in_one_transaction():
+    """방향성 여럿이 한 주의 요약이다. 절반만 들어간 주를 남기지 않는다."""
+    connection = FakeConnection()
+
+    store.store_directions(
+        connection,
+        [direction_row(), direction_row(target_code="000660")],
+        llm_run_id=None,
+    )
+
+    assert len(connection.calls) == 2
+    assert connection.committed == 1
+    assert connection.rolled_back == 0

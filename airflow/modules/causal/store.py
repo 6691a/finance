@@ -8,6 +8,7 @@
 계약은 `docs/analysis/market-causal-graph.md` 3·6절이다.
 """
 
+import json
 import logging
 from collections.abc import Mapping, Sequence
 from datetime import UTC, date, datetime
@@ -33,6 +34,7 @@ CHANNEL_UPSERT = read_sql("postgres", "market_channel", "upsert.sql")
 PATH_INSERT = read_sql("postgres", "market_causal_path", "insert.sql")
 STEP_INSERT = read_sql("postgres", "market_causal_step", "insert.sql")
 EVIDENCE_INSERT = read_sql("postgres", "market_causal_evidence", "insert.sql")
+DIRECTION_UPSERT = read_sql("postgres", "market_causal_direction", "upsert.sql")
 WEEK_EXISTS = read_sql("postgres", "market_causal_path", "exists_by_week.sql")
 
 
@@ -431,3 +433,43 @@ def finish_llm_run(
                 llm_run_id,
             ),
         )
+
+
+def store_directions(
+    connection: TransactionalConnection,
+    directions: Sequence[domain.Direction],
+    *,
+    llm_run_id: int | None,
+) -> int:
+    """방향성을 쓴다. 저장한 행 수를 준다.
+
+    **`DO UPDATE`다**(설계 §3.2). 경로(`store_paths`)와 반대 판단이고 이유가 있다 — 저쪽은
+    LLM이 낸 최초 판단이라 덮어쓰면 사라지지만, 이 행은 그 경로들을 접은 **파생 요약**이라
+    그래프가 다시 밀리면(`sync_only`) 따라가야 맞다.
+
+    **여기 있는 이유는 이 모듈이 연결과 SQL만 알기 때문이다.** `direction.py`는 LangChain을
+    끄는 자리라 저장이 거기 있으면 DAG이 저장만 하려 해도 그 무게를 문다.
+    """
+    stored = 0
+    with atomic(connection) as transaction, transaction.cursor() as cursor:
+        for direction in directions:
+            cursor.execute(
+                DIRECTION_UPSERT,
+                {
+                    "week_start": direction.week_start,
+                    "target_kind": direction.target_kind,
+                    "target_code": direction.target_code,
+                    "bias": direction.bias,
+                    "reasoning": direction.reasoning,
+                    "up_count": direction.up_count,
+                    "down_count": direction.down_count,
+                    "flat_count": direction.flat_count,
+                    # JSONB는 드라이버가 dict/list를 안 받는다. 경계에서 한 번만 문자열로 만든다.
+                    "path_ids": json.dumps(list(direction.path_ids)),
+                    # `ensure_ascii=False`가 아니면 채널 이름이 \uXXXX로 저장돼 psql로 못 읽는다.
+                    "channels": json.dumps(list(direction.channels), ensure_ascii=False),
+                    "llm_run_id": llm_run_id,
+                },
+            )
+            stored += 1
+    return stored

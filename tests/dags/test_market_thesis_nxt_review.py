@@ -107,7 +107,12 @@ def test_the_dag_owns_one_slot_only():
 
 
 def test_the_tasks_run_in_one_line():
-    """채점도 해설도 없다. 리뷰는 예측이 아니고 해설 루프는 이 슬롯을 빼 둔다."""
+    """채점이 없어 태스크가 둘뿐이다.
+
+    **해설은 이 DAG의 태스크가 아니다.** 며칠 뒤 보도가 쌓여야 판정할 수 있어
+    `market_thesis_review`의 `narrate_followups`가 붙인다
+    (`docs/analysis/market-thesis/19-nxt-narration.md`).
+    """
     assert set(DAG.task_dict) == {"build_thesis", "notify_slack"}
     assert DAG.task_dict["notify_slack"].upstream_task_ids == {"build_thesis"}
 

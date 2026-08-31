@@ -34,7 +34,7 @@
 | [market-technical-indicators.md](analysis/market-technical-indicators.md) | SMA·RSI·MACD 관측값과 매매 신호 검출·채점 | 구현 완료. 남은 것은 적중률 관측 |
 | [market-episode-analysis.md](analysis/market-episode-analysis.md) | 일봉 변화·추정 매물대·시장 근거를 연결하는 `MarketEpisode` 설계 | **미구현. 구현 계약** |
 | [market-causal-graph.md](analysis/market-causal-graph.md) | 주간 사후 인과 그래프. 사건 → 경로 체인 → 대상을 누적해 다중 홉을 만든다 | §1~§8 구현 완료(2026-08-28, 프롬프트 판 5). §7 조회·§9 선반영만 미구현 |
-| [market-thesis/](analysis/market-thesis/README.md) | 시장 추론 기록. 단계마다 문서 하나 | 14(웹 화면)·17(그래프 조회)과 18의 §3(프리마켓)을 뺀 전부 구현 완료. 4(그래프 투영)는 2026-08-30 운영 기동. 12(API)는 구현됐고 배포만 14단계와 함께 — 그 README가 원본 |
+| [market-thesis/](analysis/market-thesis/README.md) | 시장 추론 기록. 단계마다 문서 하나 | 14(웹 화면)·17(그래프 조회)과 18의 §3(프리마켓)을 뺀 전부 구현 완료. 19(애프터마켓 해설)는 2026-08-31 구현. 4(그래프 투영)는 2026-08-30 운영 기동. 12(API)는 구현됐고 배포만 14단계와 함께 — 그 README가 원본 |
 
 ## `briefing/` — 읽어서 내보내기만 하는 DAG
 

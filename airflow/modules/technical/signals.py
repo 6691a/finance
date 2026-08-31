@@ -27,7 +27,12 @@ TECHNICAL_HISTORY = read_sql("postgres", "technical", "select_history.sql")
 SIGNAL_UPSERT = read_sql("postgres", "technical_signal", "upsert.sql")
 
 # 신호를 검출하는 지수. 종목은 `instrument.is_watched`가 정하므로 여기 적지 않는다.
-SIGNAL_INDEXES: tuple[str, ...] = ("KOSPI", "KOSDAQ")
+#
+# **KOSDAQ은 뺐다**(2026-08-31, 추론 대상에서 빠진 것과 같은 커밋). 신호 289건이 쌓이는
+# 동안 그것을 인용한 추론이 **0건**이었다 — 검출은 도는데 읽는 곳이 없었다. 브리핑의
+# 기술 관측 표는 자기 목록(`briefing/market_data.TECHNICAL_INDEXES`)을 따로 갖고 일봉에서
+# 지표를 계산하므로 그대로다. 다만 그 표의 KOSDAQ 신호 칸은 30일 뒤 빈다.
+SIGNAL_INDEXES: tuple[str, ...] = ("KOSPI",)
 
 # 국내 종목의 하루 가격제한폭보다 큰 단절은 분할·병합이나 원천 이상을 의심한다(문서 5.1절).
 DOMESTIC_MAX_DAILY_CHANGE_PCT = 35.0

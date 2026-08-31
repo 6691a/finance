@@ -159,7 +159,12 @@ WATCHED_INSTRUMENTS = read_sql("postgres", "instrument", "select_watched.sql")
 # 추론 대상 지수. `quote_symbol`이 아니라 여기 두는 이유는 이것이 "무엇을 추론할지"의
 # 목록이지 "어떤 심볼을 수집할지"가 아니기 때문이다. KOSPI200은 코스피와 거의 같이 움직여
 # 대상에서 뺀다 — 같은 판단을 두 번 적는 것이 된다.
-INDEX_SUBJECTS: tuple[tuple[str, str], ...] = (("KOSPI", "코스피"), ("KOSDAQ", "코스닥"))
+#
+# **KOSDAQ도 뺐다**(2026-08-31). 사용자가 실제로 유심히 보지 않는 지수인데 "지수라서" 넣어
+# 뒀던 것이고, 운영 실측이 그 값어치를 부정했다 — T+0 Brier 0.708·T+1 0.710으로 넷 중
+# 제일 나쁘고 균등확률 기준선 0.667보다도 나쁘다(표본 14·12). 수집·브리핑 표는 그대로다.
+# 여기서 빼면 새 추론이 안 생기고, 이미 쓴 22건과 그 채점은 남아 T+5까지 돌고 끝난다.
+INDEX_SUBJECTS: tuple[tuple[str, str], ...] = (("KOSPI", "코스피"),)
 
 
 def _store_evidence(

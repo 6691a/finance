@@ -29,10 +29,11 @@ from typing import Any
 from airflow.providers.postgres.hooks.postgres import PostgresHook
 from airflow.sdk import Param
 from airflow.sdk.exceptions import AirflowFailException, AirflowSkipException
-from pydantic import SecretStr
+from pydantic import AwareDatetime, BaseModel, ConfigDict, SecretStr
 
 from modules.market_session import krx_open_day
 from modules.slack import SlackClient, SlackError
+from modules.sql import read_sql
 from modules.thesis.domain import (
     DOMESTIC_MAX_DAILY_CHANGE_PCT,
     PROMPT_VERSION,
@@ -44,6 +45,7 @@ from modules.thesis.domain import (
     evidence_ref,
 )
 from modules.thesis.state import (
+    AfterHoursObservation,
     HorizonBaseRate,
     IndexObservation,
     NxtObservedState,
@@ -75,6 +77,19 @@ CALENDAR_DAY_PATTERN = re.compile(r"\d{4}-\d{2}-\d{2}")
 SESSION_OPEN_TIME = time(9, 0)
 CLOSE_TIME = time(15, 30)
 
+# NXT 애프터마켓의 양 끝(KST). 거래소만 걸면 프리·주간 세션이 섞인다 — 하루 690봉 중 애프터는
+# 260봉뿐이다(2026-08-21 운영 DB 실측).
+#
+# **하한은 KRX 마감 15:30이고 실제 첫 애프터 봉은 15:40이다**(같은 실측: 15:40~19:59가
+# 정확히 260분, 구멍 없음). 10분을 더 열어 두는 것은 그 사이에 봉이 없어 결과가 같고,
+# NXT가 나중에 15:30부터 열면 코드를 고치지 않아도 잡히기 때문이다. 주간 세션 마지막 봉은
+# 15:20이라 이 하한으로도 섞이지 않는다.
+#
+# 세션 사실이지 슬롯 사실이 아니라 여기 있다 — 애프터마켓 리뷰(당일)와 장전 전망(전 영업일)이
+# 같은 창을 세션 날짜만 달리해 읽는다(`18-nxt-precedent.md` 2.6절).
+AFTER_HOURS_OPEN = time(15, 30)
+AFTER_HOURS_CLOSE = time(20, 0)
+
 # 세 DAG가 같은 재시도 정책을 쓴다. 재시도 셋은 readiness guard가 선행 DAG의 지연을
 # 기다리는 수단이다.
 DEFAULT_ARGS: dict[str, Any] = {"retries": 3, "retry_delay": timedelta(minutes=10)}
@@ -89,6 +104,49 @@ SETTLED_CLOSE_COUNT = (
     "SELECT count(DISTINCT stock_code) FROM stock_investor_trade_daily "
     "WHERE provider = 'kis' AND business_date = %s AND stock_code = ANY(%s)"
 )
+
+AFTER_HOURS_STATE = read_sql("postgres", "stock_bar", "select_nxt_after_hours.sql")
+
+
+class AfterHoursBar(BaseModel):
+    """`select_nxt_after_hours.sql`이 주는 한 줄. 종목마다 애프터 마지막 봉 하나다.
+
+    **컬럼 순서가 계약이다.** `from_row`가 그 순서를 아는 유일한 자리이고, 나머지 코드는
+    이름으로만 읽는다 — SQL이 열을 늘려도 인덱스가 밀리는 사고가 여기서 멈춘다.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    stock_code: str
+    last_bar_at: AwareDatetime
+    last_close: Decimal
+    bar_count: int
+    all_final: bool
+    # 그 세션 15:30 확정 종가. 아직 안 들어왔으면 None이고 등락률도 None이다.
+    settled_close: Decimal | None
+    return_pct: Decimal | None
+
+    @classmethod
+    def from_row(cls, row: tuple) -> "AfterHoursBar":
+        return cls(
+            stock_code=row[0],
+            last_bar_at=row[1],
+            last_close=row[2],
+            bar_count=row[3],
+            all_final=row[4],
+            settled_close=row[5],
+            return_pct=row[6],
+        )
+
+
+def after_hours_entry(bar: AfterHoursBar) -> AfterHoursObservation:
+    """봉 하나를 프롬프트 칸으로. 등락률이 없는 종목은 부르는 쪽이 이미 걸렀다."""
+    return AfterHoursObservation(
+        close=float(bar.last_close),
+        return_pct=round(float(bar.return_pct or 0), 2),
+        last_bar_at=bar.last_bar_at,
+        bars=bar.bar_count,
+    )
 
 
 def closed_records(toolbox: Any) -> Any:
@@ -158,6 +216,18 @@ class ThesisRun:
             cursor.execute(SETTLED_CLOSE_COUNT, (self._run_date, list(watched)))
             if cursor.fetchone()[0] < len(watched):
                 raise ThesisNotReady(f"settled closes for {self._run_date} are not all in yet")
+
+    def after_hours_bars(self, session: date, stock_codes: Sequence[str]) -> tuple[AfterHoursBar, ...]:
+        """그 세션의 NXT 애프터마켓 마지막 봉, 종목마다 하나. 봉이 없는 종목은 결과에 없다.
+
+        **어느 세션인지는 부르는 쪽이 정한다** — 애프터마켓 리뷰는 당일, 장전 전망은 전
+        영업일이다. 봉이 0개인지, 잠정뿐인지를 어떻게 다룰지도 부르는 쪽의 판단이다(리뷰는
+        기다리고 장전은 비운다).
+        """
+        window_start, window_end = after_hours_window(session)
+        with self._connection.cursor() as cursor:
+            cursor.execute(AFTER_HOURS_STATE, (window_start, window_end, session, list(stock_codes)))
+            return tuple(AfterHoursBar.from_row(row) for row in cursor.fetchall())
 
     def previous_open_day(self) -> date | None:
         """직전 개장일. 달력이 아직 그날까지 안 채워졌으면 `None`이다.
@@ -554,6 +624,14 @@ def resolve_run_date(context: Any) -> date:
 def close_at(day: date) -> datetime:
     """그 날의 KRX 마감 시각(UTC)."""
     return datetime.combine(day, CLOSE_TIME, tzinfo=KST_TIMEZONE).astimezone(UTC)
+
+
+def after_hours_window(day: date) -> tuple[datetime, datetime]:
+    """그날 NXT 애프터마켓 봉을 고를 창(UTC). KST 경계 계산은 SQL이 아니라 여기서 한다."""
+    return (
+        datetime.combine(day, AFTER_HOURS_OPEN, tzinfo=KST_TIMEZONE).astimezone(UTC),
+        datetime.combine(day, AFTER_HOURS_CLOSE, tzinfo=KST_TIMEZONE).astimezone(UTC),
+    )
 
 
 def open_at(day: date) -> datetime:

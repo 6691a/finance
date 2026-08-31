@@ -13,7 +13,7 @@ from modules.collectors.document.documents import (
     DOCUMENT_UPSERT,
     EXISTING_EXTERNAL_IDS,
     SOURCE_RECORD_INSERT,
-    WATCHED_INSTRUMENTS,
+    TAGGABLE_INSTRUMENTS,
     DocumentPayloadError,
     FeedResponse,
     FeedSource,
@@ -23,7 +23,7 @@ from modules.collectors.document.documents import (
     normalize_text,
     parse_feed,
     store_documents,
-    watched_tickers,
+    taggable_tickers,
 )
 
 SOURCE_RECORD_ID = 7
@@ -487,13 +487,14 @@ def test_existing_external_ids_asks_by_slug_and_skips_the_query_when_nothing_to_
     assert existing_external_ids(FakeConnection(), "example", []) == frozenset()
 
 
-def test_watched_tickers_reads_the_instrument_master():
-    """추론 대상·투자의견 수집과 같은 SQL이다. 추적 종목이 늘 때 수집기를 고치지 않는다."""
+def test_taggable_tickers_read_the_whole_instrument_master():
+    """문서 평가의 종목 후보와 같은 SQL이다. `is_watched`를 거르지 않는다 — 시세를 안 받는
+    종목이어도 이름을 알면 그 리포트를 받는다."""
     connection = FakeConnection()
     connection.recorded_cursor.fetchall = lambda: [("005930", "삼성전자"), ("000660", "SK하이닉스")]  # type: ignore[method-assign]
 
-    assert watched_tickers(connection) == frozenset({"005930", "000660"})
-    assert connection.recorded_cursor.calls[0][0] is WATCHED_INSTRUMENTS
+    assert taggable_tickers(connection) == frozenset({"005930", "000660"})
+    assert connection.recorded_cursor.calls[0][0] is TAGGABLE_INSTRUMENTS
 
 
 def test_metadata_only_sources_do_not_store_the_summary():

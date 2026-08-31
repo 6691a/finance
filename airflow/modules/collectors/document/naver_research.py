@@ -28,11 +28,12 @@
 
 거르기가 상세 요청 앞인 이유는 버릴 문서의 상세를 받지 않기 위해서다. 거르는 것 둘:
 
-- **추적 밖 종목의 리포트.** 종목분석은 하루 수십 건인데 대부분 우리가 보지 않는 종목이고,
-  그것까지 저장하면 LLM 평가 비용만 늘고 `recent_documents`가 관심 밖 종목으로 채워진다
-  (2026-08-22 사용자 결정, 실측에서 30건 중 2건만 남았다). 종목이 없는 리포트(시황·투자전략·
-  경제·채권·산업분석)는 시장 전체 이야기라 그대로 받고, 카테고리를 통째로 끄는 손잡이는
-  `document_source.enabled`다.
+- **마스터에 없는 종목의 리포트.** 종목분석은 하루 수십 건인데 그것까지 다 저장하면 LLM
+  평가 비용만 늘고 `recent_documents`가 관심 밖 종목으로 채워진다(2026-08-22 사용자 결정,
+  그때 실측에서 30건 중 2건만 남았다). 기준은 `instrument` 마스터 전체이고
+  **`is_watched`가 아니다**(`taggable_tickers`) — 시세를 안 받는 종목이어도 이름을 알면
+  리포트를 받는다. 종목이 없는 리포트(시황·투자전략·경제·채권·산업분석)는 시장 전체
+  이야기라 그대로 받고, 카테고리를 통째로 끄는 손잡이는 `document_source.enabled`다.
 - **이미 있는 항목.** 목록 정보로 다시 upsert하면 `content_hash`가 달라져(요약이 NULL이다)
   상세 요약이 지워지고 재평가가 돈다.
 
@@ -64,7 +65,7 @@ from modules.collectors.document.documents import (
     fetch_url,
     kst_midnight_utc,
     normalize_text,
-    watched_tickers,
+    taggable_tickers,
 )
 from modules.db import Connection
 
@@ -199,11 +200,11 @@ class NaverResearchCollector:
         상세 요청 하나가 실패하면 그대로 올린다. DAG이 출처 단위로 격리하므로 이 출처만 이번
         시간 실패하고, 다음 시간에 같은 항목이 다시 "새 항목"이다.
         """
-        watched = watched_tickers(connection)
-        wanted = tuple(item for item in items if item.stock_code is None or item.stock_code in watched)
+        taggable = taggable_tickers(connection)
+        wanted = tuple(item for item in items if item.stock_code is None or item.stock_code in taggable)
         skipped = len(items) - len(wanted)
         if skipped:
-            logger.info("%s: skipped %s reports on stocks we do not track", self._source.slug, skipped)
+            logger.info("%s: skipped %s reports on stocks we do not know", self._source.slug, skipped)
 
         known = existing_external_ids(connection, self._source.slug, [item.external_id for item in wanted])
         enriched: list[FeedItem] = []

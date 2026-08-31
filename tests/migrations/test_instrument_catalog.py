@@ -5,8 +5,11 @@
 대조한다. `indicator_series`·`quote_symbol` 카탈로그 테스트와 같은 장치다.
 """
 
+import re
+
 import pytest
 
+from modules.collectors import kis
 from modules.collectors.document.dart import DartCompany
 from modules.collectors.market.kis_positioning import PositioningStock
 from tests.helpers import NO_REVISION_REASON, head_sql, revision_files
@@ -34,3 +37,33 @@ def test_instruments_are_seeded_by_the_migration_not_the_app(capsys):
     # 과거 리비전의 결과가 따라 바뀐다.
     assert "INSERT INTO instrument" in sql
     assert "is_watched" in sql
+
+
+INSTRUMENT_INSERT = re.compile(
+    r"INSERT INTO instrument \(ticker, market, name, kind, currency, is_watched\) "
+    r"VALUES \('(?P<ticker>[^']+)', '[^']*', '[^']*', '[^']*', '[^']*', (?P<watched>true|false)\)"
+)
+
+
+def test_only_the_collected_stocks_are_watched(capsys):
+    """`is_watched`가 참인 종목은 시세를 받는 종목과 정확히 같아야 한다.
+
+    **이 플래그 하나가 여섯을 켠다** — 투자의견 수집, 기술지표 일봉 요청, 주간 인과 그래프
+    대상, 그리고 추론 subject다. 시세가 없는 종목이 참이 되면 조회가 조인에서 빠지거나
+    baseline 셋이 NULL로 들어가고, `ck_thesis_base_all_or_none`이 그 조합을 허용하므로
+    **오류 없이 빈 값이 쌓인다.**
+
+    위의 `test_every_collected_stock_has_a_master_row`는 "수집 종목마다 시드 행이 있는가"
+    한 방향만 본다. 반대 방향(참인 행이 수집 목록보다 넓은가)이 여기다.
+
+    문서 태그 후보는 `is_watched`를 안 보고 마스터 전체를 읽는다(`select_taggable.sql`).
+    그래서 마스터가 넓어지는 것 자체는 이 테스트를 깨지 않는다.
+    """
+    sql = head_sql(capsys)
+    seeded = {match["ticker"]: match["watched"] == "true" for match in INSTRUMENT_INSERT.finditer(sql)}
+    watched = {ticker for ticker, is_watched in seeded.items() if is_watched}
+
+    assert watched == {stock.value for stock in kis.DomesticStock}
+    assert watched == {stock.value for stock in PositioningStock}
+    # 마스터가 시세 목록보다 넓다는 것이 이 확장의 전제다. 같아지면 태그 후보가 다시 좁아진 것이다.
+    assert len(seeded) > len(watched)

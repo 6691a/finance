@@ -1336,6 +1336,23 @@ def test_analyst_opinions_refuses_a_stock_outside_the_watch_list_without_touchin
 
     assert "005930" in str(error.value)
     assert connection.calls == []
+    # **왕복 예산을 깎지 않는다.** 검사가 `_charge()`보다 앞이라야 한다 — 뒤에 두면 조회하지도
+    # 않은 호출이 예산을 먹고, 그 거절은 `handle_tool_errors`를 거쳐 ToolMessage로 성공처럼
+    # 끝난다. 모델은 `recent_documents` 태그에서 추적 밖 코드를 볼 수 있다(태그 후보가 시세
+    # 목록보다 넓다).
+    assert box.call_count == 0
+
+
+def test_event_surprises_refuses_a_stock_outside_the_watch_list_without_spending_the_budget():
+    """`analyst_opinions`와 같은 처리다. 둘이 같은 순서를 지켜야 한다."""
+    connection = FakeConnection()
+    box = toolbox(connection)
+
+    with pytest.raises(ToolLimitExceeded, match="추적 종목 밖"):
+        box.run("event_surprises", {"ticker": "003550"})
+
+    assert connection.calls == []
+    assert box.call_count == 0
 
 
 def test_analyst_opinions_keeps_the_broker_wording_and_does_not_cite():

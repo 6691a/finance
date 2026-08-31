@@ -3944,11 +3944,45 @@ def test_an_intraday_row_says_what_the_size_is_measured_against():
     rendered = json.dumps(render_blocks(RunSlot.INTRADAY_MIDDAY, date(2026, 8, 28), [thesis], {}), ensure_ascii=False)
 
     # 봉의 시각을 KST로 적는다. `as_of_at`(12:35)이 아니라 실제로 본 봉(12:30)이다.
-    assert "12:30 KST 6,825.11 기준 · 오늘 여기까지 -1.26%" in rendered
+    assert "12:30 KST 6,825.11 기준 · 전일 종가 대비 현재까지 -1.26%" in rendered
+
+
+def test_an_intraday_row_adds_up_the_two_axes_into_a_close_forecast():
+    """`현재까지`와 결론 크기는 축이 달라 그대로 읽으면 하루 등락이 안 나온다.
+
+    -1.26퍼센트에서 1.2퍼센트 더 빠진다는 예측이니 마감은 전일 종가 대비 -2.46퍼센트다.
+    """
+    thesis = _stored_for_render(
+        run_slot=RunSlot.INTRADAY_MIDDAY,
+        base_price=Decimal("6825.11000000"),
+        base_at=datetime(2026, 8, 28, 3, 30, tzinfo=UTC),
+        base_return_pct=Decimal("-1.2600"),
+    )
+
+    rendered = json.dumps(render_blocks(RunSlot.INTRADAY_MIDDAY, date(2026, 8, 28), [thesis], {}), ensure_ascii=False)
+
+    assert "전일 종가 대비 마감 예상 -2.46%" in rendered
+
+
+def test_an_intraday_row_without_a_size_keeps_the_close_forecast_off():
+    """판 7 이전 행은 더할 크기가 없다. 지어내는 것보다 줄이 없는 편이 낫다."""
+    thesis = _stored_for_render(
+        None,
+        None,
+        run_slot=RunSlot.INTRADAY_MIDDAY,
+        base_price=Decimal("6825.11000000"),
+        base_at=datetime(2026, 8, 28, 3, 30, tzinfo=UTC),
+        base_return_pct=Decimal("-1.2600"),
+    )
+
+    rendered = json.dumps(render_blocks(RunSlot.INTRADAY_MIDDAY, date(2026, 8, 28), [thesis], {}), ensure_ascii=False)
+
+    assert "현재까지 -1.26%" in rendered
+    assert "마감 예상" not in rendered
 
 
 def test_a_pre_open_row_names_the_previous_close_and_no_progress():
-    """장전은 기준가가 곧 전일 종가라 '여기까지'가 정의상 0이다 — 적으면 같은 말을 두 번 한다."""
+    """장전은 기준가가 곧 전일 종가라 '현재까지'가 정의상 0이다 — 적으면 같은 말을 두 번 한다."""
     thesis = _stored_for_render(
         base_price=Decimal("6912.32000000"),
         base_at=datetime(2026, 8, 20, 6, 30, tzinfo=UTC),
@@ -3958,7 +3992,9 @@ def test_a_pre_open_row_names_the_previous_close_and_no_progress():
     rendered = json.dumps(render_blocks(RunSlot.PRE_OPEN, date(2026, 8, 21), [thesis], {}), ensure_ascii=False)
 
     assert "전일 종가 6,912.32 기준 (08/20 15:30 KST)" in rendered
-    assert "여기까지" not in rendered
+    assert "현재까지" not in rendered
+    # 장전은 기준가가 전일 종가라 마감 예상이 결론 줄의 크기와 같은 값이 된다.
+    assert "마감 예상" not in rendered
 
 
 def test_a_row_without_an_axis_renders_exactly_as_it_did_before():

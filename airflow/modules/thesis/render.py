@@ -174,16 +174,51 @@ def _baseline_line(thesis: StoredThesis) -> str | None:
     그랬다 — 그 0.7은 12:35 가격에서 마감까지인데 그날 코스피는 전일 대비 1.79퍼센트
     빠졌고, 읽는 쪽에는 둘을 가를 단서가 없었다.
 
-    장중만 "오늘 여기까지"를 함께 적는다. 장전은 기준가가 곧 전일 종가라 그 값이 정의상
-    0이고, 적으면 같은 말을 두 번 하는 것이 된다.
+    장중만 "전일 종가 대비 현재까지"를 함께 적는다. 장전은 기준가가 곧 전일 종가라 그 값이
+    정의상 0이고, 적으면 같은 말을 두 번 하는 것이 된다.
+
+    **분모를 글자로 적는다.** `현재까지 -2.29%`만 있으면 읽는 쪽이 오늘 시가 대비로 읽는다
+    (2026-08-31 실제 오독). 국내 정규장은 개장 갭이 있어 시가 대비와 전일 종가 대비가
+    다른 값이고, 채점도 전일 종가 대비로 한다.
     """
     if thesis.base_price is None or thesis.base_at is None or thesis.base_return_pct is None:
         return None
     at = thesis.base_at.astimezone(KST_TIMEZONE)
     price = f"{thesis.base_price:,.2f}".rstrip("0").rstrip(".")
     if thesis.run_slot in INTRADAY_SLOTS:
-        return f"_{at:%H:%M} KST {price} 기준 · 오늘 여기까지 {thesis.base_return_pct:+.2f}%_"
+        return f"_{at:%H:%M} KST {price} 기준 · 전일 종가 대비 현재까지 {thesis.base_return_pct:+.2f}%_"
     return f"_전일 종가 {price} 기준 ({at:%m/%d %H:%M} KST)_"
+
+
+def _close_line(thesis: StoredThesis, verdicts: Sequence[tuple[str, Decimal]]) -> str | None:
+    """전일 종가 대비 마감 예상 한 줄. 없으면 `None`이다.
+
+    바로 위 두 줄은 축이 다른 값이다 — `현재까지`는 전일 종가에서 기준 봉까지 **이미 온**
+    등락이고 결론 줄의 크기는 그 봉에서 **마감까지**다. 둘을 더해야 하루 등락이 되는데,
+    그 덧셈을 읽는 쪽에 시키면 12:30에 -2.29퍼센트인 날의 `▼ 하락 1.0%`가 다시 하루
+    등락으로 읽힌다(이 줄이 막으려는 것은 `_baseline_line`과 같은 오독이다).
+
+    장중만 그린다. 장전은 `base_return_pct`가 0이라 결론 줄과 같은 값이 된다.
+    `flat`과 크기 없는 행(판 7 이전)은 더할 것이 없어 빠지고, 남는 방향이 없으면 줄 자체가
+    없다. 방향이 둘이면 어느 쪽 값인지 표시로 가른다(`_verdict_label`과 같은 규칙).
+
+    폭(`±%p`)은 결론 줄이 이미 말했다. 여기 다시 적으면 같은 값이 한 화면에 두 번이다.
+    """
+    if thesis.run_slot not in INTRADAY_SLOTS or thesis.base_return_pct is None:
+        return None
+    sizes = {"up": thesis.up_return_pct, "down": thesis.down_return_pct}
+    signs = {"up": Decimal(1), "down": Decimal(-1)}
+    parts = []
+    for direction, _ in verdicts:
+        size = sizes.get(direction)
+        if size is None:
+            continue
+        total = thesis.base_return_pct + signs[direction] * size
+        mark = f"{DIRECTION_MARKS[direction]} " if len(verdicts) > 1 else ""
+        parts.append(f"{mark}{total:+.2f}%")
+    if not parts:
+        return None
+    return f"_전일 종가 대비 마감 예상 {'   '.join(parts)}_"
 
 
 def _thesis_section(thesis: StoredThesis, verdicts: Sequence[tuple[str, Decimal]]) -> str:
@@ -210,6 +245,9 @@ def _thesis_section(thesis: StoredThesis, verdicts: Sequence[tuple[str, Decimal]
     baseline = _baseline_line(thesis)
     if baseline:
         lines.append(baseline)
+    close = _close_line(thesis, verdicts)
+    if close:
+        lines.append(close)
     for direction, _ in verdicts:
         prefix = f"*{DIRECTION_MARKS[direction]}* " if len(verdicts) > 1 else ""
         lines.append(f"> {prefix}{reasonings[direction]}")

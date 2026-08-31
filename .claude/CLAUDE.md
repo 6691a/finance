@@ -258,8 +258,11 @@ DAG가 쓰는 코드는 **위치는 Airflow를, 규칙은 백엔드를** 따른�
   그 경계를 재고 있어 재수출은 그 테스트를 즉시 깬다. 한 수집기의 의존성이 없는 환경에서
   관계없는 DAG이 import 오류로 죽는 것도 같은 이유다.
 - **최상위에 남는 것은 공용 잎이다.** `db`·`sql`·`upsert`·`utility`·`period`·`schema`·
-  `slack`·`llm`·`prompt`·`market_session`·`assessment`·`dedup`·`graph` **열셋**이다.
-  열은 300줄 미만이고 셋이 넘는다(`assessment` 637, `graph` 414, `llm` 350 — 2026-08-30 실측).
+  `slack`·`llm`·`prompt`·`market_session`·`assessment`·`dedup`·`graph`·`graph_query`
+  **열넷**이다. 열은 300줄 미만이고 넷이 넘는다(`assessment` 637, `graph` 429, `llm` 350,
+  `graph_query` 265 — 2026-08-31 실측).
+  **`graph`와 `graph_query`가 둘이라 폴더로 안 내린다** — 기준은 "한 도메인의 파일이 셋
+  이상인가"이고 지금은 둘이다. 셋째가 생기면 `graph/`로 내리되 그 이동은 따로 커밋한다.
   **이것들을 `core/` 같은 폴더로 모으지 않는다** — 114개 파일 226줄을 고치고 얻는 것이 목록
   열 줄이다(2026-08-27 실측). 폴더는 파일이 많아서 만드는 것이지 정리해 보이려고 만드는
   것이 아니다. **줄 수는 폴더로 내리는 기준이 아니다** — 기준은 "한 도메인의 파일이 셋

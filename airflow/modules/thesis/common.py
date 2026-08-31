@@ -46,6 +46,8 @@ from modules.thesis.domain import (
 )
 from modules.thesis.state import (
     AfterHoursObservation,
+    CausalChannel,
+    CausalDirection,
     HorizonBaseRate,
     IndexObservation,
     NxtObservedState,
@@ -106,6 +108,12 @@ SETTLED_CLOSE_COUNT = (
 )
 
 AFTER_HOURS_STATE = read_sql("postgres", "stock_bar", "select_nxt_after_hours.sql")
+CAUSAL_DIRECTION = read_sql("postgres", "market_causal_direction", "select_for_thesis.sql")
+
+# 방향성이 얼마나 낡아도 되나. 정상은 `W-2`(9~15일 전)이고 한 주 놓치면 `W-3`이라 거기까지
+# 허용한다. 그보다 오래면 **안 싣는다** — 주간 태스크가 skip되거나 실패했을 때 그 skip이
+# 추론까지 전파되는 마지막 자리다(설계 §4.2.1).
+MAX_DIRECTION_AGE_WEEKS = 3
 
 
 class AfterHoursBar(BaseModel):
@@ -313,7 +321,48 @@ class ThesisRun:
             stock=stock,
             technical=self.technical_state(codes),
             flat_base_rate=self.flat_base_rate(codes),
+            causal_direction=self.causal_direction(codes),
         )
+
+    def causal_direction(self, subject_codes: Sequence[str]) -> dict[str, CausalDirection]:
+        """대상별 주간 인과 방향성. 설계는 `17-graph-query.md` §4다.
+
+        **툴이 아니라 관측 상태다.** 추론 대상이 곧 그래프 대상이라 툴로 두면 모델이 호출
+        상한 중 대상 수만큼을 같은 조회에 쓰거나 아예 안 본다 — `technical`이 여기 있는 것과
+        같은 판단이다.
+
+        **컷오프가 둘이다.** `created_at <= as_of_at`은 event-time cutoff이고,
+        `week_start >= oldest_week`은 나이 상한이다(§4.2.1). 뒤엣것이 없으면 주간 태스크가
+        skip돼도 지난 주 행이 남아 추론이 그것을 최신인 척 읽는다 — skip이 추론까지
+        전파되지 않는다.
+
+        상한 밖이거나 그 주에 경로가 없던 대상은 **키가 아예 없다.** 낡은 값을 "참고로"
+        주지 않는다 — 며칠 전 것인지 적어 줘도 모델은 있는 값을 쓴다.
+        """
+        codes = list(subject_codes)
+        if not codes:
+            return {}
+        oldest_week = self._as_of_at.astimezone(KST_TIMEZONE).date() - timedelta(
+            weeks=MAX_DIRECTION_AGE_WEEKS
+        )
+        found: dict[str, CausalDirection] = {}
+        with self._connection.cursor() as cursor:
+            cursor.execute(
+                CAUSAL_DIRECTION,
+                {"codes": codes, "as_of_at": self._as_of_at, "oldest_week": oldest_week},
+            )
+            for row in cursor.fetchall():
+                found[row[0]] = CausalDirection(
+                    week_start=row[1],
+                    bias=row[2],
+                    reasoning=row[3],
+                    up_count=row[4],
+                    down_count=row[5],
+                    flat_count=row[6],
+                    path_ids=tuple(row[7] or ()),
+                    channels=tuple(CausalChannel(**channel) for channel in (row[8] or ())),
+                )
+        return found
 
     def flat_base_rate(self, subject_codes: Sequence[str]) -> dict[str, HorizonBaseRate]:
         """대상별 `flat` 기준선. 최근 `FLAT_BASE_RATE_BARS`봉의 하루 등락 분포다.

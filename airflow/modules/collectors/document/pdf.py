@@ -147,7 +147,7 @@ def markdown_table(grid: list[list[str | None]]) -> str:
 
 def _cell(value: str | None) -> str:
     # 줄바꿈과 파이프는 표를 깨뜨린다. 셀 안의 줄바꿈은 공백으로 접는다.
-    return (value or "").replace("\n", " ").replace("|", "/").strip()
+    return strip_nul(value or "").replace("\n", " ").replace("|", "/").strip()
 
 
 def pending_attachments(connection: Connection, limit: int) -> tuple[ParseCandidate, ...]:
@@ -268,6 +268,7 @@ def read_page(page: "pymupdf.Page", number: int) -> ParsedPage:
         if block_type != 0:
             # 이미지 블록이다. 좌표는 아래 면적 판정이 따로 본다.
             continue
+        text = strip_nul(text)
         visible += len(text.strip())
         if any(_inside(pymupdf.Rect(x0, y0, x1, y1), box) for box in table_boxes):
             # 표 안의 글자다. 아래에서 Markdown 표로 한 번만 싣는다.
@@ -310,6 +311,20 @@ def assemble(pages: list[ParsedPage]) -> str | None:
     """
     blocks = [f"<!-- page:{page.number} -->\n{page.text}" for page in pages if page.text]
     return "\n\n".join(blocks) if blocks else None
+
+
+def strip_nul(text: str) -> str:
+    """NUL(0x00)을 뺀다.
+
+    **PostgreSQL의 `text`는 NUL을 담지 못한다.** psycopg가 저장 직전 adapt 단계에서
+    `ValueError: A string literal cannot contain NUL (0x00) characters`로 죽고, 그 자리는
+    DAG의 첨부별 예외 처리 바깥이라 첨부 하나가 그 run 전체를 막았다(2026-09-01).
+
+    NUL은 ToUnicode 맵이 깨진 글리프를 PyMuPDF가 그대로 내보낸 것이라 **글자가 아니다.**
+    지워서 잃는 정보가 없고, `visible_chars`를 세기 전에 지워야 NUL만 있는 페이지가
+    `unreadable`로 제대로 잡힌다.
+    """
+    return text.replace("\x00", "")
 
 
 def _inside(block: "pymupdf.Rect", box: "pymupdf.Rect") -> bool:

@@ -1,6 +1,7 @@
 import hashlib
 import re
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Self
 
 import pymupdf
@@ -20,6 +21,7 @@ from modules.collectors.document.pdf import (
     assemble,
     markdown_table,
     pending_attachments,
+    read_page,
     usable_grid,
 )
 
@@ -134,6 +136,28 @@ def test_a_page_without_text_under_a_big_image_is_unreadable():
     assert not thin.unreadable
     # 글자가 있으면 로컬로 이미 읽힌 쪽이다.
     assert not wordy.unreadable
+
+
+def test_nul_characters_are_dropped_before_they_reach_the_column():
+    """ToUnicode 맵이 깨진 글리프가 NUL로 나오면 PostgreSQL의 `text`가 그 행을 못 받는다.
+
+    psycopg가 저장 직전에 죽고 그 자리는 DAG의 첨부별 예외 처리 바깥이라, 첨부 하나가
+    그 run 전체를 막는다(2026-09-01).
+    """
+    page = SimpleNamespace(
+        rect=pymupdf.Rect(0, 0, 100, 100),
+        find_tables=lambda: SimpleNamespace(tables=[]),
+        get_text=lambda kind, sort=False: [(0.0, 0.0, 10.0, 10.0, "영업이익\x00 1,200\x00", 0, 0)],
+        get_image_info=list,
+    )
+
+    read = read_page(page, 1)
+
+    assert read.text == "영업이익 1,200"
+    # NUL을 뺀 뒤 센다. 안 그러면 NUL뿐인 쪽이 글자가 있는 쪽으로 보여 unreadable을 못 넘긴다.
+    assert read.visible_chars == len("영업이익 1,200")
+    # 표 셀은 블록이 아니라 격자에서 따로 오므로 그쪽도 지운다.
+    assert "\x00" not in markdown_table([["구분", "값"], ["영업이익", "1,2\x0000"]])
 
 
 def test_a_real_pdf_gives_page_markers_and_one_copy_of_the_table(tmp_path):

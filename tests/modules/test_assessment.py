@@ -13,6 +13,7 @@ from modules.assessment import (
     DEFAULT_PERSPECTIVE,
     DOCUMENT_INDICATOR_UPSERT,
     DOCUMENT_INSTRUMENT_UPSERT,
+    INSTRUMENT_CANDIDATES,
     PENDING_DOCUMENTS,
     PERSPECTIVES,
     PROMPT_VERSION,
@@ -544,6 +545,25 @@ def test_tag_upserts_match_the_models_and_their_natural_keys():
         key = natural_key(model.__table__, name)
         assert set(key) <= set(columns)
         assert f"ON CONFLICT ({', '.join(key)}) DO NOTHING" in statement
+
+
+def test_candidates_read_the_whole_instrument_master():
+    """태그 후보는 `is_watched`를 안 본다. 시세를 안 받는 종목도 문서에서는 알아봐야 한다."""
+    body = "\n".join(line for line in INSTRUMENT_CANDIDATES.splitlines() if not line.startswith("--"))
+    assert "FROM instrument" in body
+    assert "is_watched" not in body
+    assert "WHERE" not in body
+
+
+def test_an_empty_candidate_master_fails_the_task():
+    """후보가 0행이면 모델이 아무 태그도 못 붙이고, 프롬프트 규칙("태그가 둘 다 비면
+    relevance 0")이 걸려 아카이브 전체가 0점을 받는다. 그런데 태스크는 초록으로 끝난다.
+    후보 목록이 런타임 데이터라 마이그레이션 미적용·SQL 오타가 그 상태를 만든다.
+    """
+    connection = FakeConnection()
+
+    with pytest.raises(AssessmentError):
+        AssessmentStore(connection, settings().prompt_revision).candidates()
 
 
 def test_store_writes_the_assessment_and_both_tag_kinds():

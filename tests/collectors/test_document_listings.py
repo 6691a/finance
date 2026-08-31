@@ -10,7 +10,7 @@ from modules.collectors.document.document_listings import (
 )
 from modules.collectors.document.documents import (
     EXISTING_EXTERNAL_IDS,
-    WATCHED_INSTRUMENTS,
+    TAGGABLE_INSTRUMENTS,
     DocumentPayloadError,
     FeedSource,
 )
@@ -195,17 +195,17 @@ def naver_source(category: str = "company") -> FeedSource:
     )
 
 
-# 목록 JSON의 LG(003550)는 추적 종목이고 씨엠티엑스(388210)는 아니다.
-WATCHED = ("003550", "005930")
+# 목록 JSON의 LG(003550)는 마스터에 있고 씨엠티엑스(388210)는 없다.
+TAGGABLE = ("003550", "005930")
 
 
 class FakeCursor:
-    """SQL 문자열로 응답을 고른다. `enrich`가 추적 종목과 기존 id 둘을 조회한다."""
+    """SQL 문자열로 응답을 고른다. `enrich`가 마스터 종목과 기존 id 둘을 조회한다."""
 
-    def __init__(self, existing: list[str], watched: tuple[str, ...]) -> None:
+    def __init__(self, existing: list[str], taggable: tuple[str, ...]) -> None:
         self.calls: list[tuple[str, Any]] = []
         self._existing = existing
-        self._watched = watched
+        self._taggable = taggable
         self._rows: list[tuple] = []
 
     def __enter__(self) -> Self:
@@ -216,8 +216,8 @@ class FakeCursor:
 
     def execute(self, statement: str, parameters: Any = ()) -> None:
         self.calls.append((statement, tuple(parameters)))
-        if statement is WATCHED_INSTRUMENTS:
-            self._rows = [(ticker, ticker) for ticker in self._watched]
+        if statement is TAGGABLE_INSTRUMENTS:
+            self._rows = [(ticker, ticker) for ticker in self._taggable]
         else:
             self._rows = [(external_id,) for external_id in self._existing]
 
@@ -226,8 +226,8 @@ class FakeCursor:
 
 
 class FakeConnection:
-    def __init__(self, existing: list[str] | None = None, watched: tuple[str, ...] = WATCHED) -> None:
-        self.recorded_cursor = FakeCursor(existing or [], watched)
+    def __init__(self, existing: list[str] | None = None, taggable: tuple[str, ...] = TAGGABLE) -> None:
+        self.recorded_cursor = FakeCursor(existing or [], taggable)
 
     def cursor(self) -> FakeCursor:
         return self.recorded_cursor
@@ -259,7 +259,7 @@ def test_parse_naver_research_reads_company_reports():
     assert item.summary is None
     # 작성일은 KST 기준 날짜다. KST 2026-08-21 00:00 = UTC 2026-08-20 15:00.
     assert item.published_at == datetime(2026, 8, 20, 15, 0, tzinfo=UTC)
-    # 종목코드는 저장하지 않고 `enrich`의 추적 종목 필터에만 쓴다.
+    # 종목코드는 저장하지 않고 `enrich`의 마스터 종목 필터에만 쓴다.
     assert item.stock_code == "003550"
     # 상대 경로는 API 뿌리에 붙인다.
     assert items[1].canonical_url == "https://m.stock.naver.com/research/company/95809"
@@ -297,7 +297,7 @@ def test_enrich_fetches_details_for_new_items_only(monkeypatch):
     fetch = fake_detail({"95810": NAVER_COMPANY_DETAIL})
     monkeypatch.setattr(NaverResearchCollector, "fetch_detail", fetch)
     items, _ = NaverResearchCollector.parse(NAVER_COMPANY_JSON.encode("utf-8"))
-    connection = FakeConnection(existing=["95809"], watched=("003550", "388210"))
+    connection = FakeConnection(existing=["95809"], taggable=("003550", "388210"))
 
     enriched = NaverResearchCollector(naver_source("company")).enrich(connection, items)
 
@@ -309,7 +309,7 @@ def test_enrich_fetches_details_for_new_items_only(monkeypatch):
 
 
 def test_enrich_drops_reports_on_stocks_we_do_not_track(monkeypatch):
-    """종목분석은 하루 수십 건이고 대부분 우리가 보지 않는 종목이다. 상세 요청 앞에서 버린다."""
+    """종목분석은 하루 수십 건이고 대부분 마스터에 없는 종목이다. 상세 요청 앞에서 버린다."""
     fetch = fake_detail({"95810": NAVER_COMPANY_DETAIL})
     monkeypatch.setattr(NaverResearchCollector, "fetch_detail", fetch)
     items, _ = NaverResearchCollector.parse(NAVER_COMPANY_JSON.encode("utf-8"))
@@ -317,8 +317,8 @@ def test_enrich_drops_reports_on_stocks_we_do_not_track(monkeypatch):
 
     enriched = NaverResearchCollector(naver_source("company")).enrich(connection, items)
 
-    assert connection.recorded_cursor.calls[0][0] is WATCHED_INSTRUMENTS
-    # 씨엠티엑스(388210)는 추적 밖이라 기존 id 조회에도, 상세 요청에도 오르지 않는다.
+    assert connection.recorded_cursor.calls[0][0] is TAGGABLE_INSTRUMENTS
+    # 씨엠티엑스(388210)는 마스터에 없어 기존 id 조회에도, 상세 요청에도 오르지 않는다.
     assert connection.recorded_cursor.calls[1][1] == ("naver_research_company", ["95810"])
     assert fetch.requested == [("naver_research_company", "company", "95810")]
     assert [item.external_id for item in enriched] == ["95810"]
@@ -330,7 +330,7 @@ def test_enrich_keeps_reports_that_are_not_about_one_stock(monkeypatch):
     monkeypatch.setattr(NaverResearchCollector, "fetch_detail", fetch)
     items, _ = NaverResearchCollector.parse(NAVER_MARKET_JSON.encode("utf-8"))
 
-    enriched = NaverResearchCollector(naver_source("market")).enrich(FakeConnection(watched=()), items)
+    enriched = NaverResearchCollector(naver_source("market")).enrich(FakeConnection(taggable=()), items)
 
     assert [item.external_id for item in enriched] == ["37231"]
 

@@ -216,7 +216,10 @@ investigate → (tool_calls 있으면) tools → investigate → … → answer 
 
 ## 4. subjects와 관측 상태
 
-- 지수: KOSPI, KOSDAQ. 종목: `instrument.is_watched` 전부(현재 005930·000660).
+- 지수: KOSPI. 종목: `instrument.is_watched` 전부(현재 005930·000660).
+  **KOSDAQ은 2026-08-31에 대상에서 뺐다** — 운영 22건의 Brier가 T+0 0.708·T+1 0.710으로
+  넷 중 제일 나빴고 균등확률 기준선 0.667보다도 나빴다. 원본은 `thesis/store.py`의
+  `INDEX_SUBJECTS`이고 이미 쓴 추론과 그 채점은 남는다.
 - 장후(review): 당일 세션 등락률. 종목은 `stock_investor_trade_daily`의 확정 종가(18:10),
   지수는 `index_bar` 15:30 봉 — 채점과 같은 원본([1-storage.md](1-storage.md) 3절). 분봉으로
   종가를 잡지 않는다(마감 동시호가가 빠진 날이 있다).

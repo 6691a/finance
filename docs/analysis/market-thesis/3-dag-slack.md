@@ -56,7 +56,9 @@ SCHEDULE = MultipleCronTriggerTimetable(
       (일반 예외)를 올려 Airflow 재시도에 맡긴다. 재시도를 소진하면 그 슬롯은 없던 것으로
       남는다(다음 슬롯이 새로 쓴다). DAG 간 센서보다 싸고, 기준이 "시각"이 아니라 "데이터"다.
       - 장후: `stock_investor_trade_daily`에 `run_date` 행이 watched 종목 전부 있고,
-        `index_bar`에 KOSPI·KOSDAQ의 `run_date` 15:30 봉이 있다.
+        `index_bar`에 KOSPI의 `run_date` 15:30 봉이 있다(`review.GUARD_INDEX_SYMBOLS`.
+        **추론 대상과 같은 목록이다** — 대상 아닌 지수를 기다리면 그 수집이 밀릴 때
+        관계없는 추론이 안 선다. KOSDAQ은 2026-08-31에 둘 다에서 빠졌다).
       - 장전: `document.assessed_at`의 최댓값이 `as_of_at - 20분` 이후이거나, 직전 1시간에
         `detected_at` 문서가 0건이다(평가할 게 없었던 시간). 미평가 backlog 0건을 조건으로
         걸지 않는다 — 평가에 실패한 문서는 `assessed_at`이 NULL로 남는 설계라 backlog가

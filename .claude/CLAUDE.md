@@ -272,7 +272,10 @@ DAG가 쓰는 코드는 **위치는 Airflow를, 규칙은 백엔드를** 따른�
   먼저 돌린다.** 2026-08-27 이동에서 셋이 걸렸다(`briefing/chart.py`의 `indicators`, 테스트
   둘의 `forecast`·`review`).
 - **이동과 파일 분리를 같은 커밋에 두지 않는다.** 어느 쪽이 회귀를 만들었는지 못 가른다.
-  `thesis/toolbox.py`가 1,440줄로 저장소 최대이고 다음 분리 후보인데, 기준은
+  `thesis/toolbox.py`는 2026-09-01에 셋을 떼어 1,556→920줄이 됐다 — 인자 스키마
+  (`tool_args.py`), 행 변환(`tool_rows.py`), 툴 호출 원장(`tool_ledger.py`)이다.
+  **원장은 상태를 쥐므로 파일이 아니라 클래스(`ToolCallLedger`)로 갈랐고** 툴박스가
+  그것을 소유한다. 기준은
   [collectors-class-migration.md](../docs/convention/collectors-class-migration.md)의
   "파일을 나누는 기준"에 있다.
 

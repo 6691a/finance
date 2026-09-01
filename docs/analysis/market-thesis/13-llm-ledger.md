@@ -8,7 +8,7 @@
   [7-nxt-review.md](7-nxt-review.md)(NXT 리뷰). [12-api.md](12-api.md)가 이 원장을 응답에
   싣는다 — **12보다 먼저 나가는 것이 낫다.**
 - 산출물(예정): `thesis_llm_run`·`thesis_tool_call` 테이블과 수기 리비전(+`thesis`·
-  `thesis_outcome`에 연결 칸 하나씩), `thesis/toolbox.py`의 기록 래퍼,
+  `thesis_outcome`에 연결 칸 하나씩), `thesis/tool_ledger.py`의 기록 래퍼,
   `thesis/common.py`·`thesis/review.py`의 저장 호출, SQL 넷, 테스트
 
 ## 0. 왜 — 판단만 남고 과정이 사라진다
@@ -373,7 +373,8 @@ thesis를 만들기 때문에 같은 호출 배열을 thesis마다 복제하지 
 | `apps/models/analysis/thesis.py` | `ThesisLlmRun`·`ThesisToolCall`과 enum 셋(`LlmRunKind`·`LlmRunStatus`·`ToolCallErrorKind`), `Thesis.llm_run_id`·`ThesisOutcome.narration_run_id` |
 | `migrations/versions/<신규>.py` | 수기 리비전 하나. 11단계 리비전 뒤에 얹는다. 올릴 창은 [11-expected-return.md](11-expected-return.md) 7절과 같다 — `thesis`·`thesis_outcome`에 FK 칸을 더하므로 그쪽도 잠근다 |
 | `airflow/modules/thesis/domain.py` | `LlmRunKind`·`LlmRunStatus`·`ToolCallErrorKind`(Airflow 쪽 vocabulary 복제) |
-| `airflow/modules/thesis/toolbox.py` | `begin_round`·`finish_round`, `_record` 래퍼, `tool_calls`·`round_count`, `ToolCallRecord` 모델 |
+| `airflow/modules/thesis/tool_ledger.py` | `ToolCallLedger` — `begin_round`·`finish_round`·`record` 래퍼·`close_open_records`·`calls`·`round_count`(2026-09-01 분리) |
+| `airflow/modules/thesis/toolbox.py` | 원장을 소유하고 다섯을 넘겨준다. 유효한 툴 이름은 여기만 안다 |
 | `airflow/modules/thesis/store.py` | `start_llm_run`·`finish_llm_run`, `store_theses`에 `llm_run_id` |
 | `airflow/modules/thesis/common.py` | `build_and_store`가 대화를 열고 닫는다(`finally` 포함) |
 | `airflow/modules/thesis/review.py` | 해설 루프가 대화를 열고 닫는다 |

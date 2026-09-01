@@ -41,7 +41,7 @@
 `sync_graph`가 그 주 몫을 Neo4j에 민다. **Postgres가 원본이고 Neo4j는 파생물이다** —
 설계는 [4-graph.md](../../docs/analysis/market-thesis/4-graph.md)다.
 
-엣지는 보낸 수와 MERGE된 수를 대조한다(`graph.EDGE_WRITES`, 2026-08-31 조사 G-59). Cypher의
+엣지는 보낸 수와 MERGE된 수를 대조한다(`graph.cypher.EDGE_WRITES`, 2026-08-31 조사 G-59). Cypher의
 MATCH가 못 찾은 행은 오류 없이 빠지므로, 대조가 없으면 "N개 투영"이라 적히고 그래프는 비어
 있을 수 있다. 어긋나면 `GraphError`이고 이 태스크가 즉시 실패로 바꾼다.
 

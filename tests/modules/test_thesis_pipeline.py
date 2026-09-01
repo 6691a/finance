@@ -51,6 +51,7 @@ from modules.thesis.domain import (
     ThesisSubjectKind,
     ThesisVerdict,
     ToolCallErrorKind,
+    ToolLimitExceeded,
     brier_score,
     classify_outcome,
     evidence_ref,
@@ -85,12 +86,8 @@ from modules.thesis.store import (
     StoredThesis,
     ThesisStore,
 )
-from modules.thesis.toolbox import (
-    TOOL_DESCRIPTIONS,
-    ThesisToolbox,
-    ToolLimitExceeded,
-    tool_node,
-)
+from modules.thesis.tool_args import TOOL_DESCRIPTIONS
+from modules.thesis.toolbox import ThesisToolbox, tool_node
 from modules.thesis.tools import DocumentDetail, MacroDetail
 
 THESIS_INSERT = read_sql("postgres", "thesis", "insert.sql")

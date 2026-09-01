@@ -386,9 +386,9 @@ class ThesisStore:
         status: LlmRunStatus,
         records: Sequence[ToolCallRecord],
         tool_rounds: int,
-        investigation_truncated: bool = False,
-        subjects_requested: int | None = None,
-        subjects_answered: int | None = None,
+        investigation_truncated: bool,
+        subjects_requested: int,
+        subjects_answered: int,
         usage: TokenUsage | None = None,
         error: str | None = None,
     ) -> None:
@@ -399,11 +399,11 @@ class ThesisStore:
         `tool_result_chars`는 모델에게 실제로 돌아간 것만(`delivered`) 센다 — 예산 카운터는
         버려진 결과도 센다. 둘 다 `MAX_TOOL_*`와 직접 비교하지 않는다.
 
-        `investigation_truncated`의 기본이 `False`인 것은 **해설 경로에는 왕복 상한이 없기
-        때문이다.** 그쪽은 이 인자를 주지 않는다. 추론 생성만 실제 값을 넘긴다.
-
-        `subjects_*` 둘의 기본이 `None`인 것도 같은 이유다. 해설은 대상 개념이 달라
-        **0이 아니라 NULL이다** — 0으로 넣으면 "전부 실패한 생성"과 같아 보인다.
+        **`investigation_truncated`·`subjects_requested`·`subjects_answered`에 기본값이 없다.**
+        전에는 해설 경로가 셋을 안 넘겨 NULL/False로 들어갔고, 그래서 대상 넷 중 하나만 해설한
+        실행이 DB에서도 안 보였다(2026-08-31 조사 G-36). 해설도 대상 목록을 명시적으로 받고
+        호출 상한(`MAX_TOOL_CALLS`)에서 끊기므로 생성 경로와 같은 셋을 센다. 기본값을 없애
+        부르는 쪽이 반드시 세게 한다 — `tests/modules/test_thesis_pipeline.py`가 그것을 잠근다.
 
         `usage`는 그래프 밖 콜백이 누적한 토큰이라 **실패한 대화에도 값이 있다**
         (`ThesisBuilder.usage`·`FollowupNarrator.usage`). 안 주면 셋 다 NULL이고 그건

@@ -36,6 +36,7 @@ from modules.slack import SlackClient, SlackError
 from modules.sql import read_sql
 from modules.thesis.domain import (
     DOMESTIC_MAX_DAILY_CHANGE_PCT,
+    MAX_TOOL_ROUNDS,
     PROMPT_VERSION,
     ForecastBaseline,
     LlmRunStatus,
@@ -582,6 +583,10 @@ class ThesisRun:
                 status=LlmRunStatus.FAILED,
                 records=closed_records(toolbox),
                 tool_rounds=toolbox.round_count,
+                # 죽은 대화는 절단 여부를 모른다. 왕복 수가 상한이면 그쪽에서 읽는다.
+                investigation_truncated=toolbox.round_count >= MAX_TOOL_ROUNDS,
+                subjects_requested=len(targets),
+                subjects_answered=0,
                 usage=builder.usage,
                 error=f"{type(error).__name__}: {error}",
             )

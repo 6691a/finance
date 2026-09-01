@@ -48,7 +48,12 @@ KIS에는 종목 분봉 조회가 둘이다. 장중 조회(`FHKST03010200`)와 �
 
 - **한 종목·한 날짜가 실패해도 나머지는 저장한다.** 날짜 하나가 트랜잭션 하나다.
 - HTTP 400/403/404: 설정 오류라 즉시 실패한다.
-- 0봉은 정상이다. 휴장일이면 그렇게 온다.
+- **0봉은 휴장일이면 정상이고 개장일이면 실패다.** `market_session.krx_open_day`로 가른다.
+  캘린더가 모르면(`None`) 저장소 규칙대로 정상으로 둔다. 전에는 안 묻고 "아마 휴장"으로
+  넘겨 개장일의 빈 하루가 초록이었다(2026-08-31 조사 G-35).
+- **전일종가가 없어 KIS를 한 번도 못 불렀으면 실패다.** 종목 하나가 빠지는 것은 건너뛰지만
+  둘 다 빠지면 호출 0회·`failures` 0건으로 `stored=0` 성공이었다. 하루 한 번 도는 확정
+  수집이라 다시 집는 실행이 없다 — 앞단 `kis_investor_trade_daily`가 죽은 날이 그 자리다.
 
 ## NXT를 떼는 손잡이
 
@@ -95,6 +100,7 @@ from modules.collectors.market.kis_quote import (
     KisQuoteCollector,
     last_settled_close,
 )
+from modules.market_session import krx_open_day
 from modules.utility import CONNECTION_ID, KIS_UNRECOVERABLE_STATUSES, KST_TIMEZONE
 
 logger = logging.getLogger(__name__)
@@ -153,6 +159,22 @@ def requested_business_date(run_date: date, params: dict[str, Any]) -> date:
         return date.fromisoformat(text)
     except ValueError:
         raise AirflowFailException(f"{BUSINESS_DATE_PARAM} must be YYYY-MM-DD, got {given!r}") from None
+
+
+def require_attempts(attempted: int, business_date: date, days: int) -> None:
+    """KIS를 한 번도 못 불렀으면 실패다. 근거는 모듈 docstring "실패와 재시도"."""
+    if attempted == 0:
+        raise AirflowFailException(
+            f"no previous close for any stock in the {days} day(s) ending {business_date.isoformat()}; "
+            "kis_investor_trade_daily has not filled that window"
+        )
+
+
+def no_bars_failure(open_day: bool | None, name: str) -> str | None:
+    """0봉의 뜻을 캘린더로 가른다. 개장일이면 실패 사유, 휴장일·모름이면 `None`이다."""
+    if open_day is True:
+        return f"{name}(no bars on an open day)"
+    return None
 
 
 def requested_days(params: dict[str, Any]) -> int:
@@ -225,6 +247,7 @@ def kis_stock_minute_bars_daily():
         collector = KisQuoteCollector(access_token(Variable, app_key, app_secret), app_key, app_secret)
 
         stored = 0
+        attempted = 0
         failures: list[str] = []
         for offset in range(days):
             target = business_date - timedelta(days=offset)
@@ -232,12 +255,14 @@ def kis_stock_minute_bars_daily():
                 connection = _connection()
                 try:
                     base = last_settled_close(connection, stock.value, target)
+                    open_day = krx_open_day(connection, target)
                 finally:
                     connection.close()
                 if base is None:
                     # 확정 일별 수급이 아직 그 구간을 채우지 않았다. 분모를 지어내지 않는다.
                     logger.warning("%s:%s has no previous close yet; skipping", stock.value, target.isoformat())
                     continue
+                attempted += 1
 
                 # 같은 종목을 KRX 한 번, NXT 한 번 받는다. 통합(UN)은 두 거래소 체결이
                 # 섞여 쓰지 않는다. NXT 전일 기준가도 KRX 확정 종가다. NXT는
@@ -267,7 +292,12 @@ def kis_stock_minute_bars_daily():
                         continue
 
                     if not fetch.bars:
-                        logger.info("%s returned no bars; probably a closed day", name)
+                        failure = no_bars_failure(open_day, name)
+                        if failure is None:
+                            logger.info("%s returned no bars; a closed day", name)
+                        else:
+                            logger.warning("%s returned no bars on an open day", name)
+                            failures.append(failure)
                         continue
 
                     connection = _connection()
@@ -285,6 +315,7 @@ def kis_stock_minute_bars_daily():
 
         if failures:
             raise AirflowFailException(f"{len(failures)} KIS calls failed: {'; '.join(failures)}")
+        require_attempts(attempted, business_date, days)
 
         logger.info(
             "Stored %s stock bars ending %s across %s",

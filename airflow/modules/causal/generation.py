@@ -12,6 +12,7 @@ from collections.abc import Iterable, Mapping, Sequence
 from datetime import date
 from typing import Annotated, Any, Literal, TypedDict
 
+from langchain_core.callbacks import UsageMetadataCallbackHandler
 from langchain_core.language_models import BaseChatModel
 from langchain_core.messages import BaseMessage, HumanMessage, SystemMessage
 from langgraph.graph import END, START, StateGraph
@@ -28,6 +29,7 @@ from modules.causal.domain import (
     MAX_REASONING_CHARS,
     MAX_TOOL_ROUNDS,
     PROMPT_VERSION,
+    BuildResult,
     CandidateSet,
     CausalTarget,
     CausalWindow,
@@ -398,6 +400,8 @@ class CausalState(TypedDict):
     paths: tuple[VerifiedPath, ...] | None
     attempts: int
     tool_rounds: int
+    # 왕복 상한에서 끊겼는가. 전에는 로그만 남아 원장에 안 갔다(2026-08-31 조사 G-37).
+    investigation_truncated: bool
     window: CausalWindow
     prices: dict[str, tuple[DailyClose, ...]]
     channel_names: dict[str, str]
@@ -422,7 +426,14 @@ class CausalBuilder:
         tools = toolbox.tools if toolbox else []
         # **타입을 준다.** 기본값(`True`)은 DB 연결 끊김을 "결과 없음"으로 위장한다.
         self._tool_node = ToolNode(tools, handle_tool_errors=(ToolLimitExceeded,))
+        # 토큰은 그래프 밖 콜백이 센다(`modules/llm.py`). 대화가 죽어도 읽을 수 있다.
+        self._usage = UsageMetadataCallbackHandler()
         self._graph = self._build_graph()
+
+    @property
+    def usage(self) -> dict[str, int]:
+        """지금까지 청구된 토큰. 원장이 실패 경로에서도 읽는다(`causal/run.py`)."""
+        return llm.token_usage(self._usage).model_dump()
 
     def build(
         self,
@@ -434,7 +445,7 @@ class CausalBuilder:
         channels: Sequence[ChannelOption],
         targets: Sequence[CausalTarget],
         prices: Mapping[str, tuple[DailyClose, ...]] | None = None,
-    ) -> tuple[tuple[VerifiedPath, ...], tuple[LinkedPath, ...]]:
+    ) -> BuildResult:
         """그 주의 경로와 대상→대상 연결. 검증을 마친 것만 돌려준다.
 
         **검증에 쓰는 대상 집합은 `targets`가 아니라 `returns`의 키다.** 실현 등락이 없는
@@ -458,6 +469,7 @@ class CausalBuilder:
             "paths": None,
             "attempts": 0,
             "tool_rounds": 0,
+            "investigation_truncated": False,
             "window": window,
             "prices": dict(prices or {}),
             "channel_names": {option.node_id: option.name for option in channels},
@@ -472,9 +484,22 @@ class CausalBuilder:
                     "week_start": window.week_start.isoformat(),
                     "prompt_version": PROMPT_VERSION,
                 },
+                "callbacks": [self._usage],
             },
         )
-        return final.get("paths") or (), final.get("links") or ()
+        return BuildResult(
+            paths=final.get("paths") or (),
+            links=final.get("links") or (),
+            attempts=final["attempts"],
+            tool_rounds=final["tool_rounds"],
+            investigation_truncated=final["investigation_truncated"],
+            usage=llm.token_usage(self._usage).model_dump(),
+        )
+
+    @property
+    def model_name(self) -> str:
+        """원장의 `llm_model`. 부르는 쪽(`causal/run.py`)이 LangChain을 모르므로 여기서 읽는다."""
+        return llm.model_name(self._model)
 
     @staticmethod
     def build_messages(
@@ -519,14 +544,16 @@ class CausalBuilder:
         graph = StateGraph(CausalState)
         graph.add_node("investigate", self._investigate)
         graph.add_node("tools", self._tools)
+        graph.add_node("close_investigation", self._mark_truncation)
         graph.add_node("answer", self._answer)
         graph.add_node("repair", self._repair)
         graph.add_node("link", self._link)
         graph.add_edge(START, "investigate")
         graph.add_conditional_edges(
-            "investigate", self._after_investigate, {"tools": "tools", "answer": "answer"}
+            "investigate", self._after_investigate, {"tools": "tools", "answer": "close_investigation"}
         )
         graph.add_edge("tools", "investigate")
+        graph.add_edge("close_investigation", "answer")
         # **`repair`는 `answer`의 것이고 `link`는 타지 않는다**(설계 §11.3). 링커가 0건을
         # 내는 것은 "이을 것이 없다"는 정상 답이라, 다시 물으면 없는 것을 만든다.
         graph.add_conditional_edges(
@@ -559,12 +586,24 @@ class CausalBuilder:
         reply = messages[-1] if messages else None
         if getattr(reply, "tool_calls", None) and state["tool_rounds"] < MAX_TOOL_ROUNDS:
             return "tools"
-        if getattr(reply, "tool_calls", None):
+        return "answer"
+
+    @staticmethod
+    def _mark_truncation(state: CausalState) -> dict[str, Any]:
+        """상한에서 끊겼으면 그 사실을 상태에 남긴다. `thesis/generation`과 같은 노드다.
+
+        조건부 엣지의 반환값은 다음 노드 이름이라 상태를 못 바꾼다. 그래서 답변 노드 앞에
+        이 노드를 둔다. 전에는 `_after_investigate`가 경고만 남겨 원장에 안 갔다(G-37).
+        """
+        messages = state["messages"]
+        reply = messages[-1] if messages else None
+        truncated = bool(getattr(reply, "tool_calls", None)) and state["tool_rounds"] >= MAX_TOOL_ROUNDS
+        if truncated:
             logger.warning(
                 "causal investigation truncated: the model asked for more tools after %s rounds",
                 state["tool_rounds"],
             )
-        return "answer"
+        return {"investigation_truncated": truncated}
 
     def _answer(self, state: CausalState) -> dict[str, Any]:
         """스키마를 강제해 답을 받고 검증한다. 남은 것이 없으면 `paths`가 빈 튜플이다."""

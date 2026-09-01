@@ -29,6 +29,8 @@
   같은 결과라 `AirflowFailException`이다. 어휘 드리프트는 **정규화가 깨졌다는 신호**라
   조용히 넘어가면 다음 주에 어휘가 두 배가 된다. 실현 등락 누락은 **아직 돌 때가 아니라는
   신호**다 — T+5 일봉이 들어온 뒤(KST 18:20 이후) 손으로 다시 돌린다.
+- `EmptyAnswerError`(교정 뒤에도 경로 0건)도 즉시 실패다. 전에는 0행을 저장하고 성공해
+  "인과가 없던 주"와 "모델이 못 낸 주"가 같아 보였다(2026-08-31 조사 G-37).
 - `ConnectionError`는 그대로 올려 Airflow가 재시도하게 둔다.
 
 **그 주에 경로가 이미 있으면 skip이 아니라 성공이다.** 재실행이 정상 흐름이라 매번 노란
@@ -113,7 +115,7 @@ def market_causal_weekly():
     @task(task_display_name="인과 그래프 생성", execution_timeout=BUILD_TIMEOUT)
     def build_causal_graph(**context: Any) -> dict[str, Any]:
         from modules.causal import run
-        from modules.causal.run import IncompleteReturnsError
+        from modules.causal.run import EmptyAnswerError, IncompleteReturnsError
         from modules.causal.store import VocabularyDriftError
         from modules.llm import LlmError
         from modules.prompt import PromptError
@@ -128,17 +130,20 @@ def market_causal_weekly():
         # 쓰고, 그 값은 Param이 있으면 어차피 안 본다(`domain.resolve_week`).
         logical_date = context.get("logical_date") or datetime.now(UTC)
         dag_run = context.get("dag_run")
+        task_instance = context.get("task_instance")
         try:
             return run.build_weekly_graph(
                 logical_date=logical_date,
                 week_start_param=params.get(WEEK_START_PARAM),
                 dag_run_id=getattr(dag_run, "run_id", ""),
+                try_number=getattr(task_instance, "try_number", 1),
             )
         except (
             LlmError,
             PromptError,
             VocabularyDriftError,
             IncompleteReturnsError,
+            EmptyAnswerError,
             ValueError,
         ) as error:
             # 설정·프롬프트·정규화 문제다. 다시 불러도 같은 답이 온다.

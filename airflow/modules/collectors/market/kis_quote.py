@@ -305,10 +305,14 @@ class MarketMovement(BaseModel):
 
 
 def _count(value: str | None, field: str) -> int:
-    """종목 수 한 칸. 값이 공백으로 패딩돼 오고 쉼표가 붙는 경우도 있다."""
+    """종목 수 한 칸. 값이 공백으로 패딩돼 오고 쉼표가 붙는 경우도 있다.
+
+    **빈 칸은 0이 아니다.** 0으로 채우면 다섯 칸이 all-zero가 되어 `closed`로 읽히고 행이
+    안 쓰이는데 태스크는 성공한다(2026-08-31 조사 G-39). `analyst/kis_opinion.py`와 같은 규칙이다.
+    """
     text = (value or "").strip().replace(",", "")
     if not text:
-        return 0
+        raise KisPayloadError(f"KIS returned an empty {field}")
     try:
         count = int(text)
     except ValueError:

@@ -723,3 +723,120 @@ def test_heartbeat_file_carries_the_whole_counter_set(tmp_path):
     payload = json.loads(path.read_text())
     assert set(payload) == set(service.HeartbeatExtra.model_fields) | {"state", "written_at"}
     assert payload["late_ticks"] == 2
+
+
+# ---------------------------------------------------------------------------
+# G-38 — 반쯤 죽은 세션이 건강으로 보이지 않는다
+# ---------------------------------------------------------------------------
+
+
+def test_healthcheck_flags_a_degraded_session(tmp_path):
+    """NXT 구독이 전부 거절돼도 `degraded`는 건강으로 통과했다."""
+    path = tmp_path / "heartbeat.json"
+    heartbeat_module.write_heartbeat(path, "degraded")
+
+    assert heartbeat_module.healthcheck(path) == 1
+
+
+def test_healthcheck_flags_a_connecting_loop(tmp_path):
+    """인증이 영구히 틀리면 60초마다 `connecting`을 새로 써서 신선도 검사(120초)에 절대 안 걸렸다."""
+    path = tmp_path / "heartbeat.json"
+    limit = heartbeat_module.CONNECT_FAILURE_LIMIT
+
+    heartbeat_module.write_heartbeat(path, "connecting", failure_streak=limit - 1)
+    assert heartbeat_module.healthcheck(path) == 0
+
+    heartbeat_module.write_heartbeat(path, "connecting", failure_streak=limit)
+    assert heartbeat_module.healthcheck(path) == 1
+
+
+@pytest.mark.asyncio
+async def test_a_partly_rejected_subscription_set_closes_the_session_as_failed(monkeypatch, tmp_path):
+    """넷 중 둘이 거절돼도 세션은 `SUCCEEDED`로 닫혔고 NACK는 `metadata.acks`에만 남았다."""
+    socket = FakeSocket([ack(KRX_TR_ID, "005930"), ack(KRX_TR_ID, "000660", ok=False)])
+    monkeypatch.setattr(service, "connect", lambda url, ping_interval=None: socket)
+    settings = make_settings(enable_nxt=False)
+    repository = FakeRepository()
+    heartbeat = heartbeat_module.Heartbeat(tmp_path / "heartbeat.json")
+
+    with pytest.raises(service._StreamEnded):
+        await service.KisConnection(
+            settings, build_registry(settings), repository, SecretStr("approval"), heartbeat
+        ).run()
+
+    (_, status, _, metadata) = repository.closed[0]
+    assert status == SourceStatus.FAILED
+    assert metadata["rejected_channels"] == [f"{KRX_TR_ID}:000660"]
+    assert "rejected" in metadata["reason"]
+
+
+@pytest.mark.asyncio
+async def test_an_unsolicited_control_frame_is_counted_not_dropped(monkeypatch, tmp_path):
+    """구독 확인 뒤의 제어 프레임은 파싱해 놓고 버렸다. 세션 중간의 구독 해제·서버 오류가 사라진다."""
+    notice = json.dumps(
+        {
+            "header": {"tr_id": KRX_TR_ID, "tr_key": "005930"},
+            "body": {"rt_cd": "1", "msg_cd": "OPSP0002", "msg1": "unsubscribed"},
+        }
+    )
+    socket = FakeSocket([ack(KRX_TR_ID, "005930"), ack(KRX_TR_ID, "000660"), notice])
+    monkeypatch.setattr(service, "connect", lambda url, ping_interval=None: socket)
+    settings = make_settings(enable_nxt=False)
+    repository = FakeRepository()
+    heartbeat = heartbeat_module.Heartbeat(tmp_path / "heartbeat.json")
+
+    with pytest.raises(service._StreamEnded):
+        await service.KisConnection(
+            settings, build_registry(settings), repository, SecretStr("approval"), heartbeat
+        ).run()
+
+    assert repository.closed[0][3]["control_frames"] == 1
+
+
+def test_repeated_auth_rejections_stop_the_service(tmp_path):
+    """주석은 "한 번 재발급"인데 코드에 횟수 제한이 없어 앱키가 무효하면 영원히 같은 경고였다."""
+    built = service.RealtimeService(
+        make_settings(enable_nxt=False, heartbeat_path=tmp_path / "heartbeat.json"), FakeRepository()
+    )
+
+    for _ in range(service.AUTH_REISSUE_LIMIT):
+        built.note_auth_rejection()
+
+    with pytest.raises(service.ApprovalError):
+        built.note_auth_rejection()
+
+
+@pytest.mark.asyncio
+async def test_flush_counts_the_bars_it_built_next_to_the_ones_it_stored(tmp_path):
+    """`stored_bars`만 있어 "5봉 만들어 2봉 저장"과 "2봉 만들어 2봉 저장"이 같아 보였다."""
+
+    class HalfRepository(FakeRepository):
+        async def store_bars(self, rows):
+            self.rows.extend(rows)
+            return len(rows) - 1  # 하나는 확정행과 부딪혀 가드에 걸렸다.
+
+    aggregator = MinuteAggregator()
+    aggregator.mark_connected(datetime(2026, 8, 18, 9, 0, 0, tzinfo=KST))
+    aggregator.add(tick(minute=2, second=10))
+    aggregator.add(tick(minute=2, second=20, code="000660"))
+    repository = HalfRepository()
+    heartbeat = heartbeat_module.Heartbeat(tmp_path / "heartbeat.json")
+    now = datetime(2026, 8, 18, 9, 2, 40, tzinfo=KST).astimezone(UTC)
+
+    async def sleeper(seconds: float) -> None:
+        if repository.rows:
+            raise asyncio.CancelledError
+
+    connection = _connection(
+        repository,
+        heartbeat,
+        aggregator=aggregator,
+        previous_closes={"005930": Decimal(150000), "000660": Decimal(250000)},
+        clock=lambda: now,
+        sleeper=sleeper,
+    )
+
+    with pytest.raises(asyncio.CancelledError):
+        await connection._flush_timer()
+
+    assert (connection._counters["built_bars"], connection._counters["stored_bars"]) == (2, 1)

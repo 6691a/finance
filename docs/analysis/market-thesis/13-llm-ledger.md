@@ -83,7 +83,7 @@ DB에서 볼 수 없었던 것이 정확히 이것이다.
 | `tool_calls` | int | 툴 호출 수(거절된 것 포함) |
 | `tool_result_chars` | int | 누적 결과 문자 수 |
 | `investigation_truncated` | bool | 왕복 상한에서 끊긴 실행인지 |
-| `subjects_requested`·`subjects_answered` | int, null | 요청한 대상 수와 실제로 답이 온 수. 해설은 NULL |
+| `subjects_requested`·`subjects_answered` | int, null | 요청한 대상 수와 실제로 답이 온 수. 해설·인과도 센다(2026-09-01, G-36·G-37). NULL은 그 전 행뿐이다 |
 | `prompt_tokens` | int, null | 청구된 입력 토큰의 합(왕복 전부) |
 | `completion_tokens` | int, null | 출력 토큰의 합. `reasoning_tokens`를 **포함한다** |
 | `reasoning_tokens` | int, null | 그중 모델이 속으로 생각한 토큰 |

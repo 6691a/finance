@@ -489,6 +489,24 @@ class LinkedPath(BaseModel):
     evidence_refs: tuple[str, ...]
 
 
+class BuildResult(BaseModel):
+    """`CausalBuilder.build`의 결과. 경로·연결에 원장이 물을 것을 붙인다(2026-08-31 조사 G-37).
+
+    `attempts`가 1이면 교정을 한 번 돌았다는 뜻이다 — 그때도 `paths`가 비면 모델이 두 번 다
+    못 낸 것이라 `run`이 실패시킨다. `investigation_truncated`는 왕복 상한에서 끊긴 조사다.
+    `usage`는 그 대화가 청구된 토큰(`llm.TokenUsage`의 네 칸)이다. 전부 `thesis_llm_run`으로 간다.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    paths: tuple[VerifiedPath, ...]
+    links: tuple[LinkedPath, ...]
+    attempts: int
+    tool_rounds: int = 0
+    investigation_truncated: bool
+    usage: dict[str, int] = Field(default_factory=dict)
+
+
 class DailyClose(BaseModel):
     """대상 하나의 하루 종가. **코드가 싣는다**(설계 §11.3).
 

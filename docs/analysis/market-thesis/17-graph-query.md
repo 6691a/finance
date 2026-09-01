@@ -515,7 +515,7 @@ Q1(`할인율`→대상)의 대상 수가 `as_of`에 따라 갈린다.
    `LlmRunKind.CAUSAL_DIRECTION`과 `ThesisEvidenceKind.CAUSAL_PATH`의 CHECK 확장,
    리비전 `d7a41f8b2c93`. **`ck_thesis_llm_run_slot_shape`도 함께 넓혔다** — 슬롯이 없는
    종류가 `causal` 하나에서 둘이 됐다.
-3. ~~**`airflow/modules/graph_query.py`**~~ — **끝났다**(265줄). 고정 Cypher 둘(§2.4),
+3. ~~**`airflow/modules/graph/query.py`**~~ — **끝났다**(265줄). 고정 Cypher 둘(§2.4),
    `MAX_QUERY_DEPTH`, 실행·행 상한, `DirectionInput`의 세기와 채널 집계. 최상위 공용 잎이
    열넷이 되어 `.claude/CLAUDE.md`·`.codex/AGENTS.md`의 목록을 같은 커밋에서 고쳤다.
 

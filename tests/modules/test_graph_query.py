@@ -13,7 +13,7 @@ from typing import Any, Self
 import pytest
 from neo4j.exceptions import ClientError, ServiceUnavailable, TransientError
 
-from modules import graph_query
+from modules.graph import query as graph_query
 
 WEEK = date(2026, 8, 17)
 AS_OF = datetime(2026, 9, 1, tzinfo=UTC)

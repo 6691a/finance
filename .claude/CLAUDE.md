@@ -52,7 +52,7 @@ Codex용 규칙 원본은 [.codex/AGENTS.md](../.codex/AGENTS.md)이며 두 문�
 | `migrations/` | Alembic. 리비전 파일은 `migrations/versions` 하나를 모든 별칭이 공유한다 |
 | `migrations/routing.py` | 어떤 테이블이 어떤 DB 별칭에 속하는지 판단하는 순수 함수 |
 | `../airflow/dags/` | Airflow DAG. 폴더로 나누지 않는다 — 스케줄·재시도·실패 판정만 갖는 얇은 파일이다 (아래 규칙) |
-| `../airflow/modules/` | DAG이 쓰는 공유 코드. 도메인 폴더(`collectors/`·`briefing/`·`expectation/`·`technical/`·`thesis/`)로 나누고 최상위에는 공용 잎만 둔다. 하위 패키지 `__init__.py`는 비운다 — 재수출하면 가벼운 모듈 하나를 import해도 LangChain이 딸려 온다. (아래 규칙) |
+| `../airflow/modules/` | DAG이 쓰는 공유 코드. 도메인 폴더(`collectors/`·`briefing/`·`expectation/`·`technical/`·`thesis/`·`causal/`·`graph/`)로 나누고 최상위에는 공용 잎만 둔다. 하위 패키지 `__init__.py`는 비운다 — 재수출하면 가벼운 모듈 하나를 import해도 LangChain이 딸려 온다. (아래 규칙) |
 | `../airflow/modules/collectors/` | 수집기. 도메인 폴더(`market/`·`document/`·`indicator/`·`calendar/`·`analyst/`)로 나눈다. 전환 진행 상황은 [docs/convention/collectors-class-migration.md](../docs/convention/collectors-class-migration.md) |
 | `tests/` | pytest |
 
@@ -258,11 +258,10 @@ DAG가 쓰는 코드는 **위치는 Airflow를, 규칙은 백엔드를** 따른�
   그 경계를 재고 있어 재수출은 그 테스트를 즉시 깬다. 한 수집기의 의존성이 없는 환경에서
   관계없는 DAG이 import 오류로 죽는 것도 같은 이유다.
 - **최상위에 남는 것은 공용 잎이다.** `db`·`sql`·`upsert`·`utility`·`period`·`schema`·
-  `slack`·`llm`·`prompt`·`market_session`·`assessment`·`dedup`·`graph`·`graph_query`
-  **열넷**이다. 열은 300줄 미만이고 넷이 넘는다(`assessment` 637, `graph` 429, `llm` 350,
-  `graph_query` 265 — 2026-08-31 실측).
-  **`graph`와 `graph_query`가 둘이라 폴더로 안 내린다** — 기준은 "한 도메인의 파일이 셋
-  이상인가"이고 지금은 둘이다. 셋째가 생기면 `graph/`로 내리되 그 이동은 따로 커밋한다.
+  `slack`·`llm`·`prompt`·`market_session`·`assessment`·`dedup` **열둘**이다. 열은 300줄
+  미만이고 둘이 넘는다(`assessment` 637, `llm` 350 — 2026-09-01 실측).
+  **`graph/`는 둘(`projection`·`query`)인데 사용자 결정으로 내렸다**(2026-09-01). "셋 이상"
+  기준의 예외이고, 이동은 G-59 커밋과 따로 했다.
   **이것들을 `core/` 같은 폴더로 모으지 않는다** — 114개 파일 226줄을 고치고 얻는 것이 목록
   열 줄이다(2026-08-27 실측). 폴더는 파일이 많아서 만드는 것이지 정리해 보이려고 만드는
   것이 아니다. **줄 수는 폴더로 내리는 기준이 아니다** — 기준은 "한 도메인의 파일이 셋

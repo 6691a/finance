@@ -22,7 +22,7 @@ from modules.causal.direction import (
     DirectionSummarizer,
 )
 from modules.causal.domain import Direction
-from modules.graph_query import Chain, DirectionInput, Landing
+from modules.graph.query import Chain, DirectionInput, Landing
 
 WEEK = date(2026, 8, 17)
 

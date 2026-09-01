@@ -136,7 +136,7 @@ flowchart LR
 | 수집 | httpx, scrapling(+playwright) | REST와 HTML을 같은 규약으로 |
 | 관측 | Sentry (Airflow / 상주 서비스 각각) | 에러·로그·트레이싱·프로파일링 |
 | 배포 | Docker Compose (Synology NAS), just | 이미지 3종, bind-mount 배포 |
-| 품질 | pytest, ruff, pyrefly, pre-commit | 테스트 2,968개 |
+| 품질 | pytest, ruff, pyrefly, pre-commit | 테스트 2,971개 |
 
 ## 설계하면서 고민한 것들
 
@@ -182,7 +182,7 @@ INSERT 컬럼과 `ON CONFLICT` 키를 ORM metadata와 맞춰 보는 테스트도
 | 경로 | 무엇 |
 | --- | --- |
 | `airflow/dags/` | DAG. 스케줄·재시도·실패 판정만 갖는 얇은 파일 |
-| `airflow/modules/` | DAG이 쓰는 공유 코드. `collectors/`·`briefing/`·`thesis/`·`technical/`·`expectation/` |
+| `airflow/modules/` | DAG이 쓰는 공유 코드. `collectors/`·`briefing/`·`thesis/`·`technical/`·`expectation/`·`causal/`·`graph/` |
 | `airflow/sql/` | 쿼리. Python 문자열로 두지 않습니다 |
 | `apps/models/` | SQLAlchemy 모델. 테이블 정의의 원본 |
 | `apps/realtime/` | KIS 실시간 WebSocket 수집 상주 서비스 |

@@ -41,6 +41,10 @@
 `sync_graph`가 그 주 몫을 Neo4j에 민다. **Postgres가 원본이고 Neo4j는 파생물이다** —
 설계는 [4-graph.md](../../docs/analysis/market-thesis/4-graph.md)다.
 
+엣지는 보낸 수와 MERGE된 수를 대조한다(`graph.EDGE_WRITES`, 2026-08-31 조사 G-59). Cypher의
+MATCH가 못 찾은 행은 오류 없이 빠지므로, 대조가 없으면 "N개 투영"이라 적히고 그래프는 비어
+있을 수 있다. 어긋나면 `GraphError`이고 이 태스크가 즉시 실패로 바꾼다.
+
 - **`NEO4J_URI`가 비어 있으면 `AirflowSkipException`이다.** 인스턴스가 서기 전에도
   `build_causal_graph`는 정상이어야 하고, 설정 누락으로 매주 빨간 태스크를 만들면 진짜
   실패가 묻힌다. URI가 있는데 접속이 안 되는 것은 skip이 아니라 `ConnectionError` 재시도다.
@@ -160,8 +164,8 @@ def market_causal_weekly():
         from contextlib import closing
         from datetime import date
 
-        from modules import graph
         from modules.causal.run import connection
+        from modules.graph import projection
 
         uri = os.environ.get("NEO4J_URI")
         if not uri:
@@ -176,7 +180,7 @@ def market_causal_weekly():
         sync_only = bool((context.get("params") or {}).get(SYNC_ONLY_PARAM))
         with closing(connection()) as conn:
             if sync_only:
-                weeks = graph.stored_weeks(conn)
+                weeks = projection.stored_weeks(conn)
             elif summary and summary.get("week_start"):
                 weeks = [date.fromisoformat(summary["week_start"])]
             else:
@@ -186,11 +190,16 @@ def market_causal_weekly():
 
             projected = 0
             for week in weeks:
-                paths, steps = graph.read_week(conn, week)
+                paths, steps = projection.read_week(conn, week)
                 if not paths:
                     continue
-                payload = graph.project(paths, steps)
-                graph.write_graph(uri, (user, password), payload)
+                payload = projection.project(paths, steps)
+                try:
+                    projection.write_graph(uri, (user, password), payload)
+                except projection.GraphError as error:
+                    # 쿼리·제약 오류, 그리고 MATCH가 빈 행을 내 보낸 수와 MERGE된 수가 어긋난
+                    # 경우(G-59). 다시 불러도 같은 답이다. 연결 오류는 그대로 올려 재시도한다.
+                    raise AirflowFailException(str(error)) from error
                 projected += payload.edge_count
 
         return {"weeks": [week.isoformat() for week in weeks], "edges": projected}
@@ -206,13 +215,14 @@ def market_causal_weekly():
         from contextlib import closing
         from datetime import UTC, date, datetime
 
-        from modules import graph_query, llm
+        from modules import llm
         from modules.causal import store
         from modules.causal.candidates import direction_targets
         from modules.causal.direction import DirectionError, DirectionSummarizer
         from modules.causal.domain import DIRECTION_PROMPT_VERSION
         from modules.causal.run import connection
-        from modules.graph_query import GraphQueryError
+        from modules.graph import query
+        from modules.graph.query import GraphQueryError
         from modules.prompt import PromptError
 
         weeks = [date.fromisoformat(value) for value in (projection or {}).get("weeks", [])]
@@ -235,13 +245,13 @@ def market_causal_weekly():
         summarizer = DirectionSummarizer(model)
 
         written = 0
-        graph = graph_query.driver(uri, (user, password))
+        graph = query.driver(uri, (user, password))
         try:
             with closing(connection()) as conn:
                 targets = direction_targets(conn)
                 for week in weeks:
                     found = [
-                        graph_query.read_direction_input(
+                        query.read_direction_input(
                             graph, kind=target.kind, code=target.code, week_start=week, as_of_at=as_of_at
                         )
                         for target in targets

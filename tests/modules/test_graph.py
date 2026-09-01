@@ -17,7 +17,7 @@ from typing import Any, Self
 import pytest
 from neo4j.exceptions import ClientError, ServiceUnavailable, TransientError
 
-from modules import graph
+from modules.graph import projection as graph
 
 SQL_ROOT = pathlib.Path(__file__).resolve().parents[2] / "airflow" / "sql" / "postgres"
 
@@ -71,12 +71,27 @@ def steps(*names: str, path_id: int = 1) -> list[graph.CausalStepRow]:
     ]
 
 
+class FakeResult:
+    """`transaction.run`이 주는 것 중 우리가 읽는 것 — `RETURN count(...) AS merged` 한 행."""
+
+    def __init__(self, merged: int) -> None:
+        self._merged = merged
+
+    def single(self) -> dict[str, int]:
+        return {"merged": self._merged}
+
+
 class FakeTransaction:
     def __init__(self) -> None:
         self.calls: list[tuple[str, list[dict]]] = []
+        # 문장 조각 → 그 문장이 실제로 MERGE한 행 수. 없으면 보낸 만큼 전부 됐다고 답한다.
+        self.merged: dict[str, int] = {}
 
-    def run(self, statement: str, **parameters: Any) -> None:
-        self.calls.append((statement, parameters.get("rows", [])))
+    def run(self, statement: str, **parameters: Any) -> FakeResult:
+        rows = parameters.get("rows", [])
+        self.calls.append((statement, rows))
+        merged = next((count for fragment, count in self.merged.items() if fragment in statement), len(rows))
+        return FakeResult(merged)
 
 
 class FakeSession:
@@ -373,3 +388,31 @@ def test_read_week_maps_rows_by_position():
 def test_stored_weeks_returns_dates():
     connection = FakeConnection(weeks=[(WEEK,), (date(2026, 8, 17),)])
     assert graph.stored_weeks(connection) == [WEEK, date(2026, 8, 17)]
+
+
+# --- 투영 대조 (G-59) --------------------------------------------------------
+
+
+def test_an_edge_whose_match_found_no_node_is_an_error(driver: FakeDriver):
+    """Cypher의 MATCH가 못 찾은 행은 오류 없이 통째로 빠진다. 전에는 로그가 보내려던 수를
+    찍어 "N개 투영"인데 그래프는 비어 있을 수 있었다."""
+    driver.transaction.merged["HITS"] = 0
+
+    with pytest.raises(graph.GraphError, match="hits.*sent 1.*merged 0"):
+        graph.write_graph("bolt://x:7687", ("neo4j", "pw"), graph.project([path_row()], steps("할인율")))
+
+
+def test_edge_statements_return_their_merged_count():
+    """대조의 재료는 Neo4j 카운터가 아니라 문장 자체가 세어 주는 행 수다 — MERGE는 재적재에서
+    0을 만들지만 `count(l)`은 MATCH를 통과한 행마다 하나씩 센다."""
+    statements = dict(graph.WRITES)
+    for key in graph.EDGE_WRITES:
+        assert statements[key].endswith(" AS merged"), key
+    for key in ("events", "channels", "targets"):
+        assert "RETURN" not in statements[key], key
+
+
+def test_a_full_projection_passes_the_check(driver: FakeDriver):
+    graph.write_graph("bolt://x:7687", ("neo4j", "pw"), graph.project([path_row()], steps("할인율", "밸류에이션")))
+
+    assert len(driver.transaction.calls) == 6  # 노드 셋 + from_event·chain·hits

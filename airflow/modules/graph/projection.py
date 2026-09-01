@@ -203,6 +203,7 @@ WRITES: tuple[tuple[str, str], ...] = (
             " MATCH (c:Channel {name: r.channel})"
             " MERGE (e)-[l:LEADS_TO {path_id: r.path_id, position: r.position}]->(c)"
             " SET l.week_start = r.week_start, l.created_at = r.created_at"
+            " RETURN count(l) AS merged"
         ),
     ),
     (
@@ -213,6 +214,7 @@ WRITES: tuple[tuple[str, str], ...] = (
             " MATCH (c:Channel {name: r.channel})"
             " MERGE (t)-[l:LEADS_TO {path_id: r.path_id, position: r.position}]->(c)"
             " SET l.week_start = r.week_start, l.created_at = r.created_at, l.sign = r.sign"
+            " RETURN count(l) AS merged"
         ),
     ),
     (
@@ -223,6 +225,7 @@ WRITES: tuple[tuple[str, str], ...] = (
             " MATCH (b:Channel {name: r.dst})"
             " MERGE (a)-[l:LEADS_TO {path_id: r.path_id, position: r.position}]->(b)"
             " SET l.week_start = r.week_start, l.created_at = r.created_at"
+            " RETURN count(l) AS merged"
         ),
     ),
     (
@@ -238,9 +241,16 @@ WRITES: tuple[tuple[str, str], ...] = (
             " h.return_week_change = r.return_week_change,"
             " h.return_t1_change = r.return_t1_change,"
             " h.return_t5_change = r.return_t5_change"
+            " RETURN count(h) AS merged"
         ),
     ),
 )
+
+# MATCH를 지나는 문장. Cypher의 MATCH가 한 행에서 아무 것도 못 찾으면 그 행은 **오류 없이
+# 통째로 빠진다** — 엣지 0개, 예외 0개다. 그래서 문장 끝의 `count(...)`로 MERGE에 닿은 행 수를
+# 받아 보낸 행 수와 대조한다(2026-08-31 조사 G-59). Neo4j 카운터(`relationships_created`)는
+# 재적재에서 0이라 이 대조에 못 쓴다 — MERGE는 이미 있는 엣지를 만들지 않는다.
+EDGE_WRITES = frozenset({"from_event", "from_target", "chain", "hits"})
 
 
 def read_week(connection: Connection, week_start: date) -> tuple[list[CausalPathRow], list[CausalStepRow]]:
@@ -408,6 +418,7 @@ def write_graph(uri: str, auth: tuple[str, str], payload: GraphPayload) -> None:
         # 인증·제약 위반·쿼리 오류. 다시 불러도 같은 답이다.
         raise GraphError(f"neo4j rejected the write: {error}") from error
 
+    # 엣지 수는 `_merge_all`이 MERGE된 수와 대조한 뒤라 보내려던 수가 곧 들어간 수다.
     logger.info(
         "projected %d nodes and %d edges into neo4j",
         payload.node_count,
@@ -423,7 +434,17 @@ def _driver(uri: str, auth: tuple[str, str]) -> Driver:
 
 
 def _merge_all(transaction: Any, payload: GraphPayload) -> None:
+    """노드 셋을 먼저, 엣지 넷을 뒤에 넣고 **엣지는 보낸 수와 MERGE된 수를 대조한다.**
+
+    어긋나면 `GraphError`로 트랜잭션을 되돌린다 — 채널 이름의 공백 차이나 부분 실패한 제약처럼
+    MATCH가 빈 행을 낸 주가 "N개 투영"으로 기록되고 그래프는 비어 있던 자리다.
+    """
     for key, statement in WRITES:
         rows = getattr(payload, key)
-        if rows:
-            transaction.run(statement, rows=[row.model_dump() for row in rows])
+        if not rows:
+            continue
+        result = transaction.run(statement, rows=[row.model_dump() for row in rows])
+        if key in EDGE_WRITES:
+            merged = int(result.single()["merged"])
+            if merged != len(rows):
+                raise GraphError(f"{key}: sent {len(rows)} edges but neo4j merged {merged}; a MATCH found no node")

@@ -308,7 +308,7 @@ DAG마다 절을 두지 않습니다. 상세는 각 DAG 파일의 `doc_md`에 �
 | `slack_kr_market_briefing` | 평일 08:10·09:00·10~19시 매시·15:30·20:15 | `SLACK_CHANNEL_MARKET` | NXT·KRX 시세, 수급, 전일 비교, 당일·일봉 기술 차트 |
 | `slack_us_market_briefing` | 화~토 08:00 | `SLACK_CHANNEL_MARKET` | 밤사이 미국 지수·선물(현물 옆에 선물)·원자재·크립토·ADR, 주요국 10년 금리, 전일 국내 복기 |
 | `slack_document_briefing` | 매일 08:00·12:00·15:30·20:00 | `SLACK_CHANNEL_DOCUMENT` | 직전 발송 이후 평가 집계와 LLM 선별 문서 |
-| `slack_ops_briefing` | 매일 08:00 | `SLACK_CHANNEL_OPS` | 지난 24시간 수집 성공·실패·무소식 |
+| `slack_ops_briefing` | 매일 08:00 | `SLACK_CHANNEL_OPS` | 지난 24시간 수집 성공·실패·무소식·0건 |
 
 표와 비교값은 SQL 집계가 만듭니다. 시장·운영 브리핑은 LLM을 쓰지 않고, 문서 브리핑만
 후보 선별에 사용합니다. 선별이 실패해도 점수순 대체 목록으로 리포트는 나갑니다.

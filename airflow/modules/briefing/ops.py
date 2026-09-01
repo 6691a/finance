@@ -13,8 +13,8 @@
 ## 알려진 한계
 
 `running` 행을 쓰는 수집기가 없어 **매달린 DAG는 '실행 중'이 아니라 '부재'로 보인다.**
-무소식 판정이 그 부재를 잡는 데까지가 이 리포트의 몫이다. 실행 중 상태가 필요해지면
-Airflow 메타데이터를 봐야 한다.
+무소식 판정이 그 부재를 잡고, **0건 판정이 "돌긴 돌았는데 하루 종일 빈" 소스를 잡는다**
+(2026-09-01, G-53). 실행 중 상태가 필요해지면 Airflow 메타데이터를 봐야 한다.
 
 ## 올그린에도 보낸다
 
@@ -181,6 +181,9 @@ class OpsSummary(BaseModel):
     window_hours: int
     activity: tuple[SourceActivity, ...] = ()
     silent: tuple[ExpectedSource, ...] = ()
+    # 돌긴 돌았는데 창 안에 0건인 기대 소스(`empty_sources`). 무소식과 따로 두는 이유는
+    # 고칠 곳이 다르기 때문이다 — 무소식은 스케줄러·DAG, 0건은 수집기의 판정이다.
+    empty: tuple[ExpectedSource, ...] = ()
     failures: tuple[FailureDetail, ...] = ()
     assessment_backlog: int = 0
     thesis: ThesisHealth = ThesisHealth()
@@ -189,6 +192,7 @@ class OpsSummary(BaseModel):
     def is_healthy(self) -> bool:
         return not (
             self.silent
+            or self.empty
             or self.failures
             or self.assessment_backlog > ASSESSMENT_BACKLOG_LIMIT
             or self.thesis.has_backlog
@@ -241,6 +245,7 @@ class OpsBriefingReader:
             window_hours=WINDOW_HOURS,
             activity=activity,
             silent=silent_sources(activity, self.now),
+            empty=empty_sources(activity, self.now),
             failures=tuple(
                 FailureDetail(source=row[0], source_key=row[1], started_at=row[2], detail=row[3])
                 for row in failure_rows
@@ -302,6 +307,22 @@ def silent_sources(activity: tuple[SourceActivity, ...], now: datetime) -> tuple
     )
 
 
+def empty_sources(activity: tuple[SourceActivity, ...], now: datetime) -> tuple[ExpectedSource, ...]:
+    """돌긴 돌았는데 창 안에 한 건도 안 남긴 수집원. **성공으로 끝난 실행만 본다.**
+
+    `succeeded`·`record_count=0`이 24시간 쌓여도 전에는 ✅였다(2026-08-31 조사 G-53). 이
+    저장소의 조용한 실패가 정확히 그 모양이라 — 빈 칸을 0으로 읽은 것, 30행 상한, 개장일
+    0봉 — ops가 잡을 수 있는 마지막 자리였다. 전부 실패한 소스는 실패 목록이 말하므로 여기
+    안 넣는다. 주말은 장이 없어 0건이 정상이라 무소식과 같은 규칙으로 통째로 뺀다.
+
+    # ponytail: 평일 0건이 정상인 소스가 나타나면 `ExpectedSource`에 표시 칸을 더한다.
+    """
+    if now.astimezone(KST_TIMEZONE).weekday() >= SATURDAY:
+        return ()
+    empty = {item.source for item in activity if item.succeeded > 0 and item.records == 0}
+    return tuple(source for source in EXPECTED_SOURCES if source.name in empty)
+
+
 def render_blocks(summary: OpsSummary) -> list[dict[str, Any]]:
     local = summary.generated_at.astimezone(KST_TIMEZONE)
     mark = "✅" if summary.is_healthy else "⚠️"
@@ -318,6 +339,9 @@ def render_blocks(summary: OpsSummary) -> list[dict[str, Any]]:
     if summary.silent:
         names = ", ".join(f"{source.label}({source.name})" for source in summary.silent)
         rendered.append(blocks.section(f"*무소식*\n{names}"))
+    if summary.empty:
+        names = ", ".join(f"{source.label}({source.name})" for source in summary.empty)
+        rendered.append(blocks.section(f"*0건*\n{names} — 성공으로 돌았는데 하루 종일 한 건도 안 남겼다"))
     if summary.assessment_backlog > ASSESSMENT_BACKLOG_LIMIT:
         rendered.append(blocks.section(f"*문서 평가 적체*\n대기 {summary.assessment_backlog}건"))
     if summary.failures:
@@ -399,6 +423,8 @@ def render_text(summary: OpsSummary) -> str:
     problems = []
     if summary.silent:
         problems.append(f"무소식 {len(summary.silent)}곳")
+    if summary.empty:
+        problems.append(f"0건 {len(summary.empty)}곳")
     if summary.failures:
         problems.append(f"실패 {len(summary.failures)}건")
     if summary.assessment_backlog > ASSESSMENT_BACKLOG_LIMIT:

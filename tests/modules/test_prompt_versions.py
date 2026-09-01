@@ -105,6 +105,9 @@ PROMPT_HASHES: dict[tuple[str, str], str] = {
     # 열거하고, `## 표기`가 본문의 `(ref: ...)`를 막고 숫자 표기를 원문보다 앞세운다.
     # **모델 교체(`narration_model`)와 같은 판이라 둘의 효과가 분리되지 않는다.**
     ("thesis_narrative", "4"): "fded1e90fc368d5f1e126f67aa76474bfad84e5ad9667104ff7735e481260a92",
+    # 판 5는 `variants.repair_short_answer`가 붙어 해시가 갈린다(2026-08-31, G-36). 대상이
+    # 모자란 첫 답을 빠진 이름으로 다시 묻는다 — 생성 프롬프트 판 9와 같은 교정이다.
+    ("thesis_narrative", "5"): "4d467155484e37f2cbfbf96d4a45d8d7ca4a065d7315dc8e9eb3446bb9c60c79",
 }
 
 # 현재 판을 어디서 읽는지. 표의 키와 대조하는 데만 쓴다.

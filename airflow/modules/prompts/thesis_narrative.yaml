@@ -92,3 +92,11 @@ instruction: |
 repair: >-
   이전 응답을 쓸 수 없다. 주어진 subject_code만 쓰고, verdict는
   supported·contradicted·unresolved 중 하나로, JSON 객체 하나를 다시 출력하라.
+
+variants:
+  # 대상이 모자랄 때의 교정(판 5). `repair`를 그대로 주면 "JSON 하나만 내라"를 듣고 다시
+  # 하나만 낸다 — 생성 프롬프트의 같은 조각과 같은 이유다.
+  repair_short_answer: >-
+    답에 대상이 빠졌다: $missing.
+    **요청한 대상 전부에 해설해야 한다.** 앞서 조사한 내용을 그대로 쓰되, 빠진 대상까지
+    포함해 JSON 객체 하나를 다시 출력하라. 이미 답한 대상도 함께 넣는다.

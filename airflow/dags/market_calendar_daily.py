@@ -49,6 +49,9 @@ NYSE 페이지는 3년치를 미리 고시한다.
 - **페이지 상한 도달은 실패가 아니다.** 국내 조회는 미래를 끝없이 주므로 상한이 정지 조건이다.
 - NYSE 표 계약이 어긋나면 즉시 실패한다. 이때 기존 판정은 그대로 남는다.
 - **해외 응답 0행은 실패가 아니다.** 주말·미래·값 없음이 모두 0행이라 가를 수 없다.
+- **국내 응답 0행은 실패다.** 앞으로 1년치를 묻는 조회라 0행은 값 없음이 아니라 고장이다.
+  수집기가 계보에 `failed`로 적고, DAG도 그 자리에서 죽는다 — 캘린더가 늙으면
+  `krx_open_day`가 `None`을 돌려주어 장중 수집 전부가 휴장일에 도는데 아무도 모른다.
 
 ## 필요한 환경
 
@@ -161,6 +164,18 @@ def _store[Stored](store: Callable[..., Stored], *arguments: Any) -> Stored:
             raise AirflowFailException(str(error)) from error
 
 
+def require_session_days(count: int, base_date: date) -> int:
+    """국내 캘린더 0행은 실패다.
+
+    수집기는 0행을 `source_record.status='failed'`로 적지만 DAG이 그 값을 안 보고 성공했다
+    (2026-08-31 조사 G-40). 하루 한 번만 부르는 조회라 다시 칠 기회가 없다. 계보 행은 저장 뒤에
+    판정하므로 그대로 남는다 — "조회했는데 0행"이 "안 조회했다"와 구분돼야 한다.
+    """
+    if count == 0:
+        raise AirflowFailException(f"KIS returned no KRX session days from {base_date.isoformat()}")
+    return count
+
+
 @dag(
     dag_id="market_calendar_daily",
     dag_display_name="🗓 국내·미국 영업일 캘린더",
@@ -203,7 +218,7 @@ def market_calendar_daily():
         except (KisCursorError, KisResultError) as error:
             raise AirflowFailException(str(error)) from error
 
-        count = _store(collector.store_domestic, fetch)
+        count = require_session_days(_store(collector.store_domestic, fetch), base_date)
         logger.info(
             "Stored %s KRX session days from %s over %s page(s)",
             count,

@@ -110,3 +110,27 @@ def test_the_cap_is_also_on_the_param():
 
     assert param.schema["maximum"] == kis_stock_minute_bars_daily.MAX_DAYS
     assert param.schema["minimum"] == 1
+
+
+def test_a_run_that_could_not_call_kis_at_all_fails():
+    """전일종가가 두 종목 다 없으면 호출 0회·`failures` 0건으로 초록이었다(G-35). 하루 한 번
+    도는 확정 수집이라 다시 집는 실행이 없다."""
+    with pytest.raises(AirflowFailException, match="no previous close"):
+        kis_stock_minute_bars_daily.require_attempts(0, RUN_DATE, 1)
+
+
+def test_a_run_that_called_kis_passes_through():
+    kis_stock_minute_bars_daily.require_attempts(2, RUN_DATE, 1)
+
+
+def test_no_bars_on_an_open_day_is_a_failure():
+    """이 DAG만 `krx_open_day`를 안 물어 개장일 0봉과 휴장일이 같았다."""
+    assert kis_stock_minute_bars_daily.no_bars_failure(True, "005930:KRX:2026-08-14") == (
+        "005930:KRX:2026-08-14(no bars on an open day)"
+    )
+
+
+@pytest.mark.parametrize("open_day", [False, None])
+def test_no_bars_on_a_closed_or_unknown_day_is_normal(open_day):
+    """휴장일은 0봉이 정상이고, 캘린더가 모르면(None) 저장소 규칙대로 fail-open이다."""
+    assert kis_stock_minute_bars_daily.no_bars_failure(open_day, "005930:KRX:2026-08-14") is None

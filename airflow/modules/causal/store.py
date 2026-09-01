@@ -404,10 +404,16 @@ def finish_llm_run(
     status: str,
     subjects_requested: int | None = None,
     subjects_answered: int | None = None,
+    tool_rounds: int = 0,
+    investigation_truncated: bool = False,
     usage: Mapping[str, int] | None = None,
     error: str | None = None,
 ) -> None:
-    """대화를 닫는다. 툴이 없는 흐름이라 왕복·호출 셋은 0이다.
+    """대화를 닫는다.
+
+    호출 수·결과 문자 둘은 0이다 — 이 흐름은 `thesis_tool_call` 행을 안 남긴다. 왕복 수와
+    절단 여부는 경로 생성(`run.build_weekly_graph`)이 넘긴다(2026-08-31 조사 G-37). 방향성
+    요약은 툴이 없어 기본값 그대로다.
 
     `usage`가 없으면 토큰 넷이 0이다 — **NULL이 아니다.** 0은 "안 썼다"이고 NULL은
     "안 쟀다"라 원장에서 그 둘이 갈려야 한다.
@@ -420,10 +426,10 @@ def finish_llm_run(
                 status,
                 datetime.now(UTC),
                 error,
+                tool_rounds,
                 0,
                 0,
-                0,
-                False,
+                investigation_truncated,
                 subjects_requested,
                 subjects_answered,
                 counts.get("prompt", 0),

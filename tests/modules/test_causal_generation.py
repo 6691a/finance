@@ -208,7 +208,7 @@ def _returns() -> dict[str, domain.TargetReturns]:
 
 
 def _build(model: FakeModel) -> tuple[generation.VerifiedPath, ...]:
-    return _build_with(generation.CausalBuilder(model))[0]
+    return _build_with(generation.CausalBuilder(model)).paths
 
 
 def _build_with(builder: generation.CausalBuilder, prices=None):
@@ -608,7 +608,8 @@ class TestTheLinkerRuns:
             ),
         }
 
-        paths, links = _build_with(generation.CausalBuilder(model), prices)
+        built = _build_with(generation.CausalBuilder(model), prices)
+        paths, links = built.paths, built.links
 
         assert len(paths) == 1
         assert len(links) == 1
@@ -619,8 +620,44 @@ class TestTheLinkerRuns:
         """**링커 0건은 정상 답이다.** 다시 물으면 없는 것을 만든다(설계 §11.3)."""
         model = FakeModel([ONE_PATH, NO_LINKS])
 
-        paths, links = _build_with(generation.CausalBuilder(model))
+        built = _build_with(generation.CausalBuilder(model))
+        paths, links = built.paths, built.links
 
         assert len(paths) == 1
         assert links == ()
         assert len(model.calls) == 2
+
+
+class TestTruncationIsMarked:
+    """왕복 상한에서 끊긴 조사는 로그만 남겼다(G-37). `thesis/generation`처럼 상태에 남긴다."""
+
+    def test_a_reply_that_still_wants_tools_at_the_cap_is_truncated(self) -> None:
+        from langchain_core.messages import AIMessage
+
+        reply = AIMessage("", tool_calls=[{"name": "price_window", "args": {}, "id": "call_1"}])
+        state = {"messages": [reply], "tool_rounds": generation.MAX_TOOL_ROUNDS}
+
+        assert generation.CausalBuilder._mark_truncation(state) == {"investigation_truncated": True}
+
+    def test_a_reply_that_stopped_asking_is_not_truncated(self) -> None:
+        from langchain_core.messages import AIMessage
+
+        state = {"messages": [AIMessage("done")], "tool_rounds": generation.MAX_TOOL_ROUNDS}
+
+        assert generation.CausalBuilder._mark_truncation(state) == {"investigation_truncated": False}
+
+    def test_the_flag_travels_out_of_build(self) -> None:
+        model = FakeModel([ONE_PATH, NO_LINKS])
+
+        built = _build_with(generation.CausalBuilder(model))
+
+        assert built.investigation_truncated is False
+        assert built.attempts == 0
+
+    def test_a_repaired_build_reports_its_attempt(self) -> None:
+        model = FakeModel([NO_PATHS, NO_PATHS])
+
+        built = _build_with(generation.CausalBuilder(model))
+
+        assert built.paths == ()
+        assert built.attempts == 1

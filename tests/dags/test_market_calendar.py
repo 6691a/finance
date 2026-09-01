@@ -8,6 +8,7 @@ from datetime import UTC, date, datetime
 from typing import Self
 
 import pytest
+from airflow.sdk.exceptions import AirflowFailException
 
 from dags import kis_quote_intraday, market_calendar_daily, yahoo_quote_intraday
 from modules.collectors.market.yahoo import US_EQUITY_SYMBOLS, QuoteSymbol
@@ -123,3 +124,14 @@ def test_yahoo_asks_with_the_new_york_date(monkeypatch):
 
     # KST 날짜(8/13)로 물으면 미국 세션의 절반이 엉뚱한 날을 본다.
     assert connection.recorded_cursor.parameters == ("US_EQUITY", date(2026, 8, 12))
+
+
+def test_an_empty_krx_calendar_fails_the_task():
+    """수집기는 0행을 `failed`로 적는데 DAG이 그 값을 안 보고 성공했다(G-40). 캘린더가 늙으면
+    `krx_open_day`가 `None`이 되어 휴장일 skip이 전부 사라진다."""
+    with pytest.raises(AirflowFailException, match="2026-09-01"):
+        market_calendar_daily.require_session_days(0, date(2026, 9, 1))
+
+
+def test_a_filled_krx_calendar_passes_through():
+    assert market_calendar_daily.require_session_days(250, date(2026, 9, 1)) == 250

@@ -27,6 +27,15 @@ def connection() -> Any:
     return PostgresHook(postgres_conn_id=CONNECTION_ID).get_conn()
 
 
+class EmptyAnswerError(RuntimeError):
+    """교정 뒤에도 경로가 0건이다. **그 주를 0행으로 굳히지 않는다**(2026-08-31 조사 G-37).
+
+    전에는 `store_paths(paths=())`가 0행을 쓰고 태스크가 성공해 "그 주에 인과가 없었다"와
+    "모델이 두 번 다 못 냈다"가 XCom에서 같은 모양이었다. 후보가 0건인 주도 모델은 실현
+    등락만으로 경로를 내므로, 두 번 다 빈 답은 프롬프트나 모델 쪽 문제다.
+    """
+
+
 class IncompleteReturnsError(RuntimeError):
     """대상 하나라도 실현 등락이 없다. **반쪽짜리 주를 굳히지 않는다**(2026-08-28).
 
@@ -45,8 +54,13 @@ def build_weekly_graph(
     logical_date: datetime,
     week_start_param: str | None,
     dag_run_id: str = "",
+    try_number: int = 1,
 ) -> dict[str, Any]:
-    """한 주를 되짚어 경로를 저장한다. XCom에 실릴 요약을 돌려준다."""
+    """한 주를 되짚어 경로를 저장한다. XCom에 실릴 요약을 돌려준다.
+
+    **대화 하나가 원장 행 하나다.** 모델을 부르기 전에 `running`으로 열고, 어떻게 끝나든
+    닫는다 — 실패한 대화가 원장에 없으면 "안 돌았다"와 "돌다 죽었다"를 못 가른다(G-37).
+    """
     week_start = domain.resolve_week(logical_date, week_start_param)
     window = domain.window_for(week_start)
 
@@ -74,15 +88,66 @@ def build_weekly_graph(
     # 열려 있다. 저장은 아래에서 연결을 새로 연다 — 트랜잭션을 조사와 섞지 않는다.
     with closing(connection()) as conn:
         toolbox = _toolbox(conn, window, targets)
-        paths, links = _build_paths(
-            window=window,
-            returns=returns,
-            found=found,
-            events=events,
-            channels=channels,
-            targets=targets,
-            toolbox=toolbox,
-            prices=_weekly_closes(toolbox, window, returns),
+        builder = _builder(_causal_model(), toolbox)
+        llm_run_id = store.start_llm_run(
+            conn,
+            kind="causal",
+            run_date=week_start,
+            as_of_at=window.as_of_at,
+            dag_run_id=dag_run_id,
+            try_number=try_number,
+            llm_model=builder.model_name,
+            prompt_version=domain.PROMPT_VERSION,
+        )
+        # 넓게 잡되 **반드시 다시 올린다.** 잡는 이유는 원장을 닫는 것 하나뿐이다.
+        try:
+            built = _build_paths(
+                builder=builder,
+                window=window,
+                returns=returns,
+                found=found,
+                events=events,
+                channels=channels,
+                targets=targets,
+                prices=_weekly_closes(toolbox, window, returns),
+            )
+        except BaseException as error:
+            store.finish_llm_run(
+                conn,
+                llm_run_id,
+                status="failed",
+                subjects_requested=len(targets),
+                subjects_answered=0,
+                usage=builder.usage,
+                error=f"{type(error).__name__}: {error}",
+            )
+            raise
+        paths, links = built.paths, built.links
+        if built.attempts and not paths:
+            empty = EmptyAnswerError(
+                f"the model returned no causal path for week {week_start} even after one repair"
+            )
+            store.finish_llm_run(
+                conn,
+                llm_run_id,
+                status="failed",
+                subjects_requested=len(targets),
+                subjects_answered=0,
+                tool_rounds=built.tool_rounds,
+                investigation_truncated=built.investigation_truncated,
+                usage=built.usage,
+                error=str(empty),
+            )
+            raise empty
+        store.finish_llm_run(
+            conn,
+            llm_run_id,
+            status="succeeded",
+            subjects_requested=len(targets),
+            subjects_answered=len({path.target_code for path in paths}),
+            tool_rounds=built.tool_rounds,
+            investigation_truncated=built.investigation_truncated,
+            usage=built.usage,
         )
 
     # 후보 인용률. **후보에 없어서 못 본 것과 있었는데 안 쓴 것은 다른 문제다**(2026-08-28).
@@ -112,7 +177,7 @@ def build_weekly_graph(
             paths=paths,
             returns=returns,
             input_hash=input_hash,
-            llm_run_id=None,
+            llm_run_id=llm_run_id,
             # 어휘가 비어 있으면 전부 새로 만드는 것이 정상이다. 그때 재사용을 강제하면
             # 첫 주가 언제나 죽는다.
             require_reuse=bool(channels),
@@ -156,12 +221,23 @@ def _weekly_closes(
     return closes
 
 
-def _build_paths(toolbox: Any = None, **kwargs: Any) -> tuple[Any, ...]:
-    """모델을 부르는 자리. **LangChain을 여기서 늦게 import한다.**"""
-    from modules.causal.generation import CausalBuilder
+def _causal_model() -> Any:
+    """모델을 만드는 자리. **LangChain을 여기서 늦게 import한다.**"""
     from modules.llm import causal_model
 
-    return CausalBuilder(causal_model(), toolbox).build(**kwargs)
+    return causal_model()
+
+
+def _builder(model: Any, toolbox: Any) -> Any:
+    """빌더를 만드는 자리. 원장이 열리기 전에 있어야 모델 이름을 적을 수 있다."""
+    from modules.causal.generation import CausalBuilder
+
+    return CausalBuilder(model, toolbox)
+
+
+def _build_paths(builder: Any, **kwargs: Any) -> domain.BuildResult:
+    """모델을 부르는 자리. 테스트가 이 함수를 갈아 끼운다."""
+    return builder.build(**kwargs)
 
 
 # 저장까지 못 간 실행(재실행 skip, 경로 0건)이 쓰는 값.

@@ -1046,3 +1046,9 @@ def test_expires_in_is_the_fallback_when_the_timestamp_is_unreadable(monkeypatch
 def test_a_token_without_any_expiry_is_an_error_not_a_guessed_day(monkeypatch):
     with pytest.raises(kis.KisPayloadError):
         issue_with(monkeypatch, {"access_token": "t"})
+
+
+def test_an_empty_count_is_a_payload_error_not_a_closed_market():
+    """빈 칸을 0으로 채우면 다섯 칸이 all-zero가 되어 "장이 닫혔다"로 읽히고 행이 안 쓰인다(G-39)."""
+    with pytest.raises(KisPayloadError, match="ascn_issu_cnt"):
+        parse_market_movement(index_price_response(rising=""), OBSERVED_AT)

@@ -4246,6 +4246,9 @@ def test_finishing_a_run_writes_the_token_counts():
         status=LlmRunStatus.SUCCEEDED,
         records=(),
         tool_rounds=4,
+        investigation_truncated=False,
+        subjects_requested=4,
+        subjects_answered=4,
         usage=TokenUsage(prompt=224970, cached=52992, completion=17593, reasoning=13975),
     )
 
@@ -4271,6 +4274,9 @@ def test_finishing_a_run_without_a_measurement_leaves_the_tokens_null():
         status=LlmRunStatus.FAILED,
         records=(),
         tool_rounds=0,
+        investigation_truncated=False,
+        subjects_requested=4,
+        subjects_answered=0,
         error="ThesisError: boom",
     )
 
@@ -4295,3 +4301,68 @@ def test_the_narrative_insert_links_its_conversation():
     assert "narration_run_id" in columns
     # 채점 칸은 여전히 이 문장이 안 건드린다.
     assert not columns & {"evaluated_at", "actual_return_pct", "brier_score"}
+
+
+# ---------------------------------------------------------------------------
+# G-36 — 해설 경로도 대상 누락·절단을 센다
+# ---------------------------------------------------------------------------
+
+
+def test_a_narration_missing_a_target_is_asked_again_by_name():
+    """대상 둘을 넘겼는데 하나만 오면 생성 경로처럼 빠진 이름으로 한 번 다시 묻는다."""
+    model = scripted(
+        narrative_message(narrative_payload("KOSPI")),
+        narrative_message(narrative_payload("KOSPI"), narrative_payload("000660")),
+    )
+    built = narrator(model, FakeConnection())
+
+    drafts = run_narrator(built, (narrative_target("KOSPI"), narrative_target("000660")))
+
+    assert {draft.subject_code for draft in drafts} == {"KOSPI", "000660"}
+    repair = model.calls[-1][-1].content
+    assert "000660" in repair
+    assert "KOSPI" not in repair
+
+
+def test_a_narration_repair_that_answers_fewer_keeps_the_first_answer():
+    model = scripted(
+        narrative_message(narrative_payload("KOSPI")),
+        narrative_message(),
+    )
+    built = narrator(model, FakeConnection())
+
+    drafts = run_narrator(built, (narrative_target("KOSPI"), narrative_target("000660")))
+
+    assert [draft.subject_code for draft in drafts] == ["KOSPI"]
+
+
+def test_a_narration_cut_by_the_call_cap_is_marked_truncated():
+    """`_after_investigate`가 호출 상한에서 조용히 답변으로 넘어갔다. 그 사실이 원장에 가야 한다."""
+    connection = FakeConnection({"documents": []})
+    replies = [tool_call_message() for _ in range(MAX_TOOL_CALLS + 2)]
+    model = ScriptedModel(*replies, narrative_message(narrative_payload()))
+    built = narrator(model, connection)
+
+    run_narrator(built)
+
+    assert built.investigation_truncated is True
+
+
+def test_a_narration_that_stops_asking_is_not_truncated():
+    model = scripted(narrative_message(narrative_payload()))
+    built = narrator(model, FakeConnection())
+
+    run_narrator(built)
+
+    assert built.investigation_truncated is False
+
+
+def test_the_ledger_cannot_be_closed_without_the_subject_counts():
+    """해설 경로가 셋을 안 넘겨 NULL로 들어갔다. 기본값을 없애 부르는 쪽이 반드시 세게 한다."""
+    import inspect
+
+    from modules.thesis.store import ThesisStore
+
+    parameters = inspect.signature(ThesisStore.finish_llm_run).parameters
+    for name in ("investigation_truncated", "subjects_requested", "subjects_answered"):
+        assert parameters[name].default is inspect.Parameter.empty, name

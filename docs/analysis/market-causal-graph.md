@@ -367,12 +367,13 @@ kind ≠ 'causal'  →  run_slot IS NOT NULL
 `thesis_tool_call`은 `llm_run_id`로 붙으므로 그대로다. 원장을 나누지 않는 이유는 그 목적이
 "툴 호출 패턴과 결과의 상관을 재는 것"이고 그 목적이 여기에도 그대로 적용되기 때문이다.
 
-**원장 기록은 아직 안 붙어 있다**(2026-08-29 확인). 리비전(`kind` CHECK·`run_slot` nullable)은
-올라갔지만 `causal/run.py`가 `llm_run_id=None`으로 저장하고 `causal/toolbox.py`는
-`thesis_tool_call`을 쓰지 않는다. 그래서 지금 이 흐름의 호출 수와 툴 호출 수는 **LangSmith
-트레이스와 XCom 요약으로만** 본다. 붙이는 것은 별도 작업이다 — `thesis_llm_run` 행 생성,
-툴마다 `thesis_tool_call` 기록, 그리고 `ThesisToolbox.close_open_records()`가 처리하는
-sibling 취소까지 따라온다.
+**원장 행은 붙었고 툴 호출 기록은 아직이다**(2026-09-01, 조용한 성공 재조사 G-37).
+`causal/run.py`가 모델을 부르기 전에 `thesis_llm_run`을 `running`으로 열고 어떻게 끝나든
+닫는다 — 대상 수·답한 대상 수·왕복 수·절단 여부·토큰이 실리고 `market_causal_path.llm_run_id`가
+그 행을 가리킨다. 교정 뒤에도 경로가 0건이면 `EmptyAnswerError`로 죽인다(0행을 굳히지
+않는다). `causal/toolbox.py`는 여전히 `thesis_tool_call`을 쓰지 않아 툴 호출 수와 결과
+문자 수는 0이다 — 그것은 LangSmith 트레이스로만 본다. 붙이려면 `ThesisToolbox`의
+`begin_round`/`finish_round`와 `close_open_records()`(sibling 취소)를 옮겨 와야 한다.
 
 ## 4. 어휘 정규화 — 자라는 어휘
 

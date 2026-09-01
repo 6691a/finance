@@ -83,7 +83,7 @@ requirements) **배포 단위(worktree/PR 하나)마다 문서를 나눴다.** �
 | 순서 | 문서 | 산출물 | 의존 | LLM |
 | --- | --- | --- | --- | --- |
 | 1 | [1-storage.md](1-storage.md) | `apps/models/analysis/thesis.py`, 수기 리비전, `thesis/*.sql`·`thesis_evidence/*.sql`, 세션 등락률 SQL, `thesis/domain.py`의 채점 순수 함수, 스키마·채점 테스트 | 없음 | 없음 |
-| 2 | [2-agent.md](2-agent.md) | `thesis/toolbox.py`(+`tool_args`·`tool_rows`)의 Toolbox·`thesis/generation.py`의 Builder·`thesis/store.py`의 저장, 툴 SQL 3개, `thesis_model()`, `llm.invoke` tools+schema 가드, `tests/modules/test_thesis_pipeline.py` | 1 | 있음 |
+| 2 | [2-agent.md](2-agent.md) | `thesis/toolbox.py`(+`tool_args`·`tool_rows`·`tool_ledger`)의 Toolbox·`thesis/generation.py`의 Builder·`thesis/store.py`의 저장, 툴 SQL 3개, `thesis_model()`, `llm.invoke` tools+schema 가드, `tests/modules/test_thesis_pipeline.py` | 1 | 있음 |
 | 3 | [3-dag-slack.md](3-dag-slack.md) | `dags/market_thesis_forecast.py`·`market_thesis_review.py`, 스케줄, 채점 호출, Slack 렌더링·발송, DAG 테스트. **여기서 첫 운영 발송** | 1, 2 | 있음 |
 | 4 | [4-graph.md](4-graph.md) | `airflow/modules/graph/`(`projection`·`rows`·`cypher`·`query`), `market_causal_weekly`의 `sync_graph` 태스크와 `sync_only` Param, 투영 SQL 셋, requirements, `tests/modules/test_graph.py`. **투영 대상은 `thesis`가 아니라 인과 그래프다**(2026-08-30) | `market-causal-graph.md` | 없음 |
 | 5 | [5-followup.md](5-followup.md) | `thesis_outcome` 테이블, 다지평(T+0·1·3·5) 채점, `FollowupNarrator` 사후 해설과 `verdict`, `past_theses` 툴 | 1, 2, 3 | 있음 |

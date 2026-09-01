@@ -55,11 +55,10 @@ import logging
 import time
 from collections.abc import Callable, Sequence
 from datetime import UTC, datetime, timedelta
-from decimal import Decimal
-from typing import Annotated, Any
+from typing import Any
 
 from langchain_core.messages import BaseMessage, ToolMessage
-from langchain_core.tools import BaseTool, InjectedToolCallId, StructuredTool
+from langchain_core.tools import BaseTool, StructuredTool
 from langgraph.prebuilt import ToolNode
 
 # **공개 API가 아니다.** `langgraph.prebuilt`가 export하지 않아 여기서만 import된다
@@ -67,25 +66,21 @@ from langgraph.prebuilt import ToolNode
 # 안 넣고 인자 검증 실패도 태스크 실패로 두거나(모델이 고쳐 부를 기회를 잃는다) 상위
 # `ToolException`으로 잡는 것인데(툴이 던지는 **모든** 것을 삼킨다) 둘 다 이쪽보다 나쁘다.
 from langgraph.prebuilt.tool_node import ToolInvocationError
-from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
+from pydantic import BaseModel
 
 from modules.db import TransactionalConnection as Connection
 from modules.sql import read_sql
-from modules.technical import base_rate, indicators
+from modules.technical import base_rate
 from modules.thesis.domain import (
     BASIS_POINT_INDICATOR_KINDS,
-    BASIS_POINT_KINDS,
     CLOSE_REF_SUFFIX,
     DART_VIEWER_URL,
     DOMESTIC_COUNTRY,
-    DOMESTIC_MAX_DAILY_CHANGE_PCT,
     DOMESTIC_SESSION_KINDS,
     INDICATOR_KINDS,
     MACRO_KINDS,
     MAX_HISTORY_DAYS,
     MAX_INDICATOR_RESULTS,
-    MAX_ITEM_DETAIL_CHARS,
-    MAX_OPINION_REASON_CHARS,
     MAX_PAST_THESES,
     MAX_TOOL_CALLS,
     MAX_TOOL_RESULT_CHARS,
@@ -105,12 +100,41 @@ from modules.thesis.domain import (
     ToolCallErrorKind,
     ToolCallRecord,
     evidence_ref,
-    kst_label,
 )
 from modules.thesis.state import (
     PastThesis,
     SignalBaseRate,
     SignalObservation,
+)
+from modules.thesis.tool_args import (
+    TOOL_DESCRIPTIONS,
+    AnalystOpinionsArgs,
+    DailyHistoryArgs,
+    EventSurprisesArgs,
+    MacroChangesArgs,
+    MacroIndicatorsArgs,
+    MarketFundsArgs,
+    NoArgs,
+    PastThesesArgs,
+    RecentDisclosuresArgs,
+    RecentDocumentsArgs,
+    StockFlowsArgs,
+    TypicalMoveArgs,
+)
+from modules.thesis.tool_rows import (
+    as_float,
+    change_label,
+    clamp_int,
+    document_detail,
+    indicator_row,
+    macro_detail,
+    macro_title,
+    opinion_detail,
+    pending_expectation_detail,
+    surprise_detail,
+    technical_snapshot,
+    tool_row,
+    us_close_detail,
 )
 from modules.thesis.tools import (
     AnalystOpinionsPayload,
@@ -119,25 +143,18 @@ from modules.thesis.tools import (
     DailyHistoryEmptyPayload,
     DailyHistoryPayload,
     DisclosureDetail,
-    DocumentDetail,
     EventSurprisesPayload,
-    IndicatorDetail,
     IndicatorPayload,
-    MacroDetail,
     MarketBreadthRow,
     MarketFlowRow,
     MarketFundsRow,
     MoveWindow,
-    OpinionDetail,
-    PendingExpectationDetail,
     ShortCreditRow,
     SignalDetail,
     StockFlowEstimateRow,
     StockFlowPayload,
     StockFlowSettledRow,
-    SurpriseDetail,
     TypicalMovePayload,
-    UsCloseDetail,
 )
 from modules.utility import KST_TIMEZONE
 
@@ -176,240 +193,6 @@ ANALYST_OPINIONS = read_sql("postgres", "stock_analyst_opinion", "select_thesis_
 # 8단계(2026-08-24). 기대 대비 발표 판정과, 아직 발표되지 않은 이벤트의 대표 기대치.
 EVENT_SURPRISES = read_sql("postgres", "stock_event_outcome", "select_thesis_recent.sql")
 EVENT_EXPECTATIONS = read_sql("postgres", "stock_event_claim", "select_thesis_pending.sql")
-
-# 툴 인자는 **Pydantic 모델로 선언한다.** JSON Schema는 LangChain이 뽑는다 — 손으로 쓴
-# `{"type": "function", ...}` dict는 제공처 wire format이라 이름·타입이 코드와 어긋나도
-# 아무도 못 잡는다(2026-08-21 전환).
-
-
-class ToolArgs(BaseModel):
-    """툴 인자의 공통 규칙.
-
-    **못 읽는 값은 거절하지 않고 기본값으로 되돌린다.** 모델이 `hours`에 `"bad"`나 null을
-    넣어도 왕복 하나를 오타에 쓰지 않는다. 범위를 자르는 것은 각 툴의 `_clamp_int`다
-    (`docs/analysis/market-thesis/2-agent.md` 1절 "상한은 코드 상수로 강제한다 — 모델이 인자를
-    넘겨도 잘라서 실행한다").
-
-    거절하는 것은 이 층이 아니라 위다: 모르는 툴 이름과 상한 초과는 `ToolLimitExceeded`가
-    되어 오류 `ToolMessage`로 모델에게 돌아간다.
-    """
-
-    model_config = ConfigDict(extra="ignore")
-
-    # **모델에게 보이지 않는 칸이다.** `InjectedToolCallId`가 붙으면 LangChain이
-    # `tool_call_schema`에서 빼고(`BaseTool.args`도 그것을 쓴다) 실행 시점에 진짜 call id로
-    # 채운다. 모델이 위조해 보내도 `BaseTool._parse_input`이 덮는다. 이 한 칸이 있어야
-    # 공통 래퍼가 "지금 부른 것이 어느 요청이었나"를 안다 — 툴 14개에 계측 코드를 따로
-    # 넣지 않는 이유다. 여기 두는 것은 모든 툴 인자가 `ToolArgs`를 상속해서다.
-    tool_call_id: Annotated[str, InjectedToolCallId] = ""
-
-    @model_validator(mode="before")
-    @classmethod
-    def _drop_unreadable(cls, data: Any) -> Any:
-        if not isinstance(data, dict):
-            return data
-        cleaned = dict(data)
-        for name, field in cls.model_fields.items():
-            if name not in cleaned:
-                continue
-            value = cleaned[name]
-            caster = field.annotation
-            if value is None or not callable(caster):
-                cleaned.pop(name)
-                continue
-            try:
-                cleaned[name] = caster(value)
-            except (TypeError, ValueError):
-                # 키를 빼면 필드 기본값이 들어간다. 그 기본값이 곧 fallback이다.
-                cleaned.pop(name)
-        return cleaned
-
-
-class RecentDocumentsArgs(ToolArgs):
-    hours: int = Field(
-        default=MAX_WINDOW_HOURS,
-        description=f"기준 시각에서 거슬러 올라갈 시간. {MIN_WINDOW_HOURS}~{MAX_WINDOW_HOURS}.",
-    )
-    min_score: int = Field(
-        default=MIN_VALUE_SCORE,
-        description="가치 점수 하한(0~8). 낮추면 건수가 늘고 잡음도 는다.",
-    )
-
-
-class RecentDisclosuresArgs(ToolArgs):
-    hours: int = Field(
-        default=MAX_WINDOW_HOURS,
-        description=f"기준 시각에서 거슬러 올라갈 시간. {MIN_WINDOW_HOURS}~{MAX_WINDOW_HOURS}.",
-    )
-
-
-class MacroChangesArgs(ToolArgs):
-    """인자가 없다. 창은 슬롯이 정한다."""
-
-
-class PastThesesArgs(ToolArgs):
-    subject_code: str = Field(description="이번 실행의 대상 목록 안에 있는 값만. 다른 값은 거절된다.")
-    n: int = Field(
-        default=MIN_PAST_THESES,
-        description=f"슬롯마다 최근 몇 건을 볼지. {MIN_PAST_THESES}~{MAX_PAST_THESES}.",
-    )
-
-
-class MacroIndicatorsArgs(ToolArgs):
-    kind: str = Field(
-        default="government_bond",
-        description=(
-            "볼 지표 종류. government_bond(각국 국채 금리), money_market(단기 자금시장 금리), "
-            "policy_rate(중앙은행 정책금리), tips_rate(미국 10년 실질금리와 기대인플레), "
-            "credit_spread(하이일드 신용스프레드), "
-            "price_index(물가지수), activity(소매판매·고용 등 실물활동). "
-            "**단위가 달라 한 번에 하나만 본다.** 모르는 값은 government_bond로 읽는다."
-        ),
-    )
-
-
-class NoArgs(ToolArgs):
-    """인자가 없다. 창은 슬롯이 정한다."""
-
-
-class StockFlowsArgs(ToolArgs):
-    days: int = Field(
-        default=5,
-        description=f"종목마다 최근 며칠치 확정 수급을 볼지. {MIN_HISTORY_DAYS}~{MAX_HISTORY_DAYS}.",
-    )
-
-
-class MarketFundsArgs(ToolArgs):
-    days: int = Field(
-        default=10,
-        description=f"최근 며칠치 증시자금을 볼지. {MIN_HISTORY_DAYS}~{MAX_HISTORY_DAYS}.",
-    )
-
-
-class TypicalMoveArgs(ToolArgs):
-    symbol: str = Field(
-        description=(
-            "이번 실행의 추론 대상 하나(KOSPI 또는 종목 코드 6자리). "
-            "**대상 목록 밖은 거절된다** — 크기 앵커는 추론 대상에만 뜻이 있다."
-        )
-    )
-
-
-class DailyHistoryArgs(ToolArgs):
-    symbol: str = Field(
-        description=(
-            "일봉을 볼 심볼 하나. macro_changes가 돌려준 symbol 값(예: SP500_FUT, USDKRW, VIX), "
-            "국내 지수(KOSPI, KOSDAQ), 추적 종목 코드 6자리(예: 005930)를 쓸 수 있다. "
-            "없는 심볼을 물으면 쓸 수 있는 목록을 돌려준다."
-        )
-    )
-    days: int = Field(
-        default=10,
-        description=f"최근 며칠치를 볼지. {MIN_HISTORY_DAYS}~{MAX_HISTORY_DAYS}.",
-    )
-
-
-class AnalystOpinionsArgs(ToolArgs):
-    ticker: str = Field(
-        description="추적 종목 코드 6자리(예: 005930). 추적 목록 밖이면 거절하고 쓸 수 있는 목록을 돌려준다."
-    )
-
-
-class EventSurprisesArgs(ToolArgs):
-    ticker: str = Field(
-        description="추적 종목 코드 6자리(예: 005930). 추적 목록 밖이면 거절하고 쓸 수 있는 목록을 돌려준다."
-    )
-
-
-TOOL_DESCRIPTIONS: dict[str, str] = {
-    "recent_documents": (
-        "최근 평가된 경제 문서 중 가치 점수가 높은 것들. 제목, 발행 시각, 방향, 점수, "
-        "관련 종목 티커, 그리고 앞선 평가가 남긴 새 사실과 판단 근거를 준다. "
-        "source_slug가 naver_research_로 시작하면 증권사 리서치 리포트다 — 제목 끝에 증권사 이름이 있고, "
-        "종목분석은 요약 첫머리에 투자의견·목표가가 있다."
-    ),
-    "recent_disclosures": "추적 종목에 대해 최근 접수된 DART 공시. 회사명, 보고서명, 접수일, 감지 시각을 준다.",
-    "macro_changes": (
-        "분석 창 동안 해외 지수·선물·환율·금리·채권선물·원자재·암호화폐가 얼마나 움직였나. "
-        "**축이 둘이다** — `change_pct`는 창 첫 봉 대비이고 `prev_close_change_pct`는 "
-        "직전 정규장 종가 대비다. 네 예측의 기준가와 채점 축은 전일 종가이므로 하루 등락으로 "
-        "읽을 값은 뒤쪽이다. 금리 계열은 퍼센트가 아니라 bp 차이로 준다(`*_bp`). "
-        "전일 종가가 봉에 없는 심볼은 뒤쪽 칸이 통째로 빠진다 — 0이라는 뜻이 아니다. "
-        "**국내 지수(코스피·코스닥)는 여기 안 나온다** — 창이 당일 09:00부터라 개장 갭이 빠져 "
-        "값이 하루 등락과 어긋난다. 국내 지수는 관측 상태가 전일 종가 기준으로 이미 준다. "
-        "**밤사이 미국장이 얼마나 움직였나는 us_market_close로 본다** — 이 툴의 창 변화는 창 첫 봉 "
-        "대비라 마감 직전 몇 시간만 쌓이는 현물 지수는 거의 0으로 보인다."
-    ),
-    "us_market_close": (
-        "밤사이 미국장 마감. 미국 지수·선물·원자재·환율·금리의 마감 종가와 **전일 정규장 종가 대비** "
-        "등락을 준다(금리 계열은 퍼센트가 아니라 bp). 한국 장이 열리기 전 가장 먼저 볼 값이다. "
-        "빈 배열은 이 창에 미국 봉이 없다는 뜻이지 움직이지 않았다는 뜻이 아니다 — 장후 슬롯의 창은 "
-        "당일 09:00부터라 미국 세션이 창 밖이다."
-    ),
-    "past_theses": (
-        "이 대상에 대해 전에 낸 추론과 그 결과. 그때의 세 확률·세 이유, 지평별 실제 등락률과 "
-        "Brier 점수, 사후 해설과 판정을 준다. 같은 실수를 반복하고 있는지 볼 수 있다. "
-        "`run_slot`이 `pre_open`이면 그날 장 열리기 전의 예측이라 채점이 붙고, `post_close`면 "
-        "장이 닫힌 뒤 '왜 그렇게 움직였나'를 적은 해석이라 채점 없이 해설·판정만 붙는다. "
-        "슬롯마다 최근 n건씩 준다."
-    ),
-    "macro_indicators": (
-        "각국 국채 금리 곡선과 물가·실물 지표의 최신 관측값, 그리고 직전 값 대비 변화. "
-        "미국·한국·일본·영국·독일·유로 지역 등의 만기별 금리를 만기와 나라와 함께 준다. "
-        "금리 변화는 퍼센트가 아니라 bp다. 시세(macro_changes)로는 안 보이는 채권 시장을 본다."
-    ),
-    "market_investor_flows": (
-        "코스피·코스닥의 외국인·기관·개인 장중 누적 순매수. 지수가 왜 그렇게 움직였는지를 "
-        "누가 샀고 누가 팔았나로 본다. 금액 단위는 백만원이다."
-    ),
-    "market_breadth": (
-        "코스피·코스닥의 상승·보합·하락 종목 수와 상한가·하한가 수. 지수 등락률만으로는 "
-        "안 보이는 것을 본다 — 지수는 올랐는데 하락 종목이 더 많은 날이 있다."
-    ),
-    "stock_investor_flows": (
-        "추적 종목의 최근 확정 수급(외국인·기관·개인 순매수)과 오늘의 장중 추정치. "
-        "확정은 마감 뒤 값이고 추정은 장중 값이라 따로 표시해 준다."
-    ),
-    "market_funds": (
-        "고객예탁금, 신용융자 잔고, 미수금 등 국내 증시자금의 최근 추이. 살 돈이 늘고 있는지 줄고 있는지를 본다."
-    ),
-    "daily_history": (
-        "심볼 하나의 최근 일봉(시가·고가·저가·종가·거래량)과 그 심볼의 기술적 보조지표. "
-        "macro_changes가 창 하나의 양 끝만 주는 것과 달리 며칠치 추세를 준다 — "
-        "'어제 하루 빠진 것'과 '닷새째 빠지는 중'을 가른다. "
-        "technical_snapshot은 마지막 확정 일봉 기준의 SMA20·SMA60·RSI14·MACD(라인·시그널·히스토그램)와 "
-        "직전 20거래일 평균 대비 거래량 비율이다. as_of_date가 그 기준일이고, 표본이 60봉에 못 미치거나 "
-        "가격이 하루에 35퍼센트 넘게 튄 구간이 있으면 null이다 — 0으로 채우지 않는다."
-    ),
-    "typical_move": (
-        "이 대상이 최근 하루에 실제로 얼마나 움직였나. **크기(up_return_pct·down_return_pct)를 "
-        "쓰기 전에 부르는 기준선이다.** 오른 날의 등락 중앙값과 내린 날의 등락 중앙값을 나눠 주고 "
-        "|등락|의 p25·중앙값·p75·p90도 함께 준다 — 조건부 크기의 짝이다. 창 둘(최근 20거래일과 "
-        "250거래일)을 나란히 줘서 지금이 평소보다 큰 구간인지 읽는다. "
-        "sample_size가 모자라면 통계가 null이다 — **재지 않았다는 뜻이지 0이 아니다.** "
-        "**장중 잔여 구간(지금 가격에서 마감까지)의 분포는 주지 않는다** — 분봉 이력이 짧아 셀 "
-        "표본이 없다. 값은 하루 전체 등락이고 장중 슬롯은 남은 시간만큼 줄여 쓴다."
-    ),
-    "short_and_credit": (
-        "추적 종목의 최신 공매도 수량·비중, 대차 잔고, 신용융자 잔고. 셋이 서로의 재고라 "
-        "한 표로 준다. 수집을 최근에 시작해 아직 며칠치뿐일 수 있다."
-    ),
-    "analyst_opinions": (
-        "추적 종목 하나에 대한 증권사 애널리스트의 최근 투자의견·목표주가. 발표일, 증권사, 의견, "
-        "직전 의견, 목표가, 발표 전일 종가, 목표가 괴리율을 최신 발표부터 준다. 의견이 바뀌었는지는 "
-        "의견과 직전 의견을 비교해 읽는다. 같은 증권사가 같은 날 낸 리포트가 수집돼 있으면 그 요약이 "
-        "reason에 함께 온다 — 왜 그 목표가인지가 거기 있다. 인용할 ref가 붙은 리포트 전문은 "
-        "recent_documents가 naver_research_* 문서로 준다."
-    ),
-    "event_surprises": (
-        "추적 종목 하나의 이벤트가 시장 기대에 부합했나. 둘을 준다. "
-        "outcomes는 이미 발표된 이벤트의 판정이다 — 기대치, 실제 발표값, 어긋난 정도(퍼센트), "
-        "beat(상회)/meet(부합)/miss(미달), 발표 시각. **주가는 절대 수치가 아니라 기대 대비로 "
-        "움직인다** — 좋은 실적도 기대에 못 미치면 떨어진다. "
-        "pending_expectations는 아직 발표되지 않은 이벤트의 대표 기대치다. 오늘 발표가 나오면 "
-        "그 숫자가 기준선이다. 금액은 전부 원 단위다."
-    ),
-}
 
 
 def _message_text(message: ToolMessage) -> str:
@@ -640,7 +423,7 @@ class ThesisToolbox:
             IndicatorPayload(
                 kind=chosen,
                 unit_note="변화는 bp다" if as_basis_points else "변화는 값 그대로다",
-                series=tuple(_indicator_row(row, as_basis_points=as_basis_points) for row in rows),
+                series=tuple(indicator_row(row, as_basis_points=as_basis_points) for row in rows),
             )
         )
 
@@ -652,11 +435,11 @@ class ThesisToolbox:
                 MarketFlowRow(
                     market_code=row[0],
                     observed_at=row[1],
-                    foreign_net_buy_amount=_number(row[2]),
-                    institution_net_buy_amount=_number(row[3]),
-                    individual_net_buy_amount=_number(row[4]),
-                    pension_fund_net_buy_qty=_number(row[5]),
-                    investment_trust_net_buy_qty=_number(row[6]),
+                    foreign_net_buy_amount=as_float(row[2]),
+                    institution_net_buy_amount=as_float(row[3]),
+                    individual_net_buy_amount=as_float(row[4]),
+                    pension_fund_net_buy_qty=as_float(row[5]),
+                    investment_trust_net_buy_qty=as_float(row[6]),
                 )
                 for row in rows
             ]
@@ -682,7 +465,7 @@ class ThesisToolbox:
 
     def _tool_stock_investor_flows(self, days: int) -> str:
         self._charge()
-        span = _clamp_int(days, MIN_HISTORY_DAYS, MAX_HISTORY_DAYS, 5)
+        span = clamp_int(days, MIN_HISTORY_DAYS, MAX_HISTORY_DAYS, 5)
         settled = self._fetch(
             STOCK_FLOWS,
             {"stock_codes": self._watched_codes, "as_of_at": self._as_of_at, "days": span},
@@ -697,14 +480,14 @@ class ThesisToolbox:
                     StockFlowSettledRow(
                         stock_code=row[0],
                         business_date=row[1],
-                        close_price=_number(row[2]),
-                        volume=_number(row[3]),
-                        foreign_net_buy_qty=_number(row[4]),
-                        institution_net_buy_qty=_number(row[5]),
-                        individual_net_buy_qty=_number(row[6]),
-                        foreign_net_buy_amount=_number(row[7]),
-                        institution_net_buy_amount=_number(row[8]),
-                        individual_net_buy_amount=_number(row[9]),
+                        close_price=as_float(row[2]),
+                        volume=as_float(row[3]),
+                        foreign_net_buy_qty=as_float(row[4]),
+                        institution_net_buy_qty=as_float(row[5]),
+                        individual_net_buy_qty=as_float(row[6]),
+                        foreign_net_buy_amount=as_float(row[7]),
+                        institution_net_buy_amount=as_float(row[8]),
+                        individual_net_buy_amount=as_float(row[9]),
                     )
                     for row in settled
                 ),
@@ -714,9 +497,9 @@ class ThesisToolbox:
                         business_date=row[1],
                         source_time_code=row[2],
                         collected_at=row[3],
-                        foreign_net_buy_qty=_number(row[4]),
-                        institution_net_buy_qty=_number(row[5]),
-                        total_net_buy_qty=_number(row[6]),
+                        foreign_net_buy_qty=as_float(row[4]),
+                        institution_net_buy_qty=as_float(row[5]),
+                        total_net_buy_qty=as_float(row[6]),
                     )
                     for row in estimates
                 ),
@@ -725,19 +508,19 @@ class ThesisToolbox:
 
     def _tool_market_funds(self, days: int) -> str:
         self._charge()
-        span = _clamp_int(days, MIN_HISTORY_DAYS, MAX_HISTORY_DAYS, 10)
+        span = clamp_int(days, MIN_HISTORY_DAYS, MAX_HISTORY_DAYS, 10)
         rows = self._fetch(MARKET_FUNDS, {"as_of_at": self._as_of_at, "days": span})
         return self._body(
             [
                 MarketFundsRow(
                     business_date=row[0],
-                    index_close=_number(row[1]),
-                    index_change=_number(row[2]),
-                    customer_deposit=_number(row[3]),
-                    customer_deposit_change=_number(row[4]),
-                    credit_loan_balance=_number(row[5]),
-                    unsettled_amount=_number(row[6]),
-                    turnover_ratio=_number(row[7]),
+                    index_close=as_float(row[1]),
+                    index_change=as_float(row[2]),
+                    customer_deposit=as_float(row[3]),
+                    customer_deposit_change=as_float(row[4]),
+                    credit_loan_balance=as_float(row[5]),
+                    unsettled_amount=as_float(row[6]),
+                    turnover_ratio=as_float(row[7]),
                 )
                 for row in rows
             ]
@@ -792,7 +575,7 @@ class ThesisToolbox:
         안정화에 그만큼이 필요한데 그 봉을 다 실으면 문맥만 먹는다.
         """
         self._charge()
-        span = _clamp_int(days, MIN_HISTORY_DAYS, MAX_HISTORY_DAYS, 10)
+        span = clamp_int(days, MIN_HISTORY_DAYS, MAX_HISTORY_DAYS, 10)
         wanted = str(symbol).strip()
         rows = self._fetch(
             DAILY_HISTORY,
@@ -814,7 +597,7 @@ class ThesisToolbox:
                     ),
                 )
             )
-        snapshot = _technical_snapshot(wanted, rows)
+        snapshot = technical_snapshot(wanted, rows)
         signals = self._recent_signals(wanted)
         return self._body(
             DailyHistoryPayload(
@@ -825,11 +608,11 @@ class ThesisToolbox:
                         kind=row[3],
                         country=row[4],
                         business_date=row[5],
-                        open=_number(row[6]),
-                        high=_number(row[7]),
-                        low=_number(row[8]),
-                        close=_number(row[9]),
-                        volume=_number(row[10]),
+                        open=as_float(row[6]),
+                        high=as_float(row[7]),
+                        low=as_float(row[8]),
+                        close=as_float(row[9]),
+                        volume=as_float(row[10]),
                     )
                     for row in rows[:span]
                 ),
@@ -868,9 +651,9 @@ class ThesisToolbox:
                     signal_date=str(row[2]),
                     kind=kind,
                     direction=direction,
-                    close=_number(row[5]),
-                    rsi14=_number(row[6]),
-                    volume_ratio20=_number(row[7]),
+                    close=as_float(row[5]),
+                    rsi14=as_float(row[6]),
+                    volume_ratio20=as_float(row[7]),
                 ),
             )
             signals.append(
@@ -911,14 +694,14 @@ class ThesisToolbox:
                     stock_code=row[0],
                     label=row[1],
                     business_date=row[2],
-                    short_sale_quantity=_number(row[3]),
-                    short_sale_volume_ratio=_number(row[4]),
-                    short_sale_amount=_number(row[5]),
-                    lending_balance_quantity=_number(row[6]),
-                    lending_balance_change_quantity=_number(row[7]),
-                    credit_loan_balance_quantity=_number(row[8]),
-                    credit_loan_balance_amount=_number(row[9]),
-                    credit_loan_balance_rate=_number(row[10]),
+                    short_sale_quantity=as_float(row[3]),
+                    short_sale_volume_ratio=as_float(row[4]),
+                    short_sale_amount=as_float(row[5]),
+                    lending_balance_quantity=as_float(row[6]),
+                    lending_balance_change_quantity=as_float(row[7]),
+                    credit_loan_balance_quantity=as_float(row[8]),
+                    credit_loan_balance_amount=as_float(row[9]),
+                    credit_loan_balance_rate=as_float(row[10]),
                 )
                 for row in rows
             ]
@@ -946,7 +729,7 @@ class ThesisToolbox:
         return self._body(
             AnalystOpinionsPayload(
                 stock_code=code,
-                opinions=tuple(_opinion_detail(row) for row in rows),
+                opinions=tuple(opinion_detail(row) for row in rows),
             )
         )
 
@@ -969,8 +752,8 @@ class ThesisToolbox:
         return self._body(
             EventSurprisesPayload(
                 stock_code=code,
-                outcomes=tuple(_surprise_detail(row) for row in outcomes),
-                pending_expectations=tuple(_pending_expectation_detail(row) for row in pending),
+                outcomes=tuple(surprise_detail(row) for row in outcomes),
+                pending_expectations=tuple(pending_expectation_detail(row) for row in pending),
             )
         )
 
@@ -1001,7 +784,7 @@ class ThesisToolbox:
     def _as_evidence_body(self, items: list[Evidence]) -> str:
         for item in items:
             self._registry[item.ref] = item
-        body = json.dumps([_tool_row(item) for item in items], ensure_ascii=False)
+        body = json.dumps([tool_row(item) for item in items], ensure_ascii=False)
         self._chars += len(body)
         return body
 
@@ -1202,12 +985,12 @@ class ThesisToolbox:
         # 여기 하나뿐이라 늦은 import로 끊는다.
         from modules.thesis.store import ThesisStore
 
-        count = _clamp_int(arguments.get("n"), MIN_PAST_THESES, MAX_PAST_THESES, MIN_PAST_THESES)
+        count = clamp_int(arguments.get("n"), MIN_PAST_THESES, MAX_PAST_THESES, MIN_PAST_THESES)
         return ThesisStore(self._connection).past_theses(as_of_at=self._as_of_at, subject_code=code, n=count)
 
     def _recent_documents(self, arguments: dict[str, Any]) -> list[Evidence]:
-        hours = _clamp_int(arguments.get("hours"), MIN_WINDOW_HOURS, MAX_WINDOW_HOURS, MAX_WINDOW_HOURS)
-        min_score = _clamp_int(arguments.get("min_score"), MIN_VALUE_SCORE, MAX_VALUE_SCORE, MIN_VALUE_SCORE)
+        hours = clamp_int(arguments.get("hours"), MIN_WINDOW_HOURS, MAX_WINDOW_HOURS, MAX_WINDOW_HOURS)
+        min_score = clamp_int(arguments.get("min_score"), MIN_VALUE_SCORE, MAX_VALUE_SCORE, MIN_VALUE_SCORE)
         window_start = self._as_of_at - timedelta(hours=hours)
         with self._connection.cursor() as cursor:
             cursor.execute(RECENT_DOCUMENTS, (window_start, self._as_of_at, min_score, MAX_TOOL_RESULTS))
@@ -1218,13 +1001,13 @@ class ThesisToolbox:
                 ref=evidence_ref(ThesisEvidenceKind.DOCUMENT, str(row[0])),
                 title=row[1],
                 url=row[2],
-                detail=_document_detail(row),
+                detail=document_detail(row),
             )
             for row in rows
         ]
 
     def _recent_disclosures(self, arguments: dict[str, Any]) -> list[Evidence]:
-        hours = _clamp_int(arguments.get("hours"), MIN_WINDOW_HOURS, MAX_WINDOW_HOURS, MAX_WINDOW_HOURS)
+        hours = clamp_int(arguments.get("hours"), MIN_WINDOW_HOURS, MAX_WINDOW_HOURS, MAX_WINDOW_HOURS)
         window_start = self._as_of_at - timedelta(hours=hours)
         with self._connection.cursor() as cursor:
             cursor.execute(
@@ -1266,9 +1049,9 @@ class ThesisToolbox:
             Evidence(
                 kind=ThesisEvidenceKind.MACRO_CHANGE,
                 ref=evidence_ref(ThesisEvidenceKind.MACRO_CHANGE, row[1]),
-                title=_macro_title(row),
+                title=macro_title(row),
                 url=None,
-                detail=_macro_detail(row),
+                detail=macro_detail(row),
             )
             for row in rows[:MAX_TOOL_RESULTS]
         ]
@@ -1291,266 +1074,9 @@ class ThesisToolbox:
             Evidence(
                 kind=ThesisEvidenceKind.MACRO_CHANGE,
                 ref=evidence_ref(ThesisEvidenceKind.MACRO_CHANGE, f"{row[1]}{CLOSE_REF_SUFFIX}"),
-                title=f"{row[2]} 마감 {_change_label(row[3], row[5], row[4])}",
+                title=f"{row[2]} 마감 {change_label(row[3], row[5], row[4])}",
                 url=None,
-                detail=_us_close_detail(row),
+                detail=us_close_detail(row),
             )
             for row in rows[:MAX_TOOL_RESULTS]
         ]
-
-
-def _tool_row(item: Evidence) -> dict[str, Any]:
-    """모델에게 보이는 모양. `ref`가 인용 키라 항상 첫 칸이다.
-
-    **여기만 dict를 만든다.** `Evidence`의 머리 세 칸과 상세를 한 단으로 펴는 자리라
-    모델 하나로 표현할 수 없고, 상세 종류마다 모델을 두면 머리 세 칸을 다섯 번 베끼게 된다.
-    Slack 블록·JSON Schema와 같은 wire 조립 경계다.
-    """
-    row: dict[str, Any] = {"ref": item.ref, "title": item.title, **item.detail.model_dump(mode="json")}
-    if item.url:
-        row["url"] = item.url
-    return row
-
-
-def _document_detail(row: Sequence[Any]) -> DocumentDetail:
-    """문서 한 건이 모델에게 보여 줄 값.
-
-    `new_facts`와 `reason`을 함께 준다. 제목·점수만 주면 이유 문장을 쓸 재료가 없어 모델이
-    근거를 지어낸다. 둘 합계가 길면 자른다 — 한 건이 컨텍스트를 다 먹으면 안 된다.
-    """
-    new_facts = list(row[7] or ())
-    reason = row[8] or ""
-    budget = MAX_ITEM_DETAIL_CHARS - len(reason)
-    kept: list[str] = []
-    for fact in new_facts:
-        if budget - len(fact) < 0:
-            break
-        kept.append(fact)
-        budget -= len(fact)
-    return DocumentDetail(
-        source=row[3],
-        published_at=row[4].isoformat() if row[4] else None,
-        value_score=row[5],
-        direction=row[6],
-        new_facts=tuple(kept),
-        reason=reason[:MAX_ITEM_DETAIL_CHARS],
-        tickers=tuple(row[9] or ()),
-    )
-
-
-def _opinion_detail(row: Sequence[Any]) -> OpinionDetail:
-    """투자의견 한 건. 같은 증권사·같은 날 리포트 요약이 있으면 사유로 함께 준다.
-
-    KIS는 숫자만 주고 왜 그 의견인지는 안 준다. 사유가 없으면 모델이 목표가 숫자만 보고
-    이유를 지어낸다. 요약은 길어서 자른다 — 스무 건이 컨텍스트를 다 먹으면 안 된다.
-    """
-    reason = row[7] if len(row) > 7 else None
-    return OpinionDetail(
-        business_date=row[0],
-        broker_name=row[1],
-        opinion=row[2],
-        previous_opinion=row[3],
-        target_price=_number(row[4]),
-        previous_close=_number(row[5]),
-        gap_rate=_number(row[6]),
-        reason=str(reason)[:MAX_OPINION_REASON_CHARS] if reason else None,
-    )
-
-
-def _surprise_detail(row: Sequence[Any]) -> SurpriseDetail:
-    """기대 대비 발표 판정 한 건. 금액은 원 단위 그대로 준다 — 모델이 자릿수를 바꾸지 않게."""
-    return SurpriseDetail(
-        event_type=row[0],
-        period_key=row[1],
-        metric=row[2],
-        expected_value=_number(row[3]),
-        expectation_count=row[4],
-        actual_value=_number(row[5]),
-        surprise_pct=_number(row[6]),
-        verdict=row[7],
-        announced_at=row[8],
-    )
-
-
-def _pending_expectation_detail(row: Sequence[Any]) -> PendingExpectationDetail:
-    """아직 발표되지 않은 이벤트의 대표 기대치. 발표가 나오면 이 숫자가 기준선이다."""
-    return PendingExpectationDetail(
-        event_type=row[0],
-        period_key=row[1],
-        metric=row[2],
-        expected_value=_number(row[3]),
-        expectation_count=row[4],
-        latest_stated_at=row[5],
-    )
-
-
-def _macro_detail(row: Sequence[Any]) -> MacroDetail:
-    """심볼 하나의 변화. **축이 둘이다** — 분석 창과 전일 종가.
-
-    전일 종가 대비를 함께 주는 이유는 추론과 채점의 기준가가 그것이기 때문이다. 창 변화만
-    주면 창 밖으로 빠진 개장 갭이 사라진 값을 모델이 하루 등락으로 읽는다.
-
-    **금리는 퍼센트가 아니라 bp로 준다.** 4.65→4.70을 `+1.08%`로 주면 모델이 급등으로 읽는다
-    (`briefing/market.py`의 `QUOTED_KINDS`와 같은 이유). 두 축에 같은 규칙을 쓴다.
-
-    `previous_close`는 봉에 실려 오는 값이라 심볼에 따라 없을 수 있다. 없으면 그 축의 칸
-    셋이 통째로 빠진다 — 창 종가로 대신 채우면 전일 대비가 늘 0으로 보인다.
-    """
-    kind, first_close, last_close, previous_close = row[3], row[5], row[6], row[10]
-    return MacroDetail(
-        kind=kind,
-        country=row[4],
-        first_close=float(first_close),
-        last_close=float(last_close),
-        window_start=row[7].isoformat(),
-        window_end=row[8].isoformat(),
-        bar_count=row[9],
-        change_bp=_change_bp(kind, first_close, last_close),
-        change_pct=_change_pct(kind, first_close, last_close),
-        previous_close=float(previous_close) if previous_close is not None else None,
-        prev_close_change_bp=_change_bp(kind, previous_close, last_close),
-        prev_close_change_pct=_change_pct(kind, previous_close, last_close),
-    )
-
-
-def _change_bp(kind: str, base: Decimal | None, value: Decimal) -> float | None:
-    """금리 계열만 bp를 갖는다. 기준값이 없으면 잰 것이 없다."""
-    if kind not in BASIS_POINT_KINDS or base is None:
-        return None
-    return round(float(value - base) * 100, 1)
-
-
-def _change_pct(kind: str, base: Decimal | None, value: Decimal) -> float | None:
-    """금리가 아닌 계열의 퍼센트 변화. 기준값이 없거나 0이면 잰 것이 없다."""
-    if kind in BASIS_POINT_KINDS or not base:
-        return None
-    return round(float((value - base) / base) * 100, 2)
-
-
-def _us_close_detail(row: Sequence[Any]) -> UsCloseDetail:
-    """심볼 하나의 마감 값. 비교 대상은 창의 첫 봉이 아니라 **전일 정규장 종가**다.
-
-    시각은 `closed_at_kst` 한 칸이고 이름이 시간대를 밝힌다. 다른 툴의 시각 칸은 UTC라
-    프롬프트가 "9시간을 더한다"고 알리는데, 마감 시각은 모델이 "어느 날 장이었나"를
-    정하는 데 쓰므로 표시 시간대로 준다(`kst_label`).
-    """
-    kind, close, previous_close = row[3], row[4], row[5]
-    return UsCloseDetail(
-        kind=kind,
-        close=float(close),
-        previous_close=float(previous_close),
-        closed_at_kst=kst_label(row[6]),
-        change_bp=_change_bp(kind, previous_close, close),
-        change_pct=_change_pct(kind, previous_close, close),
-    )
-
-
-def _macro_title(row: Sequence[Any]) -> str:
-    """`macro_changes` 한 줄의 제목. **축을 글자로 밝힌다.**
-
-    Slack 근거 줄이 이 문자열만 그리므로 여기서 안 밝히면 읽는 쪽이 창 변화를 하루 등락으로
-    읽는다(`thesis/render.py`의 `_baseline_line`과 같은 이유). 전일 종가가 봉에 없으면 창
-    축만 적는다 — 없는 값을 "0.00%"로 지어내지 않는다.
-    """
-    kind, label, first_close, last_close, previous_close = row[3], row[2], row[5], row[6], row[10]
-    title = f"{label} 창 {_change_label(kind, first_close, last_close)}"
-    if previous_close:
-        title += f" · 전일 종가 대비 {_change_label(kind, previous_close, last_close)}"
-    return title
-
-
-def _change_label(kind: str, base: Decimal, value: Decimal) -> str:
-    """제목 뒤에 붙는 변화 표기. Slack 근거 줄에도 그대로 쓰인다."""
-    if kind in BASIS_POINT_KINDS:
-        return f"{float(value - base) * 100:+.1f}bp"
-    if not base:
-        return "변화 없음"
-    return f"{float((value - base) / base) * 100:+.2f}%"
-
-
-def _technical_snapshot(subject_code: str, rows: Sequence[Sequence[Any]]) -> indicators.TechnicalSnapshot | None:
-    """`technical/select_history.sql` 행에서 지표 한 벌을 만든다. 못 만들면 `None`이다.
-
-    조회는 최신순이고 계산기는 오름차순을 받는다. **국내 KIS 행에만 35% 단절 guard를 건다** —
-    해외 지수·환율은 가격제한폭이 없어 같은 잣대를 댈 수 없다.
-    """
-    ascending = list(reversed(rows))
-    try:
-        bars = [
-            indicators.DailyBar(
-                business_date=row[5],
-                open=float(row[6]),
-                high=float(row[7]),
-                low=float(row[8]),
-                close=float(row[9]),
-                volume=None if row[10] is None else int(row[10]),
-            )
-            for row in ascending
-        ]
-    except (TypeError, ValueError, ValidationError) as error:
-        # 원천 값이 계약을 깨면 지표를 만들지 않는다. 원시 봉은 그대로 나간다.
-        # **로그는 남긴다** — 조용히 빠지면 프롬프트에 지표가 없는 이유를 아무도 모른다.
-        logger.warning("technical snapshot for %s skipped: %s", subject_code, error)
-        return None
-    domestic_kis = ascending[0][0] == "kis" and ascending[0][4] == "KR"
-    return indicators.summarize(
-        subject_code,
-        str(ascending[0][2] or subject_code),
-        bars,
-        max_abs_daily_change_pct=DOMESTIC_MAX_DAILY_CHANGE_PCT if domestic_kis else None,
-    )
-
-
-def _number(value: Decimal | float | None) -> float | None:
-    """`Decimal`을 JSON이 읽는 수로 바꾼다. `None`은 그대로 둔다.
-
-    **0으로 채우지 않는다.** 결측(아직 안 들어온 값)과 실제 0은 다른 뜻이고, 모델이
-    "순매수 0"을 관측으로 읽으면 없는 사실을 근거로 쓴다.
-
-    숫자가 아닌 것이 오면 `TypeError`로 죽는다. 예전에는 `date`도 그대로 통과시켜서
-    "숫자 칸"이라고 적힌 자리에 날짜가 실릴 수 있었다.
-    """
-    return None if value is None else float(value)
-
-
-def _indicator_row(row: Sequence[Any], *, as_basis_points: bool) -> IndicatorDetail:
-    """지표 계열 하나의 최신값과 직전값 대비 변화.
-
-    **금리는 bp로 준다.** 4.65에서 4.70으로 가는 것은 `+1.08%`가 아니라 `+5bp`다
-    (`_change_label`과 같은 이유). 물가지수처럼 퍼센트가 아닌 계열은 변화를 값 그대로 준다.
-
-    직전값이 없으면 `change`를 만들지 않는다. 첫 관측을 0 변화로 꾸미지 않기 위해서다.
-    """
-    value, previous = row[9], row[10]
-    change: float | None = None
-    if value is not None and previous is not None:
-        difference = Decimal(value) - Decimal(previous)
-        change = round(float(difference) * 100, 1) if as_basis_points else round(float(difference), 4)
-    return IndicatorDetail(
-        provider=row[0],
-        series_id=row[1],
-        country=row[2],
-        country_name=row[3],
-        label=row[4],
-        maturity_months=row[6],
-        unit=row[7],
-        observation_date=row[8],
-        value=_number(value),
-        previous_date=row[11],
-        previous_value=_number(previous),
-        change_bp=change if as_basis_points else None,
-        change=None if as_basis_points else change,
-    )
-
-
-def _clamp_int(value: Any, low: int, high: int, fallback: int) -> int:
-    """모델이 넘긴 인자를 허용 범위로 자른다.
-
-    범위를 벗어난 값에 오류로 답하지 않고 잘라서 실행한다. 상한은 우리가 지키면 되는 것이고,
-    한 번 더 왕복하는 값어치가 없다. 숫자가 아니면 기본값을 쓴다.
-    """
-    try:
-        number = int(value)
-    except (TypeError, ValueError):
-        return fallback
-    return max(low, min(high, number))

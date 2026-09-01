@@ -23,9 +23,9 @@ _ENV = {
 
 def _payload():
     """엣지 수만 세는 자리라 빈 투영이면 충분하다."""
-    from modules.graph import projection as graph
+    from modules.graph import rows
 
-    return graph.GraphPayload(events=(), channels=(), targets=(), from_event=(), from_target=(), chain=(), hits=())
+    return rows.GraphPayload(events=(), channels=(), targets=(), from_event=(), from_target=(), chain=(), hits=())
 
 
 def test_it_runs_weekly_on_monday_morning_kst():

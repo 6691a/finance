@@ -73,7 +73,9 @@
 
 - HTTP 400/401/403/404와 인증·식별자 문제는 `AirflowFailException`으로 즉시 실패한다.
 - ECOS는 실패도 HTTP 200으로 답하므로 본문의 `RESULT.CODE`로 가른다. `INFO-200`(데이터 없음)은
-  실패가 아니라 0건이다.
+  예외가 아니라 0건으로 온다 — **그리고 45일 창에 0건이면 태스크는 실패다.** 정책금리는 이
+  창 안에 반드시 관측이 있어서, 0건은 발표 전이 아니라 식별자나 제공처가 바뀐 것이다
+  (`require_observations`, 2026-08-31 조사 G-41). 세 제공처 다 같다.
 - BoE IADB는 값이 없는 구간과 잘못된 코드에 똑같이 HTML 오류 페이지를 HTTP 200으로 준다.
   수집기가 조회 구간 앞에 패딩을 붙이므로, 그러고도 HTML이면 코드나 구간이 틀린 것이라
   즉시 실패한다.
@@ -91,7 +93,7 @@
 import logging
 import os
 from contextlib import closing
-from datetime import timedelta
+from datetime import date, timedelta
 
 import pendulum
 from airflow.providers.postgres.hooks.postgres import PostgresHook
@@ -162,6 +164,18 @@ def require_env(name: str) -> str:
     if not value:
         raise AirflowFailException(f"{name} is required")
     return value
+
+
+def require_observations(name: str, stored: int, observation_start: date, observation_end: date) -> None:
+    """0건을 성공으로 넘기지 않는다(2026-08-31 조사 G-41).
+
+    창이 45일이라 정책금리 다섯 계열 어느 것도 이 안에 관측이 없을 수 없다 — `KRBASE`는
+    달력일 전부, 나머지는 일별이다. 그런데도 비었다면 발표 전이 아니라 제공처나 식별자가
+    바뀐 것이다. ECOS는 그 상태를 데이터 없음(`INFO-200`)으로 답해 예외를 내지 않으므로,
+    여기서 세지 않으면 매주 "성공, 0건"이 된다. `central_bank_assets_weekly`와 같은 판정이다.
+    """
+    if stored == 0:
+        raise AirflowFailException(f"{name} returned no observations for {observation_start}..{observation_end}")
 
 
 def require_no_failures(provider: str, failures: list[str]) -> None:
@@ -245,6 +259,7 @@ def policy_rate_weekly():
                     raise AirflowFailException(str(error)) from error
 
         require_no_failures("ECOS", failures)
+        require_observations("ECOS", stored, observation_start, observation_end)
         logger.info("Stored %s ECOS policy rate observations for %s..%s", stored, observation_start, observation_end)
         return stored
 
@@ -279,6 +294,7 @@ def policy_rate_weekly():
                     raise AirflowFailException(str(error)) from error
 
         require_no_failures("FRED", failures)
+        require_observations("FRED", stored, observation_start, observation_end)
         logger.info("Stored %s FRED policy rate observations for %s..%s", stored, observation_start, observation_end)
         return stored
 
@@ -308,6 +324,7 @@ def policy_rate_weekly():
                 # HTML 오류 페이지도 여기 걸린다. 둘 다 파라미터나 제공처 형식 문제라 재시도해도 같다.
                 raise AirflowFailException(str(error)) from error
 
+        require_observations("BoE", count, observation_start, observation_end)
         logger.info("Stored %s BoE policy rate observations for %s..%s", count, observation_start, observation_end)
         return count
 

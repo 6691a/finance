@@ -15,7 +15,8 @@
 `get_text()`는 표 셀의 글자도 본문에 섞어 준다. 거기에 표를 Markdown으로 한 번 더 붙이면
 같은 숫자가 두 벌이 되어 색인과 프롬프트가 함께 부푼다. 그래서 **블록 단위로 읽고**
 (`get_text("blocks")`), 쓸 만한 표의 bbox 안에 들어가는 블록은 버린 자리에 Markdown 표를
-끼운다. 순서는 y축이라 원문 읽는 차례가 유지된다.
+끼운다. 순서는 y축이다 — 1단 조판 기준이고, 2단 조판은 두 단이 줄 단위로 섞인다(BM25에는
+무관하고 프롬프트에만 영향이 있다).
 
 **쓸 만한 표의 기준은 셋이다**(`usable_grid`). 채움률, 최소 행·열, 숫자 셀. 셋을 못 넘긴
 격자는 버리고 페이지 텍스트만 남긴다 — 셀 글자는 이미 그 안에 있으므로 **잃는 것은 행·열
@@ -23,11 +24,15 @@
 
 ## 실패
 
-- 암호가 걸렸거나 PDF가 아니면 `unsupported`로 **확정**한다. 다시 열어도 같은 답이다.
+- 열리지 않는 파일(손상·PDF 아님)은 `failed`, 암호가 걸렸으면 `unsupported`로 **확정**한다.
+  다시 열어도 같은 답이다.
 - 페이지 일부가 실패하면 `partial`로 저장하고 **읽은 만큼은 남긴다.** 일부라도 검색에
   걸리는 편이 아무 것도 못 찾는 것보다 낫다.
 - 파일이 없거나 읽다가 I/O가 죽으면 예외를 그대로 올린다. **상태를 남기지 않아** 다음
   실행이 다시 집는다. 되돌릴 수 있는 실패에 상태를 남기면 재시도 규칙을 따로 써야 한다.
+- 디스크의 파일이 행의 `sha256`과 다르면 `store`의 UPDATE가 0행이다. 파싱 전에 따로 대조하지
+  않는다 — 같은 조건을 두 번 보는 것이고, 행이 이미 새 SHA로 갱신돼 있으면 그 자리에서 맞는
+  텍스트가 저장된다(설계 15절 ⑤).
 """
 
 import hashlib
@@ -72,9 +77,7 @@ class ParseCandidate(BaseModel):
     model_config = ConfigDict(frozen=True)
 
     id: int
-    document_id: int
     storage_path: str
-    sha256: str
 
 
 class ParsedPage(BaseModel):
@@ -86,7 +89,6 @@ class ParsedPage(BaseModel):
     text: str
     visible_chars: int
     image_area_ratio: float
-    tables: int
 
     @property
     def unreadable(self) -> bool:
@@ -151,13 +153,11 @@ def _cell(value: str | None) -> str:
 
 
 def pending_attachments(connection: Connection, limit: int) -> tuple[ParseCandidate, ...]:
-    """파싱을 기다리는 첨부를 오래된 것부터 집는다."""
+    """파싱을 기다리는 첨부를 오래된 것부터 집는다. 파서 판이 오른 첨부도 같은 줄에 선다."""
     with connection.cursor() as cursor:
-        cursor.execute(PENDING_PARSES, (limit,))
+        cursor.execute(PENDING_PARSES, {"limit": limit, "parser_version": PARSER_VERSION})
         rows = cursor.fetchall()
-    return tuple(
-        ParseCandidate(id=row[0], document_id=row[1], storage_path=row[2], sha256=row[3]) for row in rows
-    )
+    return tuple(ParseCandidate(id=row[0], storage_path=row[1]) for row in rows)
 
 
 class AttachmentPdfParser:
@@ -169,21 +169,14 @@ class AttachmentPdfParser:
     def __init__(self, file_root: Path = DEFAULT_FILE_ROOT) -> None:
         self._file_root = file_root
 
-    @property
-    def file_root(self) -> Path:
-        return self._file_root
-
     def parse(self, candidate: ParseCandidate) -> ParsedAttachment:
         """첨부 하나를 읽어 결과를 돌려준다. DB에 쓰지 않는다.
 
-        **디스크의 파일이 수집 시점의 그 파일인지 먼저 확인한다.** 다르면 파싱하지 않는다 —
-        내용은 정확히 읽어도 그것이 이 문서에 붙었던 파일이라는 보장이 없다.
+        읽은 파일의 SHA를 결과에 싣는다. 그것이 행의 `sha256`과 같을 때만 `store`가 갱신한다 —
+        내용을 정확히 읽어도 그것이 이 문서에 붙었던 파일이라는 보장은 그 대조가 준다.
         """
         path = self._file_root / candidate.storage_path
         digest = hashlib.sha256(path.read_bytes()).hexdigest()
-        if digest != candidate.sha256:
-            # 파일이 바뀌었다. 상태를 남기지 않아 다음 실행이 새 SHA로 다시 집는다.
-            raise FileChangedError(f"attachment {candidate.id} on disk is {digest}, not {candidate.sha256}")
 
         try:
             document = pymupdf.open(path)
@@ -216,9 +209,7 @@ class AttachmentPdfParser:
             failures=tuple(failures),
         )
 
-    def _pages(
-        self, document: "pymupdf.Document", candidate: ParseCandidate
-    ) -> tuple[list[ParsedPage], list[str]]:
+    def _pages(self, document: "pymupdf.Document", candidate: ParseCandidate) -> tuple[list[ParsedPage], list[str]]:
         pages: list[ParsedPage] = []
         failures: list[str] = []
         for number, page in enumerate(document, start=1):
@@ -252,14 +243,12 @@ class AttachmentPdfParser:
             return max(cursor.rowcount, 0)
 
 
-class FileChangedError(RuntimeError):
-    """디스크의 파일이 수집 시점의 그 파일이 아니다. 다음 실행이 새 SHA로 다시 집는다."""
-
-
 def read_page(page: "pymupdf.Page", number: int) -> ParsedPage:
     """페이지 하나를 텍스트 블록과 표로 읽는다."""
-    tables = [table for table in page.find_tables().tables if usable_grid(table.extract())]
-    table_boxes = [pymupdf.Rect(table.bbox) for table in tables]
+    # `extract()`는 셀 텍스트를 다시 읽는다. 표마다 한 번만 부르고 판정과 렌더가 같은 격자를 쓴다.
+    grids = [(table, table.extract()) for table in page.find_tables().tables]
+    tables = [(pymupdf.Rect(table.bbox), grid) for table, grid in grids if usable_grid(grid)]
+    table_boxes = [box for box, _ in tables]
 
     pieces: list[tuple[float, str]] = []
     visible = 0
@@ -275,8 +264,8 @@ def read_page(page: "pymupdf.Page", number: int) -> ParsedPage:
         if text.strip():
             pieces.append((y0, text.strip()))
 
-    for table, box in zip(tables, table_boxes, strict=True):
-        pieces.append((box.y0, markdown_table(table.extract())))
+    for box, grid in tables:
+        pieces.append((box.y0, markdown_table(grid)))
 
     pieces.sort(key=lambda piece: piece[0])
     return ParsedPage(
@@ -284,7 +273,6 @@ def read_page(page: "pymupdf.Page", number: int) -> ParsedPage:
         text="\n\n".join(piece[1] for piece in pieces),
         visible_chars=visible,
         image_area_ratio=image_area_ratio(page),
-        tables=len(tables),
     )
 
 

@@ -33,6 +33,8 @@ class FakeStore:
     def __init__(self, already: bool = False) -> None:
         self.already = already
         self.stored: list[tuple] = []
+        self.opened: list[dict] = []
+        self.closed: list[tuple[int, dict]] = []
 
     def week_has_paths(self, connection, week_start):
         return self.already
@@ -40,6 +42,17 @@ class FakeStore:
     def store_paths(self, connection, **kwargs):
         self.stored.append(kwargs)
         return domain.StoreOutcome(stored=len(kwargs["paths"]), new_channels=2)
+
+    def start_llm_run(self, connection, **kwargs):
+        self.opened.append(kwargs)
+        return 501
+
+    def finish_llm_run(self, connection, llm_run_id, **kwargs):
+        self.closed.append((llm_run_id, kwargs))
+
+
+class _FakeModel:
+    model_name = "fake-model"
 
 
 @pytest.fixture
@@ -49,6 +62,9 @@ def wiring(monkeypatch: pytest.MonkeyPatch) -> FakeStore:
     monkeypatch.setattr(run, "connection", lambda: _FakeConn())
     monkeypatch.setattr(run.store, "week_has_paths", store.week_has_paths)
     monkeypatch.setattr(run.store, "store_paths", store.store_paths)
+    monkeypatch.setattr(run.store, "start_llm_run", store.start_llm_run)
+    monkeypatch.setattr(run.store, "finish_llm_run", store.finish_llm_run)
+    monkeypatch.setattr(run, "_causal_model", lambda: _FakeModel(), raising=False)
     monkeypatch.setattr(
         run.candidates,
         "resolve_targets",
@@ -91,7 +107,7 @@ def test_a_week_that_already_has_paths_does_not_call_the_model(
     """첫 성공본이 불변이다. 재실행은 기존 행을 두고 성공으로 끝난다(설계 §5.4·§10.4)."""
     wiring.already = True
     called = []
-    monkeypatch.setattr(run, "_build_paths", lambda **kwargs: called.append(kwargs) or ((), ()))
+    monkeypatch.setattr(run, "_build_paths", lambda **kwargs: called.append(kwargs) or _built())
 
     result = run.build_weekly_graph(
         logical_date=datetime(2026, 8, 23, 22, 0, tzinfo=UTC), week_start_param=None
@@ -105,7 +121,7 @@ def test_a_week_that_already_has_paths_does_not_call_the_model(
 def test_a_fresh_week_stores_what_the_model_returned(
     wiring: FakeStore, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.setattr(run, "_build_paths", lambda **kwargs: ((_path(),), ()))
+    monkeypatch.setattr(run, "_build_paths", lambda **kwargs: _built(paths=(_path(),)))
 
     result = run.build_weekly_graph(
         logical_date=datetime(2026, 8, 23, 22, 0, tzinfo=UTC), week_start_param=None
@@ -121,7 +137,7 @@ def test_the_first_week_does_not_require_reuse(
     wiring: FakeStore, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """어휘가 비어 있으면 전부 새로 만드는 것이 정상이다. 그때 재사용을 강제하면 언제나 죽는다."""
-    monkeypatch.setattr(run, "_build_paths", lambda **kwargs: ((_path(),), ()))
+    monkeypatch.setattr(run, "_build_paths", lambda **kwargs: _built(paths=(_path(),)))
 
     run.build_weekly_graph(
         logical_date=datetime(2026, 8, 23, 22, 0, tzinfo=UTC), week_start_param=None
@@ -139,7 +155,7 @@ def test_a_week_with_existing_vocabulary_requires_reuse(
         "fetch_vocabulary",
         lambda conn, window: ((), (domain.ChannelOption(node_id="c:1", name="할인율"),)),
     )
-    monkeypatch.setattr(run, "_build_paths", lambda **kwargs: ((_path(),), ()))
+    monkeypatch.setattr(run, "_build_paths", lambda **kwargs: _built(paths=(_path(),)))
 
     run.build_weekly_graph(
         logical_date=datetime(2026, 8, 23, 22, 0, tzinfo=UTC), week_start_param=None
@@ -150,7 +166,7 @@ def test_a_week_with_existing_vocabulary_requires_reuse(
 
 def test_the_param_decides_the_week(wiring: FakeStore, monkeypatch: pytest.MonkeyPatch) -> None:
     """수동 재실행은 벽시계가 아니라 Param이 정한다."""
-    monkeypatch.setattr(run, "_build_paths", lambda **kwargs: ((), ()))
+    monkeypatch.setattr(run, "_build_paths", lambda **kwargs: _built())
 
     result = run.build_weekly_graph(
         logical_date=datetime(2026, 8, 23, 22, 0, tzinfo=UTC), week_start_param="2026-07-06"
@@ -178,7 +194,7 @@ def test_a_target_without_returns_fails_the_task(
         ),
     )
     called = []
-    monkeypatch.setattr(run, "_build_paths", lambda **kwargs: called.append(1) or ((), ()))
+    monkeypatch.setattr(run, "_build_paths", lambda **kwargs: called.append(1) or _built())
 
     with pytest.raises(run.IncompleteReturnsError) as error:
         run.build_weekly_graph(
@@ -196,7 +212,7 @@ def test_no_target_with_returns_fails_too(
     """전부 없는 것도 같은 실패다. 전에는 조용히 0건 성공이었다."""
     monkeypatch.setattr(run.candidates, "fetch_returns", lambda conn, targets, window: {})
     called = []
-    monkeypatch.setattr(run, "_build_paths", lambda **kwargs: called.append(1) or ((), ()))
+    monkeypatch.setattr(run, "_build_paths", lambda **kwargs: called.append(1) or _built())
 
     with pytest.raises(run.IncompleteReturnsError):
         run.build_weekly_graph(
@@ -209,14 +225,16 @@ def test_no_target_with_returns_fails_too(
 def test_the_builder_gets_a_toolbox(wiring: FakeStore, monkeypatch: pytest.MonkeyPatch) -> None:
     """**툴은 연결과 창과 대상 목록을 봐야 한다.** 그것을 쥔 것이 여기뿐이다."""
     seen: list[dict] = []
-    monkeypatch.setattr(run, "_build_paths", lambda **kwargs: seen.append(kwargs) or ((), ()))
+    monkeypatch.setattr(run, "_build_paths", lambda **kwargs: seen.append(kwargs) or _built())
 
     run.build_weekly_graph(
         logical_date=datetime(2026, 8, 23, 22, 0, tzinfo=UTC), week_start_param=None
     )
 
-    assert seen[0]["toolbox"] is not None
-    assert seen[0]["toolbox"].tools
+    # 빌더가 툴박스를 쥐고 온다. 원장이 열리기 전에 빌더가 있어야 모델 이름을 적는다(G-37).
+    builder = seen[0]["builder"]
+    assert builder._toolbox is not None
+    assert builder._toolbox.tools
 
 
 def test_the_summary_counts_what_the_run_saw(
@@ -226,7 +244,7 @@ def test_the_summary_counts_what_the_run_saw(
 
     8/03 주가 근거 0건으로 돌아간 것을 알아채는 데 후보 조립을 손으로 재현해야 했다.
     """
-    monkeypatch.setattr(run, "_build_paths", lambda **kwargs: ((_path(),), ()))
+    monkeypatch.setattr(run, "_build_paths", lambda **kwargs: _built(paths=(_path(),)))
     monkeypatch.setattr(
         run.candidates,
         "fetch_candidates",
@@ -264,12 +282,11 @@ def test_the_summary_counts_how_many_candidates_the_model_cited(
         run,
         "_build_paths",
         # 경로 둘이 같은 문서를 인용한다. 인용 **건수**가 아니라 인용된 **후보 수**다.
-        lambda **kwargs: (
-            (
+        lambda **kwargs: _built(
+            paths=(
                 _path(evidence_refs=("document:1",)),
                 _path(evidence_refs=("document:1", "technical_signal:9")),
-            ),
-            (),
+            )
         ),
     )
     monkeypatch.setattr(
@@ -316,7 +333,7 @@ def test_the_summary_counts_how_many_candidates_the_model_cited(
 
 def test_the_input_hash_is_recorded(wiring: FakeStore, monkeypatch: pytest.MonkeyPatch) -> None:
     """무엇으로 만들었는지가 행마다 남는다(설계 §5.4)."""
-    monkeypatch.setattr(run, "_build_paths", lambda **kwargs: ((_path(),), ()))
+    monkeypatch.setattr(run, "_build_paths", lambda **kwargs: _built(paths=(_path(),)))
 
     run.build_weekly_graph(
         logical_date=datetime(2026, 8, 23, 22, 0, tzinfo=UTC), week_start_param=None
@@ -337,3 +354,77 @@ def test_it_uses_the_shared_connection_id():
     from modules.utility import CONNECTION_ID
 
     assert run.CONNECTION_ID is CONNECTION_ID
+
+
+# ---------------------------------------------------------------------------
+# G-37 — 경로 생성 대화도 원장 행을 갖는다
+# ---------------------------------------------------------------------------
+
+
+def _built(paths=(), links=(), attempts=0, truncated=False) -> domain.BuildResult:
+    return domain.BuildResult(
+        paths=tuple(paths), links=tuple(links), attempts=attempts, investigation_truncated=truncated
+    )
+
+
+def _run(**overrides):
+    values = {
+        "logical_date": datetime(2026, 8, 23, 22, 0, tzinfo=UTC),
+        "week_start_param": None,
+    }
+    values.update(overrides)
+    return run.build_weekly_graph(**values)
+
+
+def test_the_conversation_opens_and_closes_a_ledger_row(
+    wiring: FakeStore, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`causal/store.start_llm_run`이 있는데 아무도 안 불렀다. 죽은 대화가 원장에 없으면
+    "안 돌았다"와 "돌다 죽었다"를 못 가른다."""
+    monkeypatch.setattr(run, "_build_paths", lambda **kwargs: _built(paths=(_path(),), truncated=True))
+
+    _run(dag_run_id="manual__1", try_number=2)
+
+    (opened,) = wiring.opened
+    assert opened["kind"] == "causal"
+    assert opened["run_date"] == date(2026, 8, 10)
+    assert (opened["dag_run_id"], opened["try_number"]) == ("manual__1", 2)
+    assert opened["llm_model"] == "fake-model"
+    assert opened["prompt_version"] == domain.PROMPT_VERSION
+    ((run_id, closed),) = wiring.closed
+    assert run_id == 501
+    assert closed["status"] == "succeeded"
+    assert (closed["subjects_requested"], closed["subjects_answered"]) == (1, 1)
+    assert closed["investigation_truncated"] is True
+    assert wiring.stored[0]["llm_run_id"] == 501
+
+
+def test_a_conversation_that_dies_still_closes_the_ledger(
+    wiring: FakeStore, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def boom(**kwargs):
+        raise RuntimeError("socket hung up")
+
+    monkeypatch.setattr(run, "_build_paths", boom)
+
+    with pytest.raises(RuntimeError, match="socket hung up"):
+        _run()
+
+    ((_, closed),) = wiring.closed
+    assert closed["status"] == "failed"
+    assert "socket hung up" in closed["error"]
+    assert wiring.stored == []
+
+
+def test_two_empty_answers_fail_the_week(wiring: FakeStore, monkeypatch: pytest.MonkeyPatch) -> None:
+    """교정 뒤에도 비면 0행을 저장하고 성공했다. "인과가 없었다"와 "모델이 두 번 못 냈다"가
+    XCom에서 같은 모양이었다."""
+    monkeypatch.setattr(run, "_build_paths", lambda **kwargs: _built(attempts=1))
+
+    with pytest.raises(run.EmptyAnswerError):
+        _run()
+
+    ((_, closed),) = wiring.closed
+    assert closed["status"] == "failed"
+    assert closed["subjects_answered"] == 0
+    assert wiring.stored == []

@@ -13,6 +13,10 @@ logger = logging.getLogger(__name__)
 
 HEARTBEAT_STATES = ("idle", "connecting", "ready", "degraded", "failed")
 HEARTBEAT_STALE_SECONDS = 120.0
+# `connecting`이 이 횟수 이상 이어지면 이상이다. 재연결 백오프 상한(60초)이 신선도 검사
+# (120초)보다 짧아, 인증이 영구히 틀려도 매 시도가 상태 파일을 새로 써서 절대 안 걸렸다
+# (2026-08-31 조사 G-38). 값은 `failure_streak`로 `connecting`에 실린다.
+CONNECT_FAILURE_LIMIT = 5
 
 
 def write_heartbeat(path: Path, state: str, **extra: Any) -> None:
@@ -26,15 +30,22 @@ def write_heartbeat(path: Path, state: str, **extra: Any) -> None:
 
 
 def healthcheck(path: Path, now: datetime | None = None) -> int:
-    """docker healthcheck 진입점. 0=건강, 1=이상."""
+    """docker healthcheck 진입점. 0=건강, 1=이상.
+
+    `degraded`는 이상이다 — 구독 일부가 거절돼 그 시계열이 비는 채로 도는 것이라 봉이 하루
+    통째로 빠진다. `connecting`은 연속 실패가 상한을 넘으면 이상이다.
+    """
     now = now or datetime.now(UTC)
     try:
         payload = json.loads(path.read_text())
         state = payload["state"]
         written_at = datetime.fromisoformat(payload["written_at"])
-    except (OSError, ValueError, KeyError):
+        failure_streak = int(payload.get("failure_streak", 0))
+    except (OSError, ValueError, KeyError, TypeError):
         return 1
-    if state not in HEARTBEAT_STATES or state == "failed":
+    if state not in HEARTBEAT_STATES or state in ("failed", "degraded"):
+        return 1
+    if state == "connecting" and failure_streak >= CONNECT_FAILURE_LIMIT:
         return 1
     if (now - written_at).total_seconds() > HEARTBEAT_STALE_SECONDS:
         return 1

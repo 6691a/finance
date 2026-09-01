@@ -17,7 +17,7 @@ from typing import Any, Self
 import pytest
 from neo4j.exceptions import ClientError, ServiceUnavailable, TransientError
 
-from modules import graph
+from modules.graph import projection as graph
 
 SQL_ROOT = pathlib.Path(__file__).resolve().parents[2] / "airflow" / "sql" / "postgres"
 

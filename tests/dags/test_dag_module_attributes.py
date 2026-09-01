@@ -22,8 +22,8 @@ import pytest
 MODULE_ATTRIBUTES: dict[str, tuple[str, ...]] = {
     "modules.causal.store": ("store_paths", "store_directions", "start_llm_run", "finish_llm_run", "week_has_paths"),
     "modules.causal.run": ("build_weekly_graph", "connection"),
-    "modules.graph": ("stored_weeks", "read_week", "project", "write_graph"),
-    "modules.graph_query": ("driver", "read_direction_input"),
+    "modules.graph.projection": ("stored_weeks", "read_week", "project", "write_graph"),
+    "modules.graph.query": ("driver", "read_direction_input"),
     "modules.llm": ("direction_model",),
 }
 

@@ -164,8 +164,8 @@ def market_causal_weekly():
         from contextlib import closing
         from datetime import date
 
-        from modules import graph
         from modules.causal.run import connection
+        from modules.graph import projection
 
         uri = os.environ.get("NEO4J_URI")
         if not uri:
@@ -180,7 +180,7 @@ def market_causal_weekly():
         sync_only = bool((context.get("params") or {}).get(SYNC_ONLY_PARAM))
         with closing(connection()) as conn:
             if sync_only:
-                weeks = graph.stored_weeks(conn)
+                weeks = projection.stored_weeks(conn)
             elif summary and summary.get("week_start"):
                 weeks = [date.fromisoformat(summary["week_start"])]
             else:
@@ -190,13 +190,13 @@ def market_causal_weekly():
 
             projected = 0
             for week in weeks:
-                paths, steps = graph.read_week(conn, week)
+                paths, steps = projection.read_week(conn, week)
                 if not paths:
                     continue
-                payload = graph.project(paths, steps)
+                payload = projection.project(paths, steps)
                 try:
-                    graph.write_graph(uri, (user, password), payload)
-                except graph.GraphError as error:
+                    projection.write_graph(uri, (user, password), payload)
+                except projection.GraphError as error:
                     # 쿼리·제약 오류, 그리고 MATCH가 빈 행을 내 보낸 수와 MERGE된 수가 어긋난
                     # 경우(G-59). 다시 불러도 같은 답이다. 연결 오류는 그대로 올려 재시도한다.
                     raise AirflowFailException(str(error)) from error
@@ -215,13 +215,14 @@ def market_causal_weekly():
         from contextlib import closing
         from datetime import UTC, date, datetime
 
-        from modules import graph_query, llm
+        from modules import llm
         from modules.causal import store
         from modules.causal.candidates import direction_targets
         from modules.causal.direction import DirectionError, DirectionSummarizer
         from modules.causal.domain import DIRECTION_PROMPT_VERSION
         from modules.causal.run import connection
-        from modules.graph_query import GraphQueryError
+        from modules.graph import query
+        from modules.graph.query import GraphQueryError
         from modules.prompt import PromptError
 
         weeks = [date.fromisoformat(value) for value in (projection or {}).get("weeks", [])]
@@ -244,13 +245,13 @@ def market_causal_weekly():
         summarizer = DirectionSummarizer(model)
 
         written = 0
-        graph = graph_query.driver(uri, (user, password))
+        graph = query.driver(uri, (user, password))
         try:
             with closing(connection()) as conn:
                 targets = direction_targets(conn)
                 for week in weeks:
                     found = [
-                        graph_query.read_direction_input(
+                        query.read_direction_input(
                             graph, kind=target.kind, code=target.code, week_start=week, as_of_at=as_of_at
                         )
                         for target in targets

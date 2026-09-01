@@ -23,7 +23,7 @@ _ENV = {
 
 def _payload():
     """엣지 수만 세는 자리라 빈 투영이면 충분하다."""
-    from modules import graph
+    from modules.graph import projection as graph
 
     return graph.GraphPayload(events=(), channels=(), targets=(), from_event=(), from_target=(), chain=(), hits=())
 
@@ -205,7 +205,7 @@ class TestProjection:
     def test_it_projects_the_week_from_the_upstream_summary(self, monkeypatch: pytest.MonkeyPatch) -> None:
         from datetime import date
 
-        from modules import graph
+        from modules.graph import projection as graph
 
         seen: list[date] = []
 
@@ -226,7 +226,7 @@ class TestProjection:
         """초기 적재와 밀린 주 복구가 이것 하나다. MERGE라 몇 번을 돌려도 같은 그래프다."""
         from datetime import date
 
-        from modules import graph
+        from modules.graph import projection as graph
 
         weeks = [date(2026, 8, 10), date(2026, 8, 17)]
         seen: list[date] = []

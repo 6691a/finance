@@ -2,7 +2,7 @@
 
 - 상위: [README.md](README.md)
 - 의존: [1-storage.md](1-storage.md)와 [market-causal-graph.md](../market-causal-graph.md).
-- 산출물: `airflow/modules/graph.py`, `market_causal_weekly`의 `sync_graph` 태스크와
+- 산출물: `airflow/modules/graph/projection.py`, `market_causal_weekly`의 `sync_graph` 태스크와
   `sync_only` Param, `market_causal_path/select_graph_by_week.sql`·`select_weeks.sql`·
   `market_causal_step/select_by_week.sql`, requirements 둘과 `pyproject.toml` dev,
   `tests/modules/test_graph.py`, `tests/dags/test_market_causal_weekly.py`의 `TestProjection`
@@ -118,7 +118,7 @@ CREATE CONSTRAINT target_key  IF NOT EXISTS FOR (t:Target)  REQUIRE (t.kind, t.c
 거절된다. 복합 속성 유일성으로 같은 것을 얻는다. 유일성 제약은 존재성을 강제하지 않으므로,
 빈 값은 `project()`가 MERGE 전에 걸러 `GraphError`로 죽인다.
 
-## 3. `airflow/modules/graph.py`
+## 3. `airflow/modules/graph/projection.py`
 
 `slack.py`와 같은 자리다 — Airflow를 import하지 않고, 재시도 핸들러를 붙이지 않는다.
 
@@ -182,7 +182,7 @@ DAG이 그것이기 때문이다.** thesis DAG에는 안 붙인다.
 - **`langchain-neo4j`는 아직 아무도 import하지 않는다**(2026-08-30). §8의 조회 층에 쓰려고
   미리 넣었다. **무게가 있다** — `neo4j-graphrag`를 거쳐 `scipy`(70MB)·`pypdf`가 함께
   들어와 이미지가 약 80MB 는다(실측). 쓸 때가 오기 전에 이미지를 가볍게 두고 싶으면
-  이 한 줄만 빼면 되고, `modules/graph.py`는 그것과 무관하다.
+  이 한 줄만 빼면 되고, `modules/graph/projection.py`는 그것과 무관하다.
 - **로컬**: `compose/local/docker-compose.yaml`에 이미 있다(`neo4j:5.26.29-community`,
   호스트 포트 17474·17687, named volume). `NEO4J_URI=bolt://localhost:17687`.
 - **prod: NAS의 `database` 스택에 둔다. 이 저장소의 `compose/prod/`에는 넣지 않는다.**
@@ -232,7 +232,7 @@ DAG이 그것이기 때문이다.** thesis DAG에는 안 붙인다.
 
 **§1~§6은 운영 투영이고 이 절은 학습이다.** 한 문서에 두는 이유는 같은 Neo4j를 두 번
 계획하지 않기 위해서다. 이 절은 **운영에 아무것도 붙이지 않는다** — `sync_graph` 태스크도,
-`airflow/modules/graph.py`도, prod 인스턴스도, Airflow 이미지 재빌드도 없다. 그래서 §5의
+`airflow/modules/graph/projection.py`도, prod 인스턴스도, Airflow 이미지 재빌드도 없다. 그래서 §5의
 선행 조건이 이 절에는 걸리지 않는다.
 
 ### 7.1 무엇이 §1~§6과 다른가
@@ -329,7 +329,7 @@ CREATE CONSTRAINT IF NOT EXISTS FOR (t:Target)  REQUIRE (t.kind, t.code) IS UNIQ
 
 ### 7.7 안 하는 것
 
-- `airflow/modules/graph.py`·`sync_graph` 태스크·`sync_only` Param — §1~§6의 것이다.
+- `airflow/modules/graph/projection.py`·`sync_graph` 태스크·`sync_only` Param — §1~§6의 것이다.
 - prod Neo4j 인스턴스·Airflow 이미지 재빌드 — §5의 선행 조건. 로컬만 쓰므로 안 걸린다.
 - `langchain-neo4j`·`GraphCypherQAChain` — 이 절에서는 안 쓴다. (패키지 자체는 2026-08-30에
   이미지에 넣어 뒀다. 설계는 §8이다.)

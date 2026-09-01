@@ -182,7 +182,7 @@ INSERT 컬럼과 `ON CONFLICT` 키를 ORM metadata와 맞춰 보는 테스트도
 | 경로 | 무엇 |
 | --- | --- |
 | `airflow/dags/` | DAG. 스케줄·재시도·실패 판정만 갖는 얇은 파일 |
-| `airflow/modules/` | DAG이 쓰는 공유 코드. `collectors/`·`briefing/`·`thesis/`·`technical/`·`expectation/` |
+| `airflow/modules/` | DAG이 쓰는 공유 코드. `collectors/`·`briefing/`·`thesis/`·`technical/`·`expectation/`·`causal/`·`graph/` |
 | `airflow/sql/` | 쿼리. Python 문자열로 두지 않습니다 |
 | `apps/models/` | SQLAlchemy 모델. 테이블 정의의 원본 |
 | `apps/realtime/` | KIS 실시간 WebSocket 수집 상주 서비스 |

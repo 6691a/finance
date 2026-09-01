@@ -84,7 +84,7 @@
 | `migrations/` | Alembic. 리비전 파일은 `migrations/versions` 하나를 모든 별칭이 공유한다 |
 | `migrations/routing.py` | 어떤 테이블이 어떤 DB 별칭에 속하는지 판단하는 순수 함수 |
 | `airflow/dags/` | Airflow DAG |
-| `airflow/modules/` | DAG이 쓰는 공유 코드. 도메인 폴더(`collectors/`·`briefing/`·`expectation/`·`technical/`·`thesis/`)로 나누고 최상위에는 공용 잎만 둔다. 하위 패키지 `__init__.py`는 비운다 — 재수출하면 가벼운 모듈 하나를 import해도 LangChain이 딸려 온다. (아래 규칙) |
+| `airflow/modules/` | DAG이 쓰는 공유 코드. 도메인 폴더(`collectors/`·`briefing/`·`expectation/`·`technical/`·`thesis/`·`causal/`·`graph/`)로 나누고 최상위에는 공용 잎만 둔다. 하위 패키지 `__init__.py`는 비운다 — 재수출하면 가벼운 모듈 하나를 import해도 LangChain이 딸려 온다. (아래 규칙) |
 | `airflow/modules/collectors/` | 수집기. 도메인 폴더(`market/`·`document/`·`indicator/`·`calendar/`·`analyst/`)로 나눈다. 전환 진행 상황은 [docs/convention/collectors-class-migration.md](../docs/convention/collectors-class-migration.md) |
 | `tests/` | pytest |
 
@@ -222,9 +222,9 @@ uv run ruff check apps airflow migrations tests
 
 ## `airflow/modules/`의 폴더
 
-- **한 도메인의 파일이 셋 이상이면 폴더로 내리고 접두어를 뗀다.** `collectors/`·`briefing/`·`expectation/`·`technical/`·`thesis/`가 그 형태다(뒤의 셋은 2026-08-27). `modules.thesis.thesis_domain`이 아니라 `modules.thesis.domain`이다 — `collectors/`가 파일 이름에 남긴 접두어는 **제공처**라 뜻이 있고, `thesis_`는 **폴더가 될 것**이 이름에 붙어 있던 것이다.
+- **한 도메인의 파일이 셋 이상이면 폴더로 내리고 접두어를 뗀다.** `collectors/`·`briefing/`·`expectation/`·`technical/`·`thesis/`·`causal/`·`graph/`가 그 형태다(뒤의 셋은 2026-08-27). `modules.thesis.thesis_domain`이 아니라 `modules.thesis.domain`이다 — `collectors/`가 파일 이름에 남긴 접두어는 **제공처**라 뜻이 있고, `thesis_`는 **폴더가 될 것**이 이름에 붙어 있던 것이다.
 - **하위 패키지 `__init__.py`는 빈 파일이다.** 재수출하면 `modules.thesis.domain` 하나를 import해도 LangChain이 딸려 와 DagBag이 그 무게를 문다. `tests/modules/test_import_weight.py`가 그 경계를 재고 있어 재수출은 그 테스트를 즉시 깬다.
-- **최상위에 남는 것은 공용 잎 열넷이다**(`db`·`sql`·`upsert`·`utility`·`period`·`schema`·`slack`·`llm`·`prompt`·`market_session`·`assessment`·`dedup`·`graph`·`graph_query`). 열은 300줄 미만이고 넷이 넘는다(`assessment` 637, `graph` 429, `llm` 350, `graph_query` 265 — 2026-08-31 실측). `graph`와 `graph_query`가 둘이라 폴더로 안 내린다 — 셋째가 생기면 `graph/`로 내리되 그 이동은 따로 커밋한다. **`core/` 같은 폴더로 모으지 않는다** — 114개 파일 226줄을 고치고 얻는 것이 목록 열 줄이다(2026-08-27 실측). **줄 수는 폴더로 내리는 기준이 아니다** — 기준은 "한 도메인의 파일이 셋 이상인가"이고, 잎 하나가 길어진 것은 그 파일을 나눌 문제다.
+- **최상위에 남는 것은 공용 잎 열둘이다**(`db`·`sql`·`upsert`·`utility`·`period`·`schema`·`slack`·`llm`·`prompt`·`market_session`·`assessment`·`dedup`). 열은 300줄 미만이고 둘이 넘는다(`assessment` 637, `llm` 350 — 2026-09-01 실측). `graph/`는 둘(`projection`·`query`)인데 사용자 결정으로 내렸다(2026-09-01) — "셋 이상" 기준의 예외이고 이동은 따로 커밋했다. **`core/` 같은 폴더로 모으지 않는다** — 114개 파일 226줄을 고치고 얻는 것이 목록 열 줄이다(2026-08-27 실측). **줄 수는 폴더로 내리는 기준이 아니다** — 기준은 "한 도메인의 파일이 셋 이상인가"이고, 잎 하나가 길어진 것은 그 파일을 나눌 문제다.
 - **접두어를 떼면 바인딩 이름이 짧아져 지역 변수와 겹칠 수 있다**(`from modules import technical` → `from modules.technical import indicators`). `ruff`의 `F823`이 그것을 잡는 유일한 장치이므로 기계적 치환 직후에 `ruff`를 먼저 돌린다. 2026-08-27 이동에서 셋이 걸렸다.
 - **이동과 파일 분리를 같은 커밋에 두지 않는다.** 어느 쪽이 회귀를 만들었는지 못 가른다. `thesis/toolbox.py`가 1,440줄로 저장소 최대이고 다음 분리 후보다.
 - **`dags/`는 폴더로 나누지 않는다.** DagBag은 하위 폴더를 재귀로 훑지만 `dag_id`가 경로와 무관해 UI에 그룹이 생기지 않는다(그 일은 `tags`가 한다). DAG은 파일당 얇고 접두어가 이미 정렬을 해 준다.

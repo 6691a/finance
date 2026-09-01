@@ -4,7 +4,7 @@
 `tests/collectors/`가 덮는다. 설계는 docs/collection/policy-rate-collection.md다.
 """
 
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 
 import pytest
 from airflow.sdk.exceptions import AirflowFailException
@@ -92,3 +92,14 @@ def test_a_missing_api_key_fails_before_any_call(monkeypatch):
 
     with pytest.raises(AirflowFailException, match="ECOS_API_KEY"):
         policy_rate_weekly.require_env("ECOS_API_KEY")
+
+
+def test_zero_observations_in_the_window_fail_the_task():
+    """45일 창에 0건은 발표 전이 아니라 식별자·제공처 고장이다(G-41). ECOS는 그 상태를
+    `INFO-200`으로 답해 예외를 안 내니 여기서 세지 않으면 매주 "성공, 0건"이다."""
+    with pytest.raises(AirflowFailException, match="ECOS.*2026-07-18..2026-08-31"):
+        policy_rate_weekly.require_observations("ECOS", 0, date(2026, 7, 18), date(2026, 8, 31))
+
+
+def test_any_observation_lets_the_task_succeed():
+    assert policy_rate_weekly.require_observations("ECOS", 1, date(2026, 7, 18), date(2026, 8, 31)) is None

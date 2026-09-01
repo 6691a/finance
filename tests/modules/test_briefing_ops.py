@@ -357,3 +357,46 @@ def test_a_document_summary_without_a_row_is_an_error_not_zero_backlog():
 def test_a_thesis_backlog_without_a_row_is_an_error_not_zero_backlog():
     with pytest.raises(ops.OpsQueryError):
         summary(thesis_backlog=None)
+
+
+# ---------------------------------------------------------------------------
+# G-53 — 돌긴 돌았는데 하루 종일 0건인 소스
+# ---------------------------------------------------------------------------
+
+
+def test_a_source_that_ran_all_day_with_zero_rows_is_reported_as_empty():
+    """`succeeded`·`record_count=0`이 24시간 쌓여도 ✅였다. 이 저장소의 조용한 실패가 정확히
+    그 모양이라(빈 칸→0, 30행 상한, 개장일 0봉) ops가 잡을 수 있는 마지막 자리였다."""
+    rows = [
+        (source.name, 288, 288, 0, 0, TUESDAY) if source.name == "kis" else (source.name, 4, 4, 0, 120, TUESDAY)
+        for source in ops.EXPECTED_SOURCES
+    ]
+
+    result = summary(rows)
+
+    assert [source.name for source in result.empty] == ["kis"]
+    assert not result.silent
+    assert result.is_healthy is False
+    assert "0건 1곳" in ops.render_text(result)
+    assert "국내 시세·수급(kis)" in _block_text(ops.render_blocks(result))
+
+
+def test_zero_rows_on_a_weekend_are_normal():
+    """주말은 장이 없어 0건이 정상이다. 무소식과 같은 주말 규칙을 쓴다."""
+    rows = [(source.name, 4, 4, 0, 0, SUNDAY) for source in ops.EXPECTED_SOURCES]
+
+    result = summary(rows, now=SUNDAY)
+
+    assert not result.empty
+
+
+def test_a_source_that_only_failed_is_a_failure_not_an_empty_success():
+    """전부 실패한 소스는 실패 목록이 말한다. 0건 섹션은 "성공했는데 비었다"만 잡는다."""
+    rows = [
+        (source.name, 4, 0, 4, 0, TUESDAY) if source.name == "fred" else (source.name, 4, 4, 0, 120, TUESDAY)
+        for source in ops.EXPECTED_SOURCES
+    ]
+
+    result = summary(rows)
+
+    assert not result.empty

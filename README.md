@@ -136,7 +136,7 @@ flowchart LR
 | 수집 | httpx, scrapling(+playwright) | REST와 HTML을 같은 규약으로 |
 | 관측 | Sentry (Airflow / 상주 서비스 각각) | 에러·로그·트레이싱·프로파일링 |
 | 배포 | Docker Compose (Synology NAS), just | 이미지 3종, bind-mount 배포 |
-| 품질 | pytest, ruff, pyrefly, pre-commit | 테스트 2,963개 |
+| 품질 | pytest, ruff, pyrefly, pre-commit | 테스트 2,966개 |
 
 ## 설계하면서 고민한 것들
 

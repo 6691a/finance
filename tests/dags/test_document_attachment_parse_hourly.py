@@ -2,9 +2,9 @@ import pytest
 from airflow.sdk.exceptions import AirflowFailException
 
 from dags import document_attachment_parse_hourly as module
-from modules.collectors.document.pdf import FileChangedError, ParseCandidate, ParsedAttachment
+from modules.collectors.document.pdf import ParseCandidate, ParsedAttachment
 
-CANDIDATE = ParseCandidate(id=7, document_id=42, storage_path="documents/boj/1042/0.pdf", sha256="abc")
+CANDIDATE = ParseCandidate(id=7, storage_path="documents/boj/1042/0.pdf")
 
 
 class FakeConnection:
@@ -21,8 +21,8 @@ class FakeConnection:
         pass
 
 
-def run_parse(monkeypatch, tmp_path, *, waiting, parse, batch_size=50):
-    """태스크 하나를 실제 DAG 코드로 돌린다. 파일과 DB만 가짜다."""
+def run_parse(monkeypatch, tmp_path, *, waiting, parse, store=lambda result: 1, batch_size=50):
+    """태스크 하나를 실제 DAG 코드로 돌린다. 파일과 DB만 가짜다. `store`는 갱신한 행 수를 낸다."""
     connections: list[FakeConnection] = []
     stored: list[ParsedAttachment] = []
 
@@ -36,7 +36,7 @@ def run_parse(monkeypatch, tmp_path, *, waiting, parse, batch_size=50):
         @staticmethod
         def store(connection, result):
             stored.append(result)
-            return 1
+            return store(result)
 
     def fake_connection():
         connection = FakeConnection()
@@ -74,7 +74,7 @@ def test_a_file_we_cannot_open_is_settled_so_the_queue_lets_it_go(monkeypatch, t
     """손상된 파일은 다시 열어도 같은 답이다. 상태를 남겨야 큐에서 빠진다."""
 
     def parse(candidate):
-        return ParsedAttachment(attachment_id=candidate.id, status="failed", source_sha256=candidate.sha256)
+        return ParsedAttachment(attachment_id=candidate.id, status="failed", source_sha256="abc")
 
     parsed, stored, _ = run_parse(monkeypatch, tmp_path, waiting=(CANDIDATE,), parse=parse)
 
@@ -90,7 +90,7 @@ def test_a_partially_read_file_still_stores_what_it_read(monkeypatch, tmp_path):
             attachment_id=candidate.id,
             status="partial",
             text="<!-- page:1 -->\n본문",
-            source_sha256=candidate.sha256,
+            source_sha256="abc",
             page_count=3,
             failures=("page 2(broken)",),
         )
@@ -102,19 +102,24 @@ def test_a_partially_read_file_still_stores_what_it_read(monkeypatch, tmp_path):
     assert connections[-1].commits == 1
 
 
-def test_a_file_that_changed_on_disk_stays_in_the_queue(monkeypatch, tmp_path):
-    """상태를 남기지 않아야 다음 실행이 새 SHA로 다시 집는다."""
+def test_a_row_whose_sha_moved_while_parsing_is_counted_as_failed(monkeypatch, tmp_path, caplog):
+    """UPDATE가 0행이면 그 텍스트는 다른 파일의 것이다. 버리고 실패로 세어 보이게 한다."""
     other = CANDIDATE.model_copy(update={"id": 8})
 
     def parse(candidate):
-        if candidate.id == CANDIDATE.id:
-            raise FileChangedError("attachment 7 on disk is def, not abc")
-        return ParsedAttachment(attachment_id=candidate.id, status="ok", text="본문", source_sha256="abc")
+        return ParsedAttachment(attachment_id=candidate.id, status="ok", text="본문", source_sha256="def")
 
-    parsed, stored, _ = run_parse(monkeypatch, tmp_path, waiting=(CANDIDATE, other), parse=parse)
+    parsed, stored, _ = run_parse(
+        monkeypatch,
+        tmp_path,
+        waiting=(CANDIDATE, other),
+        parse=parse,
+        store=lambda result: 0 if result.attachment_id == CANDIDATE.id else 1,
+    )
 
     assert parsed == 1
-    assert [result.attachment_id for result in stored] == [8]
+    assert [result.attachment_id for result in stored] == [7, 8]
+    assert "7(sha changed while parsing)" in caplog.text
 
 
 def test_every_attachment_failing_kills_the_task(monkeypatch, tmp_path):
@@ -123,7 +128,8 @@ def test_every_attachment_failing_kills_the_task(monkeypatch, tmp_path):
     def parse(candidate):
         raise OSError("input/output error")
 
-    with pytest.raises(AirflowFailException, match="Every attachment failed"):
+    # AirflowFailException이 아니다 — 마운트·권한은 잠시 뒤 풀릴 수 있어 retries가 살아야 한다.
+    with pytest.raises(OSError, match="Every attachment failed"):
         run_parse(monkeypatch, tmp_path, waiting=(CANDIDATE,), parse=parse)
 
 

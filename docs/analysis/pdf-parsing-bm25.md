@@ -97,12 +97,18 @@ market-thesis 툴 / apps/api 검색
 
 - `kind='file'`
 - `storage_path`가 있고 실제 파일이 존재한다
-- 확장자 또는 확인한 미디어 타입이 PDF다
-- 저장 파일의 SHA-256이 `document_attachment.sha256`과 같다
-- 아직 처리하지 않았거나 원본 SHA가 이전 파싱 시점과 달라졌다
+- 저장 경로의 확장자가 `.pdf`다 — 그 확장자는 `document_body_hourly`가 파일 이름과
+  `Content-Type`에서 정해 붙인 것이라 미디어 타입을 다시 볼 필요가 없다(15절 ⑤)
+- 아직 처리하지 않았거나(`parsed_sha256`이 NULL), 원본 SHA가 이전 파싱 시점과 달라졌거나,
+  파서 판이 올라갔다(`parser_version`이 현재 판과 다르다)
 
-파일이 없거나 SHA가 다르면 파싱하지 않는다. 수집 행과 로컬 파일의 관계가 깨진 상태에서
-만든 텍스트는 다른 문서에 붙을 수 있기 때문이다.
+파일이 없으면 파싱하지 않고 상태도 남기지 않는다 — 다음 실행이 다시 집는다.
+
+**디스크의 파일이 행의 SHA와 다른 경우는 저장 시점에 한 번만 본다.** 파서는 읽은 파일의
+SHA를 결과에 싣고, UPDATE가 `sha256 = 읽은 SHA`일 때만 걸린다. 파싱 전에 따로 대조하지
+않는다 — 같은 조건을 두 번 보는 것이고, 파일이 새것이면서 행도 이미 새 SHA로 갱신돼
+있으면 그 자리에서 맞는 텍스트가 저장되는데 사전 대조는 그것을 실패로 세기 때문이다
+(15절 ⑤). 0행이면 그 첨부를 실패로 세어 로그에 남기고, 다음 실행이 새 SHA로 다시 집는다.
 
 ## 4. 로컬 파싱
 
@@ -229,8 +235,11 @@ DB 컬럼 하나다. 파일로 빼면 백업·권한·정리 규칙이 따라온
 - 특정 페이지 실패: page와 예외를 기록하고 **부분 실패**로 저장한다. 첨부 전체를 성공으로
   확정하지 않고, 읽은 만큼은 남긴다(6.2).
 - 암호가 걸린 PDF: `미지원`으로 확정한다. 다시 시도해도 같은 답이다.
-- 원본 SHA 변경: 이전 파싱 결과를 쓰지 않고 다시 처리한다.
-- 첨부 전부 실패: 태스크를 실패시킨다.
+- 원본 SHA 변경: 이전 파싱 결과를 쓰지 않고 다시 처리한다. 파싱하는 동안 바뀌었으면
+  UPDATE가 0행이고, 그 첨부는 실패로 세어 로그에 남긴다(3절).
+- 첨부 전부 실패: 태스크를 실패시킨다. **재시도가 살아 있는 예외로 올린다**(`OSError`) —
+  전부 실패는 마운트·권한처럼 잠시 뒤 풀릴 수 있는 문제라 `retries`가 뜻을 가진다.
+  `AirflowFailException`은 재시도를 건너뛰므로 마운트 자체가 없을 때만 쓴다.
 
 **실패한 첨부를 삭제하지 않는다.** 다음 정시 실행이 다시 처리할 수 있도록 상태와 원인을
 남긴다. 되돌릴 수 없는 오류(암호, 손상)는 상태로 확정해 큐에서 빼고, 되돌릴 수 있는 것
@@ -311,10 +320,12 @@ WITH (key_field='id');
 - **다음 시간이 같은 큐를 다시 본다.** 하나가 실패했다고 죽이면 경보만 늘고 고쳐지는 것이
   없다 — `document_ingestion_hourly`와 같은 판정이고 근거는 모듈 docstring의 "실패와 재시도"
   절에 남긴다.
-- 큐는 파싱 상태가 `NULL`인 첨부다. **`document_body_hourly` 뒤에 선다** — 첨부 파일이 있어야
-  파싱할 것이 있다.
+- 큐는 `parsed_sha256 IS DISTINCT FROM sha256 OR parser_version IS DISTINCT FROM <현재 판>`인
+  첨부다(3절). **`document_body_hourly` 뒤에 선다** — 첨부 파일이 있어야 파싱할 것이 있다.
 - `dag_display_name`은 `📄 첨부 PDF 파싱`이고 `description`·`doc_md`도 채운다(저장소 규칙).
-- pool `pdf_parse` 슬롯 1로 NAS에서 하나만 돈다.
+- pool `pdf_parse` 슬롯 1로 NAS에서 하나만 돈다. **pool은 코드로 생기지 않는다** — 없으면
+  태스크가 scheduled에 멈춘 채 경고만 남으므로 DAG docstring "필요한 환경"과
+  `docs/operations.md`에 적었다. 운영에는 있다(2026-09-01 확인, 15절 ⑤).
 
 ### 9.2 NAS 운영 원칙
 
@@ -419,10 +430,10 @@ WITH (key_field='id');
    `20 * * * *`, pool `pdf_parse` 슬롯 1이다.
 2. ~~파싱 상태 값의 이름과 CHECK 제약~~ — 확정했다. `ok`·`partial`·`failed`·`unsupported`이고
    NULL이 미처리다(`AttachmentParseStatus`).
-3. **재처리 판정.** 파서 판(`pymupdf/1`)이나 4.2·4.3의 상수가 바뀔 때 무엇을 다시 도는지가
-   아직 없다. 지금 큐는 `parse_status IS NULL`이거나 파일이 바뀐 첨부만 집는다 — 판이 올라도
-   과거 첨부를 다시 파싱하지 않는다. BM25는 행을 덮어쓰면 끝이라 급하지 않지만, 판을 올릴 때
-   무엇을 되돌릴지는 그때 정한다.
+3. ~~재처리 판정~~ — 확정했다(검토 ⑤). 큐가 `parser_version IS DISTINCT FROM <현재 판>`을
+   함께 보므로 파서 판(`pymupdf/1`)이나 4.2·4.3의 상수를 바꾸고 판을 올리면 첨부 전부가 다시
+   줄을 선다. BM25는 행을 덮어쓰면 끝이라 되돌릴 것이 없다. 판을 올리는 날 큐가 첨부 전부
+   (수백 건)가 되므로 `batch_size`를 올려 백필을 서두를지는 그때 정한다.
 
 ## 15. 검토 기록
 
@@ -467,3 +478,72 @@ Airflow requirements와 compose를 대조하고 PyMuPDF API를 실측했다. PyM
 
 **남은 것은 파서 하나와 DAG 하나, 마이그레이션 하나, 인덱스 둘이다.** 그리고 10.1이 재는
 "텍스트 레이어 없는 페이지 비율"이 Vision을 켤지를 답한다.
+
+### 2026-08-31 ⑤ 구현 검토 — 겹치는 가드와 안 읽는 값
+
+`c0471f1`(파서·DAG·마이그레이션)과 `fc04660`(문서 주소가 파일이면 본문으로 읽지 않는다)을
+"불필요한 로직과 논리적으로 이상한 곳"을 기준으로 읽었다. 코드는 동작하지만 같은 일을
+두세 겹으로 막는 자리, 주석과 코드가 다른 말을 하는 자리, 만들어 놓고 아무도 안 읽는 값이
+있었다. **문서만 먼저 고치고 코드는 승인 뒤에 한다.** 아래 1~8이 고칠 것, 9~11은 기록만이다.
+
+1. **pool `pdf_parse`는 남긴다 — 사용자 결정(2026-09-01).** 검토 시점의 지적은 둘이었다.
+   태스크 하나짜리 DAG에 `max_active_runs=1`이면 이미 한 번에 하나만 돌아 pool이 더하는 것이
+   없고, pool은 Airflow에 손으로 만들어야 해서 없으면 스케줄러가 `Tasks using non-existent
+   pool` 경고만 남기고 태스크가 scheduled에 멈추는데 그 절차가 어디에도 없었다. 운영에 pool이
+   이미 있고 동작하고 있어 지우지 않는다. 대신 **빠져 있던 절차를 적었다** — DAG docstring의
+   "필요한 환경"과 `docs/operations.md`의 DAG 목록·문서 절. 나중에 NAS CPU를 같이 쓰는 DAG이
+   생기면 같은 pool에 물린다.
+2. **"재시도할 값어치가 있다"면서 재시도를 막는 예외를 올린다.** 전부 실패 시
+   `AirflowFailException`을 올리는데 이 예외는 `retries`를 건너뛴다. `default_args`의
+   `retries: 2`가 그 경로에서 죽은 설정이었다. `document_body_hourly`는 같은 자리에서
+   `ConnectionError`를 올려 재시도가 산다. → `OSError`로 바꾼다(7절). 마운트 없음 검사의
+   `AirflowFailException`은 확정 실패가 맞아 그대로 둔다.
+3. **파싱 전 SHA 대조(`FileChangedError`)는 UPDATE의 SHA 가드와 같은 일을 한다.** 파서가
+   디스크 SHA와 행 SHA를 대조해 예외를 올리고, `update_parse.sql`의 `AND sha256 = 읽은 SHA`가
+   같은 조건을 다시 본다. 사전 대조를 빼면 결과가 더 낫다 — 파일이 새것이고 행도 새 SHA면 그
+   자리에서 성공하고(지금은 실패로 센다), 행이 아직 옛 SHA면 0행이라 다음 실행이 집는다.
+   본문 수집 문서대로 첨부 파일은 한 번 쓰고 안 바뀌므로 이 길을 실제로 타는 경우는 운영자가
+   `body_status`를 NULL로 되돌려 재수집한 때뿐이다. 대신 지금은 UPDATE가 0행이어도 아무 로그
+   없이 지나가므로 그 자리를 실패로 세게 한다. → 예외 클래스·사전 대조·DAG의 except 가지·
+   테스트 둘이 준다(3절). 대조가 사라지면 `ParseCandidate.sha256`도 읽는 곳이 없어 SELECT와
+   함께 뺀다. 큐의 `parsed_sha256 IS DISTINCT FROM sha256` 한 줄은 재큐잉의 유일한 장치라
+   남긴다.
+4. **`parser_version`은 저장만 하고 큐가 안 본다.** 모델·마이그레이션·파서 주석 셋 다 "규칙이
+   바뀌면 올리고 재처리 판정에 쓴다"인데 큐 SQL에 그 조건이 없었다. `pymupdf/2`로 올려도
+   아무 첨부도 다시 안 돈다. 14절 3항이 "아직 없다"로 남아 있던 것이 이것이다. → 큐에
+   `OR parser_version IS DISTINCT FROM %(parser_version)s` 한 줄을 더하고 14절 3항을
+   확정으로 바꿨다. 컬럼이 이미 운영에 있으니 주석을 지우는 쪽보다 쓰는 쪽이 싸다.
+5. **DAG의 except 넷이 같은 몸통이다.** `FileNotFoundError`·`FileChangedError`·`OSError`·
+   `Exception` 넷이 전부 "경고 로그 + `failures`에 추가 + 다음 첨부"이고 로그 문구만 다르다.
+   `document_body_hourly`는 가지마다 행동이 다르지만(unavailable 확정, 문서 삭제) 여기는
+   아니다. → `except Exception` 하나에 `logger.exception`. 3번을 적용하면 자연히 셋이 준다.
+6. **만들어 놓고 안 읽는 값 셋.** `AttachmentPdfParser.file_root` 프로퍼티(읽는 곳 없음),
+   `ParseCandidate.document_id`(SELECT·모델·테스트까지 있는데 파서도 저장도 안 쓴다 — 저장은
+   `attachment_id`로 간다), `ParsedPage.tables`(세고 버린다). → 셋 삭제.
+7. **`table.extract()`를 표마다 두 번 부른다.** 표 판정(`usable_grid`)에서 한 번, Markdown
+   렌더에서 한 번. → 격자를 한 번 뽑아 둘 다 쓴다.
+8. **큐 SQL의 군더더기 둘.** `media_type = 'application/pdf'` 절은 본문 수집기의 `_suffix`가
+   헤더가 PDF면 이미 `.pdf`를 붙이므로 경로 절이 덮는다 — 남는 경우는 파일 이름이 `.hwp`인데
+   헤더가 PDF라는 모순뿐이고 그건 열면 `failed`로 확정될 뿐이다. `parse_status IS NULL OR`는
+   NULL이면 `parsed_sha256`도 NULL이고 `sha256 IS NOT NULL`이라 `IS DISTINCT FROM`만으로
+   참이다. → 둘 다 뺀다(3절).
+9. **(기록만) 문서 주소가 파일이면 같은 파일을 두 번 받는다.** `fc04660`의 갈래가 PDF를 이미
+   받았는데 URL만 돌려주고, 첨부 단계가 같은 URL을 다시 받는다. BOJ 한 건당 수 MB × 2.
+   지금은 22건 백필과 가끔 오는 새 문서뿐이라 둔다. 잦아지면 `DocumentBody`에 payload를 실어
+   넘긴다. **코드에는 아무 표시도 남기지 않는다**(사용자 결정, 2026-09-01) — `collect`가 주소를
+   알아내고 `_attach_files`가 받는 것이 이 수집기의 분업이라 그 갈래만 payload를 들고 넘어가는
+   쪽이 오히려 예외다. 일부러 낮게 잡은 천장이 아니라 그냥 현재 구조이므로 `ponytail:` 표시가
+   맞지 않는다.
+10. **(기록만) "y축 순서라 원문 읽는 차례가 유지된다"는 2단 조판에서 틀린다.** 증권사
+    리포트의 2단 조판은 두 단이 줄 단위로 섞인다. BM25에는 무관하고 LLM 프롬프트에만 영향이
+    있다. 코드는 두고 파서 docstring을 "1단 조판 기준이다"로 사실대로 고친다.
+11. **(사소) 문서와 코드가 다른 말.** 파서 모듈 docstring은 "PDF가 아니면 `unsupported`"인데
+    코드는 못 열면 `failed`, 암호만 `unsupported`다. 모델 주석이 맞고 docstring이 틀렸다 —
+    docstring만 고친다. `is_html_document`가 `;`로 다시 자르는데 `_header`가 이미 떼서 주는
+    것은 무해해서 둔다.
+
+**손대는 파일**(승인 뒤): `collectors/document/pdf.py`(3·6·7·10·11),
+`dags/document_attachment_parse_hourly.py`(1·2·3·5),
+`sql/postgres/document_attachment/select_pending_parse.sql`(4·6·8),
+`collectors/document/body.py`(9 주석 한 줄), 테스트 둘, README의 테스트 수.
+마이그레이션은 없다 — 컬럼은 그대로다.

@@ -10,7 +10,8 @@
 
 **앞단과 실패 성격이 다르다.** 본문 수집은 문서마다 HTTP 요청이라 네트워크가 병목이고,
 여기는 파일을 읽고 CPU로 파싱하는 일이다. 한 DAG에 넣으면 PDF 수백 쪽을 파싱하는 동안
-다음 시간 본문 수집이 밀린다. 그래서 pool(`pdf_parse`, 슬롯 1)도 여기만 문다.
+다음 시간 본문 수집이 밀린다. 그래서 pool(`pdf_parse`, 슬롯 1)도 여기만 문다 — 나중에 NAS
+CPU를 같이 쓰는 DAG이 생기면 같은 pool에 물린다.
 
 ## 큐가 곧 백필이다
 
@@ -28,8 +29,10 @@
   답이라 실패로 세지 않는다.
 - 페이지 일부가 깨지면 `partial`로 저장하고 **읽은 만큼은 남긴다.**
 - 파일이 없거나 디스크가 죽으면 상태를 남기지 않는다. 다음 실행이 다시 집는다.
-- 디스크의 파일이 수집 시점의 SHA와 다르면 파싱하지 않는다. 내용을 정확히 읽어도 그것이 이
-  문서에 붙었던 파일이라는 보장이 없다.
+- 디스크의 파일이 행의 SHA와 다르면 UPDATE가 0행이라 저장되지 않고, 그 첨부를 실패로 센다.
+  행이 새 SHA로 갱신되면 다음 실행이 다시 집는다.
+- 전부 실패는 `OSError`로 올려 `retries`가 산다 — 마운트·권한처럼 잠시 뒤 풀리는 문제다.
+  마운트 자체가 없을 때만 `AirflowFailException`으로 즉시 죽인다.
 
 ## 무엇을 세는가
 
@@ -43,6 +46,9 @@
 - **`FILE_ROOT`(`/opt/airflow/files`)가 마운트돼 있어야 한다.** 없으면 태스크를 즉시
   실패시킨다 — 조용히 건너뛰면 큐만 돌고 텍스트는 한 건도 안 남는데 성공으로 표시된다.
 - 이미지에 PyMuPDF(`>=1.26`)가 들어 있어야 한다.
+- **Airflow pool `pdf_parse`(슬롯 1).** 코드로 생기지 않는다 — UI나 `airflow pools set`으로
+  만든다. 없으면 태스크가 scheduled에 멈춘 채 `non-existent pool` 경고만 남고 실패도 경보도
+  없다. 운영에는 있다(2026-09-01 확인).
 """
 
 import logging
@@ -58,7 +64,6 @@ from airflow.sdk.exceptions import AirflowFailException
 from modules.collectors.document.pdf import (
     DEFAULT_FILE_ROOT,
     AttachmentPdfParser,
-    FileChangedError,
     pending_attachments,
 )
 from modules.utility import CONNECTION_ID, KST_TIMEZONE, atomic
@@ -122,23 +127,11 @@ def document_attachment_parse_hourly():
         for candidate in waiting:
             try:
                 result = parser.parse(candidate)
-            except FileNotFoundError as error:
-                # 마운트가 사라졌거나 파일이 지워졌다. 상태를 남기지 않아 다음 실행이 다시 집는다.
-                logger.warning("attachment %s has no file: %s", candidate.id, error)
-                failures.append(f"{candidate.id}({error})")
-                continue
-            except FileChangedError as error:
-                logger.warning("attachment %s changed on disk: %s", candidate.id, error)
-                failures.append(f"{candidate.id}({error})")
-                continue
-            except OSError as error:
-                logger.warning("attachment %s could not be read: %s", candidate.id, error)
-                failures.append(f"{candidate.id}({error})")
-                continue
             except Exception as error:
-                # 예상하지 못한 예외도 이 첨부에서 멈춰야 한다. 파서 예외 하나가 나머지를
-                # 통째로 막은 적이 있다(`document_ingestion_hourly`, 2026-08-15).
-                logger.exception("attachment %s raised an unexpected error", candidate.id)
+                # 파일 없음·I/O·예상하지 못한 파서 예외 전부 이 첨부에서 멈춘다. 상태를 남기지
+                # 않아 다음 실행이 다시 집는다. 파서 예외 하나가 나머지를 통째로 막은 적이
+                # 있다(`document_ingestion_hourly`, 2026-08-15).
+                logger.exception("attachment %s could not be parsed", candidate.id)
                 failures.append(f"{candidate.id}({error})")
                 continue
 
@@ -147,14 +140,21 @@ def document_attachment_parse_hourly():
                 logger.warning("attachment %s parsed partially: %s", candidate.id, "; ".join(result.failures))
 
             with closing(_connection()) as connection, atomic(connection):
-                stored += parser.store(connection, result)
+                updated = parser.store(connection, result)
+            if not updated:
+                # 읽는 동안 행의 SHA가 바뀌었다. 텍스트는 버리고 다음 실행이 새 파일로 다시 집는다.
+                logger.warning("attachment %s changed while parsing; nothing stored", candidate.id)
+                failures.append(f"{candidate.id}(sha changed while parsing)")
+                continue
 
+            stored += updated
             pages += result.page_count
             unreadable += result.unreadable_page_count
 
-        if failures and len(failures) == len(waiting):
-            # 전부 실패했으면 우리 쪽 문제일 가능성이 크다(마운트·권한). 재시도할 값어치가 있다.
-            raise AirflowFailException(f"Every attachment failed: {'; '.join(failures)}")
+        if len(failures) == len(waiting):
+            # 전부 실패했으면 우리 쪽 문제일 가능성이 크다(마운트·권한). 잠시 뒤 풀릴 수 있어
+            # 재시도가 살아 있는 예외로 올린다 — AirflowFailException은 retries를 건너뛴다.
+            raise OSError(f"Every attachment failed: {'; '.join(failures)}")
         if failures:
             logger.warning("%s of %s attachments failed: %s", len(failures), len(waiting), "; ".join(failures))
 

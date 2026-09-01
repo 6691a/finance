@@ -14,7 +14,6 @@ from modules.collectors.document.pdf import (
     PARSER_VERSION,
     PENDING_PARSES,
     AttachmentPdfParser,
-    FileChangedError,
     ParseCandidate,
     ParsedAttachment,
     ParsedPage,
@@ -68,7 +67,9 @@ def report_pdf(path: Path) -> str:
     for index in range(len(TABLE) + 1):
         page.draw_line(pymupdf.Point(left, top + index * row), pymupdf.Point(left + column * 3, top + index * row))
     for index in range(4):
-        page.draw_line(pymupdf.Point(left + index * column, top), pymupdf.Point(left + index * column, top + row * len(TABLE)))
+        page.draw_line(
+            pymupdf.Point(left + index * column, top), pymupdf.Point(left + index * column, top + row * len(TABLE))
+        )
     for r, line in enumerate(TABLE):
         for c, cell in enumerate(line):
             page.insert_text((left + c * column + 5, top + r * row + 16), cell, fontname=FONT, fontsize=10)
@@ -79,8 +80,8 @@ def report_pdf(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
-def candidate(digest: str, name: str = "probe.pdf") -> ParseCandidate:
-    return ParseCandidate(id=7, document_id=42, storage_path=name, sha256=digest)
+def candidate(name: str = "probe.pdf") -> ParseCandidate:
+    return ParseCandidate(id=7, storage_path=name)
 
 
 def test_a_grid_needs_fill_rows_columns_and_a_number():
@@ -115,9 +116,9 @@ def test_a_ragged_grid_is_padded_to_the_widest_row():
 
 def test_assemble_marks_every_page_and_returns_none_when_nothing_was_read():
     pages = [
-        ParsedPage(number=1, text="첫 쪽", visible_chars=3, image_area_ratio=0.0, tables=0),
-        ParsedPage(number=2, text="", visible_chars=0, image_area_ratio=0.0, tables=0),
-        ParsedPage(number=3, text="셋째 쪽", visible_chars=4, image_area_ratio=0.0, tables=0),
+        ParsedPage(number=1, text="첫 쪽", visible_chars=3, image_area_ratio=0.0),
+        ParsedPage(number=2, text="", visible_chars=0, image_area_ratio=0.0),
+        ParsedPage(number=3, text="셋째 쪽", visible_chars=4, image_area_ratio=0.0),
     ]
 
     assert assemble(pages) == "<!-- page:1 -->\n첫 쪽\n\n<!-- page:3 -->\n셋째 쪽"
@@ -127,9 +128,9 @@ def test_assemble_marks_every_page_and_returns_none_when_nothing_was_read():
 
 def test_a_page_without_text_under_a_big_image_is_unreadable():
     """이 판정이 나중에 외부 Vision을 켤지 정하는 근거다."""
-    covered = ParsedPage(number=1, text="", visible_chars=0, image_area_ratio=0.9, tables=0)
-    thin = ParsedPage(number=2, text="", visible_chars=0, image_area_ratio=0.05, tables=0)
-    wordy = ParsedPage(number=3, text="본문" * 60, visible_chars=120, image_area_ratio=0.9, tables=0)
+    covered = ParsedPage(number=1, text="", visible_chars=0, image_area_ratio=0.9)
+    thin = ParsedPage(number=2, text="", visible_chars=0, image_area_ratio=0.05)
+    wordy = ParsedPage(number=3, text="본문" * 60, visible_chars=120, image_area_ratio=0.9)
 
     assert covered.unreadable
     # 그림이 작으면 그냥 빈 쪽이다. Vision이 읽어 줄 것도 없다.
@@ -164,9 +165,11 @@ def test_a_real_pdf_gives_page_markers_and_one_copy_of_the_table(tmp_path):
     """표 셀의 글자를 본문과 표에 두 번 담지 않는다."""
     digest = report_pdf(tmp_path / "probe.pdf")
 
-    result = AttachmentPdfParser(tmp_path).parse(candidate(digest))
+    result = AttachmentPdfParser(tmp_path).parse(candidate())
 
     assert result.status == "ok"
+    # 저장이 이 값으로 행의 sha256을 대조한다. 파싱 전에 따로 대조하지 않는다.
+    assert result.source_sha256 == digest
     assert result.page_count == 2
     assert result.unreadable_page_count == 0
     assert result.parser_version == PARSER_VERSION
@@ -190,9 +193,8 @@ def test_an_image_only_page_is_counted_and_never_rendered(tmp_path):
     page.insert_image(page.rect, pixmap=pixmap)
     document.save(path)
     document.close()
-    digest = hashlib.sha256(path.read_bytes()).hexdigest()
 
-    result = AttachmentPdfParser(tmp_path).parse(candidate(digest, "scan.pdf"))
+    result = AttachmentPdfParser(tmp_path).parse(candidate("scan.pdf"))
 
     assert result.status == "ok"
     assert result.page_count == 1
@@ -203,23 +205,14 @@ def test_an_image_only_page_is_counted_and_never_rendered(tmp_path):
     assert sorted(item.name for item in tmp_path.iterdir()) == ["scan.pdf"]
 
 
-def test_a_file_that_changed_on_disk_is_not_parsed(tmp_path):
-    """내용을 정확히 읽어도 그것이 이 문서에 붙었던 파일이라는 보장이 없다."""
-    report_pdf(tmp_path / "probe.pdf")
-
-    with pytest.raises(FileChangedError):
-        AttachmentPdfParser(tmp_path).parse(candidate("a" * 64))
-
-
 def test_an_encrypted_pdf_is_settled_as_unsupported(tmp_path):
     path = tmp_path / "locked.pdf"
     document = pymupdf.open()
     document.new_page().insert_text((60, 70), "비밀", fontname=FONT, fontsize=11)
     document.save(path, encryption=pymupdf.PDF_ENCRYPT_AES_256, user_pw="pw", owner_pw="pw")
     document.close()
-    digest = hashlib.sha256(path.read_bytes()).hexdigest()
 
-    result = AttachmentPdfParser(tmp_path).parse(candidate(digest, "locked.pdf"))
+    result = AttachmentPdfParser(tmp_path).parse(candidate("locked.pdf"))
 
     # 다시 열어도 같은 답이라 확정하고 큐에서 뺀다.
     assert result.status == "unsupported"
@@ -229,9 +222,8 @@ def test_an_encrypted_pdf_is_settled_as_unsupported(tmp_path):
 def test_a_file_that_is_not_a_pdf_is_settled_as_failed(tmp_path):
     path = tmp_path / "broken.pdf"
     path.write_bytes(b"%PDF-1.7 this is not really a pdf")
-    digest = hashlib.sha256(path.read_bytes()).hexdigest()
 
-    result = AttachmentPdfParser(tmp_path).parse(candidate(digest, "broken.pdf"))
+    result = AttachmentPdfParser(tmp_path).parse(candidate("broken.pdf"))
 
     assert result.status == "failed"
     assert result.text is None
@@ -240,7 +232,7 @@ def test_a_file_that_is_not_a_pdf_is_settled_as_failed(tmp_path):
 def test_a_missing_file_raises_so_the_next_run_picks_it_up_again(tmp_path):
     """되돌릴 수 있는 실패에는 상태를 남기지 않는다."""
     with pytest.raises(FileNotFoundError):
-        AttachmentPdfParser(tmp_path).parse(candidate("b" * 64, "gone.pdf"))
+        AttachmentPdfParser(tmp_path).parse(candidate("gone.pdf"))
 
 
 def test_storing_fills_the_columns_the_model_has():
@@ -281,23 +273,24 @@ def test_storing_guards_on_the_sha_it_read():
 
 
 def test_the_queue_asks_only_for_pdf_files_it_has_not_read():
-    """`parse_status IS NULL`이 곧 백필이고, 파일이 바뀐 첨부도 같은 줄에 선다."""
+    """`parsed_sha256 IS DISTINCT FROM sha256`이 곧 백필이고, 파일이 바뀐 첨부와 파서 판이 오른
+    첨부도 같은 줄에 선다."""
     statement = without_comments(PENDING_PARSES)
 
     assert "kind = 'file'" in statement
-    assert "parse_status IS NULL" in statement
     assert "parsed_sha256 IS DISTINCT FROM a.sha256" in statement
+    assert "parser_version IS DISTINCT FROM %(parser_version)s" in statement
     assert "%%.pdf" in statement
-    assert "LIMIT %s" in statement
+    assert "LIMIT %(limit)s" in statement
 
 
 def test_pending_attachments_reads_the_rows_into_models():
-    connection = FakeConnection([(7, 42, "documents/boj/1042/0.pdf", "abc")])
+    connection = FakeConnection([(7, "documents/boj/1042/0.pdf")])
 
     waiting = pending_attachments(connection, 50)
 
-    assert waiting == (ParseCandidate(id=7, document_id=42, storage_path="documents/boj/1042/0.pdf", sha256="abc"),)
-    assert connection.recorded_cursor.calls[0][1] == (50,)
+    assert waiting == (ParseCandidate(id=7, storage_path="documents/boj/1042/0.pdf"),)
+    assert connection.recorded_cursor.calls[0][1] == {"limit": 50, "parser_version": PARSER_VERSION}
 
 
 def updated_columns(statement: str) -> tuple[str, ...]:

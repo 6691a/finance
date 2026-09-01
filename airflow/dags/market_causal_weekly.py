@@ -41,6 +41,10 @@
 `sync_graph`가 그 주 몫을 Neo4j에 민다. **Postgres가 원본이고 Neo4j는 파생물이다** —
 설계는 [4-graph.md](../../docs/analysis/market-thesis/4-graph.md)다.
 
+엣지는 보낸 수와 MERGE된 수를 대조한다(`graph.EDGE_WRITES`, 2026-08-31 조사 G-59). Cypher의
+MATCH가 못 찾은 행은 오류 없이 빠지므로, 대조가 없으면 "N개 투영"이라 적히고 그래프는 비어
+있을 수 있다. 어긋나면 `GraphError`이고 이 태스크가 즉시 실패로 바꾼다.
+
 - **`NEO4J_URI`가 비어 있으면 `AirflowSkipException`이다.** 인스턴스가 서기 전에도
   `build_causal_graph`는 정상이어야 하고, 설정 누락으로 매주 빨간 태스크를 만들면 진짜
   실패가 묻힌다. URI가 있는데 접속이 안 되는 것은 skip이 아니라 `ConnectionError` 재시도다.
@@ -190,7 +194,12 @@ def market_causal_weekly():
                 if not paths:
                     continue
                 payload = graph.project(paths, steps)
-                graph.write_graph(uri, (user, password), payload)
+                try:
+                    graph.write_graph(uri, (user, password), payload)
+                except graph.GraphError as error:
+                    # 쿼리·제약 오류, 그리고 MATCH가 빈 행을 내 보낸 수와 MERGE된 수가 어긋난
+                    # 경우(G-59). 다시 불러도 같은 답이다. 연결 오류는 그대로 올려 재시도한다.
+                    raise AirflowFailException(str(error)) from error
                 projected += payload.edge_count
 
         return {"weeks": [week.isoformat() for week in weeks], "edges": projected}

@@ -213,6 +213,10 @@ class ParsedAttachment(BaseModel):
     parser_version: str = PARSER_VERSION
     # 페이지 단위 실패 사유. 저장하지 않고 태스크 로그로만 올린다.
     failures: tuple[str, ...] = ()
+    # 왜 못 읽었나(`failed`·`unsupported`일 때만). **DB에 저장하지 않는다** — 이 값의 소비자는
+    # 사람이고, 사람이 보는 자리는 그 실행의 로그와 Sentry 이벤트다. 컬럼으로 두면 다음 파싱이
+    # 덮어써 어차피 마지막 것만 남는다.
+    reason: str | None = None
 
 
 def usable_grid(grid: list[list[str | None]]) -> bool:
@@ -289,11 +293,20 @@ class AttachmentPdfParser:
             document = pymupdf.open(path)
         except (pymupdf.FileDataError, ValueError) as error:
             logger.warning("attachment %s could not be opened: %s", candidate.id, error)
-            return ParsedAttachment(attachment_id=candidate.id, status="failed", source_sha256=digest)
+            # 사유를 결과에 싣는다. 파일이 깨진 것인지 우리 파서가 못 따라가는 형식인지를
+            # 가르는 단서가 이 문장뿐이다.
+            return ParsedAttachment(
+                attachment_id=candidate.id, status="failed", source_sha256=digest, reason=str(error)
+            )
 
         with document:
             if document.needs_pass:
-                return ParsedAttachment(attachment_id=candidate.id, status="unsupported", source_sha256=digest)
+                return ParsedAttachment(
+                    attachment_id=candidate.id,
+                    status="unsupported",
+                    source_sha256=digest,
+                    reason="the file is password protected",
+                )
             pages, failures = self._pages(document, candidate)
             page_count = document.page_count
 
@@ -304,6 +317,7 @@ class AttachmentPdfParser:
                 source_sha256=digest,
                 page_count=page_count,
                 failures=tuple(failures),
+                reason=f"every page failed: {'; '.join(failures)}",
             )
 
         return ParsedAttachment(

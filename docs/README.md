@@ -41,7 +41,7 @@
 
 | 문서 | 무엇 | 상태 |
 | --- | --- | --- |
-| [2026-09-01-document-attachment-bm25-mutable-segment.md](issues/2026-09-01-document-attachment-bm25-mutable-segment.md) | 첨부 BM25 mutable 세그먼트 검색 지연 원인과 복구 절차 | 원인 확인, 복구 미적용 |
+| [2026-09-01-document-attachment-bm25-mutable-segment.md](issues/2026-09-01-document-attachment-bm25-mutable-segment.md) | BM25 mutable 세그먼트 검색 지연. 두 인덱스를 `mutable_segment_rows=0`으로 끄고 VACUUM으로 적체를 없앤다 | **해결. 리비전 `70e8e9ce64d3` 반영 대기**(2026-09-02) |
 
 ## `briefing/` — 읽어서 내보내기만 하는 DAG
 

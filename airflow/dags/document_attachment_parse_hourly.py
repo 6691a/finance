@@ -21,18 +21,54 @@ CPU를 같이 쓰는 DAG이 생기면 같은 pool에 물린다.
 
 ## 실패와 재시도
 
-**항목별 실패 수집이고, 전부 실패했을 때만 태스크를 죽인다.** 다음 실행이 같은 큐를 곧 다시
-보기 때문이다 — 첨부 하나로 죽이면 경보만 늘고 고쳐지는 것은 없다.
-`document_body_hourly`·`document_ingestion_hourly`와 같은 계열이다.
+**가르는 축은 "다시 하면 되나"다.** 다음 실행이 고칠 수 있는 실패는 세고 넘어가고, 다시
+해도 같은 답인 실패는 태스크를 죽인다. 어느 쪽이든 **배치는 끝까지 돈다** — 첨부 하나가
+나머지 마흔아홉 건의 저장을 막아서는 안 된다(예외 하나가 나머지를 통째로 막은 적이 있다,
+`document_ingestion_hourly` 2026-08-15).
+
+### 상태로 확정하고 큐에서 빼는 것 — 태스크를 죽이지 않는다
 
 - 열리지 않는 파일은 `failed`, 암호가 걸렸으면 `unsupported`로 **확정**한다. 다시 열어도 같은
-  답이라 실패로 세지 않는다.
+  답이라 큐에서 빠진다. **DB의 행이 그 기록이라 로그보다 오래 간다** — `parse_status`로
+  언제든 조회된다.
 - 페이지 일부가 깨지면 `partial`로 저장하고 **읽은 만큼은 남긴다.**
-- 파일이 없거나 디스크가 죽으면 상태를 남기지 않는다. 다음 실행이 다시 집는다.
+- **태스크는 죽이지 않는다.** 파일이 깨진 것은 우리가 고칠 수 없고, 나머지 마흔아홉 건이 다
+  됐는데 그 하나로 빨개지면 경보만 늘고 고쳐지는 것이 없다.
+- **대신 `logger.error`로 한 번 울린다.** 그것이 파일 자체의 문제인지 우리 파서가 못 따라가는
+  형식인지는 **사람이 봐야 안다.** Airflow의 Sentry 통합은 표준 `LoggingIntegration`이라
+  ERROR만 이벤트가 되고 WARNING은 breadcrumb으로만 남는다 — 아무도 안 보는 경고를 만들지
+  않으려면 이 자리는 ERROR여야 한다.
+- 그 로그에 **첨부 id·저장 경로·사유** 셋을 싣는다. 조사하는 사람이 파일을 찾고 무엇이 났는지
+  보는 데 필요한 최소가 그 셋이다. 사유는 `ParsedAttachment.reason`이 들고 오며 **DB에는 남기지
+  않는다** — 소비자가 사람이고, 컬럼으로 두면 다음 파싱이 덮어써 마지막 것만 남는다.
+- 배치가 다시 도는 일이 없어 **같은 첨부로 두 번 울리지 않는다.** 상태를 남기는 순간 큐에서
+  빠지기 때문이다.
+
+### 다시 하면 되는 실패 — 세고 넘어간다
+
+다음 실행이 같은 큐를 곧 다시 보기 때문이다 — 첨부 하나로 죽이면 경보만 늘고 고쳐지는 것은
+없다. `document_body_hourly`·`document_ingestion_hourly`와 같은 계열이다.
+
+- 파일이 없거나 디스크 I/O가 죽으면(`OSError`) 상태를 남기지 않는다. 마운트가 흔들린 것이라
+  다음 실행이 다시 집는다.
 - 디스크의 파일이 행의 SHA와 다르면 UPDATE가 0행이라 저장되지 않고, 그 첨부를 실패로 센다.
   행이 새 SHA로 갱신되면 다음 실행이 다시 집는다.
-- 전부 실패는 `OSError`로 올려 `retries`가 산다 — 마운트·권한처럼 잠시 뒤 풀리는 문제다.
+- 전부 이 실패면 `OSError`로 올려 `retries`가 산다 — 마운트·권한처럼 잠시 뒤 풀리는 문제다.
   마운트 자체가 없을 때만 `AirflowFailException`으로 즉시 죽인다.
+
+### 다시 해도 같은 답인 실패 — 하나라도 있으면 죽인다
+
+**우리 쪽(코드·데이터·DB) 문제다.** 재시도가 고칠 수 없으니 조용히 넘기면 아무도 안 고친다.
+잡아서 배치는 끝내되 마지막에 태스크를 죽인다.
+
+- **예상하지 못한 파서 예외.** `OSError`가 아닌 것은 전부 여기다 — 파서 버그이거나 우리가
+  모르는 입력이고, 다음 실행도 같은 파일에 같은 코드를 돌린다.
+- **저장 실패.** 파싱은 됐는데 못 썼다. 2026-09-01에 PyMuPDF가 낸 NUL(0x00)을 PostgreSQL의
+  `text`가 못 담아 psycopg가 죽었다. 그때 이 자리가 예외를 삼켰다면 run은 초록이고 첨부
+  스물두 건은 텍스트 없이 남았을 것이다 — **터졌기 때문에 발견됐다.**
+
+원인은 잃지 않는다. 첨부마다 `logger.exception`으로 traceback을 남기고(Sentry 이벤트가 된다),
+마지막 예외는 첫 원인을 `raise ... from`으로 잇는다.
 
 ## 무엇을 세는가
 
@@ -45,7 +81,7 @@ CPU를 같이 쓰는 DAG이 생기면 같은 pool에 물린다.
 - `CONNECTION_ID`가 가리키는 Airflow 연결. 접속 정보는 `AIRFLOW_CONN_FINANCE`가 갖는다.
 - **`FILE_ROOT`(`/opt/airflow/files`)가 마운트돼 있어야 한다.** 없으면 태스크를 즉시
   실패시킨다 — 조용히 건너뛰면 큐만 돌고 텍스트는 한 건도 안 남는데 성공으로 표시된다.
-- 이미지에 PyMuPDF(`>=1.26`)가 들어 있어야 한다.
+- 이미지에 PyMuPDF(`==1.28.2`)가 들어 있어야 한다.
 - **Airflow pool `pdf_parse`(슬롯 1).** 코드로 생기지 않는다 — UI나 `airflow pools set`으로
   만든다. 없으면 태스크가 scheduled에 멈춘 채 `non-existent pool` 경고만 남고 실패도 경보도
   없다. 운영에는 있다(2026-09-01 확인).
@@ -72,6 +108,9 @@ logger = logging.getLogger(__name__)
 
 # 한 실행이 처리할 첨부 수. 파일 하나가 수십 쪽이라 본문 수집(200건)보다 작게 잡는다.
 DEFAULT_BATCH_SIZE = 50
+
+# 제공처 파일이 그런 것이라 우리가 고칠 것이 없는 상태. 상태로 확정해 큐에서 빼되 건수는 센다.
+SETTLED_BAD_STATUSES = ("failed", "unsupported")
 
 
 def _connection() -> Any:
@@ -123,24 +162,50 @@ def document_attachment_parse_hourly():
         stored = 0
         pages = 0
         unreadable = 0
+        # 다음 실행이 고칠 수 있는 실패. 전부 이것일 때만 죽인다.
         failures: list[str] = []
+        # 다시 해도 같은 답인 실패(파서 버그·저장 실패). **하나라도 있으면** 배치를 끝내고 죽인다.
+        unrecoverable: list[str] = []
+        first_error: Exception | None = None
+        # 제공처 파일이 손상됐거나 암호가 걸린 것. 상태로 확정해 큐에서 빼되 사람이 볼 수 있게
+        # 아래에서 한 번 울린다. 태스크는 죽이지 않는다.
+        unreadable_files: list[str] = []
         for candidate in waiting:
             try:
                 result = parser.parse(candidate)
-            except Exception as error:
-                # 파일 없음·I/O·예상하지 못한 파서 예외 전부 이 첨부에서 멈춘다. 상태를 남기지
-                # 않아 다음 실행이 다시 집는다. 파서 예외 하나가 나머지를 통째로 막은 적이
-                # 있다(`document_ingestion_hourly`, 2026-08-15).
-                logger.exception("attachment %s could not be parsed", candidate.id)
+            except OSError as error:
+                # 파일이 없거나 디스크가 죽었다. 마운트가 흔들린 것이라 다음 실행이 다시 집는다.
+                logger.warning("attachment %s could not be read: %s", candidate.id, error)
                 failures.append(f"{candidate.id}({error})")
                 continue
+            except Exception as error:
+                # `OSError`가 아닌 것은 파서 버그이거나 우리가 모르는 입력이다. 다음 실행도 같은
+                # 파일에 같은 코드를 돌리므로 아래에서 죽인다. 배치는 계속 돈다.
+                logger.exception("attachment %s hit an error we did not foresee", candidate.id)
+                unrecoverable.append(f"{candidate.id}({error})")
+                first_error = first_error or error
+                continue
+
+            if result.status in SETTLED_BAD_STATUSES:
+                # 파일이 손상됐거나 암호가 걸렸다. 상태를 남겨 큐에서 빼고, 조사에 필요한 셋
+                # (첨부 id·저장 경로·사유)을 모은다.
+                unreadable_files.append(f"{candidate.id} {candidate.storage_path}({result.reason})")
 
             if result.failures:
                 # 페이지 단위 실패는 저장하지 않으므로 여기서 올린다. 첨부는 성공으로 센다.
                 logger.warning("attachment %s parsed partially: %s", candidate.id, "; ".join(result.failures))
 
-            with closing(_connection()) as connection, atomic(connection):
-                updated = parser.store(connection, result)
+            try:
+                with closing(_connection()) as connection, atomic(connection):
+                    updated = parser.store(connection, result)
+            except Exception as error:
+                # 파싱은 됐는데 못 썼다. **삼키지 않는다** — 나머지 첨부는 계속 저장하되
+                # 아래에서 태스크를 죽인다. 여기서 traceback을 남겨 원인이 Sentry에 간다.
+                logger.exception("attachment %s could not be stored", candidate.id)
+                unrecoverable.append(f"{candidate.id}({error})")
+                first_error = first_error or error
+                continue
+
             if not updated:
                 # 읽는 동안 행의 SHA가 바뀌었다. 텍스트는 버리고 다음 실행이 새 파일로 다시 집는다.
                 logger.warning("attachment %s changed while parsing; nothing stored", candidate.id)
@@ -151,6 +216,37 @@ def document_attachment_parse_hourly():
             pages += result.page_count
             unreadable += result.unreadable_page_count
 
+        # 페이지 두 수가 외부 Vision을 켤지 정하는 근거다. 분모 없이 세지 않는다.
+        # 못 읽은 파일 수가 없으면 50건이 전부 손상인 배치와 전부 성공인 배치의 로그가 같아 보인다.
+        # 죽기 전에 남긴다.
+        logger.info(
+            "Parsed %s of %s attachments: %s pages, %s unreadable, %s settled as unreadable files",
+            stored,
+            len(waiting),
+            pages,
+            unreadable,
+            len(unreadable_files),
+        )
+
+        if unreadable_files:
+            # **태스크는 죽이지 않고 ERROR로 한 번 울린다.** 파일 자체의 문제인지 우리 파서가
+            # 못 따라가는 형식인지는 사람이 봐야 알고, Airflow의 Sentry 통합은 ERROR만 이벤트로
+            # 만든다. 같은 첨부는 상태가 남아 큐에서 빠지므로 두 번 울리지 않는다.
+            logger.error(
+                "%s of %s attachments could not be read; check whether the file or the parser is at fault: %s",
+                len(unreadable_files),
+                len(waiting),
+                "; ".join(unreadable_files),
+            )
+
+        if unrecoverable:
+            # 파서 버그이거나 파싱한 텍스트를 못 쓴 것이다. 그 첨부는 상태가 안 남아 다음 실행이
+            # 다시 집지만 같은 코드가 같은 답을 낸다 — 초록으로 끝내면 아무도 고치지 않는다.
+            # 첫 원인을 이어 붙여 추적이 여기서 끊기지 않게 한다.
+            raise RuntimeError(
+                f"{len(unrecoverable)} of {len(waiting)} attachments failed in a way that "
+                f"cannot be retried: {'; '.join(unrecoverable)}"
+            ) from first_error
         if len(failures) == len(waiting):
             # 전부 실패했으면 우리 쪽 문제일 가능성이 크다(마운트·권한). 잠시 뒤 풀릴 수 있어
             # 재시도가 살아 있는 예외로 올린다 — AirflowFailException은 retries를 건너뛴다.
@@ -158,14 +254,6 @@ def document_attachment_parse_hourly():
         if failures:
             logger.warning("%s of %s attachments failed: %s", len(failures), len(waiting), "; ".join(failures))
 
-        # 이 두 수가 외부 Vision을 켤지 정하는 근거다. 분모 없이 세지 않는다.
-        logger.info(
-            "Parsed %s of %s attachments: %s pages, %s unreadable",
-            stored,
-            len(waiting),
-            pages,
-            unreadable,
-        )
         return stored
 
     parse()

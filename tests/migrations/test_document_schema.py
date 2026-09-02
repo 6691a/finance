@@ -114,3 +114,19 @@ def test_content_level_is_gone(capsys):
     assert "DROP CONSTRAINT ck_document_metadata_only_has_no_body" in sql
     # 정책 컬럼은 그대로다. 둘은 다른 것이다.
     assert "collection_mode" in DocumentSource.__table__.columns
+
+
+def test_bm25_indexes_write_without_a_mutable_segment(capsys):
+    """pg_search의 쓰기 버퍼(mutable segment)는 색인을 읽기 시점으로 미룬다.
+
+    질의마다 버퍼의 행을 다시 읽어 lindera로 형태소 분석하므로 첨부 텍스트(평균 2만 자)가
+    수백 행 쌓이면 검색 하나가 수십 초다(2026-09-02 실측). 시간당 수십 행을 쓰는 이
+    저장소에는 버퍼가 주는 것이 없어 두 인덱스 모두 0으로 끈다.
+    """
+    sql = head_sql(capsys)
+
+    assert "ALTER INDEX document_bm25 SET (mutable_segment_rows = 0)" in sql
+    assert "ALTER INDEX document_attachment_bm25 SET (mutable_segment_rows = 0)" in sql
+    # 이미 쌓인 버퍼는 옵션만 바꿔서는 안 사라진다. VACUUM이 백그라운드 머지로 바꾼다.
+    assert "VACUUM document;" in sql
+    assert "VACUUM document_attachment;" in sql

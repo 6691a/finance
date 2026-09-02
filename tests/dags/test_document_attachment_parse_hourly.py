@@ -257,6 +257,50 @@ def test_settled_bad_files_are_counted_in_the_summary(monkeypatch, tmp_path, cap
     assert "2 settled as unreadable files" in caplog.text
 
 
+def test_settled_bad_files_raise_an_error_log_without_failing_the_task(monkeypatch, tmp_path, caplog):
+    """파일 문제인지 파서 문제인지는 사람이 봐야 안다. **태스크는 죽이지 않는다** — 나머지가
+    다 됐는데 우리가 고칠 수 없는 파일 하나로 빨개지면 안 된다.
+
+    `logger.error`인 이유는 Airflow의 Sentry 통합이 표준 LoggingIntegration이라 ERROR만
+    이벤트가 되기 때문이다. WARNING은 breadcrumb으로만 남아 아무도 안 본다.
+    """
+    other = CANDIDATE.model_copy(update={"id": 8})
+
+    def parse(candidate):
+        if candidate.id == CANDIDATE.id:
+            return ParsedAttachment(
+                attachment_id=candidate.id,
+                status="failed",
+                source_sha256="abc",
+                reason="cannot open broken document",
+            )
+        return ParsedAttachment(attachment_id=candidate.id, status="ok", text="본문", source_sha256="abc")
+
+    parsed, _, _ = run_parse(monkeypatch, tmp_path, waiting=(CANDIDATE, other), parse=parse)
+
+    # 나머지는 저장됐고 태스크는 초록이다.
+    assert parsed == 2
+
+    errors = [record for record in caplog.records if record.levelname == "ERROR"]
+    assert len(errors) == 1
+    message = errors[0].getMessage()
+    # 조사에 필요한 것 셋 — 어느 첨부인지, 어느 파일인지, 무엇이 났는지.
+    assert "7" in message
+    assert "documents/boj/1042/0.pdf" in message
+    assert "cannot open broken document" in message
+
+
+def test_no_error_log_when_every_file_was_readable(monkeypatch, tmp_path, caplog):
+    """울릴 것이 없으면 울리지 않는다. 매시 도는 DAG이라 빈 경보는 곧 무시된다."""
+
+    def parse(candidate):
+        return ParsedAttachment(attachment_id=candidate.id, status="ok", text="본문", source_sha256="abc")
+
+    run_parse(monkeypatch, tmp_path, waiting=(CANDIDATE,), parse=parse)
+
+    assert [record for record in caplog.records if record.levelname == "ERROR"] == []
+
+
 def test_the_schedule_stands_behind_the_body_collector():
     """15분에 파일을 받고 20분에 그 파일을 읽는다."""
     assert module.document_attachment_parse_hourly.schedule == "20 * * * *"

@@ -246,6 +246,38 @@ def test_an_encrypted_pdf_is_settled_as_unsupported(tmp_path):
     assert result.text is None
 
 
+def test_a_settled_bad_file_carries_why_it_could_not_be_read(tmp_path):
+    """파일 문제인지 파서 문제인지 가르려면 사유가 로그가 아니라 결과에 있어야 한다."""
+    path = tmp_path / "broken.pdf"
+    path.write_bytes(b"%PDF-1.7 this is not really a pdf")
+
+    result = AttachmentPdfParser(tmp_path).parse(candidate("broken.pdf"))
+
+    assert result.status == "failed"
+    # 제공처가 낸 문장을 그대로 싣는다. 뭉개면 무엇이 났는지 가릴 단서가 사라진다.
+    assert result.reason is not None
+    assert "as type pdf" in result.reason
+
+
+def test_an_encrypted_file_says_so_in_its_reason(tmp_path):
+    path = tmp_path / "locked.pdf"
+    document = pymupdf.open()
+    document.new_page().insert_text((60, 70), "비밀", fontname=FONT, fontsize=11)
+    document.save(path, encryption=pymupdf.PDF_ENCRYPT_AES_256, user_pw="pw", owner_pw="pw")
+    document.close()
+
+    result = AttachmentPdfParser(tmp_path).parse(candidate("locked.pdf"))
+
+    assert result.status == "unsupported"
+    assert result.reason == "the file is password protected"
+
+
+def test_a_readable_file_has_no_reason(tmp_path):
+    report_pdf(tmp_path / "probe.pdf")
+
+    assert AttachmentPdfParser(tmp_path).parse(candidate()).reason is None
+
+
 def test_a_file_that_is_not_a_pdf_is_settled_as_failed(tmp_path):
     path = tmp_path / "broken.pdf"
     path.write_bytes(b"%PDF-1.7 this is not really a pdf")

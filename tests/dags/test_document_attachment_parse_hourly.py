@@ -122,6 +122,62 @@ def test_a_row_whose_sha_moved_while_parsing_is_counted_as_failed(monkeypatch, t
     assert "7(sha changed while parsing)" in caplog.text
 
 
+def test_a_store_failure_does_not_block_the_rest_of_the_batch(monkeypatch, tmp_path, caplog):
+    """파싱한 텍스트를 못 쓴 첨부 하나가 나머지의 저장까지 막지 않는다."""
+    other = CANDIDATE.model_copy(update={"id": 8})
+
+    def parse(candidate):
+        return ParsedAttachment(attachment_id=candidate.id, status="ok", text="본문", source_sha256="abc")
+
+    def store(result):
+        if result.attachment_id == CANDIDATE.id:
+            raise ValueError("A string literal cannot contain NUL (0x00) characters")
+        return 1
+
+    with pytest.raises(RuntimeError, match="cannot be retried"):
+        run_parse(monkeypatch, tmp_path, waiting=(CANDIDATE, other), parse=parse, store=store)
+
+    # 어느 첨부가 왜 못 쓰였는지가 로그에 남는다.
+    assert "attachment 7 could not be stored" in caplog.text
+
+
+def test_a_store_failure_kills_the_task_even_when_others_were_stored(monkeypatch, tmp_path):
+    """저장 실패는 그 파일 문제가 아니라 우리 쪽 문제다. 조용히 넘기면 아무도 안 고친다 —
+    NUL이 그렇게 발견됐다(2026-09-01)."""
+    other = CANDIDATE.model_copy(update={"id": 8})
+    attempted: list[int] = []
+
+    def parse(candidate):
+        return ParsedAttachment(attachment_id=candidate.id, status="ok", text="본문", source_sha256="abc")
+
+    def store(result):
+        attempted.append(result.attachment_id)
+        if result.attachment_id == CANDIDATE.id:
+            raise ValueError("boom")
+        return 1
+
+    with pytest.raises(RuntimeError, match=r"7\(.*boom"):
+        run_parse(monkeypatch, tmp_path, waiting=(CANDIDATE, other), parse=parse, store=store)
+
+    # 죽기 전에 나머지 첨부는 저장했다. 한 건 때문에 49건을 버리지 않는다.
+    assert attempted == [7, 8]
+
+
+def test_a_store_failure_keeps_the_original_exception(monkeypatch, tmp_path):
+    """원인을 끊으면 추적이 거기서 멈춘다."""
+
+    def parse(candidate):
+        return ParsedAttachment(attachment_id=candidate.id, status="ok", text="본문", source_sha256="abc")
+
+    def store(result):
+        raise ValueError("adapt failed")
+
+    with pytest.raises(RuntimeError) as caught:
+        run_parse(monkeypatch, tmp_path, waiting=(CANDIDATE,), parse=parse, store=store)
+
+    assert isinstance(caught.value.__cause__, ValueError)
+
+
 def test_every_attachment_failing_kills_the_task(monkeypatch, tmp_path):
     """하나가 죽는 것은 그 파일 문제이고 전부 죽는 것은 마운트·권한 문제다."""
 
@@ -133,8 +189,11 @@ def test_every_attachment_failing_kills_the_task(monkeypatch, tmp_path):
         run_parse(monkeypatch, tmp_path, waiting=(CANDIDATE,), parse=parse)
 
 
-def test_an_unexpected_error_stops_at_that_attachment(monkeypatch, tmp_path):
-    """파서 예외 하나가 나머지를 통째로 막은 적이 있다(2026-08-15)."""
+def test_an_unexpected_parser_error_finishes_the_batch_then_kills_the_task(monkeypatch, tmp_path):
+    """파서 버그는 다시 해도 같은 답이다. 나머지는 저장하되 태스크는 죽는다.
+
+    나머지를 계속 도는 이유는 예외 하나가 나머지를 통째로 막은 적이 있어서다(2026-08-15).
+    """
     other = CANDIDATE.model_copy(update={"id": 8})
 
     def parse(candidate):
@@ -142,10 +201,60 @@ def test_an_unexpected_error_stops_at_that_attachment(monkeypatch, tmp_path):
             raise ValueError("something we did not foresee")
         return ParsedAttachment(attachment_id=candidate.id, status="ok", text="본문", source_sha256="abc")
 
+    with pytest.raises(RuntimeError, match="cannot be retried") as caught:
+        run_parse(monkeypatch, tmp_path, waiting=(CANDIDATE, other), parse=parse)
+
+    # 원인을 끊으면 추적이 거기서 멈춘다.
+    assert isinstance(caught.value.__cause__, ValueError)
+
+
+def test_an_unexpected_parser_error_still_stores_the_other_attachments(monkeypatch, tmp_path):
+    """예외 하나가 나머지를 통째로 막은 적이 있다(2026-08-15). 죽더라도 배치는 끝낸다."""
+    other = CANDIDATE.model_copy(update={"id": 8})
+    attempted: list[int] = []
+
+    def parse(candidate):
+        if candidate.id == CANDIDATE.id:
+            raise ValueError("something we did not foresee")
+        return ParsedAttachment(attachment_id=candidate.id, status="ok", text="본문", source_sha256="abc")
+
+    def store(result):
+        attempted.append(result.attachment_id)
+        return 1
+
+    with pytest.raises(RuntimeError):
+        run_parse(monkeypatch, tmp_path, waiting=(CANDIDATE, other), parse=parse, store=store)
+
+    assert attempted == [8]
+
+
+def test_a_missing_file_is_transient_and_leaves_the_task_green(monkeypatch, tmp_path):
+    """마운트가 흔들린 것이라 다음 실행이 고친다. 이것으로 죽이면 경보만 는다."""
+    other = CANDIDATE.model_copy(update={"id": 8})
+
+    def parse(candidate):
+        if candidate.id == CANDIDATE.id:
+            raise FileNotFoundError("documents/boj/1042/0.pdf")
+        return ParsedAttachment(attachment_id=candidate.id, status="ok", text="본문", source_sha256="abc")
+
     parsed, stored, _ = run_parse(monkeypatch, tmp_path, waiting=(CANDIDATE, other), parse=parse)
 
     assert parsed == 1
     assert [result.attachment_id for result in stored] == [8]
+
+
+def test_settled_bad_files_are_counted_in_the_summary(monkeypatch, tmp_path, caplog):
+    """손상·암호는 상태로 확정돼 큐에서 빠진다. 세지 않으면 50건이 전부 그래도 로그가 같다."""
+    other = CANDIDATE.model_copy(update={"id": 8})
+
+    def parse(candidate):
+        status = "failed" if candidate.id == CANDIDATE.id else "unsupported"
+        return ParsedAttachment(attachment_id=candidate.id, status=status, source_sha256="abc")
+
+    parsed, _, _ = run_parse(monkeypatch, tmp_path, waiting=(CANDIDATE, other), parse=parse)
+
+    assert parsed == 2
+    assert "2 settled as unreadable files" in caplog.text
 
 
 def test_the_schedule_stands_behind_the_body_collector():

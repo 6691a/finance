@@ -87,6 +87,7 @@
 | `airflow/modules/` | DAG이 쓰는 공유 코드. 도메인 폴더(`collectors/`·`briefing/`·`expectation/`·`technical/`·`thesis/`·`causal/`·`graph/`)로 나누고 최상위에는 공용 잎만 둔다. 하위 패키지 `__init__.py`는 비운다 — 재수출하면 가벼운 모듈 하나를 import해도 LangChain이 딸려 온다. (아래 규칙) |
 | `airflow/modules/collectors/` | 수집기. 도메인 폴더(`market/`·`document/`·`indicator/`·`calendar/`·`analyst/`)로 나눈다. 전환 진행 상황은 [docs/convention/collectors-class-migration.md](../docs/convention/collectors-class-migration.md) |
 | `tests/` | pytest |
+| `notebooks/` | 손으로 돌려 보는 Jupyter 노트북. 파서·수집기가 실제 데이터에서 무엇을 하는지 눈으로 확인하는 자리다. **`.gitignore`에 있어 커밋되지 않는다** — 실행하면 앱키와 시세 응답이 출력에 남는다. **DAG도 서비스도 여기를 import하지 않는다**: 코드의 원본은 언제나 `airflow/`와 `apps/`이고 노트북은 그것을 부르기만 한다 |
 
 `apps/models/`의 모듈은 도메인 단위로 나눈다(`raw.py`, `reference.py`, `content.py`).
 한 도메인이 커지면 그 안에서 다시 패키지로 나눈다(2026-08-25) — `market/`이
@@ -226,7 +227,7 @@ uv run ruff check apps airflow migrations tests
 - **하위 패키지 `__init__.py`는 빈 파일이다.** 재수출하면 `modules.thesis.domain` 하나를 import해도 LangChain이 딸려 와 DagBag이 그 무게를 문다. `tests/modules/test_import_weight.py`가 그 경계를 재고 있어 재수출은 그 테스트를 즉시 깬다.
 - **최상위에 남는 것은 공용 잎 열둘이다**(`db`·`sql`·`upsert`·`utility`·`period`·`schema`·`slack`·`llm`·`prompt`·`market_session`·`assessment`·`dedup`). 열은 300줄 미만이고 둘이 넘는다(`assessment` 637, `llm` 350 — 2026-09-01 실측). `graph/`는 둘(`projection`·`query`)인데 사용자 결정으로 내렸다(2026-09-01) — "셋 이상" 기준의 예외이고 이동은 따로 커밋했다. **`core/` 같은 폴더로 모으지 않는다** — 114개 파일 226줄을 고치고 얻는 것이 목록 열 줄이다(2026-08-27 실측). **줄 수는 폴더로 내리는 기준이 아니다** — 기준은 "한 도메인의 파일이 셋 이상인가"이고, 잎 하나가 길어진 것은 그 파일을 나눌 문제다.
 - **접두어를 떼면 바인딩 이름이 짧아져 지역 변수와 겹칠 수 있다**(`from modules import technical` → `from modules.technical import indicators`). `ruff`의 `F823`이 그것을 잡는 유일한 장치이므로 기계적 치환 직후에 `ruff`를 먼저 돌린다. 2026-08-27 이동에서 셋이 걸렸다.
-- **이동과 파일 분리를 같은 커밋에 두지 않는다.** 어느 쪽이 회귀를 만들었는지 못 가른다. `thesis/toolbox.py`가 1,440줄로 저장소 최대이고 다음 분리 후보다.
+- **이동과 파일 분리를 같은 커밋에 두지 않는다.** 어느 쪽이 회귀를 만들었는지 못 가른다. `thesis/toolbox.py`는 2026-09-01에 셋을 떼어 1,556→920줄이 됐다 — 인자 스키마(`tool_args.py`), 행 변환(`tool_rows.py`), 툴 호출 원장(`tool_ledger.py`). 원장은 상태를 쥐므로 파일이 아니라 클래스(`ToolCallLedger`)로 갈랐고 툴박스가 그것을 소유한다.
 - **`dags/`는 폴더로 나누지 않는다.** DagBag은 하위 폴더를 재귀로 훑지만 `dag_id`가 경로와 무관해 UI에 그룹이 생기지 않는다(그 일은 `tags`가 한다). DAG은 파일당 얇고 접두어가 이미 정렬을 해 준다.
 
 ## 클래스와 함수를 가르는 기준

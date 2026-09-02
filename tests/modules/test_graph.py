@@ -17,6 +17,7 @@ from typing import Any, Self
 import pytest
 from neo4j.exceptions import ClientError, ServiceUnavailable, TransientError
 
+from modules.graph import cypher, rows
 from modules.graph import projection as graph
 
 SQL_ROOT = pathlib.Path(__file__).resolve().parents[2] / "airflow" / "sql" / "postgres"
@@ -26,7 +27,7 @@ WEEK = date(2026, 8, 10)
 CREATED = datetime(2026, 8, 23, 22, 0, tzinfo=UTC)
 
 
-def path_row(**overrides: Any) -> graph.CausalPathRow:
+def path_row(**overrides: Any) -> rows.CausalPathRow:
     """사건에서 출발한 경로 하나. 기본값은 단계 하나짜리다."""
     values: dict[str, Any] = {
         "path_id": 1,
@@ -48,10 +49,10 @@ def path_row(**overrides: Any) -> graph.CausalPathRow:
         "return_unit": "percent",
     }
     values.update(overrides)
-    return graph.CausalPathRow(**values)
+    return rows.CausalPathRow(**values)
 
 
-def linked_row(**overrides: Any) -> graph.CausalPathRow:
+def linked_row(**overrides: Any) -> rows.CausalPathRow:
     """대상에서 출발한 경로. 링커가 내는 모양이다."""
     return path_row(
         path_id=2,
@@ -65,9 +66,9 @@ def linked_row(**overrides: Any) -> graph.CausalPathRow:
     )
 
 
-def steps(*names: str, path_id: int = 1) -> list[graph.CausalStepRow]:
+def steps(*names: str, path_id: int = 1) -> list[rows.CausalStepRow]:
     return [
-        graph.CausalStepRow(path_id=path_id, position=index, channel=name) for index, name in enumerate(names, start=1)
+        rows.CausalStepRow(path_id=path_id, position=index, channel=name) for index, name in enumerate(names, start=1)
     ]
 
 
@@ -263,7 +264,7 @@ def test_path_without_a_source_is_an_error():
 def test_constraints_run_before_the_merges(driver: FakeDriver):
     graph.write_graph("bolt://x:7687", ("neo4j", "pw"), graph.project([path_row()], steps("할인율")))
 
-    assert len(driver.constraints) == len(graph.CONSTRAINTS)
+    assert len(driver.constraints) == len(cypher.CONSTRAINTS)
     assert all("IS UNIQUE" in statement for statement in driver.constraints)
     # NODE KEY는 Enterprise 전용이라 community 이미지가 거절한다.
     assert not any("NODE KEY" in statement for statement in driver.constraints)
@@ -299,7 +300,7 @@ def test_empty_row_sets_are_not_sent(driver: FakeDriver):
 
 
 def test_merge_keys_include_path_id():
-    keys = dict(graph.WRITES)
+    keys = dict(cypher.WRITES)
     assert "path_id: r.path_id, position: r.position" in keys["from_event"]
     assert "path_id: r.path_id, position: r.position" in keys["from_target"]
     assert "path_id: r.path_id, position: r.position" in keys["chain"]
@@ -343,12 +344,12 @@ def _select_columns(path: pathlib.Path) -> list[str]:
 
 def test_path_sql_columns_match_the_positional_read():
     columns = _select_columns(SQL_ROOT / "market_causal_path" / "select_graph_by_week.sql")
-    assert columns == list(graph.CausalPathRow.model_fields)
+    assert columns == list(rows.CausalPathRow.model_fields)
 
 
 def test_step_sql_columns_match_the_positional_read():
     columns = _select_columns(SQL_ROOT / "market_causal_step" / "select_by_week.sql")
-    assert columns == list(graph.CausalStepRow.model_fields)
+    assert columns == list(rows.CausalStepRow.model_fields)
 
 
 def test_read_week_maps_rows_by_position():
@@ -405,8 +406,8 @@ def test_an_edge_whose_match_found_no_node_is_an_error(driver: FakeDriver):
 def test_edge_statements_return_their_merged_count():
     """대조의 재료는 Neo4j 카운터가 아니라 문장 자체가 세어 주는 행 수다 — MERGE는 재적재에서
     0을 만들지만 `count(l)`은 MATCH를 통과한 행마다 하나씩 센다."""
-    statements = dict(graph.WRITES)
-    for key in graph.EDGE_WRITES:
+    statements = dict(cypher.WRITES)
+    for key in cypher.EDGE_WRITES:
         assert statements[key].endswith(" AS merged"), key
     for key in ("events", "channels", "targets"):
         assert "RETURN" not in statements[key], key

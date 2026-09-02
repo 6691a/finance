@@ -10,17 +10,27 @@ from sqlalchemy import Table
 
 from apps.models.content import DocumentAttachment as AttachmentModel
 from modules.collectors.document.pdf import (
+    MARGIN_BAND_RATIO,
+    MAX_TABLE_CELL_CHARS,
     PARSE_UPDATE,
     PARSER_VERSION,
     PENDING_PARSES,
+    SIDE_STRIP_MAX_WIDTH,
     AttachmentPdfParser,
+    PagePiece,
     ParseCandidate,
     ParsedAttachment,
     ParsedPage,
     assemble,
+    column_gutter,
+    drop_running_frame,
     markdown_table,
+    normalize_frame,
     pending_attachments,
     read_page,
+    reading_order,
+    running_frame,
+    side_strip,
     usable_grid,
 )
 
@@ -97,6 +107,22 @@ def test_a_grid_needs_fill_rows_columns_and_a_number():
     assert not usable_grid([["구분", None, None], [None, None, "1,200"]])
 
 
+def test_a_grid_whose_cell_swallowed_a_whole_row_is_not_a_table():
+    """열 경계를 덜 찾으면 한 셀에 행이 통째로 들어간다. 그 격자는 표가 아니다.
+
+    앞의 셋(채움률·행·열·숫자)을 전부 통과하므로 이 문턱이 없으면 채택된다. 채택되면
+    `read_page`가 **원본 블록을 버린 자리에** 뭉개진 표를 넣어 페이지 텍스트가 원본보다
+    나빠진다. 실제 사례는 17열 ETF 표가 5열로 잡혀 헤더와 첫 행이 한 셀에 뭉친 것이다
+    (2026-09-01 실측, 125자).
+    """
+    crammed = "TER 샤프 IR 테마 세부테마 티커 ETF명 지역 신재생 전기차 KARS " + "KraneShares Electric Vehicles " * 3
+    assert len(crammed) > MAX_TABLE_CELL_CHARS
+    assert not usable_grid([["ETF", "수익률"], [crammed, "0.6 4.9 2.8 (16.1)"]])
+
+    # 문턱 바로 아래는 그대로 표다. 긴 셀이 있다고 다 버리지 않는다.
+    assert usable_grid([["구분", "값"], ["가" * MAX_TABLE_CELL_CHARS, "1,200"]])
+
+
 def test_the_markdown_table_keeps_one_shape():
     """표기가 갈리면 한 문서 안에 표가 두 모양으로 섞인다."""
     rendered = markdown_table([["구분", "값"], ["영업이익|주석", "1,200\n(잠정)"]])
@@ -147,6 +173,7 @@ def test_nul_characters_are_dropped_before_they_reach_the_column():
     """
     page = SimpleNamespace(
         rect=pymupdf.Rect(0, 0, 100, 100),
+        rotation=0,
         find_tables=lambda: SimpleNamespace(tables=[]),
         get_text=lambda kind, sort=False: [(0.0, 0.0, 10.0, 10.0, "영업이익\x00 1,200\x00", 0, 0)],
         get_image_info=list,
@@ -217,6 +244,38 @@ def test_an_encrypted_pdf_is_settled_as_unsupported(tmp_path):
     # 다시 열어도 같은 답이라 확정하고 큐에서 뺀다.
     assert result.status == "unsupported"
     assert result.text is None
+
+
+def test_a_settled_bad_file_carries_why_it_could_not_be_read(tmp_path):
+    """파일 문제인지 파서 문제인지 가르려면 사유가 로그가 아니라 결과에 있어야 한다."""
+    path = tmp_path / "broken.pdf"
+    path.write_bytes(b"%PDF-1.7 this is not really a pdf")
+
+    result = AttachmentPdfParser(tmp_path).parse(candidate("broken.pdf"))
+
+    assert result.status == "failed"
+    # 제공처가 낸 문장을 그대로 싣는다. 뭉개면 무엇이 났는지 가릴 단서가 사라진다.
+    assert result.reason is not None
+    assert "as type pdf" in result.reason
+
+
+def test_an_encrypted_file_says_so_in_its_reason(tmp_path):
+    path = tmp_path / "locked.pdf"
+    document = pymupdf.open()
+    document.new_page().insert_text((60, 70), "비밀", fontname=FONT, fontsize=11)
+    document.save(path, encryption=pymupdf.PDF_ENCRYPT_AES_256, user_pw="pw", owner_pw="pw")
+    document.close()
+
+    result = AttachmentPdfParser(tmp_path).parse(candidate("locked.pdf"))
+
+    assert result.status == "unsupported"
+    assert result.reason == "the file is password protected"
+
+
+def test_a_readable_file_has_no_reason(tmp_path):
+    report_pdf(tmp_path / "probe.pdf")
+
+    assert AttachmentPdfParser(tmp_path).parse(candidate()).reason is None
 
 
 def test_a_file_that_is_not_a_pdf_is_settled_as_failed(tmp_path):
@@ -302,3 +361,187 @@ def updated_columns(statement: str) -> tuple[str, ...]:
 def without_comments(statement: str) -> str:
     """설명 주석을 뗀 SQL. 주석이 규칙을 글로 적고 있어 그대로 찾으면 늘 걸린다."""
     return re.sub(r"(?m)^\s*--.*$", "", statement)
+
+
+# --- 읽는 순서와 프레임 ---------------------------------------------------
+
+PAGE = pymupdf.Rect(0, 0, 600, 800)
+
+
+def piece(text: str, x0: float, y0: float, width: float = 200, height: float = 12, margin: bool = False) -> PagePiece:
+    return PagePiece(text=text, x0=x0, y0=y0, x1=x0 + width, y1=y0 + height, in_margin=margin)
+
+
+def test_a_two_column_page_reads_the_left_column_first():
+    """y축 하나로 정렬하면 왼쪽 본문과 오른쪽 차트 라벨이 줄 단위로 섞인다(2026-09-01 실측)."""
+    pieces = [
+        piece("본문 첫 줄", 40, 100),
+        piece("(GWh)", 380, 105),
+        piece("본문 둘째 줄", 40, 120),
+        piece("300", 380, 125),
+    ]
+
+    assert [item.text for item in reading_order(pieces, PAGE)] == [
+        "본문 첫 줄",
+        "본문 둘째 줄",
+        "(GWh)",
+        "300",
+    ]
+
+
+def test_a_full_width_piece_splits_the_columns_into_bands():
+    """전폭 제목을 무시하면 제목 아래 왼쪽 단이 제목 위 오른쪽 단보다 먼저 나온다."""
+    pieces = [
+        piece("위 왼쪽", 40, 100),
+        piece("위 오른쪽", 380, 100),
+        piece("전폭 제목", 40, 200, width=520),
+        piece("아래 왼쪽", 40, 300),
+        piece("아래 오른쪽", 380, 300),
+    ]
+
+    assert [item.text for item in reading_order(pieces, PAGE)] == [
+        "위 왼쪽",
+        "위 오른쪽",
+        "전폭 제목",
+        "아래 왼쪽",
+        "아래 오른쪽",
+    ]
+
+
+def test_a_single_column_page_keeps_the_y_axis_order():
+    """빈 띠가 없으면 예전과 같다. 1단 조판을 흔들지 않는 것이 이 규칙의 조건이다."""
+    pieces = [piece("첫 문단", 40, 100, width=520), piece("둘째 문단", 40, 140, width=520)]
+
+    assert column_gutter(pieces, PAGE) is None
+    assert [item.text for item in reading_order(pieces, PAGE)] == ["첫 문단", "둘째 문단"]
+
+
+def test_one_stray_piece_on_the_right_is_not_a_second_column():
+    """오른쪽에 주석 한 조각뿐인 1단 페이지를 2단으로 읽으면 그 주석이 본문 끝으로 밀린다."""
+    pieces = [piece("본문 첫 줄", 40, 100), piece("본문 둘째 줄", 40, 120), piece("주1)", 380, 110, width=40)]
+
+    assert column_gutter(pieces, PAGE) is None
+
+
+def test_the_gutter_is_only_looked_for_in_the_middle_of_the_page():
+    """가장자리의 빈 띠는 여백이지 단 경계가 아니다."""
+    pieces = [piece("들여쓴 본문", 300, 100, width=260), piece("들여쓴 둘째 줄", 300, 120, width=260)]
+
+    assert column_gutter(pieces, PAGE) is None
+
+
+def test_page_numbers_fold_into_one_frame_line():
+    """쪽 번호는 쪽마다 값이 달라 숫자를 접어야 같은 줄로 세어진다."""
+    assert normalize_frame("- 12 -") == normalize_frame("- 3 -") == "- # -"
+    assert normalize_frame("2026년  9월\n한국은행") == "#년 #월 한국은행"
+
+
+def test_a_line_repeated_in_the_margin_is_dropped_from_every_page():
+    pages = [
+        ParsedPage(
+            number=number,
+            text="머리글\n\n본문",
+            visible_chars=6,
+            image_area_ratio=0.0,
+            pieces=(piece("머리글", 40, 10, margin=True), piece("본문", 40, 400)),
+        )
+        for number in (1, 2, 3)
+    ]
+
+    assert running_frame(pages) == frozenset({"머리글"})
+    trimmed = drop_running_frame(pages)
+
+    assert [page.text for page in trimmed] == ["본문", "본문", "본문"]
+    # 본문이 없는 스캔 쪽이 머리글 글자 수만으로 unreadable 문턱을 넘으면 안 된다.
+    assert [page.visible_chars for page in trimmed] == [3, 3, 3]
+
+
+def test_a_one_page_document_never_loses_anything():
+    """되풀이가 조건이라 한 쪽짜리는 프레임 판정 자체가 성립하지 않는다."""
+    page = ParsedPage(
+        number=1,
+        text="한국은행\n\n본문",
+        visible_chars=7,
+        image_area_ratio=0.0,
+        pieces=(piece("한국은행", 40, 10, margin=True), piece("본문", 40, 400)),
+    )
+
+    assert running_frame([page]) == frozenset()
+    assert drop_running_frame([page])[0].text == "한국은행\n\n본문"
+
+
+def test_body_text_in_the_middle_of_the_page_survives_even_when_it_repeats():
+    """여백 띠 밖의 되풀이는 프레임이 아니다 — 정형 문구가 본문에 있을 수 있다."""
+    pages = [
+        ParsedPage(
+            number=number,
+            text="같은 문장",
+            visible_chars=5,
+            image_area_ratio=0.0,
+            pieces=(piece("같은 문장", 40, 400),),
+        )
+        for number in (1, 2, 3, 4)
+    ]
+
+    assert running_frame(pages) == frozenset()
+
+
+def test_a_real_report_drops_its_running_header_and_page_numbers(tmp_path):
+    """머리글·쪽 번호가 있는 세 쪽 PDF. 본문과 한 쪽뿐인 제목은 남는다."""
+    path = tmp_path / "framed.pdf"
+    document = pymupdf.open()
+    for number in range(1, 4):
+        page = document.new_page()
+        top = page.rect.height * MARGIN_BAND_RATIO
+        page.insert_text((60, top - 6), "한화리서치 | 은행 (Positive)", fontname=FONT, fontsize=9)
+        page.insert_text((60, 300), f"{number}쪽 본문이다. 실적은 개선됐다.", fontname=FONT, fontsize=11)
+        page.insert_text((280, page.rect.height - 12), f"- {number} -", fontname=FONT, fontsize=9)
+    document.save(path)
+    document.close()
+
+    result = AttachmentPdfParser(tmp_path).parse(candidate("framed.pdf"))
+
+    assert result.text is not None
+    assert "한화리서치" not in result.text
+    assert "- 1 -" not in result.text and "- 3 -" not in result.text
+    assert result.text.count("본문이다. 실적은 개선됐다.") == 3
+
+
+def test_a_one_character_strip_at_the_edge_is_an_index_tab():
+    """`1 / 정 / 책`처럼 가장자리에 세로로 쌓은 색인 탭. 본문이 아니라 조판 장치다."""
+    rect = pymupdf.Rect(0, 0, 595, 842)
+
+    # 오른쪽 끝의 한 글자 폭 띠.
+    assert side_strip(557.8, 566.2, rect, 0)
+    # 왼쪽 끝도 같다.
+    assert side_strip(20.0, 28.4, rect, 0)
+
+    # 본문은 넓어서 안 걸린다.
+    assert not side_strip(63.4, 252.9, rect, 0)
+    # 좁아도 가운데면 차트 눈금이지 탭이 아니다.
+    assert not side_strip(300.0, 308.0, rect, 0)
+    # 문턱 바로 위 폭은 그대로 둔다.
+    assert not side_strip(560.0, 560.0 + 595 * SIDE_STRIP_MAX_WIDTH, rect, 0)
+    # 돌아간 페이지에서는 좌우 끝이 표의 첫 열·끝 열이다. 같은 규칙이 본문을 지운다.
+    assert not side_strip(557.8, 566.2, rect, 90)
+
+
+def test_index_tabs_never_reach_the_extracted_text(tmp_path):
+    """탭은 y가 본문 사이사이라, 안 떼면 문단 하나 걸러 하나씩 끼어든다."""
+    path = tmp_path / "tabbed.pdf"
+    document = pymupdf.open()
+    page = document.new_page()
+    for order, (tab, top) in enumerate([("1", 90), ("정", 105), ("책", 120)]):
+        page.insert_text((page.rect.x1 - 30, top), tab, fontname=FONT, fontsize=9)
+    page.insert_text((70, 100), "본문 첫 문단이다.", fontname=FONT, fontsize=11)
+    page.insert_text((70, 130), "본문 둘째 문단이다.", fontname=FONT, fontsize=11)
+    document.save(path)
+    document.close()
+
+    result = AttachmentPdfParser(tmp_path).parse(candidate("tabbed.pdf"))
+
+    assert result.text is not None
+    assert "본문 첫 문단이다." in result.text
+    assert "본문 둘째 문단이다." in result.text
+    # 되풀이가 조건이 아니므로 한 쪽짜리 문서에서도 떨어진다.
+    assert "정" not in result.text.replace("본문 첫 문단이다.", "").replace("본문 둘째 문단이다.", "")

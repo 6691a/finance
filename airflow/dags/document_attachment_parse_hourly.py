@@ -45,7 +45,7 @@ CPU를 같이 쓰는 DAG이 생기면 같은 pool에 물린다.
 - `CONNECTION_ID`가 가리키는 Airflow 연결. 접속 정보는 `AIRFLOW_CONN_FINANCE`가 갖는다.
 - **`FILE_ROOT`(`/opt/airflow/files`)가 마운트돼 있어야 한다.** 없으면 태스크를 즉시
   실패시킨다 — 조용히 건너뛰면 큐만 돌고 텍스트는 한 건도 안 남는데 성공으로 표시된다.
-- 이미지에 PyMuPDF(`>=1.26`)가 들어 있어야 한다.
+- 이미지에 PyMuPDF(`==1.28.2`)가 들어 있어야 한다.
 - **Airflow pool `pdf_parse`(슬롯 1).** 코드로 생기지 않는다 — UI나 `airflow pools set`으로
   만든다. 없으면 태스크가 scheduled에 멈춘 채 `non-existent pool` 경고만 남고 실패도 경보도
   없다. 운영에는 있다(2026-09-01 확인).

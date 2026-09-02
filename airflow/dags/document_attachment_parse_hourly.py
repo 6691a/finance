@@ -26,14 +26,23 @@ CPU를 같이 쓰는 DAG이 생기면 같은 pool에 물린다.
 나머지 마흔아홉 건의 저장을 막아서는 안 된다(예외 하나가 나머지를 통째로 막은 적이 있다,
 `document_ingestion_hourly` 2026-08-15).
 
-### 상태로 확정하고 큐에서 빼는 것 — 실패로 세지 않는다
+### 상태로 확정하고 큐에서 빼는 것 — 태스크를 죽이지 않는다
 
-- 열리지 않는 파일은 `failed`, 암호가 걸렸으면 `unsupported`로 **확정**한다. 제공처의 파일이
-  그런 것이라 우리가 고칠 것이 없고, 다시 열어도 같은 답이다. **DB의 행이 그 기록이라 로그보다
-  오래 간다** — `parse_status`로 언제든 조회된다.
+- 열리지 않는 파일은 `failed`, 암호가 걸렸으면 `unsupported`로 **확정**한다. 다시 열어도 같은
+  답이라 큐에서 빠진다. **DB의 행이 그 기록이라 로그보다 오래 간다** — `parse_status`로
+  언제든 조회된다.
 - 페이지 일부가 깨지면 `partial`로 저장하고 **읽은 만큼은 남긴다.**
-- 다만 **건수는 요약 로그에 싣는다.** 안 그러면 50건이 전부 `failed`인 배치와 50건이 전부
-  성공한 배치의 로그가 같아 보인다.
+- **태스크는 죽이지 않는다.** 파일이 깨진 것은 우리가 고칠 수 없고, 나머지 마흔아홉 건이 다
+  됐는데 그 하나로 빨개지면 경보만 늘고 고쳐지는 것이 없다.
+- **대신 `logger.error`로 한 번 울린다.** 그것이 파일 자체의 문제인지 우리 파서가 못 따라가는
+  형식인지는 **사람이 봐야 안다.** Airflow의 Sentry 통합은 표준 `LoggingIntegration`이라
+  ERROR만 이벤트가 되고 WARNING은 breadcrumb으로만 남는다 — 아무도 안 보는 경고를 만들지
+  않으려면 이 자리는 ERROR여야 한다.
+- 그 로그에 **첨부 id·저장 경로·사유** 셋을 싣는다. 조사하는 사람이 파일을 찾고 무엇이 났는지
+  보는 데 필요한 최소가 그 셋이다. 사유는 `ParsedAttachment.reason`이 들고 오며 **DB에는 남기지
+  않는다** — 소비자가 사람이고, 컬럼으로 두면 다음 파싱이 덮어써 마지막 것만 남는다.
+- 배치가 다시 도는 일이 없어 **같은 첨부로 두 번 울리지 않는다.** 상태를 남기는 순간 큐에서
+  빠지기 때문이다.
 
 ### 다시 하면 되는 실패 — 세고 넘어간다
 
@@ -158,8 +167,9 @@ def document_attachment_parse_hourly():
         # 다시 해도 같은 답인 실패(파서 버그·저장 실패). **하나라도 있으면** 배치를 끝내고 죽인다.
         unrecoverable: list[str] = []
         first_error: Exception | None = None
-        # 제공처 파일이 손상됐거나 암호가 걸린 것. 상태로 확정해 큐에서 빼되 건수는 남긴다.
-        settled_bad = 0
+        # 제공처 파일이 손상됐거나 암호가 걸린 것. 상태로 확정해 큐에서 빼되 사람이 볼 수 있게
+        # 아래에서 한 번 울린다. 태스크는 죽이지 않는다.
+        unreadable_files: list[str] = []
         for candidate in waiting:
             try:
                 result = parser.parse(candidate)
@@ -177,8 +187,9 @@ def document_attachment_parse_hourly():
                 continue
 
             if result.status in SETTLED_BAD_STATUSES:
-                # 제공처 파일이 손상됐거나 암호가 걸렸다. 상태를 남겨 큐에서 빼고 건수만 센다.
-                settled_bad += 1
+                # 파일이 손상됐거나 암호가 걸렸다. 상태를 남겨 큐에서 빼고, 조사에 필요한 셋
+                # (첨부 id·저장 경로·사유)을 모은다.
+                unreadable_files.append(f"{candidate.id} {candidate.storage_path}({result.reason})")
 
             if result.failures:
                 # 페이지 단위 실패는 저장하지 않으므로 여기서 올린다. 첨부는 성공으로 센다.
@@ -206,7 +217,7 @@ def document_attachment_parse_hourly():
             unreadable += result.unreadable_page_count
 
         # 페이지 두 수가 외부 Vision을 켤지 정하는 근거다. 분모 없이 세지 않는다.
-        # `settled_bad`가 없으면 50건이 전부 손상인 배치와 전부 성공인 배치의 로그가 같아 보인다.
+        # 못 읽은 파일 수가 없으면 50건이 전부 손상인 배치와 전부 성공인 배치의 로그가 같아 보인다.
         # 죽기 전에 남긴다.
         logger.info(
             "Parsed %s of %s attachments: %s pages, %s unreadable, %s settled as unreadable files",
@@ -214,8 +225,19 @@ def document_attachment_parse_hourly():
             len(waiting),
             pages,
             unreadable,
-            settled_bad,
+            len(unreadable_files),
         )
+
+        if unreadable_files:
+            # **태스크는 죽이지 않고 ERROR로 한 번 울린다.** 파일 자체의 문제인지 우리 파서가
+            # 못 따라가는 형식인지는 사람이 봐야 알고, Airflow의 Sentry 통합은 ERROR만 이벤트로
+            # 만든다. 같은 첨부는 상태가 남아 큐에서 빠지므로 두 번 울리지 않는다.
+            logger.error(
+                "%s of %s attachments could not be read; check whether the file or the parser is at fault: %s",
+                len(unreadable_files),
+                len(waiting),
+                "; ".join(unreadable_files),
+            )
 
         if unrecoverable:
             # 파서 버그이거나 파싱한 텍스트를 못 쓴 것이다. 그 첨부는 상태가 안 남아 다음 실행이

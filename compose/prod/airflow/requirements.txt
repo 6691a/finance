@@ -22,7 +22,7 @@ scrapling[fetchers]>=0.4.12
 # **하한이 1.26인 이유는 그 버전에서 `find_tables`의 시그니처가 지금 형태가 됐기 때문이다**
 # (1.25.5와 1.26.0을 실제로 설치해 확인, 2026-08-31).
 # 라이선스는 AGPL-3.0 또는 Artifex 상용 이중 배포다. 사내 배치로만 돌고 재배포하지 않는다.
-pymupdf>=1.26
+pymupdf==1.28.2
 
 # modules/llm.py: langchain_xai.ChatXAI로 모델을 부른다. 처음에는 SDK 없이 urllib으로
 # POST했지만 2026-08-16에 바꿨다. LangChain으로 부르면 LangSmith 추적이 코드 없이 따라오고

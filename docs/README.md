@@ -37,6 +37,12 @@
 | [market-causal-graph.md](analysis/market-causal-graph.md) | 주간 사후 인과 그래프. 사건 → 경로 체인 → 대상을 누적해 다중 홉을 만든다 | §1~§8 구현 완료(2026-08-28, 프롬프트 판 5). §7 조회·§9 선반영만 미구현 |
 | [market-thesis/](analysis/market-thesis/README.md) | 시장 추론 기록. 단계마다 문서 하나 | 14(웹 화면)와 18의 §3(프리마켓)을 뺀 전부 구현 완료. 17(그래프 조회)·19(애프터마켓 해설)은 2026-08-31 구현이고 17의 리비전 `d7a41f8b2c93`이 운영 반영 대기. 4(그래프 투영)는 2026-08-30 운영 기동. 12(API)는 구현됐고 배포만 14단계와 함께 — 그 README가 원본 |
 
+## `issues/` — 운영 이슈와 복구
+
+| 문서 | 무엇 | 상태 |
+| --- | --- | --- |
+| [2026-09-01-document-attachment-bm25-mutable-segment.md](issues/2026-09-01-document-attachment-bm25-mutable-segment.md) | 첨부 BM25 mutable 세그먼트 검색 지연 원인과 복구 절차 | 원인 확인, 복구 미적용 |
+
 ## `briefing/` — 읽어서 내보내기만 하는 DAG
 
 | 문서 | 무엇 | 상태 |

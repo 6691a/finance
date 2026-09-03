@@ -156,13 +156,22 @@ def test_a_slot_ref_must_point_at_an_earlier_slot_today():
         base_price=Decimal(2650),
     )
     builder = forecast_builder(slot=RunSlot.MIDDAY, earlier_slots=(earlier,))
+    # `slot_ref`는 출처가 아니라 덧붙이는 표시라 요인이 함께 있어야 한다.
     kept = builder.parse(
-        answer(reasons=[{"slot_ref": "pre_open", "direction": "up", "statement": "장전 판단 유지"}])
+        answer(
+            reasons=[
+                {"factor": "KOSPI", "slot_ref": "pre_open", "direction": "up", "statement": "장전 판단 유지"}
+            ]
+        )
     )
     assert kept.reasons[0].slot_ref is RunSlot.PRE_OPEN
 
     dropped = builder.parse(
-        answer(reasons=[{"slot_ref": "pre_close", "direction": "up", "statement": "아직 안 온 슬롯"}])
+        answer(
+            reasons=[
+                {"factor": "KOSPI", "slot_ref": "pre_close", "direction": "up", "statement": "아직 안 온 슬롯"}
+            ]
+        )
     )
     assert dropped.rejected == 1
 
@@ -857,3 +866,52 @@ def test_the_tool_budget_clears_every_factor_plus_the_document_tools():
     # `factor_history`가 부를 수 있는 요인은 15개다(뉴스·공시는 자기 툴이 따로 있다).
     # 문서 툴 둘과 되물을 여유를 더한다.
     assert MAX_TOOL_CALLS >= len(HISTORY_FACTORS) + 2
+
+
+# --- 이유의 출처 --------------------------------------------------------------
+
+
+def test_a_reason_without_a_source_is_dropped():
+    """**출처 없는 이유를 남기지 않는다.**
+
+    2026-09-03에 요인도 메모도 없는 이유 넷이 그대로 저장됐다. 값은 진짜였지만(코스피
+    자기 봉과 기준가), 요인별 성적을 볼 때 빈 칸이 "출처가 없다"인지 "지수 자체를
+    봤다"인지 가릴 수 없었다. `slot_ref`는 출처가 아니다.
+    """
+    builder = forecast_builder(slot=RunSlot.MIDDAY)
+    draft = builder.parse(
+        answer(reasons=[{"direction": "up", "statement": "저점 매수가 확인돼 상방이 열려 있다"}])
+    )
+
+    assert draft.rejected == 1
+    assert not draft.reasons
+
+
+def test_the_index_itself_is_a_factor_that_needs_no_tool_call():
+    """봉과 기준가는 프롬프트에 이미 실려 있다. 그것을 부를 툴은 없다."""
+    from modules.kospi.domain import HISTORY_FACTORS, RELATION_FACTORS
+
+    assert Factor.KOSPI not in HISTORY_FACTORS
+    # 관계 그래프에도 안 들어간다 — 지수가 자기와 같은 방향인 것은 언제나 참이다.
+    assert Factor.KOSPI not in {spec.code for spec in RELATION_FACTORS}
+
+    # 그런데도 이유의 출처로는 통한다(아무것도 조회하지 않은 실행에서).
+    builder = forecast_builder(queried=set())
+    draft = builder.parse(
+        answer(reasons=[{"factor": "KOSPI", "direction": "up", "statement": "직전일 -3.99%는 p75를 넘는다"}])
+    )
+    assert draft.rejected == 0
+    assert draft.reasons[0].factor is Factor.KOSPI
+
+
+def test_the_index_itself_cannot_become_a_relation_edge():
+    """관찰이 `KOSPI`를 적으면 버린다 — 조회한 요인만 통과하는 규칙이 그대로 막는다."""
+    builder = review_builder(queried={Factor.SOX})
+    draft = builder.parse(
+        review_answer(
+            observations=[{"factor": "KOSPI", "sign": "same", "strength": 3, "note": "지수가 올랐다"}]
+        )
+    )
+
+    assert not draft.observations
+    assert draft.rejected == 1

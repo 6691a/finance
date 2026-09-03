@@ -532,7 +532,8 @@ class ForecastBuilder(_Builder):
     def _verify_reasons(self, answers: Sequence[ReasonAnswer]) -> tuple[tuple[Reason, ...], tuple[str, ...]]:
         """근거를 실제로 본 것에 대조한다. **버린 사유를 돌려준다** — 분모가 있어야 유효율이
         읽히고, 사유가 있어야 교정 문구가 무엇을 고칠지 말한다."""
-        seen = self._toolbox.queried_factors | self._state_factors
+        # 코스피 자체는 언제나 본 것이다 — 봉과 기준가가 프롬프트에 이미 실려 있다.
+        seen = self._toolbox.queried_factors | self._state_factors | {Factor.KOSPI}
         kept: list[Reason] = []
         dropped: list[str] = []
         for item in answers:
@@ -548,6 +549,13 @@ class ForecastBuilder(_Builder):
             factor = _factor_or_none(item.factor)
             if item.factor and factor is None:
                 dropped.append(f"모르는 요인({item.factor})")
+                continue
+            # **출처 없는 이유를 남기지 않는다.** 전에는 요인도 메모도 없는 이유가 그대로
+            # 저장돼, 나중에 요인별 성적을 볼 때 빈 칸이 "출처가 없다"인지 "코스피 자체를
+            # 봤다"인지 가릴 수 없었다(2026-09-03 실측 4건). 지수 자기 값이 근거면
+            # `KOSPI`를 적는다.
+            if factor is None and item.memory_id is None:
+                dropped.append("출처 없음(요인도 메모도 없다)")
                 continue
             if factor is not None and factor not in seen:
                 dropped.append(f"조회하지 않은 요인({factor.value})")

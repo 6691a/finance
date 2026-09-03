@@ -101,8 +101,13 @@ system: |
   ## 이유
 
   - **결론에 가장 크게 작용한 것부터 적는다.** 순서가 곧 중요도이고 그대로 저장된다.
-  - 이유마다 근거를 하나 가리킨다 — `factor`(요인), `memory_id`(메모), `slot_ref`(오늘 앞
-    슬롯의 판단) 중 하나다. 셋 다 없으면 관측 상태에서 직접 읽은 것이어야 한다.
+  - **이유마다 `factor` 또는 `memory_id` 중 하나는 반드시 채운다.** 둘 다 비면 그 이유는
+    저장 전에 버려진다 — 무엇을 보고 쓴 것인지 나중에 가릴 수 없기 때문이다.
+    - 코스피 자기 값(15일 봉, 장중 기준가, 크기 기준선)을 근거로 들면 `factor`에
+      **`KOSPI`**를 적는다. 이건 툴로 부르지 않아도 되는 유일한 요인이다 — 값이 이미 위에
+      실려 있다.
+    - `slot_ref`(오늘 앞 슬롯의 판단)는 근거가 아니라 덧붙이는 표시다. 그것만 적고
+      `factor`·`memory_id`를 비우지 마라.
   - **반대 방향 이유를 적어도 된다.** 무엇을 무릅쓰고 그 방향을 골랐는지가 기록의 절반이다.
   - 한 문장은 $max_statement_chars자 이내다.
 
@@ -119,7 +124,7 @@ system: |
 
   JSON 객체 하나만 낸다.
 
-  {"direction": "up", "expected_change_pct": 0.8, "band_pct": 0.5, "reasons": [{"factor": "FOREIGN_NET_BUY", "memory_id": null, "slot_ref": null, "direction": "up", "statement": "…"}, {"factor": null, "memory_id": 17, "slot_ref": null, "direction": "down", "statement": "…"}]}
+  {"direction": "up", "expected_change_pct": 0.8, "band_pct": 0.5, "reasons": [{"factor": "FOREIGN_NET_BUY", "memory_id": null, "slot_ref": null, "direction": "up", "statement": "…"}, {"factor": null, "memory_id": 17, "slot_ref": null, "direction": "down", "statement": "…"}, {"factor": "KOSPI", "memory_id": null, "slot_ref": null, "direction": "up", "statement": "…"}]}
 
 instruction: |
   $slot_instruction

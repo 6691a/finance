@@ -43,7 +43,7 @@ from pydantic import BaseModel, ConfigDict
 #       완벽히 맞혀도 필요한 폭이 2.5~2.9%p인데 기대 크기가 약 2.0이라, 이 시장에서는 폭이
 #       중심을 넘어야 정상이다. 백테스트 닷새에서 폭이 1.4~1.8로 눌려 방향이 틀린 날마다
 #       폭도 틀렸다(폭 2/5 = 방향 2/5). 튜닝이 아니라 잘못 쓴 문장을 바로잡은 것이다.
-PROMPT_VERSION = "3"
+PROMPT_VERSION = "4"
 
 # 장후 관찰 프롬프트의 판. 전망과 축이 다르다 — 저쪽은 "잘 맞혔나", 이쪽은 "관계를 잘
 # 읽었나"다. 따로 올린다.
@@ -138,6 +138,10 @@ class Factor(StrEnum):
     SK_HYNIX = "SK_HYNIX"
     NEWS = "NEWS"
     DISCLOSURE = "DISCLOSURE"
+    # 코스피 자기 값(봉·장중 기준가·크기 기준선)을 근거로 든 이유가 쓴다. **관계 그래프에는
+    # 안 들어간다** — 지수가 자기 자신과 같은 방향인 것은 언제나 참이다. 이 값이 없으면 그런
+    # 이유가 `factor=null`로 저장돼 무엇을 근거로 들었는지 뒤에서 가릴 수 없다.
+    KOSPI = "KOSPI"
 
 
 class FactorSource(StrEnum):
@@ -148,6 +152,7 @@ class FactorSource(StrEnum):
     """
 
     QUOTE_DAILY = "quote_daily"
+    INDEX_SELF = "index_self"
     INDICATOR = "indicator_observation"
     MARKET_FLOW = "market_investor_flow_snapshot"
     STOCK_DAILY = "stock_investor_trade_daily"
@@ -305,13 +310,29 @@ FACTORS: tuple[FactorSpec, ...] = (
         key="",
         unit=FactorUnit.NONE,
     ),
+    FactorSpec(
+        code=Factor.KOSPI,
+        label="코스피 자체",
+        source=FactorSource.INDEX_SELF,
+        key=INDEX_CODE,
+        unit=FactorUnit.PERCENT,
+    ),
 )
 
 FACTOR_SPECS: dict[Factor, FactorSpec] = {spec.code: spec for spec in FACTORS}
 
-# `factor_history`가 받는 요인. 문서 요인 둘은 값이 아니라 글이라 빠진다.
+# `factor_history`가 받는 요인. 문서 요인 둘은 값이 아니라 글이라 빠지고, 코스피 자체는
+# 이미 관측 상태에 실려 있어 툴로 다시 부를 것이 없다.
 HISTORY_FACTORS: tuple[Factor, ...] = tuple(
-    spec.code for spec in FACTORS if spec.source is not FactorSource.DOCUMENT
+    spec.code
+    for spec in FACTORS
+    if spec.source not in (FactorSource.DOCUMENT, FactorSource.INDEX_SELF)
+)
+
+# 관계 그래프의 출발 노드가 되는 요인. **코스피 자체는 빠진다** — 지수가 자기와 같은 방향인
+# 것은 언제나 참이라 엣지를 쌓으면 가중치 표에 뜻 없는 +3이 하나 박힌다.
+RELATION_FACTORS: tuple[FactorSpec, ...] = tuple(
+    spec for spec in FACTORS if spec.source is not FactorSource.INDEX_SELF
 )
 
 

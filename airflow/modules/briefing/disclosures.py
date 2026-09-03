@@ -45,10 +45,12 @@ from modules.briefing import blocks
 from modules.db import Connection
 from modules.prompt import json_dump
 from modules.sql import read_sql
-from modules.thesis.domain import DART_VIEWER_URL
 from modules.utility import KST_TIMEZONE
 
 logger = logging.getLogger(__name__)
+
+# 접수번호로 여는 DART 원문. 옛 추론 모듈에 있던 것을 쓰는 쪽으로 옮겼다.
+DART_VIEWER_URL = "https://dart.fss.or.kr/dsaf001/main.do?rcpNo={rcept_no}"
 
 NEW_DISCLOSURES = read_sql("postgres", "disclosure_event", "select_new_for_briefing.sql")
 EARNINGS_BY_RCEPT = read_sql("postgres", "earnings_fact", "select_by_rcept_no.sql")

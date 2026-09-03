@@ -40,6 +40,7 @@ from apps.models.analysis.kospi import (
     KospiToolCallErrorKind,
 )
 from apps.models.analysis.technical import (
+    SignalDirection,
     TechnicalSignal,
     TechnicalSignalKind,
 )
@@ -89,6 +90,7 @@ __all__ = [
     "MarketChannel",
     "MarketEvent",
     "RunSlot",
+    "SignalDirection",
     "StockEventClaim",
     "StockEventClaimKind",
     "StockEventExtraction",

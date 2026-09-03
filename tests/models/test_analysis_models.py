@@ -480,3 +480,33 @@ def test_the_causal_evidence_keeps_its_ref_as_text() -> None:
 
     assert not table.c.ref.foreign_keys
     assert table.c.path_id.nullable is False
+
+
+def test_the_signal_direction_has_no_flat_and_no_thesis_dependency():
+    """기술적 신호는 위·아래 둘뿐이다.
+
+    전에는 옛 추론의 `ThesisDirection`을 빌려 썼고 거기엔 `FLAT`이 있었다. DB에는 들어간
+    적이 없다 — `ck_technical_signal_direction`이 둘만 받았고 `_enum_column`은 CHECK를
+    따로 만들지 않는다. 추론을 지우면서 이 표가 자기 enum을 갖는다.
+    """
+    from apps.models.analysis import SignalDirection
+
+    assert {member.value for member in SignalDirection} == {"up", "down"}
+
+
+def test_the_technical_model_does_not_import_the_thesis_model():
+    """빌려 쓰던 의존을 끊은 것이 이 커밋의 전부다. 되살아나면 삭제가 다시 막힌다."""
+    from pathlib import Path
+
+    source = (Path(__file__).resolve().parents[2] / "apps/models/analysis/technical.py").read_text(
+        encoding="utf-8"
+    )
+
+    assert "from apps.models.analysis.thesis" not in source
+
+
+def test_the_disclosure_briefing_owns_its_dart_link():
+    """공시 원문 링크는 추론과 무관하다. 쓰는 쪽이 갖는다."""
+    from modules.briefing.disclosures import DART_VIEWER_URL
+
+    assert DART_VIEWER_URL.format(rcept_no="20260903000123").endswith("rcpNo=20260903000123")

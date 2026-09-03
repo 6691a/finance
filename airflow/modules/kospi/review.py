@@ -220,6 +220,7 @@ def observe() -> dict[str, Any]:
             tool_rounds=draft.tool_rounds,
             truncated=draft.truncated,
             rejected=draft.rejected,
+            observations=written.observations,
             memories={
                 "written": written.memories_written,
                 "rejected": draft.memories_rejected + plan["rejected"],

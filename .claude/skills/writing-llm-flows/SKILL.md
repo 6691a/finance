@@ -21,8 +21,8 @@ description: Use when writing or changing code that calls an LLM in this repo �
 
 **모델을 부르는 흐름은 컴파일된 그래프를 갖는다. 호출이 하나뿐이어도 그렇다.**
 교정 재요청이 붙는 순간 분기가 생기고, 그것을 `if`로 쓰면 트레이스에 이름 없는
-`ChatOpenAI` 호출만 남는다. `causal`이 실제로 그 상태였다(LangSmith run 이름이
-`ChatOpenAI`, `tags` 빈 목록). **`with_config`로 모델 호출마다 이름을 붙이고 있으면
+`ChatOpenAI` 호출만 남는다. 지금은 없는 주간 인과 그래프가 실제로 그 상태였다
+(LangSmith run 이름이 `ChatOpenAI`, `tags` 빈 목록). **`with_config`로 모델 호출마다 이름을 붙이고 있으면
 그래프가 없다는 신호다** — 이름은 그래프 실행 하나에만 붙인다.
 
 ```python
@@ -35,7 +35,7 @@ graph.invoke(state, config={"run_name": ..., "tags": [...], "metadata": {...}})
 ## 호출–교정: 모양이 하나다
 
 저장소의 다섯이 글자 그대로 같다 — `assessment`·`briefing/disclosure_picks`·
-`briefing/picks`·`expectation/extraction`·`causal/generation`. **새 흐름은 이것을 베낀다.**
+`briefing/picks`·`expectation/extraction`·`kospi/generation`. **새 흐름은 이것을 베낀다.**
 
 ```python
 graph.add_node("call", self._call)
@@ -51,7 +51,7 @@ graph.add_edge("repair", "call")
 
 **축이 둘 더 있고 겹쳐 쓸 수 있다.**
 
-- **툴이 붙으면 앞에 두 노드가 는다**(`thesis/generation`·`thesis/outcomes`):
+- **툴이 붙으면 앞에 두 노드가 는다**(`kospi/generation`의 `_Builder`):
   `investigate` → 조건부 `tools` → `answer` → 조건부 `repair`. 뒤쪽 둘은 위와 같고
   `ToolNode`가 `tools`에 들어간다.
 - **팬아웃**은 바깥 그래프가 `Send`로 항목마다 안쪽 그래프를 부르는 것이다(`assessment`).
@@ -65,7 +65,7 @@ graph.add_edge("repair", "call")
   않는다 — 그건 제공처 wire format이라 이름·타입이 실제 함수와 어긋나도 아무도 못 잡는다.
 - **툴이 연결·기준 시각·레지스트리 같은 상태를 봐야 하면** 모듈 수준 `@tool` 대신
   **바인드된 메서드**를 감싼다: `StructuredTool.from_function(func=self._tool_x, args_schema=XArgs)`.
-  기준 구현은 `airflow/modules/thesis/toolbox.py`의 `ThesisToolbox._build_tools`.
+  기준 구현은 `airflow/modules/kospi/toolbox.py`의 `KospiToolbox._build_tools`.
 - **툴 실행 루프를 손으로 짜지 않는다.** `ToolNode`가 `tool_call_id`마다 `ToolMessage`
   하나를 보장한다. 직접 짜면 그 보장이 우리 책임이 되고, 빠지거나 둘이면 제공처가 다음
   요청을 거절한다.
@@ -97,7 +97,7 @@ ToolNode(tools, handle_tool_errors=(ToolLimitExceeded,))
 ## 모델 선택과 자격 증명
 
 - **어떤 모델을 쓸지는 코드가 정한다.** 모델 정의는 `airflow/modules/llm.py`에 LangChain
-  문법 그대로 모아 두고(`document_model()`·`thesis_model()`·`causal_model()` 등) 바꿀 때 그
+  문법 그대로 모아 두고(`document_model()`·`kospi_model()`·`expectation_model()` 등) 바꿀 때 그
   함수를 고친다. `base_url`·모델명을 환경변수로 빼서 제공처를 갈아 끼우지 않는다 —
   LangChain은 제공처마다 클래스와 인자가 달라 문자열 설정 몇 개로 흉내 내면 어느 쪽도
   제대로 못 쓴다.
@@ -120,7 +120,7 @@ ToolNode(tools, handle_tool_errors=(ToolLimitExceeded,))
   강제가 안 되는 제공처를 위해 **검증을 그대로 남긴다.**
 - **모델에게 주는 시각은 표시 시간대로 준다.** 저장·조회는 UTC지만 프롬프트에 UTC ISO를
   그대로 실으면 모델이 "오늘"을 하루 어긋나게 읽는다(장전 기준 KST 08:35 = UTC 전날 23:35).
-  `thesis.kst_label`과 `briefing/documents.pick_input`의 `as_of_kst`가 그 자리다. 섞어서 줄
+  `kospi.domain.kst_label`과 `briefing/documents.pick_input`의 `as_of_kst`가 그 자리다. 섞어서 줄
   수밖에 없으면 **어느 칸이 어느 시간대인지 프롬프트가 직접 알린다.**
 - **체크포인터·persistence는 붙이지 않는다.** 재실행 단위는 Airflow 태스크다.
 - **추적은 `LANGSMITH_*` 환경변수로 켠다.** 코드에 추적 호출을 심지 않는다.
@@ -136,7 +136,7 @@ ToolNode(tools, handle_tool_errors=(ToolLimitExceeded,))
 | 실제로 있었던 일 | 어떻게 보였나 |
 | --- | --- |
 | 대상 넷을 조사해 놓고 하나만 답함 | `written=1` 성공, Slack에 한 줄 |
-| 툴 결과가 상한을 넘음 | `ToolMessage`가 되어 태스크 성공, `thesis` 행에도 안 남음 |
+| 툴 결과가 상한을 넘음 | `ToolMessage`가 되어 태스크 성공, 결과 행에도 안 남음 |
 | 조사가 왕복 상한에 잘림 | 그대로 답변으로 넘어가 스스로 끝낸 실행과 구별 안 됨 |
 | 툴이 DB 연결 끊김을 만남 | `handle_tool_errors=True`면 "그 창에 데이터 없음"으로 읽힘 |
 
@@ -163,12 +163,15 @@ ToolNode(tools, handle_tool_errors=(ToolLimitExceeded,))
 | 표본 부족 | "재지 않았다"와 "0이다" |
 | 교정 재요청 횟수 | 첫 답이 얼마나 자주 못 쓰는가 |
 
-- **분모 없는 카운터는 카운터가 아니다.** 지금 `thesis_evidence` 행 수(남은 것)만 있고 버린
-  수가 없어 근거 유효율을 못 읽는다 — `TUNING.md` 2절이 그 사실을 적어 놨다.
+- **분모 없는 카운터는 카운터가 아니다.** 옛 추론은 남은 근거 행 수만 있고 버린 수가 없어
+  근거 유효율을 못 읽었다. `kospi_llm_run`이 그것을 고쳤다 — 이유는 `rejected`(버린 수)와
+  `kospi_forecast.reasons`의 길이(남은 수)가 짝이고, 관찰은 `rejected`와
+  `observations_written`이 짝이다. **한쪽만 세면 아무 것도 못 읽는다**(2026-09-03에 관찰의
+  분모가 없다는 것을 실제로 놓쳤다).
 - **`logger.warning`은 세는 것이 아니다.** 폐기하는 자리마다 건수를 원장 칸이나 반환값으로
   올린다. 로그는 보존 기간에 묶이고 SQL로 채점과 조인할 수 없다.
-- 기준: `thesis_llm_run`의 `subjects_requested`·`subjects_answered`·`investigation_truncated`,
-  `technical/base_rate.py`의 `MIN_BASE_RATE_SAMPLE`(미만이면 비율을 전부 `None`으로 두고 0으로
+- 기준: `kospi_llm_run`의 `rejected`·`observations_written`·`truncated`·`tool_rounds`,
+  `kospi/domain.py`의 `MIN_MOVE_BASELINE_BARS`(미만이면 크기 기준선을 `None`으로 두고 0으로
   안 채운다 — 모델은 숫자가 보이면 쓴다).
 
 ### 2. 약한 답은 출력에서 티가 나게 한다
@@ -177,8 +180,8 @@ ToolNode(tools, handle_tool_errors=(ToolLimitExceeded,))
   **구별되게** 낸다.
 - **저장소가 이미 이 패턴을 쓴다.** `18-nxt-precedent.md`는 애프터마켓 방향 지속이 56%라
   "**라벨 없이 싣지 않는다**"고 정했다. 같은 규칙을 **자기 출력에도** 적용한다.
-- 기준: `thesis/render.py`의 `VERDICT_TIE_GAP` — 확률이 붙으면 결론을 둘 다 보인다.
-  "하나로 접으면 모델이 고르지 못한 것을 우리가 대신 골라 주는 셈이다."
+- 기준: `kospi/render.py`가 `weak`인 답의 Slack 머리를 `⚠ 근거 없는 답`으로 바꾼다.
+  검증이 이유를 전부 버렸다는 사실이 정상 답과 같아 보이면 아무도 그날을 못 고른다.
 - 어기면: 매일 읽는 사람이 이상한 날을 못 고른다. 사후에 SQL로만 보이고 그때는 지나갔다.
 
 **확신도로 자동·사람을 가르는 라우팅은 만들지 않는다** — 이 저장소의 출력은 종착지가 이미
@@ -200,21 +203,23 @@ ToolNode(tools, handle_tool_errors=(ToolLimitExceeded,))
 - 모델이 판정까지 하면 틀렸을 때 나눌 데가 "모델이 틀렸다" 하나뿐이다. 값과 판정을 가르면
   **확률이 나빴는지 임계가 나빴는지**가 갈리고, 그래야 `FLAT_THRESHOLD_PCT` 같은 상수를
   손잡이로 따로 당길 수 있다.
-- 기준: `thesis/domain.py`의 `brier_score`·`classify_outcome`, `expectation/domain.py`의
+- 기준: `kospi/domain.py`의 `grade_forecast`·`change_pct`·`relation_weight`(관계 가중치를
+  코드가 감쇠 평균으로 계산한다 — 모델은 방향과 세기만 낸다), `expectation/domain.py`의
   `classify_surprise`(`judgment.py`가 부른다 — 판정에 LLM이 없다).
 
 ### 5. 가드레일은 층마다 막고, 층마다 센다
 
 - 층 넷이 **서로 다른 것을 막는다**: 프롬프트 → 파싱 검증 → 정규화 → DB CHECK.
-  `apps/models/analysis/thesis.py`의 CHECK 주석이 분담을 적어 놨다 — DB CHECK은 폭주만 받는
+  `apps/models/analysis/kospi.py`의 CHECK 주석이 분담을 적어 놨다 — DB CHECK은 폭주만 받는
   안전망이고 정합성은 저장 전 검증이 본다. DB로 막으면 경계값 하나에 행 전체가 사라진다.
 - **프롬프트에만 있는 금지는 가드레일이 아니다.** 코드가 안 보면 어겼는지도 모른다.
 - **정규화는 clamp하지 않고 `None`으로 둔다.** clamp하면 모델이 부르지 않은 숫자가 저장되고
   채점이 그것을 모델의 판단으로 센다. 확률도 저장 전에 비틀지 않는다 — 손잡이는 프롬프트다.
 - **어느 층이 몇 개를 걸렀는지 남긴다**(1번과 한 몸이다). 없으면 "프롬프트를 고칠 문제"와
   "검증을 고칠 문제"를 못 가른다.
-- 기준: `thesis/generation.py`의 `_known_claims`(레지스트리 밖 ref 폐기)와 `normalize_*`,
-  `thesis/outcomes.py`의 `_grounded_verdict`(근거 없는 판정을 `unresolved`로 강등).
+- 기준: `kospi/generation.py`의 `_verify_reasons`(조회하지 않은 요인·활성 목록 밖 메모·
+  출처 없는 이유·금지어를 버리고 사유를 함께 올린다)와 `_verify_observations`·
+  `_verify_memories`, `kospi/domain.py`의 `normalize_text`.
 
 ### 6. 호출 하나가 행 하나다. 실패해도 남는다
 
@@ -229,8 +234,11 @@ ToolNode(tools, handle_tool_errors=(ToolLimitExceeded,))
   서로 다른 프롬프트의 결과가 한 판으로 섞여 원장 전체가 못 읽는 값이 된다.
 - **트레이스는 원장의 대체물이 아니다** — 켜졌을 때만 있고, 보존 기간이 우리 것이 아니고,
   SQL로 채점과 조인할 수 없다.
-- 기준: `thesis/common.py`의 `start_llm_run`·`finish_llm_run`, `thesis_llm_run`과
-  `thesis_tool_call` 테이블.
+- 기준: `kospi/store.py`의 `KospiStore.start_llm_run`·`finish_llm_run`, `kospi_llm_run`과
+  `kospi_tool_call` 테이블.
+- **`InjectedToolCallId`를 빠뜨리면 원장이 조용히 거짓말을 한다.** 인자 스키마에 그 칸이
+  없으면 `ToolNode`가 호출 id를 못 넘겨, 모든 호출이 검증 실패로 기록되고 결과 문자 수가
+  0이 된다(2026-09-03 실측, 백테스트 69회 전부). 기준은 `kospi/tool_args.py`.
 
 ## 수정 — 무엇을 당기면 되는지 안다
 
@@ -247,8 +255,12 @@ ToolNode(tools, handle_tool_errors=(ToolLimitExceeded,))
   첫 성공본은 불변이다 — 같은 (날짜, 슬롯)에 값이 있으면 모델을 다시 부르지 않는다.
 - **한 커밋에 손잡이 하나.** 둘을 같이 당기면 효과를 못 가른다. 어쩔 수 없이 둘을 당겼으면
   **그 사실을 문서에 적는다**(`TUNING.md` 2026-08-27이 그 형태다).
-- 기준: `thesis/domain.py`의 `MAX_TOOL_CALLS`·`MAX_TOOL_RESULT_CHARS`, `llm.py`의
-  `THESIS_TIMEOUT_SECONDS`, `event_expectation_hourly`의 `batch_size` `maximum=500`.
+- 기준: `kospi/domain.py`의 `MAX_TOOL_CALLS`·`MAX_TOOL_ROUNDS`·`MAX_TOOL_RESULT_CHARS`,
+  `llm.py`의 `KOSPI_TIMEOUT_SECONDS`, `event_expectation_hourly`의 `batch_size` `maximum=500`.
+- **상한을 요인 수보다 넉넉하게 잡는다.** 툴이 대상 하나에 호출 하나면 상한이 곧 "무엇을
+  못 보나"다. 2026-09-03 첫 운영일에 네 실행 중 셋이 정확히 15/15를 썼고, 조회 가능한 요인이
+  15개여서 뉴스·공시를 부를 자리가 없었다. 25로 올렸고
+  `tests/modules/test_kospi_pipeline.py`가 `HISTORY_FACTORS + 2` 아래로 못 내려가게 잠근다.
 
 ### 8. 기준선과 접는 조건을 먼저 적는다
 
@@ -271,16 +283,26 @@ ToolNode(tools, handle_tool_errors=(ToolLimitExceeded,))
 - **모델이 자기 프롬프트를 고치는 층도, 해설에서 규칙을 뽑아 쌓는 층도 만들지 않는다**
   (`5-followup.md` 10절 — 규칙이 틀리면 예측을 조용히 망친다).
 
-## 지금 비어 있는 자리 (2026-08-31)
+## 지금 비어 있는 자리 (2026-09-03)
 
-새 코드는 위를 따르되 **아래는 기존 코드에 아직 없다.** "이미 되어 있다"고 읽지 않는다.
+**2026-08-31에 넷이 비어 있었고 셋이 채워졌다.** 옛 추론을 지우고 코스피 전망을 만들면서
+그 셋을 처음부터 넣었다.
+
+| 규칙 | 무엇이 채워졌나 | 어디 |
+| --- | --- | --- |
+| 1 | 폐기 건수의 분모 | `kospi_llm_run.rejected`와 `observations_written`·`reasons` 길이가 짝이다 |
+| 2 | 약한 답 라벨 | `kospi_forecast.weak`와 `render.py`의 `⚠ 근거 없는 답` 머리 |
+| 5 | 출력 금지어 검사 | `kospi/generation.py`의 `FORBIDDEN_PHRASES`. 프롬프트가 아니라 코드가 본다 |
+
+**하나는 여전히 비어 있다.** "이미 되어 있다"고 읽지 않는다.
 
 | 규칙 | 무엇이 비었나 | 증상 |
 | --- | --- | --- |
-| 1 | 폐기 건수의 **분모** | 근거 유효율을 못 읽는다. 남은 수만 있고 버린 수가 없다 |
-| 2 | 약한 답 라벨 | 근거 0건·조사 절단·넓은 밴드가 Slack·API에서 정상 답과 같아 보인다 |
-| 3 | 임계 알람 | `TUNING.md` 4절 표의 임계를 사람이 기억해서 눈으로 대조한다 |
-| 5 | 출력 금지어 검사 | 투자 조언·목표가 금지가 프롬프트에만 있고 코드가 안 본다 |
+| 3 | 임계 알람 | 접는 조건(방향 적중 대 기준선, 폭 적중 60~80%)이 설계 문서에만 있고 쿼리가 없다. 사람이 기억해서 눈으로 대조한다 |
+
+**표본이 쌓이기 전에는 알람을 만들지 않는다.** 코스피 전망은 2026-09-03 기동이라 채점이
+아직 서너 건이고, 그 상태의 임계는 매일 거짓 경보를 낸다. 20영업일 뒤에 만든다 —
+그것이 설계 문서가 ops 브리핑 절을 미뤄 둔 이유다.
 
 ---
 
@@ -315,7 +337,7 @@ diff가 되고 리뷰하는 사람이 로직 변경과 표현 변경을 눈으�
 
 - 판이 없는 파일은 그 표의 `UNVERSIONED`에 적어 둔다 — 새 파일이 어느 쪽인지 안 밝히고
   들어오는 것을 테스트가 잡는다.
-- 판을 세는 상수(`thesis.domain.PROMPT_VERSION` 등)는 **코드에 그대로 둔다.** 채점과
+- 판을 세는 상수(`kospi.domain.PROMPT_VERSION` 등)는 **코드에 그대로 둔다.** 채점과
   이어져 있어 코드가 원본이다.
 - **`fragments/`는 그 가드 밖이다** — 조각을 고치면 그것을 끼워 쓰는 흐름들의 문장이 함께
   바뀌는데 해시는 각 흐름의 파일 내용이라 안 깨진다. **그 흐름들의 판을 손으로 함께 올린다.**

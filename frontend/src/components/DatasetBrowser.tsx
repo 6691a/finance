@@ -14,6 +14,7 @@ import { type StockNames, useStockNames } from "../stocks";
 import { Async } from "./AsyncState";
 import DataTable, { type Column } from "./DataTable";
 import Pager, { pageOf } from "./Pager";
+import TextFilter from "./TextFilter";
 
 /** 데이터셋이 요구하는 필터. 없는 것은 화면에 안 그린다. */
 export type FilterKind = "dates" | "stock" | "market" | "day";
@@ -168,15 +169,14 @@ export default function DatasetBrowser({
           </>
         )}
         {active.filters.includes("stock") && (
-          <label>
-            종목코드
-            <input
-              type="text"
-              value={stock}
-              placeholder="005930"
-              onChange={(event) => set("stock_code", event.target.value)}
-            />
-          </label>
+          // 글자 필터는 Enter나 포커스를 잃을 때 확정한다 — 키마다 URL을 고치면 조합 중인
+          // 글자가 깨지고 요청도 낱자마다 나간다(`TextFilter`의 주석).
+          <TextFilter
+            label="종목코드"
+            value={stock}
+            placeholder="005930"
+            onCommit={(value) => set("stock_code", value)}
+          />
         )}
         {active.filters.includes("market") && (
           <label>

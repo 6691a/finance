@@ -185,7 +185,6 @@ class DocumentReadService:
         min_score: int | None = None,
         instrument: str | None = None,
         indicator: str | None = None,
-        search: str | None = None,
         limit: int = DEFAULT_LIMIT,
         offset: int = 0,
     ) -> DocumentList:
@@ -196,7 +195,6 @@ class DocumentReadService:
             min_score=min_score,
             instrument=instrument,
             indicator=indicator,
-            search=search,
             limit=limit,
             offset=offset,
         )

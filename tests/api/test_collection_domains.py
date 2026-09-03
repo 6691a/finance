@@ -231,6 +231,33 @@ def test_the_document_list_never_reads_the_body():
     assert "document.value_score" in compiled
 
 
+def test_the_list_has_no_text_search_at_all():
+    """**문서 검색을 통째로 뺐다**(2026-09-02).
+
+    BM25로 붙였다가 조회가 안 끝나 백엔드 25개가 25분씩 운영 DB의 CPU를 먹었고, 원인이
+    첨부 색인의 mutable 세그먼트로 밝혀졌다(조회할 때마다 그 안의 행을 다시 토크나이즈한다).
+    다음 판은 쪽 단위 색인으로 새로 짓기 때문에 그 사이 `ILIKE` 대체도 두지 않는다 —
+    반쪽짜리 검색창이 있으면 다음 사람이 그것을 검색 기능으로 읽는다.
+
+    이 검사는 그 사이 누가 옛 형태를 되돌리는 것을 막는다.
+    """
+    compiled = str(
+        DocumentReadRepository.list_statement(
+            published_from=AT, published_to=AT, limit=30
+        ).compile()
+    )
+
+    assert "|||" not in compiled
+    assert "pdb." not in compiled
+    assert "LIKE" not in compiled
+    assert "published_at DESC" in compiled
+
+    with pytest.raises(TypeError):
+        DocumentReadRepository.list_statement(
+            published_from=AT, published_to=AT, search="기준금리", limit=30
+        )
+
+
 @pytest.mark.asyncio
 async def test_the_document_detail_carries_the_body_and_the_assessment():
     """원문과 평가를 한 화면에서 맞춰 봐야 "왜 근거로 뽑혔나"가 읽힌다."""

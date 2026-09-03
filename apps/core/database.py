@@ -42,10 +42,25 @@ class DatabaseConfig(PydanticBaseModel):
         return self
 
 
+# 읽기 전용 연결이 한 문장을 붙잡을 수 있는 최대 시간. **조회가 이보다 오래 걸리면 그건
+# 답이 아니라 사고다.**
+#
+# 2026-09-01에 문서 검색 조회 하나가 안 끝나면서, 화면이 다시 부를 때마다 백엔드가 쌓여
+# **25개가 25분씩 운영 DB의 CPU를 먹었다.** 그 사이 시세·지표 화면까지 함께 느려졌다.
+# `pg_cancel_backend`도 한참 뒤에야 먹혔다. 그때 스스로 풀리는 장치가 이것 하나였는데
+# 없었다.
+#
+# 값은 넉넉하다 — 지금 가장 느린 조회(시세 심볼 커버리지 집계)가 그 안에 들어온다.
+READ_ONLY_STATEMENT_TIMEOUT_MS = 15_000
+
+
 def _connect_args_for(config: DatabaseConfig) -> dict[str, dict[str, str]]:
     server_settings = {"timezone": "UTC"}
     if config.read_only:
         server_settings["default_transaction_read_only"] = "on"
+        # **쓰기 별칭에는 걸지 않는다.** 수집·마이그레이션은 오래 걸리는 것이 정상이고,
+        # 그쪽 시간 판단은 Airflow의 태스크 타임아웃이 한다.
+        server_settings["statement_timeout"] = str(READ_ONLY_STATEMENT_TIMEOUT_MS)
     return {"server_settings": server_settings}
 
 

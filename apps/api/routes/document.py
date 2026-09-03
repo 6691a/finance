@@ -94,7 +94,6 @@ async def list_documents(
     ] = None,
     instrument: Annotated[str | None, Query(description="종목 태그(티커)")] = None,
     indicator: Annotated[str | None, Query(description="지표 태그(series_id)")] = None,
-    q: Annotated[str | None, Query(description="제목·요약 부분 일치")] = None,
     limit: Limit = DEFAULT_LIMIT,
     offset: Offset = 0,
 ) -> DocumentList:
@@ -109,7 +108,6 @@ async def list_documents(
         min_score=min_score,
         instrument=instrument,
         indicator=indicator,
-        search=q,
         limit=limit,
         offset=offset,
     )

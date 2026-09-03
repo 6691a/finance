@@ -11,6 +11,7 @@ import { query, useJson } from "../api";
 import { Async, Empty } from "../components/AsyncState";
 import DirectionMark from "../components/DirectionMark";
 import Pager, { pageOf } from "../components/Pager";
+import TextFilter from "../components/TextFilter";
 import { integerText, kstText, numberText, safeHref } from "../format";
 import { stockText, useStockNames } from "../stocks";
 import type {
@@ -61,7 +62,6 @@ export default function DocumentsPage() {
   const source = params.get("source") ?? "";
   const minScore = params.get("min_score") ?? "";
   const instrument = params.get("instrument") ?? "";
-  const q = params.get("q") ?? "";
   // 쪽은 URL에 둔다 — 새로고침해도 보던 쪽이다.
   const offset = Math.max(0, Number(params.get("offset") ?? 0) || 0);
 
@@ -78,7 +78,6 @@ export default function DocumentsPage() {
               source,
               min_score: minScore,
               instrument,
-              q,
               limit: 100,
               offset: offset || undefined,
             })}`;
@@ -144,38 +143,26 @@ export default function DocumentsPage() {
         )}
         {tab === "documents" && (
           <>
-            <label>
-              출처
-              <input
-                type="text"
-                value={source}
-                placeholder="cnbc"
-                onChange={(event) => set("source", event.target.value)}
-              />
-            </label>
-            <label>
-              최소 점수
-              <input
-                type="number"
-                min={0}
-                max={10}
-                value={minScore}
-                onChange={(event) => set("min_score", event.target.value)}
-              />
-            </label>
-            <label>
-              종목 태그
-              <input
-                type="text"
-                value={instrument}
-                placeholder="005930"
-                onChange={(event) => set("instrument", event.target.value)}
-              />
-            </label>
-            <label>
-              제목·요약 검색
-              <input type="text" value={q} onChange={(event) => set("q", event.target.value)} />
-            </label>
+            {/* **글자 필터는 Enter나 포커스를 잃을 때 확정된다.** 키마다 URL을 고치면
+                한글 조합이 깨지고(`기준` → `ㄱㅣㅈㅜㄴ`) 낱자마다 조회가 한 번씩 나간다. */}
+            <TextFilter
+              label="출처"
+              value={source}
+              placeholder="cnbc"
+              onCommit={(value) => set("source", value)}
+            />
+            <TextFilter
+              label="최소 점수"
+              type="number"
+              value={minScore}
+              onCommit={(value) => set("min_score", value)}
+            />
+            <TextFilter
+              label="종목 태그"
+              value={instrument}
+              placeholder="005930"
+              onCommit={(value) => set("instrument", value)}
+            />
           </>
         )}
       </div>

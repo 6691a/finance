@@ -80,6 +80,9 @@ export default function DashboardPage() {
         숫자는 최근 몇 건만 본 것이다.
       </p>
 
+      {/* **문서 검색은 뺐다**(2026-09-02). 첨부 색인이 조회 시점에 통째로 토크나이즈되어
+          운영 DB를 붙잡았다. 다음 판은 쪽 단위 색인으로 새로 짓는다 — 설계 문서 §8.8. */}
+
       <div className="cards">
         <Card title="수집" to="/collection">
           {stale === null ? (

@@ -3,7 +3,7 @@ from dependency_injector import providers
 from pydantic import ValidationError
 
 from apps.core.container import Container
-from apps.core.database import Database, _connect_args_for
+from apps.core.database import READ_ONLY_STATEMENT_TIMEOUT_MS, Database, _connect_args_for
 from tests.helpers import SettingsForTest as Settings
 
 DEFAULT_URL = "postgresql+asyncpg://finance:finance@localhost:15432/finance"
@@ -185,5 +185,8 @@ def test_read_only_alias_sets_postgres_read_only_transaction():
         "server_settings": {
             "timezone": "UTC",
             "default_transaction_read_only": "on",
+            # **읽기 전용 연결은 한 문장을 오래 붙잡지 않는다**(2026-09-01). 조회 하나가
+            # 안 끝나면서 백엔드 25개가 25분씩 운영 DB를 먹은 뒤에 들어왔다.
+            "statement_timeout": str(READ_ONLY_STATEMENT_TIMEOUT_MS),
         }
     }

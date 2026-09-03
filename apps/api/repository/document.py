@@ -18,7 +18,7 @@ from datetime import date, datetime
 from typing import Any
 
 from pydantic import Field
-from sqlalchemy import Select, func, or_, select
+from sqlalchemy import Select, func, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from sqlalchemy.orm import load_only
 
@@ -54,6 +54,7 @@ LIST_COLUMNS = (
 class DocumentListRows(RowBundle):
     documents: tuple[Document, ...] = ()
     has_more: bool = False
+
     # 문서 id → 태그
     instruments: dict[int, tuple[str, ...]] = Field(default_factory=dict)
     indicators: dict[int, tuple[str, ...]] = Field(default_factory=dict)
@@ -91,15 +92,15 @@ class DocumentReadRepository:
         min_score: int | None = None,
         instrument: str | None = None,
         indicator: str | None = None,
-        search: str | None = None,
         limit: int = DEFAULT_LIMIT,
         offset: int = 0,
     ) -> Select[Any]:
         """목록 조회문. **끝 경계가 열려 있다**(`< published_to`).
 
-        `search`는 `ILIKE`다. ParadeDB(`pg_search`)의 `@@@`가 이 DB에 있지만, 3천 행에서는
-        순차 스캔이 이미 빠르고 연산자를 들이는 순간 인덱스와 색인 정책이 함께 따라온다 —
-        느려지면 그때 옮긴다.
+        **본문 검색은 여기 없다**(2026-09-02에 뺐다). BM25로 붙였다가 하루 만에 되돌렸고,
+        `ILIKE` 대체도 함께 뺐다 — 다음 판은 쪽 단위 색인으로 새로 짓기 때문에 그 사이
+        반쪽짜리 검색창을 두지 않는다. 왜 그렇게 정했는지는
+        `docs/analysis/market-thesis/20-collection-browser.md` §8.8에 있다.
         """
         statement = (
             select(Document)
@@ -128,11 +129,6 @@ class DocumentReadRepository:
                 Document.id.in_(
                     select(DocumentIndicator.document_id).where(DocumentIndicator.series_id == indicator)
                 )
-            )
-        if search:
-            pattern = f"%{search}%"
-            statement = statement.where(
-                or_(Document.title.ilike(pattern), Document.summary.ilike(pattern))
             )
         return (
             statement.order_by(Document.published_at.desc(), Document.id.desc())
@@ -187,7 +183,9 @@ class DocumentReadRepository:
     # --- 공개 조회 -----------------------------------------------------------
 
     async def list_rows(self, **filters: Any) -> DocumentListRows:
-        """문서 목록 한 쪽. 왕복 셋이고 한 세션 안이다."""
+        """문서 목록 한 쪽. 왕복 셋이고 한 세션 안이다.
+
+        """
         limit = filters.get("limit", DEFAULT_LIMIT)
         async with self._session_factory() as session:
             rows = list((await session.execute(self.list_statement(**filters))).scalars())

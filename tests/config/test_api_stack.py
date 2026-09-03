@@ -111,7 +111,7 @@ def test_the_image_group_covers_every_third_party_import_it_runs():
     import tomllib
 
     # import 이름과 배포 이름이 다른 것만 적는다. 나머지는 `_`를 `-`로 바꾸면 같다.
-    DISTRIBUTION = {"yaml": "pyyaml"}
+    DISTRIBUTION = {"yaml": "pyyaml", "paradedb": "sqlalchemy-paradedb"}
 
     def roots(path: Path) -> set[str]:
         found: set[str] = set()

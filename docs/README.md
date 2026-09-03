@@ -24,7 +24,7 @@
 | [korea-trade-collection.md](collection/korea-trade-collection.md) | 관세청 10일 단위 수출입 잠정치 42계열 | 구현 완료(2026-08-28). `kcs_trade_daily` |
 | [document-body-collection.md](collection/document-body-collection.md) | 문서 본문·첨부 파일·영상 링크. 검색이 딛고 설 원문을 모은다 | 구현 완료(2026-08-30). `document_body_hourly`. **파일 마운트 뒤에 배포** |
 
-## `analysis/` — LLM 평가·기술지표·시장 추론
+## `analysis/` — LLM 평가·기술지표·코스피 전망
 
 | 문서 | 무엇 | 상태 |
 | --- | --- | --- |
@@ -34,9 +34,7 @@
 | [pdf-vision-analysis.md](analysis/pdf-vision-analysis.md) | 텍스트가 안 나오는 영역만 외부 Vision에 보내는 설계 | **보류.** 조건이 관측되면 켠다 |
 | [market-technical-indicators.md](analysis/market-technical-indicators.md) | SMA·RSI·MACD 관측값과 매매 신호 검출·채점 | 구현 완료. 남은 것은 적중률 관측 |
 | [market-episode-analysis.md](analysis/market-episode-analysis.md) | 일봉 변화·추정 매물대·시장 근거를 연결하는 `MarketEpisode` 설계 | **미구현. 구현 계약** |
-| [market-causal-graph.md](analysis/market-causal-graph.md) | 주간 사후 인과 그래프. 사건 → 경로 체인 → 대상을 누적해 다중 홉을 만든다 | §1~§8 구현 완료(2026-08-28, 프롬프트 판 5). §7 조회·§9 선반영만 미구현 |
-| [kospi-forecast.md](analysis/kospi-forecast.md) | 코스피 일일 전망 v2. 관계 그래프(Neo4j)·메모·툴 셋으로 슬롯 셋(장전·장중·마감전)의 방향·등락률·±폭과 이유를 낸다. `market-thesis/`·`market-causal-graph.md`를 대체한다 | **구현 완료, 배포 전.** 리비전 `a1c74f0b8e35` 반영 대기 |
-| [market-thesis/](analysis/market-thesis/README.md) | 시장 추론 기록. 단계마다 문서 하나 | 14(웹 화면)와 18의 §3(프리마켓)을 뺀 전부 구현 완료. 17(그래프 조회)·19(애프터마켓 해설)은 2026-08-31 구현이고 17의 리비전 `d7a41f8b2c93`이 운영 반영 대기. 4(그래프 투영)는 2026-08-30 운영 기동. 12(API)는 구현됐고 배포만 14단계와 함께 — 그 README가 원본 |
+| [kospi-forecast.md](analysis/kospi-forecast.md) | 코스피 일일 전망. 관계 그래프(Neo4j)·메모·툴 셋으로 슬롯 셋(장전·장중·마감전)의 방향·등락률·±폭과 이유를 낸다 | **운영 중**(2026-09-03 기동). 옛 `market-thesis/`·`market-causal-graph.md`와 그 코드·표는 같은 날 지웠다 |
 
 ## `issues/` — 운영 이슈와 복구
 

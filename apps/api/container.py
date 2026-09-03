@@ -2,7 +2,7 @@
 
 **여기서 선언한 것이 생성자로 주입된다.** 업무 코드는 파라미터로 의존성을 받고,
 컨테이너를 들여다보는 자리는 라우터의 `@inject` 경계 하나뿐이다 —
-`container.thesis_repository()`를 업무 코드가 직접 부르면 그건 Service Locator이지
+provider를 업무 코드가 `container.x()`로 직접 부르면 그건 Service Locator이지
 의존성 주입이 아니다.
 
 **`apps/core/container.py`를 그대로 쓰지 않는다.** 그 모듈은 본문에서
@@ -15,8 +15,6 @@
 from dependency_injector import containers, providers
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from apps.api.repository import ThesisReadRepository
-from apps.api.service import ThesisReadService
 from apps.core.database import Database
 
 
@@ -54,18 +52,4 @@ class ApiContainer(containers.DeclarativeContainer):
         session_factory_for,
         database=database,
         alias=db_alias,
-    )
-
-    # 조회마다 새 인스턴스다. 상태가 세션 팩토리뿐이라 비용이 없고, `Singleton`으로 두면
-    # 나중에 요청 상태를 담게 될 때 조용히 새어 나간다.
-    thesis_repository = providers.Factory(
-        ThesisReadRepository,
-        session_factory=session_factory,
-    )
-
-    # **라우터가 주입받는 것은 이쪽이다.** 리포지토리는 store만 알고 응답 계약을 모른다 —
-    # 그 경계가 "Neo4j로 갈아끼워도 응답은 그대로"를 지탱한다.
-    thesis_service = providers.Factory(
-        ThesisReadService,
-        repository=thesis_repository,
     )

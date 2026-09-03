@@ -1,4 +1,4 @@
-# finance — 시장 데이터 수집·LLM 시장 추론·검증 파이프라인
+# finance — 시장 데이터 수집·LLM 코스피 전망·검증 파이프라인
 
 국내외 시장 데이터와 공시·리서치 문서를 매일 모아 Postgres에 쌓고, 그 위에서 LLM이
 **"오늘 시장이 왜 이렇게 움직였을까 / 앞으로 어떻게 움직일까"**를 근거와 함께 적어 둡니다.
@@ -35,9 +35,9 @@ flowchart LR
         FEED["뉴스·리서치 피드"]
     end
 
-    subgraph AF["Airflow — DAG 48"]
+    subgraph AF["Airflow — DAG 42"]
         COL["수집 DAG 31<br/>분봉·일봉·수급·공시·매크로·문서"]
-        ANA["분석 DAG 11<br/>문서 평가(LLM) · 기술 신호(SQL)<br/>코스피 전망·관찰(LLM+툴)<br/>시장 추론(대체 예정) · 주간 인과 그래프"]
+        ANA["분석 DAG 6<br/>문서 평가(LLM) · 기술 신호(SQL)<br/>코스피 전망·관찰(LLM+툴)<br/>기대 대비 발표(LLM)"]
         BRF["브리핑 DAG 5"]
     end
 
@@ -45,11 +45,10 @@ flowchart LR
 
     subgraph DB["PostgreSQL"]
         FACT[("시세·봉 · 지표 관측치<br/>문서·공시 · source_record")]
-        THESIS[("kospi_forecast · kospi_llm_run<br/>thesis · thesis_outcome (대체 예정)")]
-        CAUSAL[("market_causal_path · step · direction<br/>market_event · market_channel")]
+        THESIS[("kospi_forecast · kospi_llm_run<br/>kospi_tool_call")]
     end
 
-    GRAPH["Neo4j<br/>코스피 관계 그래프 Factor → Index (원본)<br/>주간 인과 그래프 투영 Event → Channel → Target"]
+    GRAPH["Neo4j<br/>코스피 관계·메모의 원본<br/>Factor → Index · Memory"]
 
     SLACK["Slack 브리핑 5종"]
     API["apps/api — FastAPI 조회 API"]
@@ -93,16 +92,14 @@ flowchart LR
 | 11:35 · 14:35 | **코스피 장중 전망** — 개장 뒤 나온 공시·기사·수급과 현재가를 놓고 마감까지를 다시 본다. 기준가가 전일 종가가 아니라 그 시각 현재가다 |
 | 18:10 ~ 18:40 | 투자자별 매매동향 확정, 기술 신호 검출·채점 |
 | 19:00 | **코스피 장후 관찰** — 오늘 전망을 채점하고, 무엇이 코스피를 움직였는지를 요인별 엣지로 그래프에 쌓고, 메모를 정리한다 |
-| 20:30 | 장마감 사후 해석 추론(대체 예정) — 오늘 왜 그렇게 움직였는가 + 과거 추론 채점·사후 해설 |
 | 20:40 | 종목 1분봉 확정본 수집(KRX·NXT 분리) |
 | 21:00 | **NXT 애프터마켓 리뷰** |
-| 매주 월 07:00 | 주간 인과 그래프 — 사건 → 경로 체인 → 대상을 누적해 다중 홉을 만든다 |
 
 ## 코스피 전망 파이프라인
 
 이 프로젝트에서 가장 공들인 부분입니다. LangGraph로 만들었고, 아래 규칙 위에서 돌아갑니다.
 
-**한 번 갈아엎었습니다.** 먼저 만든 시장 추론은 대상 넷 · 툴 열여섯 · 확률 셋 · 지평 넷으로
+**한 번 갈아엎었고 옛 코드는 지웠습니다**(2026-09-03). 먼저 만든 시장 추론은 대상 넷 · 툴 열여섯 · 확률 셋 · 지평 넷으로
 축이 곱해져 있었고, 채점 70건에서 방향 적중이 32.9%였습니다. 같은 구간의 "매일 상승" 기준선이
 48.6%였으니 **기준선보다 한참 아래**였습니다. 문제는 성적보다 구조였습니다 — 9일 동안
 프롬프트 판이 12개 올라가 판당 표본이 4~12건이었고, 그 상태로는 어떤 변경의 효과도 잴 수
@@ -145,14 +142,14 @@ flowchart LR
 | 언어 | Python 3.13, uv | 수집·분석·서비스가 한 언어 |
 | 오케스트레이션 | Apache Airflow 3.3 | 제공처마다 다른 주기, 재시도, 백필이 필요 |
 | 저장 | PostgreSQL, SQLAlchemy 2.0 async, asyncpg, Alembic | 시계열도 관계형으로 충분한 규모 |
-| 그래프 | Neo4j (community) | 코스피 관계·메모의 **원본**입니다. 매일 장후 관찰이 요인별 엣지를 쌓고 다음 날 전망이 읽습니다. 주간 인과 그래프는 Postgres가 원본이고 이쪽이 투영입니다 |
+| 그래프 | Neo4j (community) | 코스피 관계·메모의 **원본**입니다. 매일 장후 관찰이 요인별 엣지를 쌓고 다음 날 전망이 읽습니다. 가중치는 Python이 반감기 5일로 감쇠 평균해 계산합니다 |
 | 캐시 | Redis | 실시간 수집 버퍼 |
 | LLM | LangChain / LangGraph, xAI Grok, OpenAI 호환 API | 툴 호출 루프와 구조화 출력 |
 | API | FastAPI, dependency-injector | 읽기 전용 조회, 생성자 주입 + provider override 테스트 |
 | 수집 | httpx, scrapling(+playwright) | REST와 HTML을 같은 규약으로 |
 | 관측 | Sentry (Airflow / 상주 서비스 각각) | 에러·로그·트레이싱·프로파일링 |
 | 배포 | Docker Compose (Synology NAS), just | 이미지 3종, bind-mount 배포 |
-| 품질 | pytest, ruff, pyrefly, pre-commit | 테스트 3,101개 |
+| 품질 | pytest, ruff, pyrefly, pre-commit | 테스트 2,336개 |
 
 ## 설계하면서 고민한 것들
 
@@ -198,7 +195,7 @@ INSERT 컬럼과 `ON CONFLICT` 키를 ORM metadata와 맞춰 보는 테스트도
 | 경로 | 무엇 |
 | --- | --- |
 | `airflow/dags/` | DAG. 스케줄·재시도·실패 판정만 갖는 얇은 파일 |
-| `airflow/modules/` | DAG이 쓰는 공유 코드. `collectors/`·`briefing/`·`kospi/`·`thesis/`·`technical/`·`expectation/`·`causal/`·`graph/` |
+| `airflow/modules/` | DAG이 쓰는 공유 코드. `collectors/`·`briefing/`·`kospi/`·`technical/`·`expectation/` |
 | `airflow/sql/` | 쿼리. Python 문자열로 두지 않습니다 |
 | `apps/models/` | SQLAlchemy 모델. 테이블 정의의 원본 |
 | `apps/realtime/` | KIS 실시간 WebSocket 수집 상주 서비스 |

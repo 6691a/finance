@@ -11,30 +11,6 @@
 서비스들이 공유하는 변환이고, `__init__.py`는 **재수출만** 한다.
 """
 
-from apps.api.service.common import number
-from apps.api.service.thesis import (
-    ThesisReadService,
-    build_detail,
-    build_list,
-    citation_of,
-    llm_run_of,
-    outcome_of,
-    precedent_of,
-    project_graph,
-    summary_of,
-    thesis_node_id,
-)
 
 __all__ = [
-    "ThesisReadService",
-    "build_detail",
-    "build_list",
-    "citation_of",
-    "llm_run_of",
-    "number",
-    "outcome_of",
-    "precedent_of",
-    "project_graph",
-    "summary_of",
-    "thesis_node_id",
 ]

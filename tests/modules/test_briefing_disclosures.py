@@ -328,11 +328,9 @@ def test_the_report_name_links_to_the_dart_viewer():
     assert "<https://dart.fss.or.kr/dsaf001/main.do?rcpNo=20260827000123|" in body
 
 
-def test_the_viewer_url_is_the_one_the_thesis_tools_use():
-    """상수를 두 벌 두지 않는다."""
-    from modules.thesis.domain import DART_VIEWER_URL
-
-    assert DART_VIEWER_URL.format(rcept_no="1") == NewDisclosure(
+def test_the_viewer_url_comes_from_one_constant():
+    """상수를 두 벌 두지 않는다. 옛 추론 모듈에 있던 것을 쓰는 쪽으로 옮겼다(2026-09-03)."""
+    assert disclosures.DART_VIEWER_URL.format(rcept_no="1") == NewDisclosure(
         rcept_no="1",
         stock_code="005930",
         company_name="삼성전자",

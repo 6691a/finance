@@ -8,26 +8,6 @@
 리포지토리들이 공유하는 것이고, `__init__.py`는 **재수출만** 한다.
 """
 
-from apps.api.repository.common import (
-    DEFAULT_LIMIT,
-    DEFAULT_WINDOW_DAYS,
-    MAX_LIMIT,
-    RowBundle,
-)
-from apps.api.repository.thesis import (
-    ThesisDetailRows,
-    ThesisGraphRows,
-    ThesisListRows,
-    ThesisReadRepository,
-)
 
 __all__ = [
-    "DEFAULT_LIMIT",
-    "DEFAULT_WINDOW_DAYS",
-    "MAX_LIMIT",
-    "RowBundle",
-    "ThesisDetailRows",
-    "ThesisGraphRows",
-    "ThesisListRows",
-    "ThesisReadRepository",
 ]

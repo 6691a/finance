@@ -13,7 +13,6 @@ from modules.expectation.extraction import SYSTEM_PROMPT as EXTRACTION_PROMPT
 from modules.llm import (
     NUMBER_STYLE,
     REQUEST_TIMEOUT_SECONDS,
-    THESIS_TIMEOUT_SECONDS,
     LlmError,
     RetryableLlmError,
     UnsupportedResponseFormat,
@@ -22,13 +21,9 @@ from modules.llm import (
     document_model,
     invoke,
     model_name,
-    narration_model,
-    thesis_model,
     token_usage,
 )
 from modules.schema import response_format, strict_json_schema
-from modules.thesis.generation import SYSTEM_PROMPT as THESIS_PROMPT
-from modules.thesis.outcomes import NARRATIVE_SYSTEM_PROMPT
 
 
 class ScriptedModel:
@@ -92,56 +87,6 @@ def test_the_briefing_model_is_its_own_function(monkeypatch):
     # 캐시는 서버마다다. 이 헤더가 없으면 같은 대화의 다음 요청이 다른 서버로 가 접두를
     # 못 만난다(`modules/llm.py`의 "대화 하나는 서버 하나로 보낸다").
     assert model.default_headers == {"x-grok-conv-id": "test-conv"}
-
-
-def test_the_thesis_model_is_its_own_function(monkeypatch):
-    """브리핑 선별과 같은 모델이지만 함수를 나눠 둔다. 선별과 추론은 요구가 달라
-    한쪽만 바꾸고 싶어질 때 그 함수만 고치면 된다."""
-    monkeypatch.setenv("XAI_API_KEY", "secret-key")
-
-    model = thesis_model("test-conv")
-
-    assert model_name(model) == "grok-4.6"
-    assert model.max_retries == 0
-    # 추론 한 요청은 툴 결과 여러 건을 읽고 대상 전부에 답한다 — 문서 한 건 태깅보다 길다.
-    # 2026-08-21 운영 첫 실행이 300초에서 `APITimeoutError`로 죽었다. 문서 태깅의 값은
-    # 그대로 둔다(한 번에 손잡이 하나).
-    assert model.request_timeout == THESIS_TIMEOUT_SECONDS
-    assert THESIS_TIMEOUT_SECONDS > REQUEST_TIMEOUT_SECONDS
-    # 툴 왕복마다 대화 전체가 재전송되는 흐름이라 이 헤더가 제일 급한 자리다.
-    assert model.default_headers == {"x-grok-conv-id": "test-conv"}
-
-
-def test_the_narration_model_is_a_different_provider_from_the_thesis_model(monkeypatch):
-    """해설만 추론과 다른 모델이다. 두 작업의 병목이 반대라서 갈랐다(16단계).
-
-    이 검사가 잠그는 것은 "무엇을 부르나"가 아니라 **어떻게 불러야 도는가**다. 셋 중
-    하나라도 빠지면 운영에서만 죽거나 조용히 나빠진다.
-    """
-    monkeypatch.setenv("OPENAI_API_KEY", "secret-key")
-
-    model = narration_model()
-
-    assert model_name(model) == "gpt-5.6-luna"
-    # `/v1/chat/completions`는 이 모델에 function tool과 reasoning을 같이 주면 400이다.
-    # 툴 루프가 있는 흐름이라 이게 빠지면 첫 호출부터 죽는다.
-    assert model.use_responses_api is True
-    # `max`는 툴 호출을 자기 추론으로 대체해 조사가 얕아지고 `medium`은 표기가 샌다.
-    assert model.reasoning == {"effort": "high"}
-    assert model.max_retries == 0
-    # 툴 왕복이 있는 흐름이라 추론과 같은 타임아웃을 쓴다.
-    assert model.request_timeout == THESIS_TIMEOUT_SECONDS
-    # xAI의 sticky 라우팅 헤더를 붙이지 않는다 — OpenAI는 캐시가 접두 해시로 자동이라
-    # 맞출 서버가 없다. 붙이면 아무 일도 안 하는 헤더가 남는다.
-    assert "x-grok-conv-id" not in (model.default_headers or {})
-
-
-def test_the_thesis_model_stays_on_grok(monkeypatch):
-    """**예측은 옮기지 않는다.** 백테스트에서 방향 적중이 그록 9/20, 루나 5/20으로
-    무작위 기대(6.7)보다 낮았다(16단계 8절). `thesis` 채점 시계열도 이 함수에 걸려 있다."""
-    monkeypatch.setenv("XAI_API_KEY", "secret-key")
-
-    assert model_name(thesis_model("test-conv")) == "grok-4.6"
 
 
 def test_invoke_binds_the_schema_and_no_tools():
@@ -261,10 +206,10 @@ def test_response_format_is_shaped_for_the_api(model):
 
 @pytest.mark.parametrize(
     "prompt",
-    [THESIS_PROMPT, NARRATIVE_SYSTEM_PROMPT, picks.SYSTEM_PROMPT, system_prompt(DEFAULT_PERSPECTIVE)],
+    [picks.SYSTEM_PROMPT, system_prompt(DEFAULT_PERSPECTIVE)],
 )
 def test_every_prose_prompt_carries_the_number_style(prompt):
-    """산문을 내는 프롬프트 넷이 같은 한 벌을 쓴다. 네 곳에 따로 적으면 반드시 어긋난다."""
+    """산문을 내는 프롬프트가 같은 한 벌을 쓴다. 여러 곳에 따로 적으면 반드시 어긋난다."""
     assert NUMBER_STYLE in prompt
 
 

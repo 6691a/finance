@@ -3,12 +3,8 @@ from datetime import UTC, datetime, timedelta
 from typing import Self
 
 import pytest
-from sqlalchemy import Table
 
-from apps.models.analysis import ThesisOutcome
-from apps.models.raw import SourceRecord
 from modules.briefing import ops
-from modules.thesis.state import NARRATED_SLOTS, RunSlot
 
 # KST 2026-08-18(화) 08:00. 전 영업일은 월요일이다.
 TUESDAY = datetime(2026, 8, 17, 23, 0, tzinfo=UTC)
@@ -20,10 +16,6 @@ HEALTHY_ROWS = [
 ]
 
 NO_BACKLOG = (0, 0, 0, 0, 0, 0, None)
-
-# 추론 지표. (지평, 채점, 평균 Brier, flat, 해설, 지지, 반박, 보류)
-NO_THESIS: list = []
-NO_THESIS_BACKLOG = (0, 0)
 
 
 class FakeCursor:
@@ -63,36 +55,13 @@ def summary(
     failures=(),
     backlog=NO_BACKLOG,
     now=TUESDAY,
-    thesis_rows=None,
-    thesis_backlog=NO_THESIS_BACKLOG,
 ):
     connection = FakeConnection(
         HEALTHY_ROWS if rows is None else rows,
         list(failures),
         backlog,
-        NO_THESIS if thesis_rows is None else thesis_rows,
-        thesis_backlog,
     )
     return ops.OpsBriefingReader(connection, now).summary()
-
-
-def test_the_thesis_backlog_counts_the_slots_the_narration_loop_actually_makes():
-    """밀림을 세는 목록과 해설을 만드는 목록이 같아야 한다.
-
-    어긋나면 한쪽은 해설을 안 만들고 다른 쪽은 그것을 밀림으로 세서, 목표일이 지난 뒤
-    `unnarrated`가 영영 줄지 않는 거짓 경보가 된다. 상수 하나(`NARRATED_SLOTS`)를 양쪽이
-    보게 만드는 것이 그 방법이고, 이 테스트는 ops 쪽이 정말 그것을 넘기는지를 본다.
-    """
-    connection = FakeConnection(HEALTHY_ROWS, [], NO_BACKLOG, NO_THESIS, NO_THESIS_BACKLOG)
-
-    ops.OpsBriefingReader(connection, TUESDAY).summary()
-
-    calls = [call for cursor in connection.cursors for call in cursor.calls]
-    _, parameters = next(call for call in calls if "unnarrated" in call[0])
-
-    # (지평 목록, 창의 시작, 채점 슬롯, 해설 슬롯, 오늘)
-    assert parameters[3] == list(NARRATED_SLOTS)
-    assert RunSlot.POST_NXT_CLOSE in parameters[3]
 
 
 def test_all_green_reports_every_source_as_healthy():
@@ -195,145 +164,11 @@ def test_unknown_sources_are_folded_into_one_row():
 
 
 def test_the_window_is_a_full_day():
-    connection = FakeConnection(HEALTHY_ROWS, [], NO_BACKLOG, NO_THESIS, NO_THESIS_BACKLOG)
+    connection = FakeConnection(HEALTHY_ROWS, [], NO_BACKLOG)
     ops.OpsBriefingReader(connection, TUESDAY).summary()
 
     assert connection.cursors[0].calls[0][1][0] == TUESDAY - timedelta(hours=ops.WINDOW_HOURS)
 
-
-# --- 추론 품질 ---------------------------------------------------------------
-
-# (지평, 채점, 평균 Brier, flat, 해설, 지지, 반박, 보류, 크기 채점, 평균 크기 오차,
-#  밴드 채점, 밴드 적중)
-# 크기 오차와 밴드는 지평 0에만 있다. 나머지 지평은 크기를 받지 않아 NULL이 정상이다.
-THESIS_ROWS = [
-    (0, 12, 0.612, 3, 0, 0, 0, 0, 9, 0.42, 8, 5),
-    (1, 12, 0.701, 4, 12, 1, 4, 7, 0, None, 0, 0),
-    (5, 8, 0.588, 2, 8, 2, 1, 5, 0, None, 0, 0),
-]
-
-
-def test_the_thesis_section_is_absent_until_something_is_graded():
-    # 추론이 정말 없는 날은 조회가 0행을 준다. 그건 정상이라 섹션을 안 그린다.
-    text = _block_text(ops.render_blocks(summary()))
-
-    assert "추론 품질" not in text
-
-
-def test_the_thesis_section_marks_whether_it_beats_the_uniform_baseline():
-    text = _block_text(ops.render_blocks(summary(thesis_rows=THESIS_ROWS)))
-
-    assert "추론 품질" in text
-    # 숫자만 보면 매번 0.667과 비교해야 한다. 기호가 갈라 준다.
-    assert "0.612 ✓" in text
-    assert "0.701 ✗" in text
-    assert "0.588 ✓" in text
-    assert str(ops.UNIFORM_BRIER) in text
-
-
-def test_the_thesis_section_shows_the_size_error_with_its_own_sample_count():
-    """부호가 뜻이다 — 양수면 과소추정이고 그것이 프롬프트를 고칠 방향이다."""
-    text = _block_text(ops.render_blocks(summary(thesis_rows=THESIS_ROWS)))
-
-    assert "+0.42%p 과소" in text
-    # flat과 미채점이 빠져 Brier의 n(12)과 다르다. 표본을 함께 적지 않으면 섞어 읽는다.
-    assert "n=9" in text
-
-
-def test_a_horizon_without_a_size_grade_shows_a_dash():
-    """크기는 지평 0에서만 받는다. 지평 1·3·5의 빈 칸은 결함이 아니다."""
-    text = _block_text(ops.render_blocks(summary(thesis_rows=THESIS_ROWS)))
-
-    # 지평 1 행에 0.00%p가 찍히면 "오차가 없었다"로 읽힌다.
-    assert "0.00%p" not in text
-
-
-def test_the_thesis_section_shows_the_band_hit_rate():
-    """**오차 평균과 다른 것을 잰다** — 저쪽은 중심의 치우침, 이쪽은 자기 불확실성을 아는가다.
-
-    적중률이 지나치게 높아도 문제라 목표대를 함께 적는다. 95퍼센트면 폭을 너무 넓게 불러
-    구간이 아무 것도 말하지 않는다는 뜻이다.
-    """
-    text = _block_text(ops.render_blocks(summary(thesis_rows=THESIS_ROWS)))
-
-    assert "5/8 (62%)" in text
-    assert "60~80퍼센트" in text
-
-
-def test_a_horizon_without_a_band_grade_shows_a_dash_not_zero_percent():
-    """오차 폭을 받기 전 판의 추론이다. 0/0을 0퍼센트로 그리면 "한 번도 못 맞혔다"로 읽힌다."""
-    text = _block_text(ops.render_blocks(summary(thesis_rows=[(0, 4, 0.5, 1, 0, 0, 0, 0, 4, 0.2, 0, 0)])))
-
-    assert "(0%)" not in text
-
-
-def test_the_thesis_section_shows_the_verdict_split():
-    text = _block_text(ops.render_blocks(summary(thesis_rows=THESIS_ROWS)))
-
-    # 판정은 Brier와 다른 것을 잰다. 분포가 한눈에 보여야 한쪽으로 쏠린 것을 잡는다.
-    assert "1/4/7" in text
-    assert "2/1/5" in text
-
-
-def test_the_thesis_section_carries_no_narrative_text():
-    """해설 전문은 DB에만 둔다.
-
-    매일 해설 몇 편이 운영 리포트에 쌓이면 정작 봐야 할 실패 목록이 묻힌다.
-    """
-    text = _block_text(ops.render_blocks(summary(thesis_rows=THESIS_ROWS)))
-
-    assert "해설" not in text.replace("미해설", "")
-
-
-def test_an_overdue_grade_breaks_the_all_green():
-    # 목표 영업일이 지났는데도 안 된 것만 센다. 아직 안 지난 것은 정상이다.
-    built = summary(thesis_rows=THESIS_ROWS, thesis_backlog=(3, 2))
-
-    assert built.thesis.has_backlog
-    assert not built.is_healthy
-    assert "추론 적체 5건" in ops.render_text(built)
-
-
-def test_a_horizon_without_grades_shows_a_dash_not_a_zero():
-    text = _block_text(ops.render_blocks(summary(thesis_rows=[(5, 0, None, 0, 0, 0, 0, 0, 0, None, 0, 0)])))
-
-    # 0.000은 "완벽했다"로 읽힌다. 채점이 없는 것과 완벽한 것을 가른다.
-    assert "0.000" not in text
-
-
-def test_fallback_text_is_one_line():
-    assert "\n" not in ops.render_text(summary())
-
-
-def test_the_horizon_list_matches_the_thesis_module():
-    from modules.thesis.domain import HORIZON_DAYS
-
-    # ops는 LLM 층을 import하지 않는다 — 감시하는 쪽이 감시받는 쪽을 부르면 그쪽이 죽은 날
-    # 이 리포트도 같이 흔들린다. 대신 값을 한 벌 더 두고 여기서 대조한다.
-    assert set(ops.THESIS_HORIZONS) == set(HORIZON_DAYS)
-
-
-@pytest.mark.parametrize(
-    ("statement", "table", "columns"),
-    [
-        (
-            ops.BRIEFING_WINDOW,
-            SourceRecord.__table__,
-            ("source", "started_at", "completed_at", "status", "record_count"),
-        ),
-        (ops.RECENT_FAILURES, SourceRecord.__table__, ("source_key", "metadata")),
-        (
-            ops.THESIS_CALIBRATION,
-            ThesisOutcome.__table__,
-            ("horizon_days", "brier_score", "actual_outcome", "narrative", "verdict"),
-        ),
-        (ops.THESIS_BACKLOG, ThesisOutcome.__table__, ("horizon_days", "evaluated_at", "narrative")),
-    ],
-)
-def test_queries_name_columns_that_exist(statement: str, table: Table, columns: tuple[str, ...]):
-    for column in columns:
-        assert column in table.columns, f"{table.name}.{column}"
-        assert column in statement
 
 
 def _block_text(blocks) -> str:
@@ -341,22 +176,17 @@ def _block_text(blocks) -> str:
 
 
 def _activity_table(blocks) -> dict:
-    """수집 현황 표 블록. 렌더에는 추론 지평 표도 있어 첫 table 만 집는다."""
+    """수집 현황 표 블록. 표가 여럿이 될 수 있어 첫 table만 집는다."""
     return next(block for block in blocks if block.get("type") == "table")
 
 
-# 감시 리포트의 빈 조회. 둘 다 GROUP BY 없는 집계라 한 행이 반드시 오고, 안 오면 쿼리나
-# 스키마가 깨진 것이다. 그때 0을 찍으면 적체 없음(=초록)으로 위장한다.
+# 감시 리포트의 빈 조회. GROUP BY 없는 집계라 한 행이 반드시 오고, 안 오면 쿼리나 스키마가
+# 깨진 것이다. 그때 0을 찍으면 적체 없음(=초록)으로 위장한다.
 
 
 def test_a_document_summary_without_a_row_is_an_error_not_zero_backlog():
     with pytest.raises(ops.OpsQueryError):
         summary(backlog=None)
-
-
-def test_a_thesis_backlog_without_a_row_is_an_error_not_zero_backlog():
-    with pytest.raises(ops.OpsQueryError):
-        summary(thesis_backlog=None)
 
 
 # ---------------------------------------------------------------------------

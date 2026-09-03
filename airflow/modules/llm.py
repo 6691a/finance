@@ -32,7 +32,7 @@ xAI의 프롬프트 캐시는 **서버마다 따로** 저장된다. 같은 대�
 요청을 같은 서버로 보내는 sticky 라우팅이고, 그래서 **툴 왕복이 있는 흐름은 이 헤더가
 없으면 왕복마다 대화 전체를 새로 낸다.**
 
-2026-08-27 `market_thesis_intraday` 실측이 그 값이다. 모델 호출 네 번 중 캐시를 만난 것은
+2026-08-27 옛 시장 추론(지금은 없다) 실측이 그 값이다. 모델 호출 네 번 중 캐시를 만난 것은
 셋째 하나였고(51,968 토큰), 나머지 셋은 512였다 — 입력 246,395 토큰 중 캐시 적중이 21.5%다.
 
 `conv_id`는 **결정적 문자열**이다. 실행마다 난수를 만들면 재시도가 새 대화가 되어 캐시를
@@ -63,7 +63,7 @@ xAI의 프롬프트 캐시는 **서버마다 따로** 저장된다. 같은 대�
 **`LANGSMITH_TRACING_BACKGROUND=false`도 함께 준다**(2026-08-28). 기본값은 백그라운드 스레드가
 run을 모아 배치로 보내는데, Airflow 태스크 프로세스가 큐를 비우기 전에 끝나면 **시작 이벤트만
 남고 종료가 안 간다.** 트레이스가 `status: pending`에 `outputs: null`로 영원히 멈춰 있으면
-그것이다. 호출이 적고 금방 끝나는 흐름(`causal`)이 먼저 걸렸다. 동기 전송은 왕복이 하나
+그것이다. 호출이 적고 금방 끝나는 흐름이 먼저 걸렸다. 동기 전송은 왕복이 하나
 늘지만 LLM 호출 자체가 수십 초라 묻힌다.
 """
 
@@ -92,13 +92,6 @@ REQUEST_TIMEOUT_SECONDS = 300.0
 # 쓰는 일이라 문서 한 건을 태깅하는 것보다 길다. 2026-08-21 운영 첫 실행이 300초에서
 # `APITimeoutError`로 죽었다. 노트북(`narrator_ab.ipynb`)은 이미 900을 쓰고 있었다.
 #
-# **1800은 관측이 아니라 예방이다**(2026-08-22). 900에서 죽은 실행은 아직 없고, 툴이 11개로
-# 늘면서 왕복이 길어질 것을 보고 미리 올렸다. 되돌릴 후보라는 사실을 손잡이 장부에 남겼다
-# (`docs/analysis/market-thesis/TUNING.md` 6절 이력). 실제 소요 분포가 쌓이면 다시 정한다.
-#
-# **문서 태깅의 300초를 같이 올리지 않는다.** 그쪽은 지금 값으로 잘 돌고 있고, 한 번에
-# 손잡이 하나만 당긴다(`docs/analysis/market-thesis/TUNING.md` 1절).
-THESIS_TIMEOUT_SECONDS = 1800.0
 
 # 코스피 일일 전망·관찰. 툴이 셋이고 대상이 하나라 옛 추론의 절반으로 시작한다. 여기 걸리면
 # `kospi.domain.MAX_TOOL_ROUNDS`를 먼저 의심한다 — 왕복이 늘수록 한 요청이 길어진다.
@@ -142,44 +135,6 @@ def document_model() -> BaseChatModel:
     )
 
 
-def causal_model() -> BaseChatModel:
-    """주간 사후 인과 그래프(`modules/causal/generation.py`)가 쓰는 모델.
-
-    8주 프로토타입을 이 모델로 돌려 어휘 수렴과 사슬 깊이를 확인했다. 문서 태깅과 같은
-    모델이지만 함수를 나눠 두는 이유는 같다 — 이쪽만 다른 모델로 옮기고 싶어질 때 이 함수만
-    고친다.
-    """
-    return ChatOpenAI(
-        model="gpt-5.6-luna",
-        timeout=REQUEST_TIMEOUT_SECONDS,
-        # **툴을 쓰므로 Responses API로 간다**(2026-08-28). Chat Completions에서는 이 모델이
-        # 함수 툴과 reasoning을 같이 못 받는다 — `Function tools with reasoning_effort are
-        # not supported for gpt-5.6-luna in /v1/chat/completions`. `reasoning_effort="none"`
-        # 으로 낮추는 대신 API를 옮긴다. 인과 추론이 이 흐름의 값어치이고 그것을 끄면
-        # 툴을 붙인 이유가 사라진다.
-        use_responses_api=True,
-        # 재시도는 Airflow가 한다. 위 모듈 docstring 참고.
-        max_retries=0,
-    )
-
-
-def direction_model() -> BaseChatModel:
-    """주간 방향성 요약(`modules/causal/direction.py`)이 쓰는 모델.
-
-    그래프를 만든 `causal_model`과 같은 모델이지만 함수를 나눠 둔다 — 저쪽은 툴을 돌며
-    경로를 만드는 일이고 이쪽은 이미 만들어진 경로를 읽고 어느 채널이 우위인지 한 문장을
-    쓰는 일이라, 한쪽만 옮기고 싶어질 때 그 함수만 고친다.
-
-    **툴이 없어서 `use_responses_api`가 필요 없다.** 경로는 코드가 Cypher로 뽑아 프롬프트에
-    싣는다(설계 §3.1) — 그래서 이 흐름은 왕복이 하나이고, 자유 Cypher 프로토타입이 물던
-    호출당 45~104초가 여기 없다.
-    """
-    return ChatOpenAI(
-        model="gpt-5.6-luna",
-        timeout=REQUEST_TIMEOUT_SECONDS,
-        # 재시도는 Airflow가 한다. 위 모듈 docstring 참고.
-        max_retries=0,
-    )
 
 
 def expectation_model() -> BaseChatModel:
@@ -221,37 +176,14 @@ def briefing_model(conv_id: str) -> BaseChatModel:
     )
 
 
-def thesis_model(conv_id: str) -> BaseChatModel:
-    """시장 추론(`modules/thesis/generation.py`·`thesis/outcomes.py`)이 쓰는 모델.
-
-    툴 왕복이 많은 작업이라 툴 호출 품질로 고른다. 브리핑 선별과 같은 `grok-4.6`이지만 함수를
-    나눠 둔다 — 선별은 목록을 읽고 고르는 일이고 추론은 툴을 여러 번 돌며 가설을 세우는
-    일이라, 한쪽만 다른 모델로 옮기고 싶어질 때 그 함수만 고치면 된다.
-
-    키는 이 클래스가 `XAI_API_KEY`에서 스스로 읽는다. 우리가 넘기지 않는다.
-    **운영 키를 먼저 확인한다** — 2026-08-20 실측에서 `compose/prod/airflow/.env`의
-    `XAI_API_KEY`가 `Incorrect API key provided`였다. 키가 무효면 이 DAG는 매 슬롯 실패한다.
-
-    `conv_id`는 이 실행 하나를 가리키는 결정적 문자열이다. **이 흐름이 헤더가 제일 급한
-    자리다** — 툴 왕복마다 대화 전체가 재전송되기 때문이다(모듈 docstring 참고).
-    """
-    return ChatXAI(
-        model="grok-4.6",
-        timeout=THESIS_TIMEOUT_SECONDS,
-        default_headers=_conversation_headers(conv_id),
-        # 재시도는 Airflow가 한다. 위 모듈 docstring 참고.
-        max_retries=0,
-    )
-
 
 def kospi_model(conv_id: str) -> BaseChatModel:
     """코스피 일일 전망·관찰(`modules/kospi/`)이 쓰는 모델.
 
-    툴 왕복이 있는 작업이라 툴 호출 품질로 고른다. `thesis_model`과 같은 `grok-4.6`이지만
-    함수를 나눠 둔다 — 옛 추론은 지워질 예정이고, 그때 이 함수만 남으면 된다.
+    툴 왕복이 있는 작업이라 툴 호출 품질로 고른다.
 
-    타임아웃이 `THESIS_TIMEOUT_SECONDS`가 아니라 그 절반인 이유는 **툴이 셋뿐이기 때문이다.**
-    옛 추론은 열다섯 개 툴에 대상 넷이라 한 요청이 길었다. 여기서 이 값에 걸리면 상한
+    타임아웃이 900초인 것은 **툴이 셋이고 대상이 하나이기 때문이다.** 옛 시장 추론은 툴
+    열다섯에 대상 넷이라 1800초를 썼다. 여기서 이 값에 걸리면 상한
     (`kospi.domain.MAX_TOOL_ROUNDS`)을 먼저 의심한다.
 
     `conv_id`는 이 실행 하나를 가리키는 **결정적** 문자열이다. 난수면 재시도가 캐시를
@@ -268,42 +200,9 @@ def kospi_model(conv_id: str) -> BaseChatModel:
     )
 
 
-def narration_model() -> BaseChatModel:
-    """사후 해설(`modules/thesis/outcomes.py`)이 쓰는 모델. **추론과 다른 모델이다.**
-
-    같은 시장 추론 계보인데 모델이 갈리는 이유는 두 작업의 병목이 반대이기 때문이다.
-    해설은 답이 문서에 있고 가져오면 되는 일이라 **조사를 많이 하는 쪽**이 이기고, 예측은
-    같은 관측에서 확률을 매기는 일이라 **추론**이 값어치다. 실측이 정확히 그렇게 갈렸다 —
-    해설은 이 모델이 그록과 같은 조사 깊이를 22배 싸게 냈고(48건), 예측은 방향 적중이
-    그록 9/20에 이 모델 5/20으로 무작위 기대(6.7)보다 낮았다(20건).
-    근거는 `docs/analysis/market-thesis/16-narration-model.md` 2·8절이다.
-
-    **`use_responses_api`가 필수다.** `/v1/chat/completions`는 이 모델에 function tool과
-    reasoning을 같이 주면 400이다("To use function tools, use /v1/responses or set
-    reasoning_effort to 'none'"). 같은 문서 6절.
-
-    **effort는 `high`로 고정한다.** `max`는 프롬프트가 재량을 남긴 자리에서 툴 호출을 자기
-    추론으로 대체해 조사가 얕아지고(툴 7회 → 2회), `medium`은 표기가 샌다 — 해설 본문에
-    `(ref: ...)`를 박고 그중 다수가 `_known_refs`에 잘려 본문과 `evidence_refs`가 어긋난다.
-
-    `thesis_model`과 달리 `conv_id`를 받지 않는다. 그 인자는 xAI의 **서버별** 캐시를 sticky
-    라우팅으로 맞추려는 것인데(위 모듈 docstring) OpenAI의 캐시는 접두 해시로 자동이라
-    맞출 서버가 없다. 인자를 남기면 아무 일도 하지 않는 인자가 된다.
-
-    키는 이 클래스가 `OPENAI_API_KEY`에서 스스로 읽는다. `document_model`과 같은 키다.
-    """
-    return ChatOpenAI(
-        model="gpt-5.6-luna",
-        timeout=THESIS_TIMEOUT_SECONDS,
-        use_responses_api=True,
-        reasoning={"effort": "high"},
-        # 재시도는 Airflow가 한다. 위 모듈 docstring 참고.
-        max_retries=0,
-    )
-
 
 class TokenUsage(BaseModel):
-    """대화 하나가 청구된 토큰. `thesis_llm_run`의 네 칸이 이 값을 그대로 받는다.
+    """대화 하나가 청구된 토큰. `kospi_llm_run`의 네 칸이 이 값을 그대로 받는다.
 
     넷을 나눠 두는 이유는 **서로 다른 손잡이에 붙기 때문이다.** `prompt`는 왕복마다 대화
     전체가 재전송된 결과라 프롬프트 블록 크기와 왕복 상한이 움직이고, `reasoning`은 대화에

@@ -133,5 +133,5 @@ class TechnicalSignal(EntityBase):
     rule_version: Mapped[str] = mapped_column(
         Text,
         nullable=False,
-        comment="검출 규칙 버전(modules/technical/indicators.py의 RULE_VERSION). thesis.prompt_version과 같은 역할이다",
+        comment="검출 규칙 버전(modules/technical/indicators.py의 RULE_VERSION)",
     )

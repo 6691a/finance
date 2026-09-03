@@ -70,6 +70,7 @@ from modules.kospi.tools import (
     FactorHistoryPayload,
     FactorPoint,
     FlowPoint,
+    NewsPage,
     NewsRow,
     StockPoint,
 )
@@ -240,20 +241,24 @@ class KospiToolbox:
         # `factor: NEWS` 이유가 검증을 통과한다.
         self._saw_news = bool(rows)
         return self._body(
-            [
-                NewsRow(
-                    document_id=row[0],
-                    title=row[1],
-                    source=row[2],
-                    published_at=row[3],
-                    value_score=row[4],
-                    direction=row[5],
-                    reason=row[6],
-                    new_facts=list(row[7] or []),
-                    tickers=tuple(row[8] or ()),
-                )
-                for row in rows
-            ]
+            NewsPage(
+                total=int(rows[0][9]) if rows else 0,
+                shown=len(rows),
+                items=tuple(
+                    NewsRow(
+                        document_id=row[0],
+                        title=row[1],
+                        source=row[2],
+                        published_at=row[3],
+                        value_score=row[4],
+                        direction=row[5],
+                        reason=row[6],
+                        new_facts=list(row[7] or []),
+                        tickers=tuple(row[8] or ()),
+                    )
+                    for row in rows
+                ),
+            )
         )
 
     def _tool_recent_disclosures(self, hours: int = DEFAULT_WINDOW_HOURS) -> str:

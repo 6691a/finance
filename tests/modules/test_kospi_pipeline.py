@@ -633,10 +633,39 @@ def test_an_empty_document_result_does_not_make_that_factor_citable():
 
     toolbox = KospiToolbox(_EmptyConnection(), as_of_at=datetime(2026, 9, 2, 23, 35, tzinfo=UTC))
     assert toolbox.run("recent_disclosures", {"hours": 24}) == "[]"
-    assert toolbox.run("recent_news", {"hours": 24}) == "[]"
+    assert json.loads(toolbox.run("recent_news", {"hours": 24})) == {"total": 0, "shown": 0, "items": []}
 
     assert Factor.DISCLOSURE not in toolbox.queried_factors
     assert Factor.NEWS not in toolbox.queried_factors
+
+
+class _NewsCursor(_RecordingCursor):
+    def execute(self, statement, parameters=()):
+        published = datetime(2026, 9, 2, 20, 0, tzinfo=UTC)
+        # 마지막 칸이 창 안의 전체 수다. 두 행을 주고 총계는 303이라 잘린 상태다.
+        self.rows = [
+            (1, "브로드컴 가이던스 실망", "einfomax", published, 7, "negative", "반도체 센티먼트", ["시간외 급락"], ["005930"], 303),
+            (2, "이란, 미군 기지 공격", "einfomax", published, 8, "negative", "지정학", [], [], 303),
+        ]
+
+
+class _NewsConnection:
+    def cursor(self):
+        return _NewsCursor()
+
+
+def test_recent_news_tells_the_model_how_many_it_did_not_see():
+    """303건 중 30건을 주면서 그 말을 안 하면 모델은 다 봤다고 믿는다. `total`과 `shown`이
+    다르면 잘린 것이다."""
+    from modules.kospi.toolbox import KospiToolbox
+
+    toolbox = KospiToolbox(_NewsConnection(), as_of_at=datetime(2026, 9, 2, 23, 35, tzinfo=UTC))
+    page = json.loads(toolbox.run("recent_news", {"hours": 24}))
+
+    assert page["total"] == 303
+    assert page["shown"] == 2
+    assert [item["document_id"] for item in page["items"]] == [1, 2]
+    assert Factor.NEWS in toolbox.queried_factors
 
 
 def test_the_disclosure_tool_description_names_every_watched_company():

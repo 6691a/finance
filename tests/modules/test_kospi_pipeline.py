@@ -748,3 +748,89 @@ def test_every_kospi_dag_exposes_the_notify_switch():
         assert "common.notify_param()" in source, name
         # docstring의 params 표에도 적혀 있어야 한다 — 운영자가 UI 전에 읽는 자리다.
         assert re.search(r"^\| `notify` \|", source, re.MULTILINE), name
+
+
+# --- 드라이버 경계의 타입 ------------------------------------------------------
+
+
+class _CapturingSession:
+    """`session.run`에 실린 파라미터를 그대로 모으는 가짜. 결과는 언제나 비어 있다."""
+
+    def __init__(self, captured: dict[str, object]) -> None:
+        self.captured = captured
+
+    def run(self, statement: str, **parameters: object):
+        self.captured.update(parameters)
+        return _CapturingSession._EmptyResult()
+
+    def begin_transaction(self):
+        return self
+
+    def commit(self) -> None:
+        return None
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *_: object) -> bool:
+        return False
+
+    class _EmptyResult:
+        def __iter__(self):
+            return iter(())
+
+        def single(self):
+            return None
+
+
+class _CapturingDriver:
+    def __init__(self, captured: dict[str, object]) -> None:
+        self.captured = captured
+
+    def session(self):
+        return _CapturingSession(self.captured)
+
+
+def test_dates_reach_the_driver_as_plain_types_not_pendulum():
+    """**드라이버는 정확한 타입으로 직렬화 훅을 고른다 — 서브클래스면 죽는다.**
+
+    2026-09-03 첫 운영 실행이 여기서 죽었다:
+    `ValueError: Values of type <class 'pendulum.date.Date'> are not supported`.
+    `datetime`만 벗기고 `date`를 안 벗긴 것이 원인이다. pendulum `DateTime.date()`가
+    pendulum `Date`를 주므로 KST 날짜를 뽑는 경로가 전부 그 타입을 만든다.
+
+    조회와 쓰기를 함께 잠근다 — 쓰기 쪽은 `run_date` 하나를 다섯 쿼리가 나눠 쓴다.
+    """
+    import pendulum
+
+    from modules.kospi import graph as kospi_graph
+
+    moment = pendulum.datetime(2026, 9, 3, 8, 35, tz="Asia/Seoul")
+    pendulum_date = moment.date()
+    # 전제가 깨지면(pendulum이 표준 타입을 주게 되면) 이 테스트는 아무것도 안 지킨다.
+    assert type(pendulum_date) is not date
+
+    read: dict[str, object] = {}
+    kospi_graph.read_memories(_CapturingDriver(read), as_of_date=pendulum_date, as_of_at=moment)
+    assert read, "조회가 파라미터를 하나도 안 실었다"
+
+    written: dict[str, object] = {}
+    kospi_graph.write_review(
+        _CapturingDriver(written),
+        run_date=pendulum_date,
+        observations=(),
+        new_memories=(),
+        kept_ids=(1,),
+        retired=(),
+        unreviewed_ids=(),
+        llm_run_id=None,
+        created_at=moment,
+    )
+    assert written, "쓰기가 파라미터를 하나도 안 실었다"
+
+    for where, captured in (("조회", read), ("쓰기", written)):
+        for name, value in captured.items():
+            if isinstance(value, datetime):
+                assert type(value) is datetime, f"{where}의 {name}이 {type(value)}"
+            elif isinstance(value, date):
+                assert type(value) is date, f"{where}의 {name}이 {type(value)}"

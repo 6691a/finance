@@ -270,6 +270,7 @@ def read_relations(graph: Driver, *, as_of_date: date, as_of_at: datetime) -> tu
     관측이 0인 요인도 행으로 나온다(`n_obs=0`). 그것이 "관계가 없다"가 아니라 "아직 모른다"
     라는 것은 프롬프트가 밝힌다.
     """
+    as_of_date = _plain_date(as_of_date)
     window_start = date.fromordinal(max(as_of_date.toordinal() - RELATION_LOOKBACK_DAYS, 1))
     with _session(graph) as session:
         rows = _run(
@@ -309,7 +310,9 @@ def read_memories(graph: Driver, *, as_of_date: date, as_of_at: datetime) -> tup
     """
     with _session(graph) as session:
         rows = _run(
-            session, READ_MEMORIES, {"as_of_date": as_of_date, "as_of_at": _plain_datetime(as_of_at)}
+            session,
+            READ_MEMORIES,
+            {"as_of_date": _plain_date(as_of_date), "as_of_at": _plain_datetime(as_of_at)},
         )
     memories: list[StoredMemory] = []
     for row in rows:
@@ -351,6 +354,8 @@ def write_review(
     `retired`에는 모델이 `drop`한 것과 코드가 만료·미검토로 내린 것이 함께 온다. 어느 쪽인지는
     `RetireReason`이 들고 있어 나중에 "모델이 메모를 잘 지우나"를 따로 잴 수 있다.
     """
+    # `run_date`는 아래 다섯 쿼리가 전부 쓴다. 입구에서 한 번 벗긴다.
+    run_date = _plain_date(run_date)
     if isinstance(created_at, datetime):
         created_at = _plain_datetime(created_at)
 
@@ -479,6 +484,17 @@ def _plain_datetime(value: datetime) -> datetime:
         value.microsecond,
         tzinfo=value.tzinfo,
     )
+
+
+def _plain_date(value: date) -> date:
+    """드라이버가 받는 표준 `date`로. **`_plain_datetime`과 같은 이유다.**
+
+    `ValueError: Values of type <class 'pendulum.date.Date'> are not supported` —
+    `datetime`만 벗기고 `date`를 안 벗겨서 2026-09-03 첫 운영 실행이 여기서 죽었다.
+    pendulum `DateTime.date()`가 pendulum `Date`를 주므로 KST 날짜를 뽑는 경로가 전부
+    이것을 만든다. **공개 함수 셋이 입구에서 한 번 벗기고 아래로는 표준 타입만 흐른다.**
+    """
+    return date(value.year, value.month, value.day)
 
 
 def _as_date(value: object) -> date:

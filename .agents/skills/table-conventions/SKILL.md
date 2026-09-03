@@ -164,14 +164,15 @@ API·크롤링·웹소켓 수집 결과의 출처와 상태를 가볍게 보존�
   | 읽는 SQL | 무엇을 묻나 | 소비자 |
   | --- | --- | --- |
   | `instrument/select_taggable.sql` | 이 종목 이름을 아는가 | 문서 평가의 종목 후보, 네이버 기업 리포트 필터 |
-  | `instrument/select_watched.sql` | 이 종목 시세를 받는가 | 투자의견 수집, 추론 subject, 기술지표 조회, 주간 인과 그래프 대상 |
+  | `instrument/select_watched.sql` | 이 종목 시세를 받는가 | 투자의견 수집, 기술지표 조회, 코스피 전망의 종목 요인 |
 
   **시세가 없어도 성립하는 조회만 `select_taggable.sql`을 읽는다.** `is_watched`가 참인
   종목은 수집기 Enum 다섯(`kis.DomesticStock`, `InvestorFlowStock`, `PositioningStock`,
   `DartCompany`, `apps.realtime.service.DomesticStock`)과 **정확히 같아야 하고**
   `tests/migrations/test_instrument_catalog.py`가 그것을 대조한다. 시세 없는 종목을 참으로
-  두면 기술지표 조회는 조인에서 빠지고 추론 baseline 셋은 NULL로 들어간다 —
-  `ck_thesis_base_all_or_none`이 그 조합을 허용해서 **오류 없이 빈 값이 쌓인다.**
+  두면 그 종목은 조인에서 조용히 빠진다 — **행이 사라지는 것은 오류로 안 보인다.**
+  옛 추론에서 실제로 그랬다: baseline 셋이 NULL로 들어갔는데 CHECK가 그 조합을 허용해
+  빈 값이 쌓였다.
 - `is_watched`는 상장폐지·거래정지 같은 생애주기 상태를 뜻하지 않는다. 그것이 필요해지면
   별도 `status` enum 컬럼으로 분리한다.
 - 한 종목을 여러 소스에서 수집하게 되면 `source_symbol` 한 칸으로 못 버틴다. 그때는

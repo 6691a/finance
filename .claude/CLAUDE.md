@@ -52,7 +52,7 @@ Codex용 규칙 원본은 [.codex/AGENTS.md](../.codex/AGENTS.md)이며 두 문�
 | `migrations/` | Alembic. 리비전 파일은 `migrations/versions` 하나를 모든 별칭이 공유한다 |
 | `migrations/routing.py` | 어떤 테이블이 어떤 DB 별칭에 속하는지 판단하는 순수 함수 |
 | `../airflow/dags/` | Airflow DAG. 폴더로 나누지 않는다 — 스케줄·재시도·실패 판정만 갖는 얇은 파일이다 (아래 규칙) |
-| `../airflow/modules/` | DAG이 쓰는 공유 코드. 도메인 폴더(`collectors/`·`briefing/`·`expectation/`·`technical/`·`thesis/`·`causal/`·`graph/`)로 나누고 최상위에는 공용 잎만 둔다. 하위 패키지 `__init__.py`는 비운다 — 재수출하면 가벼운 모듈 하나를 import해도 LangChain이 딸려 온다. (아래 규칙) |
+| `../airflow/modules/` | DAG이 쓰는 공유 코드. 도메인 폴더(`collectors/`·`briefing/`·`expectation/`·`technical/`·`kospi/`)로 나누고 최상위에는 공용 잎만 둔다. 하위 패키지 `__init__.py`는 비운다 — 재수출하면 가벼운 모듈 하나를 import해도 LangChain이 딸려 온다. (아래 규칙) |
 | `../airflow/modules/collectors/` | 수집기. 도메인 폴더(`market/`·`document/`·`indicator/`·`calendar/`·`analyst/`)로 나눈다. 전환 진행 상황은 [docs/convention/collectors-class-migration.md](../docs/convention/collectors-class-migration.md) |
 | `tests/` | pytest |
 | `notebooks/` | 손으로 돌려 보는 Jupyter 노트북. 파서·수집기가 실제 데이터에서 무엇을 하는지 눈으로 확인하는 자리다. **`.gitignore`에 있어 커밋되지 않는다** — 실행하면 앱키와 시세 응답이 출력에 남는다. **DAG도 서비스도 여기를 import하지 않는다**: 코드의 원본은 언제나 `airflow/`와 `apps/`이고 노트북은 그것을 부르기만 한다 |
@@ -60,7 +60,7 @@ Codex용 규칙 원본은 [.codex/AGENTS.md](../.codex/AGENTS.md)이며 두 문�
 `apps/models/`의 모듈은 도메인 단위로 나눈다(`raw.py`, `reference.py`, `content.py`).
 한 도메인이 커지면 그 안에서 다시 패키지로 나눈다(2026-08-25) — `market/`이
 `sessions.py`·`series.py`·`fundamentals.py`·`positioning.py`·`investor_flow.py`,
-`analysis/`가 `thesis.py`·`events.py`·`technical.py`다.
+`analysis/`가 `kospi.py`·`events.py`·`technical.py`다.
 테이블은 스키마를 지정하지 않고 연결의 `search_path`(PostgreSQL 기본 `public`)를 그대로 따르므로
 파일 이름이 PostgreSQL 스키마와 대응하지 않는다.
 
@@ -130,7 +130,7 @@ provider 수명은 뜻을 갖는다 — 엔진 풀처럼 프로세스에 한 벌
 도메인 단위로 나뉜 것과 같다.
 
 - `<리소스>.py` — 그 리소스 하나의 것. 파일 이름이 리소스 이름이고 네 폴더에서 같다
-  (`thesis.py`가 넷에 하나씩). **한 리소스를 고칠 때 열 파일이 넷으로 정해진다.**
+  (`health.py`가 넷에 하나씩). **한 리소스를 고칠 때 열 파일이 넷으로 정해진다.**
 - `common.py` — **그 층의 리소스들이 공유하는 것만.** 리포지토리는 행 묶음 베이스와
   목록 상한, 서비스는 `Decimal` → JSON number 같은 변환, 스키마는 공통 베이스와 시각
   표기 애노테이션이다. 리소스 하나에만 쓰이는 것을 여기 두지 않는다 — 쓰는 쪽이 하나면
@@ -142,7 +142,7 @@ provider 수명은 뜻을 갖는다 — 엔진 풀처럼 프로세스에 한 벌
 `routes/`만 둘이 더 붙는다.
 
 - **`router`는 파일마다 하나**이고 경로 접두와 `tags`도 그 파일이 정한다
-  (`APIRouter(prefix="/api/theses", tags=["thesis"])`). 그래야 리소스를 더할 때 `app.py`가
+  (`APIRouter(prefix="/api/health", tags=["health"])`). 그래야 리소스를 더할 때 `app.py`가
   아니라 새 파일 하나만 는다. `__init__.py`는 그것들을 `routers` 튜플로 재수출하고
   `app.py`가 순회한다.
 - **wiring은 패키지를 통째로 건다**(`WiringConfiguration(packages=["apps.api.routes"])`).
@@ -248,21 +248,22 @@ DAG가 쓰는 코드는 **위치는 Airflow를, 규칙은 백엔드를** 따른�
 ## `airflow/modules/`의 폴더
 
 **한 도메인의 파일이 셋 이상이면 폴더로 내리고 접두어를 뗀다.** `collectors/`·`briefing/`·
-`expectation/`·`technical/`·`thesis/`가 그 형태다(뒤의 셋은 2026-08-27에 내렸다 — 최상위
-`.py`가 31개에서 12개로 줄었다). `modules.thesis.thesis_domain`은 말을 더듬으므로
-`modules.thesis.domain`이다. `collectors/`가 파일 이름에 제공처를 남긴 것
+`expectation/`·`technical/`·`kospi/`가 그 형태다(2026-08-27에 셋을 내렸다 — 최상위 `.py`가
+31개에서 12개로 줄었다). `modules.kospi.kospi_domain`은 말을 더듬으므로
+`modules.kospi.domain`이다. `collectors/`가 파일 이름에 제공처를 남긴 것
 (`market/kis_positioning.py`)과 다른 판단인데, 저기는 접두어가 **제공처**라 뜻이 있고
-`thesis_`는 **폴더가 될 것**이 이름에 붙어 있던 것이다.
+도메인 접두어는 **폴더가 될 것**이 이름에 붙어 있던 것이다.
 
-- **하위 패키지 `__init__.py`는 빈 파일이다.** 재수출하면 `modules.thesis.domain` 하나를
+- **하위 패키지 `__init__.py`는 빈 파일이다.** 재수출하면 `modules.kospi.domain` 하나를
   import해도 LangChain이 딸려 와 DagBag이 그 무게를 문다. `tests/modules/test_import_weight.py`가
   그 경계를 재고 있어 재수출은 그 테스트를 즉시 깬다. 한 수집기의 의존성이 없는 환경에서
   관계없는 DAG이 import 오류로 죽는 것도 같은 이유다.
+  **지금 `kospi/`의 슬롯 모듈 넷은 이 경계를 못 지킨다** — `store.py`가 `modules.llm`에서
+  `TokenUsage` 하나를 가져오는데 그 모듈이 LangChain을 끌고 온다(2026-09-03 실측 202개).
+  같은 테스트가 그 상태를 사실로 잠가 두었으니 고치면 그것이 깨진다.
 - **최상위에 남는 것은 공용 잎이다.** `db`·`sql`·`upsert`·`utility`·`period`·`schema`·
   `slack`·`llm`·`prompt`·`market_session`·`assessment`·`dedup` **열둘**이다. 열은 300줄
   미만이고 둘이 넘는다(`assessment` 637, `llm` 350 — 2026-09-01 실측).
-  **`graph/`는 둘(`projection`·`query`)인데 사용자 결정으로 내렸다**(2026-09-01). "셋 이상"
-  기준의 예외이고, 이동은 G-59 커밋과 따로 했다.
   **이것들을 `core/` 같은 폴더로 모으지 않는다** — 114개 파일 226줄을 고치고 얻는 것이 목록
   열 줄이다(2026-08-27 실측). 폴더는 파일이 많아서 만드는 것이지 정리해 보이려고 만드는
   것이 아니다. **줄 수는 폴더로 내리는 기준이 아니다** — 기준은 "한 도메인의 파일이 셋
@@ -273,8 +274,9 @@ DAG가 쓰는 코드는 **위치는 Airflow를, 규칙은 백엔드를** 따른�
   먼저 돌린다.** 2026-08-27 이동에서 셋이 걸렸다(`briefing/chart.py`의 `indicators`, 테스트
   둘의 `forecast`·`review`).
 - **이동과 파일 분리를 같은 커밋에 두지 않는다.** 어느 쪽이 회귀를 만들었는지 못 가른다.
-  `thesis/toolbox.py`는 2026-09-01에 셋을 떼어 1,556→920줄이 됐다 — 인자 스키마
-  (`tool_args.py`), 행 변환(`tool_rows.py`), 툴 호출 원장(`tool_ledger.py`)이다.
+  옛 추론의 툴박스는 2026-09-01에 셋을 떼어 1,556→920줄이 됐다 — 인자 스키마
+  (`tool_args.py`), 행 변환(`tool_rows.py`), 툴 호출 원장(`tool_ledger.py`)이고 `kospi/`가
+  그 배치를 그대로 이어받았다.
   **원장은 상태를 쥐므로 파일이 아니라 클래스(`ToolCallLedger`)로 갈랐고** 툴박스가
   그것을 소유한다. 기준은
   [collectors-class-migration.md](../docs/convention/collectors-class-migration.md)의
@@ -283,7 +285,7 @@ DAG가 쓰는 코드는 **위치는 Airflow를, 규칙은 백엔드를** 따른�
 **`dags/`는 폴더로 나누지 않는다.** Airflow의 DagBag은 하위 폴더를 재귀로 훑으므로
 기술적으로는 되지만, `dag_id`가 파일 경로와 무관해 **UI에는 그룹이 생기지 않는다**(그 일은
 `tags`가 한다). 얻는 것이 파일 탐색기에서뿐이고, DAG은 파일당 얇은 데다 접두어
-(`kis_`·`fred_`·`slack_`·`market_thesis_`)가 이미 정렬을 해 준다.
+(`kis_`·`fred_`·`slack_`·`kospi_`)가 이미 정렬을 해 준다.
 
 ## 클래스와 함수를 가르는 기준
 
@@ -294,10 +296,9 @@ DAG가 쓰는 코드는 **위치는 Airflow를, 규칙은 백엔드를** 따른�
   안 변하는 값**을 들고 도는 것. 그 값이 인자로 함수마다 다시 들어가고 있으면 그게 신호다.
   기준 구현은 `modules/collectors/analyst/kis_opinion.py`의 `KisAnalystOpinionCollector`,
   `modules/collectors/document/naver_research.py`의 `NaverResearchCollector`,
-  `modules/assessment.py`의 `DocumentAssessor`, `modules/thesis/toolbox.py`의 `ThesisToolbox`·
-  `ThesisBuilder`·`FollowupNarrator`다. 연결을 쥐는 흐름 코드는
-  `modules/thesis/nxt_review.py`의 `NxtAfterHoursReview`, `modules/thesis/common.py`의
-  `ThesisRun`, `modules/thesis/store.py`의 `ThesisStore`가 기준이다.
+  `modules/assessment.py`의 `DocumentAssessor`, `modules/kospi/toolbox.py`의 `KospiToolbox`,
+  `modules/kospi/generation.py`의 `ForecastBuilder`·`ReviewBuilder`다. 연결과 기준 시각을
+  쥐는 코드는 `modules/kospi/store.py`의 `KospiStore`가 기준이다.
 - **생성자는 그 실행 동안 안 변하는 것만 받는다.** 종목·구간처럼 호출마다 바뀌는 것은
   메서드 인자다.
 - **함수로 둔다**: 파싱·정규화·계산처럼 감쌀 상태가 없는 것, 그리고 그 클래스의 관심사가
@@ -404,8 +405,9 @@ DAG가 쓰는 코드는 **위치는 Airflow를, 규칙은 백엔드를** 따른�
   화면이 생기면 문서와 실제가 갈린다.
 - **pyrefly가 대신 볼 수 있는 것을 사람이 본다.** 모델이면 필드 이름 오타가 정적 검사에서 죽는다.
 
-기준 구현은 `airflow/modules/thesis/state.py`(`ObservedState`·`TechnicalState`·`PastThesis`)와
-`airflow/modules/technical/indicators.py`(`DailyBar`·`TechnicalSnapshot`·`SignalEvent`)다.
+기준 구현은 `airflow/modules/kospi/state.py`(`ObservedState`·`ReviewState`·`RelationRow`·
+`MemoryRow`)와 `airflow/modules/technical/indicators.py`(`DailyBar`·`TechnicalSnapshot`·
+`SignalEvent`)다.
 
 - **모델은 `ConfigDict(frozen=True)`다.** 재시도 경로에서 값이 바뀌면 원본과 저장값이 어긋난다.
 - **JSON으로 바꾸는 것은 경계에서 한 번뿐이다.** `model_dump(mode="json")`을 프롬프트 조립과
@@ -417,13 +419,13 @@ DAG가 쓰는 코드는 **위치는 Airflow를, 규칙은 백엔드를** 따른�
   표현할 수 없다. `{"as_of_date": ..., "subjects": {"KOSPI": {...}}}`로 만든다.
 - **모델을 두는 곳은 그 값을 만드는 모듈이다.** 단 그 모듈이 LangChain·Airflow를 import하는데
   다른 모듈도 같은 모델을 봐야 하면, 무거운 의존성이 없는 모듈로 따로 뺀다
-  (`thesis/state.py`가 그 예다 — `thesis/generation.py`는 LangChain, `thesis/common.py`는 Airflow를
+  (`kospi/state.py`가 그 예다 — `kospi/generation.py`는 LangChain, `kospi/common.py`는 Airflow를
   import해서 서로를 모듈 수준에서 import할 수 없다). 소비자가 하나뿐이어도 그 모듈이 이미
-  크면 따로 뺀다(`thesis/tools.py`의 툴 응답 모델 스무 개가 그 예다).
+  크면 따로 뺀다(`kospi/tools.py`의 툴 응답 모델이 그 예다).
 - **테스트도 모델로 넘긴다.** 픽스처가 맨 dict면 프롬프트에 실릴 키가 테스트에서만 존재할 수 있다.
 
 **wire 조립 경계는 예외다.** Slack 블록, LangGraph 노드 반환, JSON Schema, 검증 전
-외부 응답 파싱, 그리고 모델을 JSON으로 펴는 자리(`thesis._tool_row`·`_body`)는 dict로 둔다.
+외부 응답 파싱, 그리고 모델을 JSON으로 펴는 자리(`kospi/tool_rows.py`)는 dict로 둔다.
 그 dict는 제공처 규격이거나 모델을 JSON으로 바꾸는 경계 그 자체라 모델로 감싸면 같은 검증이
 두 번이 된다. 그 밖의 도메인 값은 **처음부터 모델로 쓴다.**
 
@@ -499,13 +501,14 @@ DAG가 쓰는 코드는 **위치는 Airflow를, 규칙은 백엔드를** 따른�
 **실행 시각으로 "지금 어느 모드인가"를 추론하지 않는다.** 한 DAG가 여러 시각에 돌면서
 `logical_date`의 시각으로 모드를 가르면, 모드가 실행자의 의도가 아니라 시계에서 나온다.
 `logical_date`가 없는 수동 실행은 벽시계로 떨어져 **UI의 Trigger 버튼이 조용히 다른 모드를
-돌린다.** 2026-08-21에 `market_thesis_analysis`를 `market_thesis_forecast`(장전)와
-`market_thesis_review`(장후)로 나눈 이유가 이것이다.
+돌린다.** 2026-08-21에 옛 추론의 단일 DAG를 장전·장후로 나눈 이유가 이것이고,
+`kospi_forecast_daily`(장전)·`kospi_intraday_daily`(장중)·`kospi_review_daily`(장후)가
+그 배치를 그대로 이어받았다.
 
 나누면 따라오는 것:
 
 - 한쪽 모드에서만 도는 태스크가 다른 쪽 실행에서 **빈 성공으로 보이는 일**이 없어진다.
-  전에는 장전 실행의 `grade_followups`·`narrate_followups`가 즉시 반환하면서 성공 표시였다.
+  옛 추론에서는 장전 실행의 채점·해설 태스크가 즉시 반환하면서 성공 표시였다.
 - 모드마다 재시도·타임아웃을 따로 줄 수 있다. 앞단이 다르면 기다리는 성격도 다르다.
 - 따로 pause 할 수 있고 `max_active_runs`가 서로를 막지 않는다.
 
@@ -514,11 +517,11 @@ DAG가 쓰는 코드는 **위치는 Airflow를, 규칙은 백엔드를** 따른�
 (`slack_kr_market_briefing`이 그 예다).
 
 **한 DAG에 슬롯이 여럿이면 슬롯을 벽시계로 떨어뜨리지 않는 장치를 함께 둔다.**
-`market_thesis_intraday`(장중 전망 넷)가 그 형태다 — 넷이 같은 봉과 같은 문서 평가를 같은
-이유로 기다려 DAG 하나이고, `thesis.intraday.resolve_slot`이 ① Param → ② `logical_date` →
+`kospi_intraday_daily`(장중 전망 둘)가 그 형태다 — 둘이 같은 봉과 같은 문서 평가를 같은
+이유로 기다려 DAG 하나이고, `kospi.intraday.resolve_slot`이 ① Param → ② `logical_date` →
 ③ **실패** 순으로 슬롯을 정한다. 가까운 슬롯으로 반올림하지도 않는다. 조용히 다른 슬롯을
 도는 것보다 안 도는 편이 낫다는 것이 2026-08-21에 얻은 교훈이고, 그것을 지키면 시각이
-여럿인 것 자체는 문제가 아니다. 슬롯 시각의 원본은 상수 하나(`INTRADAY_SLOT_TIMES`)이고
+여럿인 것 자체는 문제가 아니다. 슬롯 시각의 원본은 상수 하나(`kospi.domain.SLOT_TIMES`)이고
 DAG의 cron과 어긋나지 않게 테스트가 둘을 대조한다.
 
 ### 모드로 갈리는 함수도 나눈다
@@ -530,10 +533,10 @@ DAG를 나눈 뒤 공유 모듈에 `if mode == "..."`가 남으면 절반만 나
   글자 그대로 같은 것이다. 모드는 **값으로 흘러갈 수는 있다**(`run_slot`을 저장 함수에
   넘기는 것) — 금지하는 것은 그 값으로 **분기**하는 것이다.
 - **모드마다 다른 것은 모드별 모듈이 갖는다.** 기준 시각, readiness guard, 조회 창의 시작,
-  어느 세션을 볼지 같은 것이다. 기준 구현은 `airflow/modules/thesis/common.py`와
-  `thesis/forecast.py`·`thesis/review.py` 셋이다.
-- 공유 함수가 모드별 값을 **인자로 받게** 만들면 분기가 사라진다. `observed_state`가
-  슬롯 대신 세션 날짜를 받는 것이 그 형태다 — 어느 세션을 볼지는 부르는 쪽이 정한다.
+  어느 세션을 볼지 같은 것이다. 기준 구현은 `airflow/modules/kospi/common.py`와
+  `kospi/forecast.py`·`kospi/intraday.py`·`kospi/review.py` 넷이다.
+- 공유 함수가 모드별 값을 **인자로 받게** 만들면 분기가 사라진다. `build_observed_state`가
+  슬롯 대신 기준 시각과 기준가를 받는 것이 그 형태다 — 무엇을 볼지는 부르는 쪽이 정한다.
 
 어느 형태든 **되돌릴 수 없는 오류는 즉시 `AirflowFailException`으로 바꾼다.** 설정·인증·주소
 문제(HTTP 4xx)는 재시도해도 같은 답이다. 재시도할 값어치가 있는 것(`ConnectionError`)은

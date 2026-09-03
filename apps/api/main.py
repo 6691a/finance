@@ -77,7 +77,7 @@ def main() -> int:
     # 받는다 — 그래야 `apps.api.container`가 config.yaml 없이 import된다.
     container = ApiContainer(settings=settings, db_alias=DB_ALIAS)
     app = create_app(container)
-    logger.info("serving the thesis read API from alias %s", DB_ALIAS)
+    logger.info("serving the read API from alias %s", DB_ALIAS)
     uvicorn.run(
         app,
         host=os.environ.get("API_HOST", DEFAULT_HOST),

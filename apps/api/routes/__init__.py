@@ -8,7 +8,7 @@
 `app.py`가 아니라 새 파일 하나만 는다.
 
 `__init__.py`는 **재수출만** 한다. `routers`에 넣는 것을 빠뜨리면 라우트가 조용히
-사라지므로 `tests/api/test_routes.py`가 등록된 경로를 확인한다.
+사라진다 — 리소스를 더할 때 등록된 경로를 확인하는 테스트를 함께 만든다.
 
 **컨테이너 wiring은 이 패키지를 통째로 건다**(`WiringConfiguration(packages=[...])`).
 모듈을 하나씩 적으면 새 리소스를 더할 때 `container.py`도 함께 고쳐야 하고, 빠뜨리면
@@ -18,8 +18,7 @@
 from fastapi import APIRouter
 
 from apps.api.routes.health import router as health_router
-from apps.api.routes.thesis import router as thesis_router
 
-routers: tuple[APIRouter, ...] = (health_router, thesis_router)
+routers: tuple[APIRouter, ...] = (health_router,)
 
-__all__ = ["health_router", "routers", "thesis_router"]
+__all__ = ["health_router", "routers"]

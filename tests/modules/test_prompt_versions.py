@@ -20,50 +20,15 @@ import hashlib
 import pytest
 
 from modules.assessment import PROMPT_VERSION as ASSESSMENT_PROMPT_VERSION
-from modules.causal.domain import DIRECTION_PROMPT_VERSION as CAUSAL_DIRECTION_PROMPT_VERSION
-from modules.causal.domain import PROMPT_VERSION as CAUSAL_PROMPT_VERSION
 from modules.expectation.domain import PROMPT_VERSION as EXPECTATION_PROMPT_VERSION
 from modules.kospi.domain import PROMPT_VERSION as KOSPI_PROMPT_VERSION
 from modules.kospi.domain import REVIEW_PROMPT_VERSION as KOSPI_REVIEW_PROMPT_VERSION
 from modules.prompt import PROMPT_ROOT
-from modules.thesis.domain import PROMPT_VERSION as THESIS_PROMPT_VERSION
-from modules.thesis.outcomes import NARRATIVE_PROMPT_VERSION
 
 # 판이 붙는 프롬프트 파일. 흐름의 현재 판을 키에 함께 적는다.
 # **문장을 고쳤으면 판을 올리고 이 해시도 같이 바꾼다. 둘을 같은 커밋에서 만진다.**
 PROMPT_HASHES: dict[tuple[str, str], str] = {
     ("assessment", "3"): "98ca6e74ed7f241abeb7b4b459a86a3c22a459ff8189af6c063d92bc92ea8a79",
-    ("causal_graph", "1"): "6d5516c5ee2d1140cf5abd044100738b1a2b25fd5db430598b6b077aa66639f1",
-    # 판 2는 자리표시자에 들어가는 값의 모양이 바뀐 것이다(2026-08-28). 근거 후보를 대상
-    # 코드로 안 좁히면서 문서 줄이 태그 목록을 싣게 됐다. YAML은 그대로라 해시가 1과 같다.
-    ("causal_graph", "2"): "6d5516c5ee2d1140cf5abd044100738b1a2b25fd5db430598b6b077aa66639f1",
-    # 판 3은 어휘 재사용에 조건을 달았다(2026-08-28). 사슬과 `reasoning`이 같은 말을 하는지가
-    # 기존 이름을 고를지 새로 만들지의 판정 기준이라고 프롬프트가 직접 밝힌다.
-    ("causal_graph", "3"): "88e6d3867e71d74f65ed5912c93dcdea8f4a52aa2d7bd56af9da5935846fb74e",
-    # 판 4는 사건을 고르는 규칙을 더했다(2026-08-28). 대상 주 것을 새로 만드는 것이 기본이고,
-    # 같은 일을 날짜만 달리해 쪼개지 않는다. 후보 창은 코드가 1주로 좁힌다.
-    ("causal_graph", "4"): "819558a38ac3106586e7359cf42297079722145c4f5bad38da46c6650733ab0d",
-    # 판 5는 `confidence`를 가르는 기준이 근거를 읽었는지라고 밝혔다(2026-08-28).
-    # 판 4 실행이 경로 서른넷을 전부 `plausible`로 냈다.
-    ("causal_graph", "5"): "0711c09f0eef35133b476949efccdbe8e47af45b980f776046f68854c6a5547d",
-    # 판 6은 툴 셋을 붙였다(2026-08-28). 프롬프트가 언제 무엇을 부를지 안내한다.
-    ("causal_graph", "6"): "a3c835998eb65bfa4ed4449e7f4989daf451d3985eaded84e2f1bad6bb3d0886",
-    # 판 7은 넷째 툴 `macro_indicators`를 안내한다(2026-08-28). 대상 아홉에 없는 매크로
-    # 지표를 모델이 값으로 볼 수 있게 됐다.
-    ("causal_graph", "7"): "994dea4f799cf080666e5a233fe7903dea4e01e4272809b8bdf5f93cccb2bf61",
-    # 판 8은 기사 숫자를 근거로 쓰지 못하게 막았다(2026-08-28). 문서는 요약만 있고 원문이
-    # 비어 있어 그 숫자를 되짚을 수 없다.
-    ("causal_graph", "8"): "83d485c7ec318f95d85751bcac7c251d44f189a890d40afb96a590e4834205bb",
-    # 판 9는 공시가 판 8의 "숫자를 옮기지 마라" 밖임을 밝힌다(2026-08-29). 후보 줄에 붙는
-    # 공시 본문은 요약이 아니라 접수된 원문이다.
-    ("causal_graph", "9"): "e9e3aedf80f3a9dc754027efe0e881b2efd738dc8bf700ede2416a5ea60a6dd0",
-    # 판 10은 `link` 조각을 더했다(2026-08-30). 첫 답이 끝난 뒤 **대상이 다시 원인이 된
-    # 자리**만 한 번 더 묻는다. 날짜 두 칸을 받아 코드가 종가와 대조하므로
-    # `endpoint_observed`는 모델이 주장하고 코드가 확인한다(설계 §11.3).
-    ("causal_graph", "10"): "25bc7d180d737da399569376691b1b1405197869abb9bbdbea1fed6aa47ffcd2",
-    # 방향성 요약의 첫 판(2026-08-31, 17단계). 세기를 세지 말라는 것과 `mixed`가 `flat`과
-    # 다르다는 것이 이 프롬프트의 두 축이다 — 다수결로 갈렸으면 모델에게 묻지 않는다.
-    ("causal_direction", "1"): "b063e9a0f851af5dac5e2ed5786f8b4796bf7983dabf1859d52dc2b67cf0dd9b",
     ("expectation_extraction", "1"): "7108eab56e598ff642aeb7269f0f07ab9ef21707798202447db6a6b0a3b52a41",
     # 코스피 일일 전망의 첫 판(2026-09-02). 옛 추론에서 **가져오지 않은 것**이 이 프롬프트를
     # 정의한다 — 3-클래스 확률과 `flat` 기준선 문장은 캘리브레이션 실패의 자리였다.
@@ -79,63 +44,14 @@ PROMPT_HASHES: dict[tuple[str, str], str] = {
     ("kospi_forecast", "4"): "62ec5f4981ba52f642ffc76afc35553e08e1f491393040c825971e0db97092fe",
     # 장후 관찰의 첫 판(2026-09-02). 관찰·새 메모·메모 판정 셋을 한 답에 낸다.
     ("kospi_review", "1"): "e7f0097f2e306984b759ec383d06c08630de98e8043ecb60c10f20f7d5e793f2",
-    # 판 8은 문장이 아니라 **자리표시자에 들어가는 값의 모양**이 바뀐 것이다(2026-08-27).
-    # 관측 상태·과거 추론 JSON에서 들여쓰기를 뺐다 — 모델이 보는 입력이 달라지므로 판을
-    # 가르지만 YAML은 그대로라 해시가 7과 같다. **같은 해시가 두 판에 걸린 것이 정상이다.**
-    ("thesis_generation", "7"): "ba0a741a06869b16aa3a439ebe56c33cdfa8b4084366c3d6ec183e8d5c426154",
-    ("thesis_generation", "8"): "ba0a741a06869b16aa3a439ebe56c33cdfa8b4084366c3d6ec183e8d5c426154",
-    # 판 9는 교정 문구 하나(`variants.repair_short_answer`)가 늘어 해시가 갈린다.
-    # 문장보다 결과가 달라진 판이다 — 대상이 모자란 답을 한 번 다시 묻는다.
-    ("thesis_generation", "9"): "09339dfae4c0ea0c32fe751b0b29d5b5becd9d431e5cefe158df59935879043f",
-    # 판 10은 출력 형식 스켈레톤의 크기 자리표시자가 `0.0`에서 `null`로 바뀌어 해시가 갈린다.
-    # `0.0`을 그대로 베낀 답이 매번 임계에서 버려지고 있었다.
-    ("thesis_generation", "10"): "0c6aae2d149ccc8845d521cb87c8d60c633a8cc98104f8d7525d4dd13be01e91",
-    # 판 11은 교정 문구가 **버린 사유**를 싣는다(2026-08-27 intraday: 세 이유가 모두 비어
-    # 전부 버려졌는데, 사유 없는 교정을 받은 모델이 같은 답을 다시 냈다).
-    ("thesis_generation", "11"): "91166bc5f5e98244b1759f031763ba2828b2fc7afd0ed50ae364ef8fc3da6672",
-    # 판 12는 `prob_flat` 캘리브레이션이다(2026-08-28). 채점 84건에서 모델 평균 0.31,
-    # 실제 13%였다. "창이 짧으면 flat이 잦다"는 문장을 실측으로 뒤집고(장중 12~25%,
-    # 하루 13%) 기준선의 두 배를 상한으로 못박았다.
-    ("thesis_generation", "12"): "26997dc850158ca01af32d66269b30f74c766e2e62ee70da68ce6d1ece576be1",
-    # 판 13은 **같은 해시다.** YAML 문장은 그대로이고 `macro_changes`가 돌려주는 행에서
-    # 국내 지수가 빠졌다. 모델이 보는 글자가 달라져 판을 가른다.
-    ("thesis_generation", "13"): "26997dc850158ca01af32d66269b30f74c766e2e62ee70da68ce6d1ece576be1",
-    # 판 14는 `## 크기` 절을 통째로 바꿔 해시가 갈린다. 기준선이 `typical_move`로 옮겼고
-    # 브레이크가 대칭이 됐으며 오차 폭 두 칸이 붙었다.
-    ("thesis_generation", "14"): "7146c65c9150ff8fd600792e9a7f4c4c7c57e12de08911562720379de944c6e8",
-    # 판 15는 애프터마켓을 장전의 재료로 이었다(2026-08-31). `pre_open` 지시문이 관측 상태의
-    # `after_hours`를 설명하고, 과거 추론 절이 `post_nxt_close` 행의 읽는 법을 더한다.
-    ("thesis_generation", "15"): "578f9ada731adaaac23f28355794e21ffdde353baaf60ad802871f19a76b8420",
-    # 판 16은 관측 상태에 주간 인과 방향성이 실려 절 하나가 늘었다(2026-08-31, 17단계).
-    # 그 절이 셋을 말한다 — 예측이 아니라 2주 전 사후 인과라는 것, 키가 없는 것과 `flat`이
-    # 다르다는 것, `causal_path:<id>`로 인용할 수 있다는 것이다.
-    ("thesis_generation", "16"): "5a534075cb2c9475d7201c1e999900132fd0a2c7df4f8740e4abc02b67e09884",
-    # 판 17은 **같은 해시다.** YAML 문장은 그대로이고 `macro_changes`가 창 변화 옆에 전일
-    # 종가 대비를 함께 준다. 모델이 보는 글자가 달라져 판을 가른다.
-    ("thesis_generation", "17"): "5a534075cb2c9475d7201c1e999900132fd0a2c7df4f8740e4abc02b67e09884",
-    ("thesis_narrative", "2"): "1baea1c554c90619576036db58ad42d2a1e24052fc8ab982978e605c6e696b8b",
-    # 판 3은 **같은 해시다.** YAML 문장은 그대로이고 자리표시자에 들어가는 값의 줄 수만
-    # 늘었다(예측의 축, 밴드 적중). 모델이 보는 글자가 달라져 판을 가른다.
-    ("thesis_narrative", "3"): "1baea1c554c90619576036db58ad42d2a1e24052fc8ab982978e605c6e696b8b",
-    # 판 4는 절 둘이 붙어 해시가 갈린다(16단계). `## 조사 규칙`이 무엇을 부르고 나서 답할지를
-    # 열거하고, `## 표기`가 본문의 `(ref: ...)`를 막고 숫자 표기를 원문보다 앞세운다.
-    # **모델 교체(`narration_model`)와 같은 판이라 둘의 효과가 분리되지 않는다.**
-    ("thesis_narrative", "4"): "fded1e90fc368d5f1e126f67aa76474bfad84e5ad9667104ff7735e481260a92",
-    # 판 5는 `variants.repair_short_answer`가 붙어 해시가 갈린다(2026-08-31, G-36). 대상이
-    # 모자란 첫 답을 빠진 이름으로 다시 묻는다 — 생성 프롬프트 판 9와 같은 교정이다.
-    ("thesis_narrative", "5"): "4d467155484e37f2cbfbf96d4a45d8d7ca4a065d7315dc8e9eb3446bb9c60c79",
 }
 
 # 현재 판을 어디서 읽는지. 표의 키와 대조하는 데만 쓴다.
 PROMPT_VERSIONS: dict[str, str] = {
     "assessment": ASSESSMENT_PROMPT_VERSION,
-    "causal_direction": CAUSAL_DIRECTION_PROMPT_VERSION,
-    "causal_graph": CAUSAL_PROMPT_VERSION,
     "expectation_extraction": EXPECTATION_PROMPT_VERSION,
     "kospi_forecast": KOSPI_PROMPT_VERSION,
     "kospi_review": KOSPI_REVIEW_PROMPT_VERSION,
-    "thesis_generation": THESIS_PROMPT_VERSION,
-    "thesis_narrative": NARRATIVE_PROMPT_VERSION,
 }
 
 # 채점하지 않는 흐름이라 판을 가를 이유가 없는 파일. 표에 넣지 않는다.

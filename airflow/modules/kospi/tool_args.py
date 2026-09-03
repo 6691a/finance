@@ -22,10 +22,8 @@ from modules.kospi.domain import (
     HISTORY_FACTORS,
     MAX_HISTORY_DAYS,
     MAX_TOOL_CALLS,
-    MAX_VALUE_SCORE,
     MAX_WINDOW_HOURS,
     MIN_HISTORY_DAYS,
-    MIN_VALUE_SCORE,
     MIN_WINDOW_HOURS,
     factor_label,
 )
@@ -71,15 +69,6 @@ class RecentNewsArgs(_Args):
         description=(
             f"기준 시각에서 거슬러 올라갈 시간. {MIN_WINDOW_HOURS}~{MAX_WINDOW_HOURS}. "
             "지금이 아니라 이 실행의 기준 시각이 창의 끝이다"
-        ),
-    )
-    min_score: int = Field(
-        default=MIN_VALUE_SCORE,
-        ge=MIN_VALUE_SCORE,
-        le=MAX_VALUE_SCORE,
-        description=(
-            f"문서 가치 점수 하한. {MIN_VALUE_SCORE}~{MAX_VALUE_SCORE}. "
-            "높이면 건수가 줄고 낮추면 잡음이 는다"
         ),
     )
 

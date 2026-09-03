@@ -462,8 +462,6 @@ MIN_WINDOW_HOURS = 1
 MAX_WINDOW_HOURS = 48
 DEFAULT_WINDOW_HOURS = 24
 
-MIN_VALUE_SCORE = 0
-MAX_VALUE_SCORE = 8
 
 # 답의 범위. **폭주만 막는 값이다** — 정합성은 프롬프트와 저장 전 검증이 본다.
 MAX_EXPECTED_CHANGE_PCT = Decimal(10)

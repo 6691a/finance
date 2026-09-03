@@ -346,7 +346,7 @@ earlier_slots_today:
 | 툴 | 인자 | 주는 것 |
 | --- | --- | --- |
 | `factor_history` | `factor: Factor`, `days ≤ 30` | 그 요인의 일별 값과 전일 대비 변화(단위는 §3.1). 요인의 자리별 SQL 파일 넷을 코드의 매핑이 고른다. 장중에는 수급 요인에 오늘 누적 행이 한 줄 더 붙는다 |
-| `recent_news` | `hours ≤ 48` | 평가된 문서 상위 N — 제목·발행 시각·`direction`·`value_score`·태그·평가 요약 |
+| `recent_news` | `hours ≤ 48` | 평가된 문서 상위 N — 제목·발행 시각·`direction`·`value_score`·태그·평가 요약. `total`(창 안의 전체)과 `shown`(돌려준 수)을 함께 실어 잘렸는지 보인다 |
 | `recent_disclosures` | `hours ≤ 48` | 본문 있는 DART 공시 — 회사·보고서명·접수 시각·본문 앞부분 |
 
 셋 다 `as_of_at` 상한을 건다. `NEWS`·`DISCLOSURE` 요인은 `factor_history`가 아니라 뒤의 둘로

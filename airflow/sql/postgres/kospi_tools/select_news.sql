@@ -28,7 +28,9 @@ SELECT document.id,
        coalesce(
            array_agg(tag.ticker ORDER BY tag.ticker) FILTER (WHERE tag.ticker IS NOT NULL),
            '{}'
-       ) AS tickers
+       ) AS tickers,
+       -- 창 안의 후보 전체 수. `LIMIT` 앞에서 세므로 돌려준 행 수와 다르면 잘린 것이다.
+       count(*) OVER () AS total
 FROM document
 CROSS JOIN bounds
 LEFT JOIN document_instrument AS tag

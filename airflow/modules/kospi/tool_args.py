@@ -22,6 +22,7 @@ from modules.kospi.domain import (
     HISTORY_FACTORS,
     MAX_HISTORY_DAYS,
     MAX_TOOL_CALLS,
+    MAX_TOOL_RESULTS,
     MAX_WINDOW_HOURS,
     MIN_HISTORY_DAYS,
     MIN_WINDOW_HOURS,
@@ -91,6 +92,8 @@ TOOL_DESCRIPTIONS: dict[str, str] = {
     ),
     "recent_news": (
         "기준 시각까지 들어온 평가된 기사. 제목·발행 시각·방향·가치 점수·평가 요약·종목 태그를 준다. "
+        f"가치 점수 상위 {MAX_TOOL_RESULTS}건만 온다 — `total`이 창 안의 전체 수이고 `shown`이 돌려준 수다. "
+        "둘이 다르면 못 본 기사가 있는 것이니 '그런 뉴스는 없었다'고 단정하지 마라. "
         "본문은 없다 — 요약에 적힌 숫자를 그대로 옮겨 쓰지 마라. 숫자는 factor_history가 갖고 있다."
     ),
     "recent_disclosures": (

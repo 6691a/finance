@@ -240,7 +240,9 @@ class KospiToolbox:
                 "limit": MAX_TOOL_RESULTS,
             },
         )
-        self._saw_news = True
+        # **0건이면 본 것이 아니다.** 빈 결과에 플래그를 세우면 행 하나 못 봤는데
+        # `factor: NEWS` 이유가 검증을 통과한다.
+        self._saw_news = bool(rows)
         return self._body(
             [
                 NewsRow(
@@ -270,7 +272,9 @@ class KospiToolbox:
                 "limit": MAX_TOOL_RESULTS,
             },
         )
-        self._saw_disclosures = True
+        # 두 회사 범위라 하루 창은 대개 빈다(09-03 실측 12회 전부 `[]`). 그때 `DISCLOSURE`가
+        # 인용 가능해지면 안 본 공시를 근거로 쓸 수 있다.
+        self._saw_disclosures = bool(rows)
         return self._body(
             [
                 DisclosureRow(

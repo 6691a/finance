@@ -612,6 +612,44 @@ def test_the_injected_call_id_is_hidden_from_the_model():
         assert "tool_call_id" not in tool.tool_call_schema.model_json_schema().get("properties", {}), tool.name
 
 
+class _EmptyCursor(_RecordingCursor):
+    def execute(self, statement, parameters=()):
+        self.rows = []
+
+
+class _EmptyConnection:
+    def cursor(self):
+        return _EmptyCursor()
+
+
+def test_an_empty_document_result_does_not_make_that_factor_citable():
+    """0건은 본 것이 아니다.
+
+    첫 운영일 `recent_disclosures` 12회가 전부 `[]`였는데(두 회사 범위라 하루 창은 대개 빈다)
+    플래그는 세워져 `DISCLOSURE` 이유가 검증을 통과할 수 있었다. 행 하나 못 본 요인은
+    `queried_factors`에 안 들어간다.
+    """
+    from modules.kospi.toolbox import KospiToolbox
+
+    toolbox = KospiToolbox(_EmptyConnection(), as_of_at=datetime(2026, 9, 2, 23, 35, tzinfo=UTC))
+    assert toolbox.run("recent_disclosures", {"hours": 24}) == "[]"
+    assert toolbox.run("recent_news", {"hours": 24}) == "[]"
+
+    assert Factor.DISCLOSURE not in toolbox.queried_factors
+    assert Factor.NEWS not in toolbox.queried_factors
+
+
+def test_the_disclosure_tool_description_names_every_watched_company():
+    """수집 범위가 두 회사라는 말이 툴 설명에 있어야 모델이 시장 전체 공시를 기대하고 매번
+    한 번씩 부르지 않는다. 회사 목록은 수집기가 원본이라 설명과 대조한다."""
+    from modules.collectors.document.dart import DartCompany
+    from modules.kospi.tool_args import TOOL_DESCRIPTIONS
+
+    description = TOOL_DESCRIPTIONS["recent_disclosures"]
+    for company in DartCompany:
+        assert company.label in description, company.label
+
+
 # --- 모자란 답은 한 번 되묻는다 -------------------------------------------------
 
 

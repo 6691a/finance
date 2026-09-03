@@ -1,7 +1,4 @@
-"""기술적 신호.
-
-`direction`이 `thesis.ThesisDirection`을 쓴다. 의존은 `technical -> thesis` 한 방향이다.
-"""
+"""기술적 신호."""
 
 from datetime import date
 from decimal import Decimal
@@ -17,7 +14,20 @@ from sqlalchemy.orm import Mapped, mapped_column
 
 from apps.core.database import EntityBase, table_options
 from apps.models.analysis._columns import _enum_column
-from apps.models.analysis.thesis import ThesisDirection
+
+
+class SignalDirection(StrEnum):
+    """신호가 어느 쪽으로 일어났나.
+
+    **판정이 아니라 사건의 방향이다.** 골든크로스·MACD 상향·RSI 과매도 탈출이 `UP`이다.
+
+    전에는 옛 추론의 `ThesisDirection`을 빌려 썼고 그쪽에는 `FLAT`이 있었다. 여기서는 값이
+    둘뿐이라 쓴 적이 없고 `ck_technical_signal_direction`도 둘만 받았다. 추론을 지우면서
+    이 표가 자기 enum을 갖는다.
+    """
+
+    UP = "up"
+    DOWN = "down"
 
 
 class TechnicalSignalKind(StrEnum):
@@ -39,9 +49,9 @@ class TechnicalSignal(EntityBase):
     다르다 — "언제 교차했는지"는 시점이 지나면 값에서 되살릴 수 없고, 그 사건 뒤 실제로
     어떻게 움직였는지를 채점하려면 사건이 행으로 남아야 한다.
 
-    **`thesis`와 달리 덮어쓴다.** 저 쪽은 LLM이 재호출마다 답이 달라 첫 성공본을 지키지만
-    이것은 결정적 계산이라, 원천 봉이 수정되면 값이 따라가는 편이 맞다. 덮어써도 "최초
-    판단"이 사라지는 게 아니다.
+    **덮어쓴다.** LLM이 낸 값은 재호출마다 답이 달라 첫 성공본을 지키지만, 이것은 결정적
+    계산이라 원천 봉이 수정되면 값이 따라가는 편이 맞다. 덮어써도 "최초 판단"이 사라지는
+    게 아니다.
 
     `source_record`를 남기지 않는다. 외부 응답이 아니라 파생 사건이고, 원천 계보는
     `index_daily`·`stock_investor_trade_daily`의 `source_record_id`가 이미 갖는다.
@@ -90,8 +100,8 @@ class TechnicalSignal(EntityBase):
             "rsi_reversal은 RSI14의 30·70 재돌파)"
         ),
     )
-    direction: Mapped[ThesisDirection] = mapped_column(
-        _enum_column(ThesisDirection),
+    direction: Mapped[SignalDirection] = mapped_column(
+        _enum_column(SignalDirection),
         nullable=False,
         comment=(
             "사건의 방향(up 또는 down). 골든크로스·MACD 상향·과매도 탈출이 up이다. "

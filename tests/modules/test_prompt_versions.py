@@ -23,6 +23,8 @@ from modules.assessment import PROMPT_VERSION as ASSESSMENT_PROMPT_VERSION
 from modules.causal.domain import DIRECTION_PROMPT_VERSION as CAUSAL_DIRECTION_PROMPT_VERSION
 from modules.causal.domain import PROMPT_VERSION as CAUSAL_PROMPT_VERSION
 from modules.expectation.domain import PROMPT_VERSION as EXPECTATION_PROMPT_VERSION
+from modules.kospi.domain import PROMPT_VERSION as KOSPI_PROMPT_VERSION
+from modules.kospi.domain import REVIEW_PROMPT_VERSION as KOSPI_REVIEW_PROMPT_VERSION
 from modules.prompt import PROMPT_ROOT
 from modules.thesis.domain import PROMPT_VERSION as THESIS_PROMPT_VERSION
 from modules.thesis.outcomes import NARRATIVE_PROMPT_VERSION
@@ -63,6 +65,19 @@ PROMPT_HASHES: dict[tuple[str, str], str] = {
     # 다르다는 것이 이 프롬프트의 두 축이다 — 다수결로 갈렸으면 모델에게 묻지 않는다.
     ("causal_direction", "1"): "b063e9a0f851af5dac5e2ed5786f8b4796bf7983dabf1859d52dc2b67cf0dd9b",
     ("expectation_extraction", "1"): "7108eab56e598ff642aeb7269f0f07ab9ef21707798202447db6a6b0a3b52a41",
+    # 코스피 일일 전망의 첫 판(2026-09-02). 옛 추론에서 **가져오지 않은 것**이 이 프롬프트를
+    # 정의한다 — 3-클래스 확률과 `flat` 기준선 문장은 캘리브레이션 실패의 자리였다.
+    ("kospi_forecast", "1"): "73dd161eb811c1a5bc80e8b0b9e61b27b0150abf3902dae01f849466ae16ae47",
+    # 판 2는 크기 절을 실측 기준선 위에 다시 썼다(2026-09-03). 판 1은 "최근 진폭에서
+    # 출발하라"고만 말해 모델이 봉 열다섯을 눈대중했고, 중앙값 이동 2.27퍼센트인 시장에
+    # 폭 1.00퍼센트포인트를 불렀다 — 폭 채점이 구조적으로 뜻을 잃는 값이었다.
+    ("kospi_forecast", "2"): "6f31dfae06fbb29ac9886d84e88735aeed8bc295c1bdc0e98c03bc8c5b627094",
+    # 판 3은 "폭이 중심값보다 크면 뜻이 없다"를 지웠다(2026-09-03). 방향을 완벽히 맞혀도
+    # 필요한 폭이 2.5~2.9%p인데 기대 크기가 약 2.0이라 그 문장이 틀렸다. 닷새 백테스트에서
+    # 폭이 1.4~1.8로 눌려 방향이 틀린 날마다 폭도 틀렸다.
+    ("kospi_forecast", "3"): "5cfab29d134eacb3c8ce4244f738e557783bede7c47e324e401b0a638c1bfa84",
+    # 장후 관찰의 첫 판(2026-09-02). 관찰·새 메모·메모 판정 셋을 한 답에 낸다.
+    ("kospi_review", "1"): "e7f0097f2e306984b759ec383d06c08630de98e8043ecb60c10f20f7d5e793f2",
     # 판 8은 문장이 아니라 **자리표시자에 들어가는 값의 모양**이 바뀐 것이다(2026-08-27).
     # 관측 상태·과거 추론 JSON에서 들여쓰기를 뺐다 — 모델이 보는 입력이 달라지므로 판을
     # 가르지만 YAML은 그대로라 해시가 7과 같다. **같은 해시가 두 판에 걸린 것이 정상이다.**
@@ -116,6 +131,8 @@ PROMPT_VERSIONS: dict[str, str] = {
     "causal_direction": CAUSAL_DIRECTION_PROMPT_VERSION,
     "causal_graph": CAUSAL_PROMPT_VERSION,
     "expectation_extraction": EXPECTATION_PROMPT_VERSION,
+    "kospi_forecast": KOSPI_PROMPT_VERSION,
+    "kospi_review": KOSPI_REVIEW_PROMPT_VERSION,
     "thesis_generation": THESIS_PROMPT_VERSION,
     "thesis_narrative": NARRATIVE_PROMPT_VERSION,
 }

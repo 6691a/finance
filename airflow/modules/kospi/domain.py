@@ -424,7 +424,7 @@ MAX_UNREVIEWED = 2
 # 절반이다. 실질 브레이크를 호출 수에 두는 것이 이 값의 목적이고, 한 커밋에 손잡이 하나다.
 #
 # **왕복(3)도 안 올린다.** 왕복은 곧 모델 호출 수라 타임아웃과 비용에 직접 걸린다.
-MAX_TOOL_CALLS = 15
+MAX_TOOL_CALLS = 25
 MAX_TOOL_ROUNDS = 3
 MAX_TOOL_RESULT_CHARS = 120_000
 

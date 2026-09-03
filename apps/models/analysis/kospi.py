@@ -269,6 +269,15 @@ class KospiLlmRun(EntityBase):
             "(kind = 'review' AND slot IS NULL) OR (kind = 'forecast' AND slot IS NOT NULL)",
             name="ck_kospi_llm_run_slot_shape",
         ),
+        # 관찰 건수는 관찰 대화만 갖는다. 전망에 값이 들어오면 배선이 어긋난 것이다.
+        CheckConstraint(
+            "observations_written IS NULL OR kind = 'review'",
+            name="ck_kospi_llm_run_observations_kind",
+        ),
+        CheckConstraint(
+            "observations_written IS NULL OR observations_written >= 0",
+            name="ck_kospi_llm_run_observations_written",
+        ),
         table_options(
             comment="코스피 전망·관찰의 모델 호출 원장. 실패한 대화도 남는다",
             database="default",
@@ -344,6 +353,11 @@ class KospiLlmRun(EntityBase):
         Integer,
         nullable=True,
         comment="검증이 버린 이유·관찰의 수. 남은 수의 분모라 유효율이 여기서 읽힌다",
+    )
+    observations_written: Mapped[int | None] = mapped_column(
+        Integer,
+        nullable=True,
+        comment="이 관찰이 그래프에 쓴 요인 엣지 수. `rejected`의 분모다. 전망 대화는 NULL",
     )
     memories_written: Mapped[int | None] = mapped_column(
         Integer, nullable=True, comment="이 관찰이 새로 쓴 메모 수. 전망 대화는 NULL"

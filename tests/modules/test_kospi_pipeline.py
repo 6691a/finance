@@ -834,3 +834,26 @@ def test_dates_reach_the_driver_as_plain_types_not_pendulum():
                 assert type(value) is datetime, f"{where}의 {name}이 {type(value)}"
             elif isinstance(value, date):
                 assert type(value) is date, f"{where}의 {name}이 {type(value)}"
+
+
+def test_the_review_records_how_many_observations_it_wrote():
+    """`rejected`의 분모다. 배선이 끊기면 원장에 NULL이 쌓이고 아무도 모른다."""
+    import inspect
+
+    from modules.kospi import review
+
+    source = inspect.getsource(review.observe)
+    assert "observations=written.observations" in source
+
+
+def test_the_tool_budget_clears_every_factor_plus_the_document_tools():
+    """요인마다 호출 하나라 예산이 요인 수보다 넉넉해야 뉴스·공시를 볼 자리가 남는다.
+
+    2026-09-03 첫 운영일에 네 실행 중 셋이 정확히 15/15를 썼다. 요인이 15개인데 상한이
+    15여서, 요인을 다 보면 문서 툴 둘을 부를 자리가 없었다.
+    """
+    from modules.kospi.domain import HISTORY_FACTORS, MAX_TOOL_CALLS
+
+    # `factor_history`가 부를 수 있는 요인은 15개다(뉴스·공시는 자기 툴이 따로 있다).
+    # 문서 툴 둘과 되물을 여유를 더한다.
+    assert MAX_TOOL_CALLS >= len(HISTORY_FACTORS) + 2

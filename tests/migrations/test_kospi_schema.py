@@ -103,3 +103,17 @@ def test_the_tables_and_columns_carry_korean_comments(capsys):
     assert "COMMENT ON TABLE kospi_forecast IS" in sql
     assert "COMMENT ON COLUMN kospi_forecast.input_state IS" in sql
     assert "COMMENT ON COLUMN kospi_llm_run.truncated IS" in sql
+
+
+def test_the_observation_count_has_a_denominator_column(capsys):
+    """`rejected`만 있고 남은 수가 없으면 유효율을 못 읽는다.
+
+    관찰 엣지는 Neo4j로만 가서, 이 칸이 없으면 Postgres에서 "몇 개 중 몇 개를 버렸나"에
+    답할 수 없다. **분모 없는 카운터는 카운터가 아니다.**
+    """
+    sql = head_sql(capsys)
+
+    assert "observations_written" in sql
+    # 전망 대화에 값이 들어오면 배선이 어긋난 것이다.
+    assert "ck_kospi_llm_run_observations_kind" in sql
+    assert "ck_kospi_llm_run_observations_written" in sql

@@ -49,10 +49,8 @@ from modules.kospi.domain import (
     MAX_TOOL_CALLS,
     MAX_TOOL_RESULT_CHARS,
     MAX_TOOL_RESULTS,
-    MAX_VALUE_SCORE,
     MAX_WINDOW_HOURS,
     MIN_HISTORY_DAYS,
-    MIN_VALUE_SCORE,
     MIN_WINDOW_HOURS,
     Factor,
     FactorSource,
@@ -227,16 +225,14 @@ class KospiToolbox:
         self._queried.add(code)
         return self._body(payload)
 
-    def _tool_recent_news(self, hours: int = DEFAULT_WINDOW_HOURS, min_score: int = MIN_VALUE_SCORE) -> str:
+    def _tool_recent_news(self, hours: int = DEFAULT_WINDOW_HOURS) -> str:
         self._charge()
         span = _clamp(hours, MIN_WINDOW_HOURS, MAX_WINDOW_HOURS, DEFAULT_WINDOW_HOURS)
-        score = _clamp(min_score, MIN_VALUE_SCORE, MAX_VALUE_SCORE, MIN_VALUE_SCORE)
         rows = self._fetch(
             RECENT_NEWS,
             {
                 "window_start": self._as_of_at - timedelta(hours=span),
                 "as_of_at": self._as_of_at,
-                "min_score": score,
                 "limit": MAX_TOOL_RESULTS,
             },
         )

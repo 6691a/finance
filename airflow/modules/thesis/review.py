@@ -263,6 +263,9 @@ def narrate_followups(built: dict[str, Any]) -> int:
                         status=LlmRunStatus.FAILED,
                         records=common.closed_records(toolbox),
                         tool_rounds=toolbox.round_count,
+                        investigation_truncated=narrator.investigation_truncated,
+                        subjects_requested=len(targets),
+                        subjects_answered=0,
                         usage=narrator.usage,
                         error=f"{type(error).__name__}: {error}",
                     )
@@ -283,6 +286,11 @@ def narrate_followups(built: dict[str, Any]) -> int:
                     status=LlmRunStatus.SUCCEEDED,
                     records=common.closed_records(toolbox),
                     tool_rounds=toolbox.round_count,
+                    # 해설도 대상 목록을 받으므로 생성 경로와 같은 셋을 남긴다. 전에는 NULL이라
+                    # 넷 중 하나만 해설한 실행이 DB에서도 안 보였다(2026-08-31 조사 G-36).
+                    investigation_truncated=narrator.investigation_truncated,
+                    subjects_requested=len(targets),
+                    subjects_answered=len(drafts),
                     usage=narrator.usage,
                 )
 

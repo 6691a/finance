@@ -95,9 +95,18 @@ SESSION_COUNTERS: dict[str, int] = {
     "contract_errors": 0,
     "quarantined": 0,
     "stored_bars": 0,
+    # `stored_bars`의 분모. 확정행과 부딪혀 가드에 걸린 봉은 rowcount에 안 잡히므로 만든 수를
+    # 따로 세야 "5봉 만들어 2봉 저장"이 보인다(2026-08-31 조사 G-38).
+    "built_bars": 0,
     "skipped_no_previous_close": 0,
     "out_of_session_ticks": 0,
+    # 구독 확인 뒤에 온 PINGPONG 아닌 제어 프레임. 구독 해제 통지·서버 오류가 여기 들어온다.
+    "control_frames": 0,
 }
+
+# approval key 재발급 상한. 주석은 "한 번 재발급"이었는데 코드에 횟수 제한이 없어 앱키가
+# 무효하면 60초마다 영원히 같은 경고를 남겼다(G-38). 넘으면 설정 문제로 보고 터뜨린다.
+AUTH_REISSUE_LIMIT = 3
 
 
 class DomesticStock(StrEnum):
@@ -243,8 +252,10 @@ class HeartbeatExtra(BaseModel):
     contract_errors: int
     quarantined: int
     stored_bars: int
+    built_bars: int
     skipped_no_previous_close: int
     out_of_session_ticks: int
+    control_frames: int
     late_ticks: int
 
 
@@ -301,6 +312,7 @@ class KisConnection:
         approval_key: SecretStr,
         heartbeat: Heartbeat,
         *,
+        failure_streak: int = 0,
         clock: Callable[[], datetime] = lambda: datetime.now(UTC),
         sleeper: Callable[[float], Coroutine[Any, Any, None]] = asyncio.sleep,
     ) -> None:
@@ -309,6 +321,9 @@ class KisConnection:
         self._repository = repository
         self._approval_key = approval_key
         self._heartbeat = heartbeat
+        # 이 연결 앞에 연속으로 실패한 횟수. `connecting` 상태 파일에 실려 healthcheck가
+        # 재연결 루프를 잡는다(`heartbeat.CONNECT_FAILURE_LIMIT`).
+        self._failure_streak = failure_streak
         self._clock = clock
         self._sleeper = sleeper
         # 연결 하나가 사는 동안의 상태. 전에는 `run_connection`의 지역 변수와 클로저였다.
@@ -372,6 +387,7 @@ class KisConnection:
                     }
                 )
             if rows:
+                self._counters["built_bars"] += len(rows)
                 self._counters["stored_bars"] += await self._repository.store_bars(rows)
             self._heartbeat.update(self._heartbeat.state, **self._heartbeat_extra().model_dump(mode="json"))
 
@@ -390,10 +406,12 @@ class KisConnection:
         """연결 하나를 끝까지 돈다.
 
         구독 전부가 인증 거절이면 `AuthRejectedError`를 올려 바깥 루프가 approval key를
-        재발급하게 한다. 개별 NACK는 그 시계열만 비활성한다.
+        재발급하게 한다. 개별 NACK는 그 시계열만 비활성한다 — **그리고 그 사실을 세션
+        레코드에 `failed`로 남긴다.** 전에는 `SUCCEEDED`로 닫혀 NACK가 `metadata.acks`에만
+        남았고 아무 조회도 그것을 안 봤다(2026-08-31 조사 G-38).
         """
         started_at = datetime.now(UTC)
-        self._heartbeat.update("connecting", session_id=self._session_id)
+        self._heartbeat.update("connecting", session_id=self._session_id, failure_streak=self._failure_streak)
 
         self._source_record_id = await self._repository.open_session(
             started_at, {"session_id": self._session_id, "interval": "1m"}
@@ -409,6 +427,7 @@ class KisConnection:
 
         subscribed_codes = frozenset(subscription.tr_key for subscription in self._registry)
         active: set[tuple[str, str]] = set()
+        rejected: list[str] = []
         ack_results: list[dict[str, str | bool]] = []
         status = SourceStatus.FAILED
         reason = "unknown"
@@ -440,6 +459,7 @@ class KisConnection:
                         if control.ok:
                             active.add(channel)
                         else:
+                            rejected.append(f"{control.tr_id}:{control.tr_key}")
                             logger.warning(
                                 "Subscription rejected for %s %s: %s %s",
                                 control.tr_id,
@@ -472,6 +492,17 @@ class KisConnection:
                             if isinstance(control, PingPong):
                                 # 받은 프레임을 그대로 되돌린다. 공식 helper와 같은 방식이다.
                                 await socket.send(control.raw)
+                                continue
+                            # 구독 확인 뒤의 제어 프레임 — 구독 해제 통지, 서버 오류 코드다.
+                            # 전에는 파싱해 놓고 버렸다. 세고 남긴다(G-38).
+                            self._counters["control_frames"] += 1
+                            logger.warning(
+                                "Control frame after subscription: %s %s %s %s",
+                                control.tr_id,
+                                control.tr_key,
+                                control.code,
+                                control.message,
+                            )
                             continue
                         try:
                             ticks = parse_data_frame(text, subscribed_codes)
@@ -518,10 +549,15 @@ class KisConnection:
         finally:
             # SIGTERM·끊김 어느 쪽이든 열린 분은 저장하지 않는다(문서 7.3).
             self._aggregator.drop_open_minutes()
+            if rejected and status is SourceStatus.SUCCEEDED:
+                # 일부 채널이 세션 내내 비어 있었다. 초록으로 닫으면 ops 브리핑이 못 센다.
+                status = SourceStatus.FAILED
+                reason = f"{len(rejected)} subscriptions rejected: {', '.join(rejected)}"
             metadata = {
                 "session_id": self._session_id,
                 "reason": reason,
                 "acks": ack_results,
+                "rejected_channels": rejected,
                 "active_channels": sorted(f"{tr_id}:{tr_key}" for tr_id, tr_key in active),
                 **self._counters,
                 "late_ticks": self._aggregator.late_tick_count,
@@ -550,6 +586,21 @@ class RealtimeService:
         self._registry = build_registry(settings)
         self._approval_key: SecretStr | None = None
         self._failure_streak = 0
+        self._auth_rejections = 0
+
+    def note_auth_rejection(self) -> None:
+        """인증 거절 한 번. approval key를 버려 다음 연결이 재발급하게 한다.
+
+        **상한이 있다.** `AUTH_REISSUE_LIMIT`을 넘으면 앱키 자체가 틀린 것이라 `ApprovalError`로
+        터뜨린다 — 프로세스가 죽고 compose의 restart가 되살리므로 조용히 도는 것보다 낫다.
+        """
+        self._auth_rejections += 1
+        if self._auth_rejections > AUTH_REISSUE_LIMIT:
+            raise ApprovalError(
+                f"authentication rejected {self._auth_rejections} times in a row; the app key is likely invalid"
+            )
+        self._approval_key = None
+        self._failure_streak += 1
 
     async def run(self) -> None:
         logger.info(
@@ -584,7 +635,12 @@ class RealtimeService:
 
                 connection = asyncio.create_task(
                     KisConnection(
-                        self._settings, self._registry, self._repository, self._approval_key, self._heartbeat
+                        self._settings,
+                        self._registry,
+                        self._repository,
+                        self._approval_key,
+                        self._heartbeat,
+                        failure_streak=self._failure_streak,
                     ).run()
                 )
                 waiter = asyncio.create_task(shutdown.wait())
@@ -601,14 +657,14 @@ class RealtimeService:
                 try:
                     connection.result()
                     self._failure_streak = 0
+                    self._auth_rejections = 0
                 except ConnectWindowClosed:
                     self._failure_streak = 0
                     continue
                 except AuthRejectedError:
-                    # approval key를 한 번 재발급하고 재연결한다(문서 7.4).
+                    # approval key를 재발급하고 재연결한다(문서 7.4). 상한은 `note_auth_rejection`.
                     logger.warning("Authentication rejected; reissuing the approval key")
-                    self._approval_key = None
-                    self._failure_streak += 1
+                    self.note_auth_rejection()
                 except (
                     TimeoutError,
                     OSError,

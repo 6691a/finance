@@ -112,7 +112,9 @@ logger = logging.getLogger(__name__)
 #    함께 들어간다 — 조사 규칙이 없으면 툴을 절반만 부르고(7회 대 14회) 해설이 테마 층에
 #    머물고, 표기 절이 없으면 본문에 `(ref: ...)`를 박는다. **판이 갈리는 이유는 프롬프트와
 #    모델 둘 다이므로 이 판의 결과를 3판과 비교할 때 둘을 분리할 수 없다.**
-NARRATIVE_PROMPT_VERSION = "4"
+# 판 5는 문장이 하나 는다 — 대상이 모자란 답을 빠진 이름으로 다시 묻는 `repair_short_answer`
+# (2026-08-31, G-36). 생성 경로의 판 9와 같은 교정이다.
+NARRATIVE_PROMPT_VERSION = "5"
 
 # 해설 한 편의 상한. 넘으면 그 항목만 자른다.
 MAX_NARRATIVE_CHARS = 1000
@@ -221,6 +223,11 @@ class NarrativeState(TypedDict):
     drafts: tuple[NarrativeDraft, ...] | None
     error: str | None
     attempts: int
+    # 아래 셋은 `ThesisState`와 같은 자리다(2026-08-31 조사 G-36). 대상이 빠진 첫 답을
+    # `partial_drafts`에 두고 교정을 한 번 돌리며, 조사가 호출 상한에서 끊긴 사실을 남긴다.
+    missing_subjects: tuple[str, ...]
+    partial_drafts: tuple[NarrativeDraft, ...]
+    investigation_truncated: bool
 
 
 class FollowupNarrator:
@@ -241,6 +248,9 @@ class FollowupNarrator:
         self._tool_node = tool_node(toolbox)
         self._usage = UsageMetadataCallbackHandler()
         self._graph = self._build_graph()
+        # 마지막 `run`의 조사가 호출 상한에서 끊겼는가. 원장(`thesis_llm_run`)이 읽는다.
+        # 해설기는 (지평, 슬롯)마다 새로 만들어지므로 실행 하나의 값이다.
+        self.investigation_truncated = False
 
     @property
     def usage(self) -> llm.TokenUsage:
@@ -358,6 +368,9 @@ class FollowupNarrator:
             "drafts": None,
             "error": None,
             "attempts": 0,
+            "missing_subjects": (),
+            "partial_drafts": (),
+            "investigation_truncated": False,
         }
         final = self._graph.invoke(
             state,
@@ -367,6 +380,7 @@ class FollowupNarrator:
                 "callbacks": [self._usage],
             },
         )
+        self.investigation_truncated = bool(final.get("investigation_truncated"))
         drafts = final.get("drafts")
         if drafts is None:
             raise ThesisError(final.get("error") or "Model did not return any narrative")
@@ -428,11 +442,15 @@ class FollowupNarrator:
         graph = StateGraph(NarrativeState)
         graph.add_node("investigate", self._investigate)
         graph.add_node("tools", self._tools)
+        graph.add_node("close_investigation", self._mark_truncation)
         graph.add_node("answer", self._answer)
         graph.add_node("repair", self._repair)
         graph.add_edge(START, "investigate")
-        graph.add_conditional_edges("investigate", self._after_investigate, {"tools": "tools", "answer": "answer"})
+        graph.add_conditional_edges(
+            "investigate", self._after_investigate, {"tools": "tools", "answer": "close_investigation"}
+        )
         graph.add_edge("tools", "investigate")
+        graph.add_edge("close_investigation", "answer")
         graph.add_conditional_edges("answer", self._after_answer, {"repair": "repair", END: END})
         graph.add_edge("repair", "answer")
         return graph.compile()
@@ -465,12 +483,46 @@ class FollowupNarrator:
             drafts = self.parse(_text(reply), state["targets"])
         except ThesisError as error:
             return {"messages": [reply], "drafts": None, "error": str(error)}
-        return {"messages": [reply], "drafts": drafts, "error": None}
+        return {"messages": [reply], **self._resolve(state, drafts)}
+
+    @staticmethod
+    def _resolve(state: NarrativeState, drafts: tuple[NarrativeDraft, ...]) -> dict[str, Any]:
+        """`ThesisBuilder._resolve`와 같은 판정. **요청한 대상이 안 온 것을 여기서 처음 센다.**
+
+        `parse`는 온 것 중 버린 것만 세므로, 대상 다섯을 넘겨 하나만 와도 전에는 `written=1`로
+        성공했다(2026-08-31 조사 G-36). 모자란 첫 답은 형식 실패와 같게 다뤄 한 번 다시 묻고,
+        교정 답이 더 적으면 첫 답으로 되돌아간다.
+        """
+        answered = {draft.subject_code for draft in drafts}
+        missing = tuple(target.subject.code for target in state["targets"] if target.subject.code not in answered)
+        if missing:
+            logger.warning(
+                "모델이 대상 %s개 중 %s개만 해설했다. 빠진 것: %s", len(state["targets"]), len(drafts), list(missing)
+            )
+        if missing and state["attempts"] == 0:
+            return {
+                "drafts": None,
+                "error": f"대상 {len(missing)}개가 빠졌다: {', '.join(missing)}",
+                "missing_subjects": missing,
+                "partial_drafts": drafts,
+            }
+        previous = state["partial_drafts"]
+        if len(drafts) < len(previous):
+            logger.warning("교정 답이 %s건으로 더 적어 첫 답 %s건을 쓴다", len(drafts), len(previous))
+            return {"drafts": previous, "error": None}
+        return {"drafts": drafts, "error": None}
 
     def _repair(self, state: NarrativeState) -> dict[str, Any]:
+        """한 번만 다시 묻는다. 대상이 모자란 것과 형식이 깨진 것은 문구가 다르다."""
+        missing = state["missing_subjects"]
+        instruction = (
+            PROMPTS.render_variant("repair_short_answer", missing=", ".join(missing))
+            if missing
+            else NARRATIVE_REPAIR_INSTRUCTION
+        )
         logger.warning("retrying the narratives once after %s", state["error"])
         return {
-            "messages": [HumanMessage(NARRATIVE_REPAIR_INSTRUCTION)],
+            "messages": [HumanMessage(instruction)],
             "attempts": state["attempts"] + 1,
         }
 
@@ -479,6 +531,21 @@ class FollowupNarrator:
         if getattr(reply, "tool_calls", None) and self._toolbox.call_count < MAX_TOOL_CALLS:
             return "tools"
         return "answer"
+
+    def _mark_truncation(self, state: NarrativeState) -> dict[str, Any]:
+        """호출 상한에서 끊겼으면 그 사실을 상태에 남긴다. `ThesisBuilder._mark_truncation`과 같다.
+
+        조건부 엣지는 상태를 못 바꾸므로 답변 노드 앞에 이 노드를 둔다. 전에는 로그도 없이
+        답변으로 넘어가 스스로 끝낸 해설과 잘린 해설이 원장에서 같아 보였다(G-36).
+        """
+        reply = state["messages"][-1]
+        truncated = bool(getattr(reply, "tool_calls", None)) and self._toolbox.call_count >= MAX_TOOL_CALLS
+        if truncated:
+            logger.warning(
+                "narration investigation truncated: the model asked for more tools after %s calls",
+                self._toolbox.call_count,
+            )
+        return {"investigation_truncated": truncated}
 
     @staticmethod
     def _after_answer(state: NarrativeState) -> str:

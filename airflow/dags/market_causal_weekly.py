@@ -29,6 +29,8 @@
   같은 결과라 `AirflowFailException`이다. 어휘 드리프트는 **정규화가 깨졌다는 신호**라
   조용히 넘어가면 다음 주에 어휘가 두 배가 된다. 실현 등락 누락은 **아직 돌 때가 아니라는
   신호**다 — T+5 일봉이 들어온 뒤(KST 18:20 이후) 손으로 다시 돌린다.
+- `EmptyAnswerError`(교정 뒤에도 경로 0건)도 즉시 실패다. 전에는 0행을 저장하고 성공해
+  "인과가 없던 주"와 "모델이 못 낸 주"가 같아 보였다(2026-08-31 조사 G-37).
 - `ConnectionError`는 그대로 올려 Airflow가 재시도하게 둔다.
 
 **그 주에 경로가 이미 있으면 skip이 아니라 성공이다.** 재실행이 정상 흐름이라 매번 노란
@@ -38,6 +40,10 @@
 
 `sync_graph`가 그 주 몫을 Neo4j에 민다. **Postgres가 원본이고 Neo4j는 파생물이다** —
 설계는 [4-graph.md](../../docs/analysis/market-thesis/4-graph.md)다.
+
+엣지는 보낸 수와 MERGE된 수를 대조한다(`graph.cypher.EDGE_WRITES`, 2026-08-31 조사 G-59). Cypher의
+MATCH가 못 찾은 행은 오류 없이 빠지므로, 대조가 없으면 "N개 투영"이라 적히고 그래프는 비어
+있을 수 있다. 어긋나면 `GraphError`이고 이 태스크가 즉시 실패로 바꾼다.
 
 - **`NEO4J_URI`가 비어 있으면 `AirflowSkipException`이다.** 인스턴스가 서기 전에도
   `build_causal_graph`는 정상이어야 하고, 설정 누락으로 매주 빨간 태스크를 만들면 진짜
@@ -113,7 +119,7 @@ def market_causal_weekly():
     @task(task_display_name="인과 그래프 생성", execution_timeout=BUILD_TIMEOUT)
     def build_causal_graph(**context: Any) -> dict[str, Any]:
         from modules.causal import run
-        from modules.causal.run import IncompleteReturnsError
+        from modules.causal.run import EmptyAnswerError, IncompleteReturnsError
         from modules.causal.store import VocabularyDriftError
         from modules.llm import LlmError
         from modules.prompt import PromptError
@@ -128,17 +134,20 @@ def market_causal_weekly():
         # 쓰고, 그 값은 Param이 있으면 어차피 안 본다(`domain.resolve_week`).
         logical_date = context.get("logical_date") or datetime.now(UTC)
         dag_run = context.get("dag_run")
+        task_instance = context.get("task_instance")
         try:
             return run.build_weekly_graph(
                 logical_date=logical_date,
                 week_start_param=params.get(WEEK_START_PARAM),
                 dag_run_id=getattr(dag_run, "run_id", ""),
+                try_number=getattr(task_instance, "try_number", 1),
             )
         except (
             LlmError,
             PromptError,
             VocabularyDriftError,
             IncompleteReturnsError,
+            EmptyAnswerError,
             ValueError,
         ) as error:
             # 설정·프롬프트·정규화 문제다. 다시 불러도 같은 답이 온다.
@@ -155,8 +164,8 @@ def market_causal_weekly():
         from contextlib import closing
         from datetime import date
 
-        from modules import graph
         from modules.causal.run import connection
+        from modules.graph import projection
 
         uri = os.environ.get("NEO4J_URI")
         if not uri:
@@ -171,7 +180,7 @@ def market_causal_weekly():
         sync_only = bool((context.get("params") or {}).get(SYNC_ONLY_PARAM))
         with closing(connection()) as conn:
             if sync_only:
-                weeks = graph.stored_weeks(conn)
+                weeks = projection.stored_weeks(conn)
             elif summary and summary.get("week_start"):
                 weeks = [date.fromisoformat(summary["week_start"])]
             else:
@@ -181,11 +190,16 @@ def market_causal_weekly():
 
             projected = 0
             for week in weeks:
-                paths, steps = graph.read_week(conn, week)
+                paths, steps = projection.read_week(conn, week)
                 if not paths:
                     continue
-                payload = graph.project(paths, steps)
-                graph.write_graph(uri, (user, password), payload)
+                payload = projection.project(paths, steps)
+                try:
+                    projection.write_graph(uri, (user, password), payload)
+                except projection.GraphError as error:
+                    # 쿼리·제약 오류, 그리고 MATCH가 빈 행을 내 보낸 수와 MERGE된 수가 어긋난
+                    # 경우(G-59). 다시 불러도 같은 답이다. 연결 오류는 그대로 올려 재시도한다.
+                    raise AirflowFailException(str(error)) from error
                 projected += payload.edge_count
 
         return {"weeks": [week.isoformat() for week in weeks], "edges": projected}
@@ -201,13 +215,14 @@ def market_causal_weekly():
         from contextlib import closing
         from datetime import UTC, date, datetime
 
-        from modules import graph_query, llm
+        from modules import llm
         from modules.causal import store
         from modules.causal.candidates import direction_targets
         from modules.causal.direction import DirectionError, DirectionSummarizer
         from modules.causal.domain import DIRECTION_PROMPT_VERSION
         from modules.causal.run import connection
-        from modules.graph_query import GraphQueryError
+        from modules.graph import query
+        from modules.graph.query import GraphQueryError
         from modules.prompt import PromptError
 
         weeks = [date.fromisoformat(value) for value in (projection or {}).get("weeks", [])]
@@ -230,13 +245,13 @@ def market_causal_weekly():
         summarizer = DirectionSummarizer(model)
 
         written = 0
-        graph = graph_query.driver(uri, (user, password))
+        graph = query.driver(uri, (user, password))
         try:
             with closing(connection()) as conn:
                 targets = direction_targets(conn)
                 for week in weeks:
                     found = [
-                        graph_query.read_direction_input(
+                        query.read_direction_input(
                             graph, kind=target.kind, code=target.code, week_start=week, as_of_at=as_of_at
                         )
                         for target in targets

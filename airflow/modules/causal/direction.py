@@ -41,7 +41,7 @@ from modules.causal.domain import DIRECTION_PROMPT_VERSION, MAX_DIRECTION_REASON
 # 셋째를 만들지 않는다. 둘 다 LangChain을 import하는 흐름이라 무게가 늘지 않는다 — 셋째
 # 소비자가 생기면 그때 `llm.py`로 올린다.
 from modules.causal.generation import reply_text
-from modules.graph_query import DirectionInput
+from modules.graph.query import DirectionInput
 from modules.prompt import read_prompt
 from modules.schema import json_object, response_format
 

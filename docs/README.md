@@ -28,14 +28,21 @@
 
 | 문서 | 무엇 | 상태 |
 | --- | --- | --- |
-| [economic-document-archive-design.md](analysis/economic-document-archive-design.md) | 문서 아카이브 4단계 설계 | 1·2단계 완료. 6.6 섹터 확장은 2026-08-31 구현, **마이그레이션 적용 대기**. 3·4단계 재계획 보류 |
+| [economic-document-archive-design.md](analysis/economic-document-archive-design.md) | 문서 아카이브 4단계 설계 | 1·2단계 완료. 6.6 섹터 확장 2026-08-31 적용 완료, **6.7 업종 축 미구현**. 3·4단계 재계획 보류 |
 | [document-assessment-workflow.md](analysis/document-assessment-workflow.md) | `document_assessment_hourly`의 LangGraph 흐름도 | 구현 완료 |
 | [pdf-parsing-bm25.md](analysis/pdf-parsing-bm25.md) | PyMuPDF 첨부 파싱 → 첨부 텍스트 → 문서 단위 BM25 색인. 외부 호출·임베딩 없음 | **구현 완료, 배포 대기** |
 | [pdf-vision-analysis.md](analysis/pdf-vision-analysis.md) | 텍스트가 안 나오는 영역만 외부 Vision에 보내는 설계 | **보류.** 조건이 관측되면 켠다 |
 | [market-technical-indicators.md](analysis/market-technical-indicators.md) | SMA·RSI·MACD 관측값과 매매 신호 검출·채점 | 구현 완료. 남은 것은 적중률 관측 |
 | [market-episode-analysis.md](analysis/market-episode-analysis.md) | 일봉 변화·추정 매물대·시장 근거를 연결하는 `MarketEpisode` 설계 | **미구현. 구현 계약** |
-| [market-causal-graph.md](analysis/market-causal-graph.md) | 주간 사후 인과 그래프. 사건 또는 대상 → 경로 체인 → 대상을 누적해 다중 홉을 만든다 | §1~§8·§11 구현 완료(프롬프트 판 10). **조회 API와 화면은 20단계가 갖는다** |
-| [market-thesis/](analysis/market-thesis/README.md) | 시장 추론 기록. 단계마다 문서 하나 | 16과 18의 §3(프리마켓)을 뺀 전부 구현 완료. 17(그래프 조회)·19(애프터마켓 해설)은 2026-08-31 구현이고 17의 리비전 `d7a41f8b2c93`이 운영 반영 대기. 4(그래프 투영)는 2026-08-30 운영 기동. 12·14·20은 함께 배포한다 — 그 README가 원본 |
+| [market-causal-graph.md](analysis/market-causal-graph.md) | 주간 사후 인과 그래프. 사건 또는 대상 → 경로 체인 → 대상을 누적해 다중 홉을 만든다 | §1~§8·§11 구현 완료(프롬프트 판 10). **`kospi-forecast.md`가 대체한다** |
+| [kospi-forecast.md](analysis/kospi-forecast.md) | 코스피 일일 전망 v2. 관계 그래프(Neo4j)·메모·툴 셋으로 슬롯 셋(장전·장중·마감전)의 방향·등락률·±폭과 이유를 낸다. `market-thesis/`·`market-causal-graph.md`를 대체한다 | **구현 완료, 배포 전.** 리비전 `a1c74f0b8e35` 반영 대기 |
+| [market-thesis/](analysis/market-thesis/README.md) | 시장 추론 기록. 단계마다 문서 하나 | 16과 18의 §3(프리마켓)을 뺀 전부 구현 완료. 17(그래프 조회)·19(애프터마켓 해설)은 2026-08-31 구현이고 17의 리비전 `d7a41f8b2c93`이 운영 반영 대기. 4(그래프 투영)는 2026-08-30 운영 기동. 12·14·20은 함께 배포한다 — 그 README가 원본. **추론 자체는 `kospi-forecast.md`가 대체한다** |
+
+## `issues/` — 운영 이슈와 복구
+
+| 문서 | 무엇 | 상태 |
+| --- | --- | --- |
+| [2026-09-01-document-attachment-bm25-mutable-segment.md](issues/2026-09-01-document-attachment-bm25-mutable-segment.md) | BM25 mutable 세그먼트 검색 지연. 두 인덱스를 `mutable_segment_rows=0`으로 끄고 VACUUM으로 적체를 없앤다 | **해결. 리비전 `70e8e9ce64d3` 반영 대기**(2026-09-02) |
 
 ## `briefing/` — 읽어서 내보내기만 하는 DAG
 

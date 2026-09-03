@@ -2,7 +2,8 @@
 
 - 상위: [README.md](README.md)
 - 의존: [1-storage.md](1-storage.md)(저장할 테이블·insert SQL·채점 함수)
-- 산출물: `ThesisToolbox`(지금 `airflow/modules/thesis/toolbox.py`)·`ThesisBuilder`(`thesis/generation.py`)·저장(`thesis/store.py`) 추가(1단계가 만든
+- 산출물: `ThesisToolbox`(지금 `airflow/modules/thesis/toolbox.py`. 인자 스키마는
+  `tool_args.py`, 행 변환은 `tool_rows.py`, 툴 호출 원장은 `tool_ledger.py`가 갖는다)·`ThesisBuilder`(`thesis/generation.py`)·저장(`thesis/store.py`) 추가(1단계가 만든
   채점 함수 옆), 툴 SQL 3개, `modules/llm.py`의 `thesis_model()`과 `invoke` tools+schema 가드,
   `tests/modules/test_thesis_pipeline.py`
 - 이 단계엔 DAG가 없다. 모듈과 테스트까지다. 운영 호출은 [3-dag-slack.md](3-dag-slack.md).

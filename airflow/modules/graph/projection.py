@@ -36,15 +36,27 @@ event-time cutoff가 이 값으로 걸린다(17-graph-query.md §5.3). `week_sta
 
 import logging
 from collections.abc import Sequence
-from datetime import date, datetime
+from datetime import date
 from itertools import pairwise
 from typing import Any
 
 from neo4j import Driver, GraphDatabase
 from neo4j.exceptions import ClientError, Neo4jError, ServiceUnavailable, SessionExpired, TransientError
-from pydantic import BaseModel, ConfigDict
 
 from modules.db import Connection
+from modules.graph.cypher import CONSTRAINTS, EDGE_WRITES, WRITES
+from modules.graph.rows import (
+    CausalPathRow,
+    CausalStepRow,
+    ChainEdge,
+    ChannelNode,
+    EventEdge,
+    EventNode,
+    GraphPayload,
+    HitsEdge,
+    TargetEdge,
+    TargetNode,
+)
 from modules.sql import read_sql
 
 logger = logging.getLogger(__name__)
@@ -52,195 +64,6 @@ logger = logging.getLogger(__name__)
 
 class GraphError(RuntimeError):
     """Neo4j가 거절했고 다시 불러도 같은 결과다(인증·제약 위반·쿼리 오류)."""
-
-
-class _Row(BaseModel):
-    """투영에 오가는 값은 전부 불변이다. 재시도 경로에서 바뀌면 원본과 어긋난다."""
-
-    model_config = ConfigDict(frozen=True)
-
-
-class CausalPathRow(_Row):
-    """`market_causal_path` 한 행 중 그래프에 싣는 것만."""
-
-    path_id: int
-    week_start: date
-    created_at: datetime
-    event_title: str | None
-    event_occurred_on: date | None
-    source_target_kind: str | None
-    source_target_code: str | None
-    source_sign: str | None
-    target_kind: str
-    target_code: str
-    sign: str
-    confidence: str
-    reasoning: str
-    return_week_change: float
-    return_t1_change: float
-    return_t5_change: float
-    return_unit: str
-
-
-class CausalStepRow(_Row):
-    """`market_causal_step` 한 행. 채널을 id가 아니라 이름으로 갖는다."""
-
-    path_id: int
-    position: int
-    channel: str
-
-
-class EventNode(_Row):
-    title: str
-    occurred_on: date
-
-
-class ChannelNode(_Row):
-    name: str
-
-
-class TargetNode(_Row):
-    kind: str
-    code: str
-
-
-class EventEdge(_Row):
-    """사건에서 첫 채널로."""
-
-    path_id: int
-    week_start: date
-    created_at: datetime
-    position: int
-    title: str
-    occurred_on: date
-    channel: str
-
-
-class TargetEdge(_Row):
-    """대상에서 첫 채널로. 앞 주의 결과가 다음 원인이 되는 자리다(설계 §11.4)."""
-
-    path_id: int
-    week_start: date
-    created_at: datetime
-    position: int
-    src_kind: str
-    src_code: str
-    sign: str
-    channel: str
-
-
-class ChainEdge(_Row):
-    """채널에서 채널로."""
-
-    path_id: int
-    week_start: date
-    created_at: datetime
-    position: int
-    src: str
-    dst: str
-
-
-class HitsEdge(_Row):
-    """마지막 채널에서 대상으로. **경로 수준 속성이 여기 실린다** — 주장이 착지하는 자리다."""
-
-    path_id: int
-    week_start: date
-    created_at: datetime
-    channel: str
-    kind: str
-    code: str
-    sign: str
-    confidence: str
-    reasoning: str
-    return_unit: str
-    return_week_change: float
-    return_t1_change: float
-    return_t5_change: float
-
-
-class GraphPayload(_Row):
-    """한 주를 Neo4j에 넣을 모양으로 편 것."""
-
-    events: tuple[EventNode, ...]
-    channels: tuple[ChannelNode, ...]
-    targets: tuple[TargetNode, ...]
-    from_event: tuple[EventEdge, ...]
-    from_target: tuple[TargetEdge, ...]
-    chain: tuple[ChainEdge, ...]
-    hits: tuple[HitsEdge, ...]
-
-    @property
-    def node_count(self) -> int:
-        return len(self.events) + len(self.channels) + len(self.targets)
-
-    @property
-    def edge_count(self) -> int:
-        return len(self.from_event) + len(self.from_target) + len(self.chain) + len(self.hits)
-
-
-# 제약은 붙을 때마다 멱등하게 보장한다. Neo4j는 Alembic 대상이 아니라 마이그레이션 파일로
-# 관리하지 않는다. `NODE KEY`를 쓰지 않는 이유는 Enterprise 전용이라 community 이미지에서
-# `CREATE CONSTRAINT`가 거절되기 때문이다 — 복합 속성 유일성으로 같은 것을 얻는다.
-CONSTRAINTS = (
-    ("CREATE CONSTRAINT event_key IF NOT EXISTS FOR (e:Event) REQUIRE (e.title, e.occurred_on) IS UNIQUE"),
-    "CREATE CONSTRAINT channel_key IF NOT EXISTS FOR (c:Channel) REQUIRE c.name IS UNIQUE",
-    ("CREATE CONSTRAINT target_key IF NOT EXISTS FOR (t:Target) REQUIRE (t.kind, t.code) IS UNIQUE"),
-)
-
-# MERGE 키에 `path_id`와 `position`이 들어간다. 재적재가 엣지를 누적하지 않게 하는 장치다.
-WRITES: tuple[tuple[str, str], ...] = (
-    (
-        "events",
-        "UNWIND $rows AS r MERGE (:Event {title: r.title, occurred_on: r.occurred_on})",
-    ),
-    ("channels", "UNWIND $rows AS r MERGE (:Channel {name: r.name})"),
-    ("targets", "UNWIND $rows AS r MERGE (:Target {kind: r.kind, code: r.code})"),
-    (
-        "from_event",
-        (
-            "UNWIND $rows AS r"
-            " MATCH (e:Event {title: r.title, occurred_on: r.occurred_on})"
-            " MATCH (c:Channel {name: r.channel})"
-            " MERGE (e)-[l:LEADS_TO {path_id: r.path_id, position: r.position}]->(c)"
-            " SET l.week_start = r.week_start, l.created_at = r.created_at"
-        ),
-    ),
-    (
-        "from_target",
-        (
-            "UNWIND $rows AS r"
-            " MATCH (t:Target {kind: r.src_kind, code: r.src_code})"
-            " MATCH (c:Channel {name: r.channel})"
-            " MERGE (t)-[l:LEADS_TO {path_id: r.path_id, position: r.position}]->(c)"
-            " SET l.week_start = r.week_start, l.created_at = r.created_at, l.sign = r.sign"
-        ),
-    ),
-    (
-        "chain",
-        (
-            "UNWIND $rows AS r"
-            " MATCH (a:Channel {name: r.src})"
-            " MATCH (b:Channel {name: r.dst})"
-            " MERGE (a)-[l:LEADS_TO {path_id: r.path_id, position: r.position}]->(b)"
-            " SET l.week_start = r.week_start, l.created_at = r.created_at"
-        ),
-    ),
-    (
-        "hits",
-        (
-            "UNWIND $rows AS r"
-            " MATCH (c:Channel {name: r.channel})"
-            " MATCH (t:Target {kind: r.kind, code: r.code})"
-            " MERGE (c)-[h:HITS {path_id: r.path_id}]->(t)"
-            " SET h.week_start = r.week_start, h.created_at = r.created_at, h.sign = r.sign,"
-            " h.confidence = r.confidence,"
-            " h.reasoning = r.reasoning, h.return_unit = r.return_unit,"
-            " h.return_week_change = r.return_week_change,"
-            " h.return_t1_change = r.return_t1_change,"
-            " h.return_t5_change = r.return_t5_change"
-        ),
-    ),
-)
 
 
 def read_week(connection: Connection, week_start: date) -> tuple[list[CausalPathRow], list[CausalStepRow]]:
@@ -408,6 +231,7 @@ def write_graph(uri: str, auth: tuple[str, str], payload: GraphPayload) -> None:
         # 인증·제약 위반·쿼리 오류. 다시 불러도 같은 답이다.
         raise GraphError(f"neo4j rejected the write: {error}") from error
 
+    # 엣지 수는 `_merge_all`이 MERGE된 수와 대조한 뒤라 보내려던 수가 곧 들어간 수다.
     logger.info(
         "projected %d nodes and %d edges into neo4j",
         payload.node_count,
@@ -423,7 +247,17 @@ def _driver(uri: str, auth: tuple[str, str]) -> Driver:
 
 
 def _merge_all(transaction: Any, payload: GraphPayload) -> None:
+    """노드 셋을 먼저, 엣지 넷을 뒤에 넣고 **엣지는 보낸 수와 MERGE된 수를 대조한다.**
+
+    어긋나면 `GraphError`로 트랜잭션을 되돌린다 — 채널 이름의 공백 차이나 부분 실패한 제약처럼
+    MATCH가 빈 행을 낸 주가 "N개 투영"으로 기록되고 그래프는 비어 있던 자리다.
+    """
     for key, statement in WRITES:
         rows = getattr(payload, key)
-        if rows:
-            transaction.run(statement, rows=[row.model_dump() for row in rows])
+        if not rows:
+            continue
+        result = transaction.run(statement, rows=[row.model_dump() for row in rows])
+        if key in EDGE_WRITES:
+            merged = int(result.single()["merged"])
+            if merged != len(rows):
+                raise GraphError(f"{key}: sent {len(rows)} edges but neo4j merged {merged}; a MATCH found no node")

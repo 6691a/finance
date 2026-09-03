@@ -436,6 +436,15 @@ class LlmRunStatus(StrEnum):
     FAILED = "failed"
 
 
+class ToolLimitExceeded(RuntimeError):
+    """상한에 걸려 실행하지 않았다. 오류 `ToolMessage`가 되어 모델에게 돌아간다.
+
+    **여기 있는 이유는 `ToolCallRecord`와 같다** — 던지는 쪽(`thesis.toolbox`)과 분류해
+    기록하는 쪽(`thesis.tool_ledger`)이 갈려서, 둘 중 하나에 두면 다른 쪽이 그것을 위해
+    상대를 import한다.
+    """
+
+
 class ToolCallErrorKind(StrEnum):
     """툴 호출이 실패한 종류. **오류 문자열을 파싱해 분류하지 않는다.**
 

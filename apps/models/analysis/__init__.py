@@ -29,6 +29,16 @@ from apps.models.analysis.events import (
     StockEventType,
     SurpriseVerdict,
 )
+from apps.models.analysis.kospi import (
+    KospiDirection,
+    KospiForecast,
+    KospiLlmRun,
+    KospiLlmRunKind,
+    KospiLlmRunStatus,
+    KospiSlot,
+    KospiToolCall,
+    KospiToolCallErrorKind,
+)
 from apps.models.analysis.technical import (
     TechnicalSignal,
     TechnicalSignalKind,
@@ -62,6 +72,14 @@ __all__ = [
     "CausalConfidence",
     "CausalSign",
     "CausalTargetKind",
+    "KospiDirection",
+    "KospiForecast",
+    "KospiLlmRun",
+    "KospiLlmRunKind",
+    "KospiLlmRunStatus",
+    "KospiSlot",
+    "KospiToolCall",
+    "KospiToolCallErrorKind",
     "LlmRunKind",
     "LlmRunStatus",
     "MarketCausalDirection",

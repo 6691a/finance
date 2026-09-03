@@ -100,6 +100,12 @@ REQUEST_TIMEOUT_SECONDS = 300.0
 # 손잡이 하나만 당긴다(`docs/analysis/market-thesis/TUNING.md` 1절).
 THESIS_TIMEOUT_SECONDS = 1800.0
 
+# 코스피 일일 전망·관찰. 툴이 셋이고 대상이 하나라 옛 추론의 절반으로 시작한다. 여기 걸리면
+# `kospi.domain.MAX_TOOL_ROUNDS`를 먼저 의심한다 — 왕복이 늘수록 한 요청이 길어진다.
+#
+# **900은 관측이 아니라 시작값이다.** 실제 소요 분포가 쌓이면 다시 정한다.
+KOSPI_TIMEOUT_SECONDS = 900.0
+
 # 산문에 숫자를 쓰는 규칙. 문장은 `modules/prompts/fragments/shared.yaml`이 갖는다 —
 # 산문을 내는 프롬프트 넷이 `$number_style`로 받아 쓰는 조각이라 흐름 하나에 속하지 않는다.
 # 이름은 그대로 남긴다. 네 소비자와 테스트가 이 상수로 쓰고 있다.
@@ -232,6 +238,30 @@ def thesis_model(conv_id: str) -> BaseChatModel:
     return ChatXAI(
         model="grok-4.6",
         timeout=THESIS_TIMEOUT_SECONDS,
+        default_headers=_conversation_headers(conv_id),
+        # 재시도는 Airflow가 한다. 위 모듈 docstring 참고.
+        max_retries=0,
+    )
+
+
+def kospi_model(conv_id: str) -> BaseChatModel:
+    """코스피 일일 전망·관찰(`modules/kospi/`)이 쓰는 모델.
+
+    툴 왕복이 있는 작업이라 툴 호출 품질로 고른다. `thesis_model`과 같은 `grok-4.6`이지만
+    함수를 나눠 둔다 — 옛 추론은 지워질 예정이고, 그때 이 함수만 남으면 된다.
+
+    타임아웃이 `THESIS_TIMEOUT_SECONDS`가 아니라 그 절반인 이유는 **툴이 셋뿐이기 때문이다.**
+    옛 추론은 열다섯 개 툴에 대상 넷이라 한 요청이 길었다. 여기서 이 값에 걸리면 상한
+    (`kospi.domain.MAX_TOOL_ROUNDS`)을 먼저 의심한다.
+
+    `conv_id`는 이 실행 하나를 가리키는 **결정적** 문자열이다. 난수면 재시도가 캐시를
+    버린다(모듈 docstring의 "대화 하나는 서버 하나로" 참고).
+
+    키는 이 클래스가 `XAI_API_KEY`에서 스스로 읽는다. 우리가 넘기지 않는다.
+    """
+    return ChatXAI(
+        model="grok-4.6",
+        timeout=KOSPI_TIMEOUT_SECONDS,
         default_headers=_conversation_headers(conv_id),
         # 재시도는 Airflow가 한다. 위 모듈 docstring 참고.
         max_retries=0,

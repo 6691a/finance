@@ -1,4 +1,4 @@
-"""KIS 미국 현물지수 확정 일봉 수집기.
+"""KIS 해외 현물지수 확정 일봉 수집기. 미국(`OverseasIndex`)과 아시아(`AsiaIndex`)가 같은 수집기를 쓴다.
 
 마감 분봉(`kis_overseas_index.py`)과 나눠 둔다. 저기는 브리핑용으로 마감 부근 102봉을 받고
 `index_bar`에 넣는다. 여기는 상관 분석용으로 구간의 확정 일봉을 받아 `index_daily`에 넣는다.
@@ -44,7 +44,7 @@ from modules.collectors.kis import (
     send_get,
 )
 from modules.collectors.market.kis_index_daily import DailyIndexBar
-from modules.collectors.market.kis_overseas_index import OverseasIndex
+from modules.collectors.market.kis_overseas_index import AsiaIndex, OverseasIndex
 from modules.db import Connection
 from modules.sql import read_sql
 from modules.upsert import execute_upserts
@@ -84,7 +84,8 @@ class OverseasIndexDailyFetch(BaseModel):
 
     model_config = ConfigDict(frozen=True)
 
-    index: OverseasIndex
+    # 미국 마감 DAG과 아시아 일봉 DAG이 같은 수집기를 쓴다. 코드와 저장 심볼만 있으면 된다.
+    index: OverseasIndex | AsiaIndex
     start_date: date
     end_date: date
     bars: tuple[DailyIndexBar, ...]
@@ -125,7 +126,7 @@ def _daily_overseas_rows(body: bytes, requested_code: str) -> tuple[KisOverseasD
 
 
 def _daily_overseas_bar(row: KisOverseasDailyRow) -> DailyIndexBar:
-    """`stck_bsop_date`를 뉴욕 거래일로 그대로 읽는다. UTC로 다시 계산하지 않는다."""
+    """`stck_bsop_date`를 그 시장의 거래일로 그대로 읽는다(미국은 뉴욕, 아시아는 현지). UTC로 다시 계산하지 않는다."""
     raw_date = row.business_date.strip()
     if not _DATE_PATTERN.fullmatch(raw_date):
         raise KisPayloadError(f"KIS overseas daily date is malformed: {raw_date!r}")
@@ -144,7 +145,7 @@ def _daily_overseas_bar(row: KisOverseasDailyRow) -> DailyIndexBar:
 
 
 class KisOverseasIndexDailyCollector:
-    """미국 현물지수 확정 일봉 수집기. 자격 증명과 토큰을 들고 구간으로 조회·저장한다.
+    """해외 현물지수 확정 일봉 수집기. 자격 증명과 토큰을 들고 구간으로 조회·저장한다.
 
     한 실행이 객체 하나다. 토큰은 발급 횟수 제한이 있어 DAG이 한 번 받아 넘긴다.
     """
@@ -156,7 +157,7 @@ class KisOverseasIndexDailyCollector:
 
     def fetch(
         self,
-        index: OverseasIndex,
+        index: OverseasIndex | AsiaIndex,
         start_date: date,
         end_date: date,
         *,

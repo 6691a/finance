@@ -119,6 +119,21 @@ class IntradayState(_State):
     flows: FlowRow | None = None
 
 
+class EarlierReason(_State):
+    """앞 슬롯 이유 하나. **요인 코드를 문장과 함께 싣는다.**
+
+    문장만 주면 모델이 "S&P500이 올랐다"는 글을 읽고도 그것이 `SP500` 요인이라는 것을 다시
+    짐작해야 한다. 코드가 붙어 있으면 장중 슬롯이 그 요인을 `factor_history`로 다시 불러
+    "아직 살아 있나"를 확인할 수 있다(2026-09-04 — 장전 이유 14건 중 상방 재료 여섯이
+    장중에 말없이 사라진 것이 계기다).
+    """
+
+    direction: Direction
+    statement: str
+    factor: Factor | None = None
+    memory_id: int | None = None
+
+
 class EarlierSlot(_State):
     """오늘 앞선 슬롯이 낸 답. 장중 슬롯이 본다.
 
@@ -132,7 +147,7 @@ class EarlierSlot(_State):
     expected_change_pct: Decimal
     band_pct: Decimal
     base_price: Decimal
-    reasons: tuple[str, ...] = ()
+    reasons: tuple[EarlierReason, ...] = ()
 
 
 class ObservedState(_State):

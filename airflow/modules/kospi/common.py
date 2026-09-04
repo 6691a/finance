@@ -28,13 +28,15 @@ from modules.kospi.domain import (
     RELATION_LOOKBACK_DAYS,
     REVIEW_TIME,
     SLOT_TIMES,
+    Direction,
+    Factor,
     KospiNotReady,
     RunSlot,
     kst_label,
 )
 from modules.kospi.graph import driver as graph_driver
 from modules.kospi.graph import read_memories, read_relations
-from modules.kospi.state import EarlierSlot, MemoryRow, ObservedState, RelationRow
+from modules.kospi.state import EarlierReason, EarlierSlot, MemoryRow, ObservedState, RelationRow
 from modules.kospi.store import KospiStore
 from modules.utility import CONNECTION_ID, KST_TIMEZONE
 
@@ -202,6 +204,9 @@ def earlier_slots(store: KospiStore, *, run_date: date, slot: RunSlot) -> tuple[
 
     **정답이 아니라 그때의 판단이다.** 프롬프트가 그것을 밝히고, 이유가 이어받으면
     `slot_ref`로 인용한다.
+
+    이유는 문장만이 아니라 **요인 코드까지** 넘긴다. 장중 슬롯이 그 요인을 다시 조회해
+    "아직 작용하나"를 판단하는 손잡이다.
     """
     order = {value: index for index, value in enumerate(SLOT_TIMES)}
     return tuple(
@@ -212,10 +217,20 @@ def earlier_slots(store: KospiStore, *, run_date: date, slot: RunSlot) -> tuple[
             expected_change_pct=row.expected_change_pct,
             band_pct=row.band_pct,
             base_price=row.base_price,
-            reasons=tuple(str(item.get("statement", "")) for item in row.reasons),
+            reasons=tuple(_earlier_reason(item) for item in row.reasons),
         )
         for row in store.forecasts(run_date)
         if order.get(row.slot, 99) < order.get(slot, 99)
+    )
+
+
+def _earlier_reason(item: dict[str, Any]) -> EarlierReason:
+    """`kospi_forecast.reasons` JSONB의 항목 하나. 저장 전 검증을 지난 값이라 그대로 읽는다."""
+    return EarlierReason(
+        direction=Direction(item["direction"]),
+        statement=str(item.get("statement", "")),
+        factor=Factor(item["factor"]) if item.get("factor") else None,
+        memory_id=item.get("memory_id"),
     )
 
 

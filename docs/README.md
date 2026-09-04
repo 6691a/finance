@@ -23,6 +23,7 @@
 | [central-bank-assets-collection.md](collection/central-bank-assets-collection.md) | 중앙은행 여섯의 대차대조표 총자산. `kind='balance_sheet'`와 그 항목 | 구현 완료(2026-08-28). `central_bank_assets_weekly` |
 | [korea-trade-collection.md](collection/korea-trade-collection.md) | 관세청 10일 단위 수출입 잠정치 42계열 | 구현 완료(2026-08-28). `kcs_trade_daily` |
 | [document-body-collection.md](collection/document-body-collection.md) | 문서 본문·첨부 파일·영상 링크. 검색이 딛고 설 원문을 모은다 | 구현 완료(2026-08-30). `document_body_hourly`. **파일 마운트 뒤에 배포** |
+| [korea-industry-macro-expansion.md](collection/korea-industry-macro-expansion.md) | 산업 대표 20사를 한국 거시 지표의 표본으로 삼는다. 실적·공시와 ECOS 심리·경기 지수, 그리고 명단이 바뀔 때 지표가 안 끊기게 하는 규칙 | **미구현. 구현 계약**(2026-09-04) |
 
 ## `analysis/` — LLM 평가·기술지표·코스피 전망
 

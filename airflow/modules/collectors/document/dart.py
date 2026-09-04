@@ -1,5 +1,10 @@
 """OpenDART에서 삼성전자·SK하이닉스의 공시와 실적을 수집한다.
 
+**분기 실적만 대상이 넓다.** 공시는 `DartCompany` 둘이고, 분기 실적은
+`instrument.filing_entity_id`가 채워진 산업 대표 20사(`filing_entities`)다. 후자는 개별
+기업 분석이 아니라 **한국 거시 지표**를 만들기 위한 표본이다 —
+`docs/collection/korea-industry-macro-expansion.md`.
+
 저장 대상은 `disclosure_event`와 `earnings_fact`다. 정의의 원본은 백엔드의
 `apps/models/market.py`이며 여기 SQL의 컬럼 이름은 `tests/collectors/test_dart.py`가 그 모델
 metadata와 대조한다.
@@ -57,6 +62,25 @@ metadata와 대조한다.
 
 `report_nm`이 `분기보고서 (2026.03)` 꼴이라 사업연도와 보고서코드를 여기서 뽑는다.
 `[기재정정]` 같은 접두사는 떼고 판정하되 원문 이름은 그대로 저장한다.
+
+## 다중회사 주요계정 (실측 2026-09-04)
+
+`fnlttMultiAcnt.json`은 회사 고유번호를 콤마로 이어 받는다. 20사를 한 번에 물으면 621행이
+오고 회사가 스무 곳 다 들어 있다. `fnlttSinglAcntAll`이 회사마다 호출인 것과 갈리는 지점이고,
+거시 표본을 스무 곳으로 넓히면서도 하루 4콜로 끝나는 이유다.
+
+대신 계약이 셋 다르다.
+
+- **`account_id`가 없다.** 계정을 이름으로 잡는다(`MULTI_ACCOUNT_METRICS`). 금융·증권사는
+  `영업이익(손실)`로 오고 **삼성생명·KB금융은 매출액 행이 아예 없다.**
+- **`당기순이익(손실)`이 손익계산서 안에서 두 번 온다**(전 회사). 값은 같아서 하나만 남기고,
+  **다르면 실패시킨다** — 어느 줄이 맞는지 고를 수 없다.
+- **연결과 별도가 한 응답에 함께 온다.** `fs_div`로 갈려 오므로 범위를 지정해 두 번 부르지
+  않고 둘 다 저장한다.
+
+기간은 `thstrm_dt`가 `2025.01.01 ~ 2025.09.30` 꼴로 준다. **끝 날짜가 기간 종료일**이고
+`thstrm_amount`가 3개월치, `thstrm_add_amount`가 사업연도 누계다. 사업보고서(`11011`)에는
+누계 칸이 없고 연간치가 `thstrm_amount`로 온다.
 """
 
 import hashlib
@@ -89,6 +113,8 @@ SOURCE = "dart"
 SOURCE_KEY_LIST = "disclosure_list"
 SOURCE_KEY_DOCUMENT = "disclosure_document"
 SOURCE_KEY_FINANCIALS = "financial_statement"
+# 다중회사 주요계정은 조회 한 번이 회사 스무 곳을 담는다. 계보도 그 조회 단위로 남긴다.
+SOURCE_KEY_MULTI_ACCOUNT = "multi_account"
 
 REQUEST_TIMEOUT_SECONDS = 30
 
@@ -142,6 +168,45 @@ FINANCIAL_ACCOUNTS: dict[str, str] = {
     "ifrs-full_ProfitLoss": "net_income",
 }
 
+# 다중회사 주요계정(`fnlttMultiAcnt`)의 손익계산서 계정. **이 API는 `account_id`를 주지
+# 않는다**(2026-09-04 실측). 단일회사 전체 재무제표(`fnlttSinglAcntAll`)와 갈리는 지점이고
+# 그래서 여기서만 이름으로 잡는다. 이름이 약한 키라는 것은 사실이고, 그 약함을 이 표가 좁힌다.
+#
+# **금융·증권사는 `영업이익(손실)`로 온다**(미래에셋증권·삼성생명 실측). 그리고 **매출액 행이
+# 아예 없는 회사가 있다**(삼성생명·KB금융) — 0으로 채우지 않고 행을 만들지 않는다.
+#
+# 표에 없는 이름(`법인세차감전 순이익`·`총포괄손익`·`이자수익`·`순이자손익`·`순수수료손익`·
+# `영업비용`·`이자비용`)은 버린다.
+MULTI_ACCOUNT_METRICS: dict[str, str] = {
+    "매출액": "revenue",
+    "영업이익": "operating_profit",
+    "영업이익(손실)": "operating_profit",
+    "당기순이익(손실)": "net_income",
+}
+
+# 다중회사 주요계정의 기간 기준과 그것을 담은 응답 칸.
+#
+# 분기·반기 보고서는 `thstrm_amount`가 3개월치이고 `thstrm_add_amount`가 사업연도 누계다
+# (2026-09-04 실측: 삼성전자 2025 3분기 매출 86조 / 누계 239조). **사업보고서(`11011`)에는
+# 누계 칸이 아예 없고** 연간치가 `thstrm_amount`로 온다 — 그래서 사업보고서 행은 `period`
+# 하나로만 저장되고 그 `period_end`가 12-31이다.
+MULTI_ACCOUNT_BASES: tuple[tuple[str, str, str], ...] = (
+    ("period", "thstrm_amount", "frmtrm_amount"),
+    ("cumulative", "thstrm_add_amount", "frmtrm_add_amount"),
+)
+
+# `2026.01.01 ~ 2026.03.31` 꼴. 끝 날짜가 기간 종료일이다. 재무상태표 행은
+# `2026.03.31 현재`로 오지만 손익계산서만 읽으므로 여기 오지 않는다.
+MULTI_ACCOUNT_PERIOD_PATTERN = re.compile(r"(\d{4})\.(\d{2})\.(\d{2})\s*~\s*(\d{4})\.(\d{2})\.(\d{2})")
+
+# 사업연도 분기 종료월 → OpenDART 보고서코드. `PERIODIC_REPORTS`와 같은 표인데, 이쪽은
+# 보고서 이름이 아니라 달력에서 기간을 되짚어 만든다.
+QUARTER_REPORT_CODES: tuple[tuple[int, str], ...] = ((3, "11013"), (6, "11012"), (9, "11014"), (12, "11011"))
+
+# 한 실행이 훑는 보고서 수. 직전 네 분기를 매번 다시 본다. 정정 공시로 숫자가 바뀌면
+# 새 접수번호로 오므로 그것을 집으려면 지나간 기간도 계속 봐야 한다.
+MULTI_ACCOUNT_PERIODS = 4
+
 # 정기보고서 이름의 월 → OpenDART 보고서코드와 기간 종료월.
 PERIODIC_REPORTS: dict[int, str] = {3: "11013", 6: "11012", 9: "11014", 12: "11011"}
 QUARTER_END_DAYS: dict[int, int] = {3: 31, 6: 30, 9: 30, 12: 31}
@@ -190,6 +255,7 @@ DISCLOSURE_BODY_PENDING_SELECT = read_sql("postgres", "disclosure_event", "selec
 DISCLOSURE_BODY_UPDATE = read_sql("postgres", "disclosure_event", "update_body.sql")
 EARNINGS_FACT_UPSERT = read_sql("postgres", "earnings_fact", "upsert.sql")
 SOURCE_RECORD_INSERT = read_sql("postgres", "source_record", "insert.sql")
+FILING_ENTITY_SELECT = read_sql("postgres", "instrument", "select_filing_entities.sql")
 
 
 class DartCompany(StrEnum):
@@ -211,6 +277,42 @@ class DartCompany(StrEnum):
 
     SAMSUNG_ELECTRONICS = ("005930", "00126380", "삼성전자")
     SK_HYNIX = ("000660", "00164779", "SK하이닉스")
+
+
+class FilingEntity(BaseModel):
+    """규제 공시 수집 대상 한 곳. `instrument` 마스터의 한 행이다.
+
+    `DartCompany`와 달리 이 목록은 코드가 아니라 DB가 갖는다. 공시는 아직 그 Enum이 정하고
+    분기 실적만 이 목록을 쓴다 — `is_watched`(시세 대상)와도 갈라야 해서 축을 따로 뒀다.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    stock_code: str
+    name: str
+    filing_entity_id: str
+    sector: str | None
+
+
+def filing_entities(connection: Connection) -> tuple[FilingEntity, ...]:
+    """공시·실적 수집 대상. 번호가 있다는 것이 곧 대상이라는 뜻이다.
+
+    수집기 클래스 밖에 두는 것은 이 조회가 DART와 무관하기 때문이다 — 자격 증명도 토큰도
+    필요 없고 마스터 테이블만 본다. `kis_opinion.watched_stocks`와 같은 자리다.
+    """
+    with connection.cursor() as cursor:
+        cursor.execute(FILING_ENTITY_SELECT)
+        rows = cursor.fetchall() or []
+    return tuple(
+        FilingEntity(
+            stock_code=str(row[0]),
+            name=str(row[1]),
+            filing_entity_id=str(row[2]),
+            sector=str(row[3]) if row[3] is not None else None,
+        )
+        for row in rows
+    )
+
 class DartHTTPError(RuntimeError):
     """OpenDART가 2xx가 아닌 상태로 응답했다. 재시도 여부는 호출자가 `status`로 정한다."""
 
@@ -330,6 +432,43 @@ class EarningsFetch(BaseModel):
     metadata: dict[str, Any]
     started_at: datetime
     completed_at: datetime
+
+
+class MultiAccountEntry(BaseModel):
+    """다중회사 주요계정 응답에서 뽑은 한 회사·한 재무제표 범위. `earnings_fact` 여러 행이 된다.
+
+    연결(`CFS`)과 별도(`OFS`)가 둘 다 오고 **한쪽을 고르지 않는다.** 자연키에
+    `statement_scope`가 들어 있어 서로 덮지 않고, 어느 쪽을 볼지는 읽는 쪽이 정한다.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    stock_code: str
+    rcept_no: str
+    statement_scope: str
+    values: tuple[EarningsValue, ...]
+
+
+class MultiAccountFetch(BaseModel):
+    """다중회사 주요계정 조회 한 번. **회사 스무 곳이 응답 하나에 들어 있다.**
+
+    그래서 `source_record`도 회사가 아니라 이 조회 단위로 하나만 남는다.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    business_year: int
+    report_code: str
+    entries: tuple[MultiAccountEntry, ...]
+    requested_count: int
+    answered_count: int
+    row_count: int
+    started_at: datetime
+    completed_at: datetime
+
+    @property
+    def value_count(self) -> int:
+        return sum(len(entry.values) for entry in self.entries)
 
 
 def _day(value: str) -> date:
@@ -676,6 +815,126 @@ def pending_earnings(connection: Connection, stock_codes: tuple[str, ...], since
     )
 
 
+def recent_report_periods(today: date, count: int = MULTI_ACCOUNT_PERIODS) -> tuple[tuple[int, str], ...]:
+    """`today` 기준으로 이미 끝난 최근 분기 `count`개의 `(사업연도, 보고서코드)`.
+
+    **기준 날짜는 KST다.** 부르는 쪽(DAG)이 `data_interval_end`를 KST로 바꿔 넘긴다.
+
+    분기가 끝났다는 것과 보고서가 올라왔다는 것은 다르다 — 정기보고서는 기간 종료 뒤
+    45일(사업보고서는 90일)까지 제출한다. 그래서 **가장 최근 기간이 아직 0건인 것은 정상이고,
+    넷이 전부 0건인 것만 실패다.** 그 판정은 DAG가 한다.
+    """
+    if count < 1:
+        raise ValueError("count must be positive")
+    quarters = [(year, month) for year in (today.year, today.year - 1) for month, _ in QUARTER_REPORT_CODES]
+    ended = sorted(
+        (year, month) for year, month in quarters if date(year, month, QUARTER_END_DAYS[month]) < today
+    )
+    if len(ended) < count:
+        raise ValueError(f"cannot look back {count} quarters from {today.isoformat()}")
+    codes = dict(QUARTER_REPORT_CODES)
+    return tuple((year, codes[month]) for year, month in ended[-count:])
+
+
+def _multi_account_period_end(text: str) -> date:
+    """`2026.01.01 ~ 2026.03.31`의 끝 날짜.
+
+    **모양을 먼저 본다.** 재무상태표 행은 `2026.03.31 현재`로 오고, 그것이 여기 들어오면
+    구간 없는 값을 기간 종료일로 읽는다. 손익계산서만 읽으므로 오지 않아야 하고, 와도
+    실패시킨다.
+    """
+    match = MULTI_ACCOUNT_PERIOD_PATTERN.search(str(text))
+    if match is None:
+        raise DartPayloadError(f"multi-account period is not a date range: {text!r}")
+    year, month, day = (int(part) for part in match.group(4, 5, 6))
+    try:
+        return date(year, month, day)
+    except ValueError:
+        raise DartPayloadError(f"multi-account period end is not a real date: {text!r}") from None
+
+
+def parse_multi_accounts(
+    payload: dict[str, Any],
+    entities: tuple[FilingEntity, ...],
+) -> tuple[MultiAccountEntry, ...]:
+    """다중회사 주요계정 응답을 회사·재무제표 범위마다 갈라 읽는다.
+
+    **요청하지 않은 회사가 섞여 오면 실패시킨다.** 콤마로 이어 보내는 요청이라 번호 하나가
+    잘못 붙으면 남의 회사 실적이 우리 종목코드로 저장될 수 있다.
+
+    **손익계산서(`IS`)만 읽는다.** 포괄손익계산서(`CIS`)에도 순이익이 중복으로 온다.
+    """
+    by_entity_id = {entity.filing_entity_id: entity for entity in entities}
+    grouped: dict[tuple[str, str], dict[tuple[str, str], EarningsValue]] = {}
+    receipts: dict[tuple[str, str], str] = {}
+
+    for row in payload.get("list") or []:
+        if str(row.get("sj_div", "")).strip() != "IS":
+            continue
+        entity_id = str(row.get("corp_code", "")).strip()
+        entity = by_entity_id.get(entity_id)
+        if entity is None:
+            raise DartPayloadError(f"DART answered with corp_code {entity_id!r} which was not requested")
+
+        account_name = str(row.get("account_nm", "")).strip()
+        metric = MULTI_ACCOUNT_METRICS.get(account_name)
+        if metric is None:
+            continue
+
+        scope = str(row.get("fs_div", "")).strip()
+        if scope not in (StatementScope.CFS, StatementScope.OFS):
+            raise DartPayloadError(f"unknown fs_div {scope!r} for {entity.stock_code}")
+
+        rcept_no = str(row.get("rcept_no", "")).strip()
+        if not rcept_no:
+            raise DartPayloadError(f"multi-account row for {entity.stock_code} has no rcept_no")
+        key = (entity.stock_code, scope)
+        receipts.setdefault(key, rcept_no)
+
+        period_end = _multi_account_period_end(row.get("thstrm_dt", ""))
+        currency = str(row.get("currency", "")).strip() or "KRW"
+        for basis, current_key, prior_key in MULTI_ACCOUNT_BASES:
+            current = _amount(row.get(current_key) or "")
+            if current is None:
+                continue
+            value = EarningsValue(
+                metric=metric,
+                amount_basis=basis,
+                statement_scope=scope,
+                period_end=period_end,
+                current_amount=current,
+                prior_year_amount=_amount(row.get(prior_key) or ""),
+                currency=currency,
+                # 이 API는 `account_id`를 주지 않는다. 되짚을 근거는 계정명뿐이다.
+                source_account_id=None,
+                source_account_name=account_name,
+            )
+            values = grouped.setdefault(key, {})
+            existing = values.get((metric, basis))
+            if existing is None:
+                values[(metric, basis)] = value
+                continue
+            # `당기순이익(손실)`은 손익계산서 안에서 두 번 온다(전 회사 실측 2026-09-04).
+            # 값이 같은 중복이라 하나만 남기고, **다르면 어느 줄이 맞는지 고를 수 없으므로
+            # 실패시킨다.** 조용히 뒤엣것으로 덮으면 되짚을 수 없다.
+            if existing.current_amount != value.current_amount or existing.prior_year_amount != value.prior_year_amount:
+                raise DartPayloadError(
+                    f"multi-account rows for {entity.stock_code} {scope} {metric}/{basis} disagree: "
+                    f"{existing.current_amount} vs {value.current_amount}"
+                )
+
+    return tuple(
+        MultiAccountEntry(
+            stock_code=stock_code,
+            rcept_no=receipts[(stock_code, scope)],
+            statement_scope=scope,
+            values=tuple(values.values()),
+        )
+        for (stock_code, scope), values in sorted(grouped.items())
+        if values
+    )
+
+
 class DartCollector:
     """OpenDART 수집기. API 키를 쥐고 공시 목록·원문·재무제표를 조회하고 저장한다.
 
@@ -904,6 +1163,111 @@ class DartCollector:
                 f"were parsed: {', '.join(unparsed)}"
             )
         return None
+
+    def fetch_multi_accounts(
+        self,
+        entities: tuple[FilingEntity, ...],
+        business_year: int,
+        report_code: str,
+    ) -> MultiAccountFetch:
+        """대상 회사 전체의 주요계정을 **한 번에** 받는다. 아직 안 올라왔으면 0건 성공이다.
+
+        `fnlttSinglAcntAll`과 달리 회사 번호를 콤마로 이어 보내므로 스무 곳이 호출 하나다.
+        대신 응답이 `account_id`를 주지 않아 계정을 이름으로 잡는다(`MULTI_ACCOUNT_METRICS`).
+        """
+        if not entities:
+            raise ValueError("multi-account fetch needs at least one filing entity")
+
+        started_at = datetime.now(UTC)
+        payload = _json(
+            self._call(
+                "fnlttMultiAcnt.json",
+                {
+                    "corp_code": ",".join(entity.filing_entity_id for entity in entities),
+                    "bsns_year": str(business_year),
+                    "reprt_code": report_code,
+                },
+            )
+        )
+        status = str(payload.get("status", ""))
+        rows: list[dict[str, Any]] = []
+        if status == STATUS_NO_DATA:
+            # 기간은 끝났는데 보고서가 아직 안 올라왔다. 실패가 아니고 다음 실행이 다시 본다.
+            logger.info("Multi-account %s/%s is not available yet", business_year, report_code)
+        elif status != STATUS_OK:
+            raise DartStatusError(status, str(payload.get("message", "")).strip())
+        else:
+            rows = payload.get("list") or []
+
+        entries = parse_multi_accounts({"list": rows}, entities)
+        if rows and not entries:
+            # 응답은 왔는데 아는 계정이 하나도 없다. 계정명이 바뀐 것이라 0건으로 두면
+            # 매 실행이 같은 자리에서 조용히 아무 것도 안 남긴다.
+            raise DartPayloadError(
+                f"DART multi-account {business_year}/{report_code} answered with {len(rows)} rows "
+                f"but no known accounts were parsed"
+            )
+
+        return MultiAccountFetch(
+            business_year=business_year,
+            report_code=report_code,
+            entries=entries,
+            requested_count=len(entities),
+            answered_count=len({entry.stock_code for entry in entries}),
+            row_count=len(rows),
+            started_at=started_at,
+            completed_at=datetime.now(UTC),
+        )
+
+    def store_multi_accounts(self, connection: Connection, fetch: MultiAccountFetch) -> int:
+        """다중회사 주요계정을 저장하고 저장한 행 수를 돌려준다.
+
+        **조회 하나가 `source_record` 하나다.** 회사마다 계보를 만들면 응답 한 번이 스무 행을
+        남긴다. 0건이어도 남긴다 — 조회했지만 아직 없는 기간과 아직 조회하지 않은 기간이
+        구분돼야 한다.
+        """
+        with connection.cursor() as cursor:
+            source_record_id = _insert_source_record(
+                cursor,
+                SOURCE_KEY_MULTI_ACCOUNT,
+                fetch.started_at,
+                fetch.completed_at,
+                "succeeded",
+                fetch.value_count,
+                {
+                    "business_year": fetch.business_year,
+                    "report_code": fetch.report_code,
+                    "requested_count": fetch.requested_count,
+                    "answered_count": fetch.answered_count,
+                    "row_count": fetch.row_count,
+                    # 주요계정 금액은 원 단위로 온다. 곱하지 않는다.
+                    "unit_multiplier": "1",
+                },
+            )
+            execute_upserts(
+                cursor,
+                EARNINGS_FACT_UPSERT,
+                [
+                    (
+                        entry.stock_code,
+                        entry.rcept_no,
+                        "periodic",
+                        value.period_end,
+                        value.statement_scope,
+                        value.amount_basis,
+                        value.metric,
+                        value.current_amount,
+                        value.prior_year_amount,
+                        value.currency,
+                        value.source_account_id,
+                        value.source_account_name,
+                        source_record_id,
+                    )
+                    for entry in fetch.entries
+                    for value in entry.values
+                ],
+            )
+        return fetch.value_count
 
     def store_disclosures(
         self, connection: Connection, fetch: DisclosureFetch, detected_at: datetime | None = None

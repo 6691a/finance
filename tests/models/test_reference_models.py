@@ -43,10 +43,15 @@ def test_instrument_keeps_optional_source_symbol_and_watch_flag():
         "currency",
         "source_symbol",
         "is_watched",
+        "filing_entity_id",
+        "sector",
     }
     assert columns.source_symbol.nullable is True
     assert columns.is_watched.nullable is False
     assert columns.currency.nullable is False
+    # 번호가 없다는 것은 규제 공시 대상이 아니라는 뜻이다. 빈 문자열로 메우면 그 뜻이 사라진다.
+    assert columns.filing_entity_id.nullable is True
+    assert columns.sector.nullable is True
 
 
 def test_instrument_finite_domains_use_enums_with_check_constraints():
@@ -156,4 +161,14 @@ def test_instrument_documents_table_and_column_purposes():
         "currency": "종목 가격의 표시 통화(ISO 4217, 예: KRW 또는 USD)",
         "source_symbol": "수집 소스에서 쓰는 심볼. 티커와 다를 때만 채운다(예: KOSPI → ^KS11)",
         "is_watched": "시세를 수집할 대상 여부. 거짓이면 문서 태그 후보로만 쓴다",
+        "filing_entity_id": (
+            "그 나라 공시 규제기관이 이 회사에 붙인 고유번호. 값이 있으면 규제 공시·실적 수집 대상이고 "
+            "NULL이면 아니다. 발급 기관은 market이 정한다(kospi·kosdaq=금융감독원 DART 회사 고유번호 8자리, "
+            "nyse·nasdaq=SEC EDGAR CIK). 그래서 읽는 쪽은 market을 함께 건다"
+        ),
+        "sector": (
+            "이 종목이 대표하는 산업(예: 반도체, 자동차, 화장품). 한국 거시 지표를 회사가 아니라 "
+            "산업 단위로 집계하기 위한 축이며 대표 기업이 교체돼도 이름이 바뀌지 않는다. "
+            "값이 바뀌는 것이 전제라 Enum과 CHECK를 두지 않는다"
+        ),
     }

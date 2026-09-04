@@ -33,3 +33,28 @@ def test_instrument_migration_documents_table_and_columns(capsys):
         "COMMENT ON COLUMN instrument.source_symbol IS "
         "'수집 소스에서 쓰는 심볼. 티커와 다를 때만 채운다(예: KOSPI → ^KS11)'"
     ) in sql
+
+
+def test_instrument_migration_adds_the_filing_entity_and_sector_columns(capsys):
+    sql = head_sql(capsys)
+
+    assert "ADD COLUMN filing_entity_id TEXT" in sql
+    assert "ADD COLUMN sector TEXT" in sql
+    # 번호가 없다는 것이 "규제 공시 대상이 아니다"라는 뜻이다. NOT NULL이면 그 뜻이 사라진다.
+    assert "ADD COLUMN filing_entity_id TEXT NOT NULL" not in sql
+    assert "ADD COLUMN sector TEXT NOT NULL" not in sql
+    # 섹터는 값이 바뀌는 것이 전제다. CHECK를 걸면 섹터 하나 들일 때 마이그레이션이 두 벌이 된다.
+    assert "ck_instrument_sector" not in sql
+
+
+def test_the_new_instrument_column_comments_match_the_model(capsys):
+    """마이그레이션과 모델의 주석이 어긋나면 다음 autogenerate가 매번 COMMENT ON 차이를 낸다."""
+    from apps.models.reference import Instrument
+
+    sql = head_sql(capsys)
+    columns = Instrument.__table__.c
+
+    for name in ("filing_entity_id", "sector"):
+        comment = columns[name].comment
+        assert comment
+        assert f"COMMENT ON COLUMN instrument.{name} IS '{comment}'" in sql

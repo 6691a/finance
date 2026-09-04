@@ -67,3 +67,65 @@ def test_only_the_collected_stocks_are_watched(capsys):
     assert watched == {stock.value for stock in PositioningStock}
     # 마스터가 시세 목록보다 넓다는 것이 이 확장의 전제다. 같아지면 태그 후보가 다시 좁아진 것이다.
     assert len(seeded) > len(watched)
+
+
+FILING_ENTITY_UPDATE = re.compile(
+    r"UPDATE instrument SET filing_entity_id = '(?P<entity_id>\d+)', sector = '(?P<sector>[^']+)' "
+    r"WHERE market = 'kospi' AND ticker = '(?P<ticker>[^']+)'"
+)
+
+
+def seeded_filing_entities(sql: str) -> dict[str, tuple[str, str]]:
+    return {match["ticker"]: (match["entity_id"], match["sector"]) for match in FILING_ENTITY_UPDATE.finditer(sql)}
+
+
+def test_every_filing_entity_has_a_sector(capsys):
+    """공시·실적 대상 스무 곳에 회사 번호와 섹터가 함께 들어간다.
+
+    **섹터가 비면 거시 집계가 회사 단위로 떨어진다.** 그러면 대표를 교체한 해의 점프가
+    산업 변화인지 명단 변화인지 가릴 수 없다.
+    """
+    seeded = seeded_filing_entities(head_sql(capsys))
+
+    assert len(seeded) == 20
+    assert all(entity_id and sector for entity_id, sector in seeded.values())
+    # 반도체만 둘이고 나머지는 섹터당 하나다.
+    sectors = [sector for _, sector in seeded.values()]
+    assert len(set(sectors)) == 19
+    assert sectors.count("반도체") == 2
+
+
+def test_filing_entities_cover_the_disclosure_collector(capsys):
+    """공시 수집기가 아는 회사는 전부 마스터에 번호가 있어야 한다.
+
+    반대 방향(번호가 있는데 수집기 Enum에 없는 것)은 **정상이다.** 이 칸이 `is_watched`와
+    다른 축이라는 것이 그 뜻이고, 대상을 넓히는 동안 Enum이 뒤따라온다.
+    """
+    seeded = seeded_filing_entities(head_sql(capsys))
+
+    for company in DartCompany:
+        assert company.value in seeded, f"{company.label} 회사 번호가 시드에 없다"
+        assert seeded[company.value][0] == company.corp_code
+
+
+def test_filing_entity_ids_are_dart_corp_codes(capsys):
+    """한국 시장의 번호는 DART 회사 고유번호 8자리다.
+
+    발급 기관은 `market`이 정한다. 미국 종목이 들어오면 같은 칸에 SEC CIK가 들어가므로,
+    자릿수를 여기서 잠가 두면 그때 이 테스트가 갈릴 자리를 알려 준다.
+    """
+    for entity_id, _ in seeded_filing_entities(head_sql(capsys)).values():
+        assert len(entity_id) == 8 and entity_id.isdigit()
+
+
+def test_watched_stays_narrower_than_the_filing_entities(capsys):
+    """시세 대상은 늘지 않는다.
+
+    이 칸을 만든 이유가 그것이다 — 공시를 스무 곳으로 넓히면서 분봉·수급·실시간 구독까지
+    함께 끌고 가지 않으려고 축을 나눴다.
+    """
+    sql = head_sql(capsys)
+    seeded = {match["ticker"]: match["watched"] == "true" for match in INSTRUMENT_INSERT.finditer(sql)}
+    watched = {ticker for ticker, is_watched in seeded.items() if is_watched}
+
+    assert watched < set(seeded_filing_entities(sql))

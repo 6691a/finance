@@ -77,6 +77,10 @@ BALANCE_SHEET_UNIT = "Billions of Won"
 NO_SOURCE_UNIT = ""
 DIFFUSION_INDEX_UNIT = "Diffusion Index (100 = neutral)"
 SENTIMENT_INDEX_UNIT = "Index Long-run Average=100"
+# **경기종합지수만 제공처가 단위를 준다.** 그 표기는 `2020=100`이고 우리 저장 표기는
+# `Index 2020=100`이라 **둘을 한 상수로 두면 안 된다** — 그러면 단위 변경 검사가 첫 행에서
+# 죽는다(2026-09-04에 실제로 그렇게 죽었다). 1970-01~2026-07 679행이 전부 이 표기다.
+BUSINESS_CYCLE_SOURCE_UNIT = "2020=100"
 BUSINESS_CYCLE_UNIT = "Index 2020=100"
 
 
@@ -229,7 +233,7 @@ class EcosSeries(StrEnum):
         BUSINESS_CYCLE_STAT_CODE,
         "I16A",
         MONTHLY_CYCLE,
-        BUSINESS_CYCLE_UNIT,
+        BUSINESS_CYCLE_SOURCE_UNIT,
         BUSINESS_CYCLE_UNIT,
         "activity",
         "선행종합지수(월별)",

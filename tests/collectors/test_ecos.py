@@ -215,6 +215,32 @@ def test_the_two_axis_tables_declare_both_item_codes():
     assert (EcosSeries.BSI_M.item_code, EcosSeries.BSI_M.item_code2) == ("99988", "AA")
 
 
+def test_source_units_are_the_providers_own_strings():
+    """`source_unit_name`은 ECOS가 보내는 글자 그대로여야 한다.
+
+    **여기서 한 번 틀렸다**(2026-09-04). 선행종합지수의 제공처 표기가 `2020=100`인데 우리
+    저장 표기 `Index 2020=100`을 두 자리에 다 넣어서, 백필 첫 행이
+    `ECOS changed the unit of I16A to '2020=100'`으로 죽었다. 응답을 안 보고 상수 하나를
+    돌려 쓰면 이 자리가 조용히 어긋난다 — 오프라인 픽스처는 우리가 만든 값을 되읽어서 못 잡는다.
+
+    실측 구간과 표기(2026-09-04): CSI 2008-07~2026-08 218행, BSI 2009-08~2026-08 205행이
+    모두 `null`이고, 선행종합지수는 1970-01~2026-07 679행이 전부 `2020=100`이다.
+    """
+    assert EcosSeries.CSI_M.source_unit_name == ""
+    assert EcosSeries.BSI_M.source_unit_name == ""
+    assert EcosSeries.LEADING_M.source_unit_name == "2020=100"
+
+
+def test_the_provider_unit_and_the_stored_unit_are_never_the_same_constant():
+    """제공처 표기와 정규화 표기는 다른 것이다. 같으면 한 상수를 두 자리에 넣은 것이다.
+
+    금리는 `연%` → `Percent`, 잔액은 `십억원` → `Billions of Won`처럼 늘 갈린다. 이 불변이
+    깨지는 순간이 위 사고의 모양이라 계열 전체에 건다.
+    """
+    for series in EcosSeries:
+        assert series.source_unit_name != series.unit, series.value
+
+
 def test_the_business_survey_uses_the_actual_table_not_the_outlook_table():
     """전망(`512Y014`)과 실적(`512Y015`)이 다른 통계표다. 실적을 쓴다."""
     assert EcosSeries.BSI_M.stat_code == "512Y015"

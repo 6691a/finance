@@ -37,11 +37,11 @@ from neo4j.exceptions import ClientError, Neo4jError, ServiceUnavailable, Sessio
 from pydantic import BaseModel, ConfigDict
 
 from modules.kospi.domain import (
-    FACTORS,
     INDEX_CODE,
     INDEX_LABEL,
     MAX_STRENGTH,
     MIN_STRENGTH,
+    RELATION_FACTORS,
     RELATION_LOOKBACK_DAYS,
     Factor,
     Observation,
@@ -252,7 +252,7 @@ def ensure_schema(graph: Driver) -> None:
     잡혀야 "관측 없음"으로 표에 실린다 — 빈 칸이 "관계가 없다"로 읽히면 모델이 그 요인을
     영영 안 본다.
     """
-    rows = [{"code": spec.code.value, "label": spec.label} for spec in FACTORS]
+    rows = [{"code": spec.code.value, "label": spec.label} for spec in RELATION_FACTORS]
     with _session(graph) as session:
         for statement in CONSTRAINTS:
             _run(session, statement, {})
@@ -298,7 +298,7 @@ def read_relations(graph: Driver, *, as_of_date: date, as_of_at: datetime) -> tu
             )
         )
     return tuple(
-        relation_weight(spec.code, grouped.get(spec.code, []), as_of_date=as_of_date) for spec in FACTORS
+        relation_weight(spec.code, grouped.get(spec.code, []), as_of_date=as_of_date) for spec in RELATION_FACTORS
     )
 
 

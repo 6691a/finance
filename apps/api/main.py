@@ -146,7 +146,7 @@ def main() -> int:
         logger.warning("neo4j is not configured — the causal graph routes answer 503")
 
     app = create_app(container)
-    logger.info("serving the thesis read API from alias %s", DB_ALIAS)
+    logger.info("serving the read API from alias %s", DB_ALIAS)
     uvicorn.run(
         app,
         host=os.environ.get("API_HOST", DEFAULT_HOST),

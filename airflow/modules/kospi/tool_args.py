@@ -22,10 +22,9 @@ from modules.kospi.domain import (
     HISTORY_FACTORS,
     MAX_HISTORY_DAYS,
     MAX_TOOL_CALLS,
-    MAX_VALUE_SCORE,
+    MAX_TOOL_RESULTS,
     MAX_WINDOW_HOURS,
     MIN_HISTORY_DAYS,
-    MIN_VALUE_SCORE,
     MIN_WINDOW_HOURS,
     factor_label,
 )
@@ -73,15 +72,6 @@ class RecentNewsArgs(_Args):
             "지금이 아니라 이 실행의 기준 시각이 창의 끝이다"
         ),
     )
-    min_score: int = Field(
-        default=MIN_VALUE_SCORE,
-        ge=MIN_VALUE_SCORE,
-        le=MAX_VALUE_SCORE,
-        description=(
-            f"문서 가치 점수 하한. {MIN_VALUE_SCORE}~{MAX_VALUE_SCORE}. "
-            "높이면 건수가 줄고 낮추면 잡음이 는다"
-        ),
-    )
 
 
 class RecentDisclosuresArgs(_Args):
@@ -102,10 +92,14 @@ TOOL_DESCRIPTIONS: dict[str, str] = {
     ),
     "recent_news": (
         "기준 시각까지 들어온 평가된 기사. 제목·발행 시각·방향·가치 점수·평가 요약·종목 태그를 준다. "
+        f"가치 점수 상위 {MAX_TOOL_RESULTS}건만 온다 — `total`이 창 안의 전체 수이고 `shown`이 돌려준 수다. "
+        "둘이 다르면 못 본 기사가 있는 것이니 '그런 뉴스는 없었다'고 단정하지 마라. "
         "본문은 없다 — 요약에 적힌 숫자를 그대로 옮겨 쓰지 마라. 숫자는 factor_history가 갖고 있다."
     ),
     "recent_disclosures": (
         "기준 시각까지 접수된 DART 공시 중 **본문이 있는 것**. 회사명·보고서명·접수 시각과 본문 앞부분을 준다. "
+        "**수집 범위는 산업 대표 20사뿐이고** 본문은 주요사항·자기주식·배당·실적·조회공시 같은 "
+        "사건성 종류에만 있다 — 시장 전체 공시가 아니며 빈 결과가 보통이다. "
         "본문은 접수된 원문이라 거기 적힌 금액과 날짜는 그대로 인용해도 된다. "
         "다만 원문에 없는 것을 보고서명에서 짐작하지 마라."
     ),

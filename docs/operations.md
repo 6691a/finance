@@ -1,7 +1,7 @@
 # 저장소 운영 안내
 
 - 상태: 지금 도는 코드의 설명이다. Grafana는 제거됐다(2026-08-26 결정) — 그 자리를
-  [analysis/market-thesis/14-web-ui.md](analysis/market-thesis/14-web-ui.md)의 화면이 받는다.
+  [analysis/kospi-forecast-web.md](analysis/kospi-forecast-web.md)의 화면이 받는다.
 - 무엇: 설정·DB alias·마이그레이션·DAG 목록·배포·관측. **저장소를 돌리는 사람과 에이전트가 읽는다.**
   프로젝트가 무엇인지는 루트 [README.md](../README.md)가 갖는다.
 
@@ -270,6 +270,7 @@ DAG마다 절을 두지 않습니다. 상세는 각 DAG 파일의 `doc_md`에 �
 | `fred_treasury_daily` | 화~토 07:30 | `indicator_observation` | FRED |
 | `fred_macro_daily` | 화~토 07:40 | `indicator_observation` | FRED |
 | `ecos_market_rate_daily` | 화~토 08:00 | `indicator_observation` | 한국은행 ECOS |
+| `ecos_sentiment_monthly` | 월요일 10:00 | `indicator_observation`(소비자심리·업황BSI·선행지수) | 한국은행 ECOS |
 | `bbk_bund_daily` | 화~토 08:10 | `indicator_observation` | 분데스방크 |
 | `mof_jgb_daily` | 화~토 08:20 | `indicator_observation` | 일본 재무성 |
 | `boe_gilt_daily` | 화~토 08:40 | `indicator_observation` | 잉글랜드은행 |
@@ -283,9 +284,12 @@ DAG마다 절을 두지 않습니다. 상세는 각 DAG 파일의 `doc_md`에 �
 | `kis_stock_minute_bars_daily` | 평일 20:40 | `stock_bar` | KIS |
 | `kis_market_positioning_daily` | 화~토 08:10 | `krx_*` 6종(신용·공매도·대차·증시자금) | KIS |
 | `kis_overseas_index_close` | 화~토 07:30 | `index_bar`(S&P500·나스닥 종합 마감 분봉) | KIS |
+| `kis_asia_index_intraday` | 평일 09~17시 5분마다 | `index_bar`(니케이·상해·항셍·대만 1분봉, 15분 지연) | KIS |
+| `kis_asia_index_daily` | 평일 18:00 | `index_daily`(니케이·상해·항셍·대만 확정 일봉) | KIS |
 | `yahoo_quote_intraday` | 5분마다(시간 창 없음) | `quote_bar` | Yahoo |
 | `yahoo_quote_daily` | 매일 07:30 | `quote_daily` | Yahoo |
-| `dart_disclosure_intraday` | 평일 07~20시 2분마다 | `disclosure_event`, `earnings_fact` | DART |
+| `dart_disclosure_intraday` | 평일 07~20시 2분마다 | `disclosure_event`, `earnings_fact`(산업 대표 20사) | DART |
+| `dart_multi_earnings_quarterly` | 평일 20:00 | `earnings_fact`(산업 대표 20사 최근 네 분기) | DART |
 | `document_ingestion_hourly` | 매시 05분 | `document`, `document_source` | 공식기관·언론 피드 |
 | `document_body_hourly` | 매시 15분 | `document`(`body`·`body_status`), `document_attachment` | 문서 원문 페이지 |
 | `document_attachment_parse_hourly` | 매시 20분 | `document_attachment`(`extracted_text`·`parse_status`) | 받아 둔 첨부 PDF (외부 호출 없음) |
@@ -407,7 +411,7 @@ airflow dags trigger mof_jgb_daily --conf '{\"source_file\": \"all\", \"observat
 - **흐름 제어는 LangGraph입니다.** 재시도, 교정 재요청, 문서별 팬아웃(`Send`)을 `StateGraph`의 노드와 엣지로 표현합니다. 노드 이름이 그대로 트레이스에 남아 어디서 몇 번 불렀는지 보이는 것이 이 규칙의 목적입니다.
 - **데이터 모양은 Pydantic입니다.** 설정, 모델 응답, 노드가 주고받는 결과를 `BaseModel`로 선언하고, 응답 스키마는 그 모델에서 뽑아 `response_format`으로 강제합니다. 강제를 지원하지 않는 제공처를 위해 스키마 없이 한 번 더 부르는 경로와 검증을 그대로 남겨 둡니다.
 
-**어떤 모델을 쓸지는 코드가 정합니다.** `llm.py`의 `document_model()`·`thesis_model()`·`expectation_model()`이 LangChain 문법 그대로 모델을 만들고, 바꿀 때 그 함수를 고칩니다. 지금 문서 평가와 이벤트 추출은 `ChatOpenAI`로 `gpt-5.6-luna`를, 시장 추론은 `ChatXAI`로 `grok-4.6`을 부릅니다. `base_url`과 모델명을 환경변수로 빼서 제공처를 갈아 끼우지 않습니다. LangChain은 제공처마다 클래스와 인자가 달라 문자열 설정 몇 개로 흉내 내면 어느 쪽도 제대로 못 씁니다. **환경에서 오는 것은 API 키뿐이고 그것도 우리가 읽지 않습니다.** LangChain 클래스가 자기 이름(`OPENAI_API_KEY`·`XAI_API_KEY`)으로 스스로 읽습니다. 키를 우리 설정 객체에 담으면 로그와 예외에 실릴 자리만 늘어납니다.
+**어떤 모델을 쓸지는 코드가 정합니다.** `llm.py`의 `document_model()`·`kospi_model()`·`expectation_model()`이 LangChain 문법 그대로 모델을 만들고, 바꿀 때 그 함수를 고칩니다. 지금 문서 평가와 이벤트 추출은 `ChatOpenAI`로 `gpt-5.6-luna`를, 코스피 전망·관찰은 `ChatXAI`로 `grok-4.6`을 부릅니다. `base_url`과 모델명을 환경변수로 빼서 제공처를 갈아 끼우지 않습니다. LangChain은 제공처마다 클래스와 인자가 달라 문자열 설정 몇 개로 흉내 내면 어느 쪽도 제대로 못 씁니다. **환경에서 오는 것은 API 키뿐이고 그것도 우리가 읽지 않습니다.** LangChain 클래스가 자기 이름(`OPENAI_API_KEY`·`XAI_API_KEY`)으로 스스로 읽습니다. 키를 우리 설정 객체에 담으면 로그와 예외에 실릴 자리만 늘어납니다.
 
 **재시도는 Airflow가 합니다.** 모델 클라이언트는 `max_retries=0`으로 만듭니다. SDK가 먼저 재시도하면 태스크 타임아웃 안에서 몇 번을 불렀는지 로그와 트레이스가 어긋납니다. 체크포인터도 붙이지 않습니다. 재실행 단위는 Airflow 태스크입니다.
 
@@ -419,7 +423,7 @@ airflow dags trigger mof_jgb_daily --conf '{\"source_file\": \"all\", \"observat
 
 ## 웹 화면과 조회 API
 
-수집·추론을 읽는 화면은 `frontend/`(React·TypeScript·Vite)이고 **상주 서비스가 아닙니다.**
+수집·전망을 읽는 화면은 `frontend/`(React·TypeScript·Vite)이고 **상주 서비스가 아닙니다.**
 Vite가 구운 `frontend/dist`를 `apps/api/`(FastAPI)가 같은 origin에서 함께 줍니다.
 **Grafana는 이 화면과 함께 걷어냈습니다**(2026-08-26 결정) — 대시보드 열여덟은 원시 수집을
 보던 것이라 대체 없이 사라졌고, 그 자리를 이 화면이 메웁니다.
@@ -528,11 +532,14 @@ docker compose -f compose/prod/airflow/docker-compose.yaml up -d --force-recreat
 `up -d --build` 합니다. Airflow 과거 태스크 로그를 유지하려면 이전 `logs/` 내용을
 `airflow/logs/`로 복사합니다(생략해도 동작에는 지장 없음).
 
-### Neo4j (인과 그래프 투영)
+### Neo4j (코스피 관계·메모의 원본)
 
 **이 저장소의 `compose/prod/`에는 없습니다.** Postgres·Redis가 사는 NAS의 `database` 스택
 (저장소 밖)에 서비스 하나로 들어갑니다. Airflow prod compose가 `database` 네트워크에
 external로 붙어 있어 **컨테이너 이름으로 닿습니다**.
+
+**여기가 코스피 관계와 메모의 원본입니다.** 투영이 아니라 원본이라 Postgres에 같은 값이
+없습니다 — 지우면 되살릴 데가 없습니다. `kospi_review_daily`만 씁니다.
 
 ```yaml
   neo4j:
@@ -560,7 +567,8 @@ external로 붙어 있어 **컨테이너 이름으로 닿습니다**.
     restart: always
 ```
 
-Airflow `.env`에 셋을 넣습니다. 없으면 `sync_graph`가 skip이라 나머지 태스크는 그대로 돕니다.
+Airflow `.env`에 셋을 넣습니다. **없으면 `kospi_review_daily`가 죽습니다** — 관계를
+쓸 자리가 없으면 그 실행은 할 일이 없습니다.
 
 ```
 NEO4J_URI=bolt://neo4j:7687
@@ -571,12 +579,20 @@ NEO4J_PASSWORD=<database 스택 .env의 NEO4J_PWD와 같은 값>
 드라이버가 이미지에 들어가야 하므로 **`just build-airflow` 후 `just deploy-airflow`**가
 필요합니다(`requirements.txt` 변경).
 
-첫 적재와 밀린 주 복구는 같은 명령입니다. `sync_only`가 LLM을 건너뛰고 저장된 주 전부를
-밀어 넣습니다 — MERGE라 몇 번을 돌려도 같은 그래프입니다.
+과거 날짜의 관찰을 채우려면 `kospi_review_daily`를 날짜별로 트리거합니다. `notify=false`가
+Slack 발송만 건너뜁니다 — 운영 채널을 도배하지 않으려는 자리입니다.
 
 ```bash
-airflow dags trigger market_causal_weekly --conf '{"sync_only": true}'
+airflow dags trigger kospi_review_daily \
+  --run-id obs_2026-08-24 --conf '{"run_date": "2026-08-24", "notify": false}'
 ```
+
+**`run-id`에 `backfill__`을 쓰지 않습니다.** Airflow 3이 실제 backfill 실행용으로 예약해
+둔 접두어라 거절됩니다(`scheduled__`·`manual__`·`asset_triggered__`도 같습니다).
+
+관찰 엣지는 `MERGE`라 같은 날짜를 몇 번 돌려도 같은 그래프입니다. **메모는 `CREATE`라
+중복됩니다** — 실패한 실행이 그래프까지 쓴 뒤 죽었으면 그 날짜의 메모를 지우고 다시
+돌립니다.
 
 브라우저는 `http://<NAS 주소>:17474`이고, Connect URL은 **`bolt://<NAS 주소>:17687`**입니다.
 `neo4j://`는 서버가 자기 주소를 컨테이너 내부 포트(7687)로 알려 줘서 실패합니다.

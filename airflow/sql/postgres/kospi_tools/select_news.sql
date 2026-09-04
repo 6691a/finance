@@ -9,6 +9,10 @@
 -- 둘 다 컬럼이 아니라 `assessment` JSONB 안의 키다.
 --
 -- 종목 태그를 배열로 접어 문서당 한 행을 지킨다. 대표에 연결된 중복은 뺀다.
+--
+-- 점수 하한 인자는 없앴다(2026-09-03). 24시간 창의 후보가 303건인데 `LIMIT`이 상위 30을
+-- 자르므로 하한 0·2·3이 전부 같은 답이었다 — 모델이 돌리고 있다고 믿는 손잡이가 연결돼
+-- 있지 않았다. 없는 편이 있는 척하는 것보다 낫다.
 WITH bounds AS (
     SELECT %(window_start)s::timestamptz AS window_start,
            %(as_of_at)s::timestamptz AS as_of_at
@@ -24,7 +28,9 @@ SELECT document.id,
        coalesce(
            array_agg(tag.ticker ORDER BY tag.ticker) FILTER (WHERE tag.ticker IS NOT NULL),
            '{}'
-       ) AS tickers
+       ) AS tickers,
+       -- 창 안의 후보 전체 수. `LIMIT` 앞에서 세므로 돌려준 행 수와 다르면 잘린 것이다.
+       count(*) OVER () AS total
 FROM document
 CROSS JOIN bounds
 LEFT JOIN document_instrument AS tag
@@ -35,7 +41,6 @@ WHERE document.canonical_document_id IS NULL
   AND document.detected_at <= bounds.as_of_at
   AND document.assessed_at <= bounds.as_of_at
   AND document.updated_at <= bounds.as_of_at
-  AND document.value_score >= %(min_score)s
 GROUP BY document.id
 ORDER BY document.value_score DESC NULLS LAST, document.assessed_at DESC
 LIMIT %(limit)s

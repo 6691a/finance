@@ -32,9 +32,8 @@ from typing import Any
 from pydantic import AwareDatetime, BaseModel, ConfigDict
 
 from modules.briefing import blocks, documents
-from modules.db import Connection, Cursor
+from modules.db import Connection
 from modules.sql import read_sql
-from modules.thesis.state import FORECAST_SLOTS, NARRATED_SLOTS
 from modules.utility import KST_TIMEZONE
 
 
@@ -48,21 +47,8 @@ class OpsQueryError(RuntimeError):
 
 BRIEFING_WINDOW = read_sql("postgres", "source_record", "select_briefing_window.sql")
 RECENT_FAILURES = read_sql("postgres", "source_record", "select_recent_failures.sql")
-THESIS_CALIBRATION = read_sql("postgres", "thesis_outcome", "select_calibration.sql")
-THESIS_BACKLOG = read_sql("postgres", "thesis_outcome", "select_backlog.sql")
 
 WINDOW_HOURS = 24
-
-# 추론 품질을 볼 구간. 프롬프트와 모델이 바뀌면 옛 점수와 섞여 추이가 흐려지므로 짧게 둔다.
-THESIS_WINDOW_DAYS = 28
-
-# 채점·해설 지평. `modules/thesis/domain.py`의 같은 목록과 값이 같아야 한다. 그쪽을 import하지 않는
-# 이유는 ops 브리핑이 LLM 층에 기대지 않기 위해서다 — 감시하는 쪽이 감시받는 쪽을 부르면
-# 그쪽이 죽은 날 이 리포트도 같이 흔들린다.
-THESIS_HORIZONS = (0, 1, 3, 5)
-
-# 균등 확률(1/3씩)의 3-class Brier. 결과와 무관하게 이 값이라 예측력 비교의 baseline이다.
-UNIFORM_BRIER = 0.667
 
 # 채널에 그릴 실패 건수. 더 있으면 Airflow 로그를 봐야 하는 상황이다.
 RECENT_FAILURE_LIMIT = 5
@@ -123,57 +109,6 @@ class FailureDetail(BaseModel):
     detail: str | None = None
 
 
-class ThesisHorizon(BaseModel):
-    """지평 하나의 추론 품질. 지평을 섞으면 T+1의 잡음이 T+5의 신호를 덮는다."""
-
-    model_config = ConfigDict(frozen=True)
-
-    horizon_days: int
-    graded: int
-    mean_brier: float | None
-    flat_outcomes: int
-    narrated: int
-    supported: int
-    contradicted: int
-    unresolved: int
-    # 크기 채점. **지평 0에만 있고** flat 실현·판 7 이전 행은 빠져서 표본이 `graded`와 다르다.
-    # 평균은 부호를 살린다 — 양수면 과소추정, 음수면 과대추정이고 그것이 프롬프트를 고칠 방향이다.
-    return_graded: int = 0
-    mean_return_error_pct: float | None = None
-    # 밴드 적중. **오차 평균과 다른 것을 잰다** — 저쪽은 중심의 치우침이고 이쪽은 모델이
-    # 자기 불확실성을 아는가다. **적중률이 지나치게 높아도 문제다**: 95퍼센트면 폭을
-    # 너무 넓게 불러 구간이 아무 것도 말하지 않는다는 뜻이다.
-    band_graded: int = 0
-    band_hits: int = 0
-
-    @property
-    def beats_uniform(self) -> bool | None:
-        """균등 확률 baseline보다 나은가. 채점이 없으면 `None`."""
-        if self.mean_brier is None:
-            return None
-        return self.mean_brier < UNIFORM_BRIER
-
-
-class ThesisHealth(BaseModel):
-    """추론 파이프라인의 운영·품질 지표.
-
-    **두 묶음을 섞지 않는다**(`docs/analysis/market-thesis/README.md` 5절). backlog는 운영 지표라
-    이걸로 판단하고, Brier와 판정 분포는 누적만 한다 — 4주 표본으로 예측력을 결론 내리지 못한다.
-    """
-
-    model_config = ConfigDict(frozen=True)
-
-    window_days: int = THESIS_WINDOW_DAYS
-    horizons: tuple[ThesisHorizon, ...] = ()
-    ungraded: int = 0
-    unnarrated: int = 0
-
-    @property
-    def has_backlog(self) -> bool:
-        """목표 영업일이 지났는데도 안 된 것이 있는가. 아직 안 지난 것은 세지 않는다."""
-        return bool(self.ungraded or self.unnarrated)
-
-
 class OpsSummary(BaseModel):
     model_config = ConfigDict(frozen=True)
 
@@ -186,7 +121,6 @@ class OpsSummary(BaseModel):
     empty: tuple[ExpectedSource, ...] = ()
     failures: tuple[FailureDetail, ...] = ()
     assessment_backlog: int = 0
-    thesis: ThesisHealth = ThesisHealth()
 
     @property
     def is_healthy(self) -> bool:
@@ -195,7 +129,6 @@ class OpsSummary(BaseModel):
             or self.empty
             or self.failures
             or self.assessment_backlog > ASSESSMENT_BACKLOG_LIMIT
-            or self.thesis.has_backlog
         )
 
 
@@ -227,7 +160,6 @@ class OpsBriefingReader:
                 # GROUP BY 없는 집계라 한 행이 반드시 온다. 안 오면 쿼리나 스키마가 깨진
                 # 것이고, 그때 적체 0을 찍으면 **감시 리포트가 초록으로 위장한다.**
                 raise OpsQueryError("document briefing summary returned no row")
-            thesis = self._thesis_health(cursor)
 
         activity = tuple(
             SourceActivity(
@@ -251,51 +183,8 @@ class OpsBriefingReader:
                 for row in failure_rows
             ),
             assessment_backlog=document_counts[5],
-            thesis=thesis,
         )
 
-    def _thesis_health(self, cursor: Cursor) -> ThesisHealth:
-        """추론 품질과 밀린 건수.
-
-        **DB 오류를 삼키지 않는다.** `thesis_outcome`이 없다는 것은 마이그레이션이 안 됐다는
-        뜻이고, 그건 운영 리포트가 조용히 넘길 일이 아니라 소리쳐야 할 일이다. 빈 섹션으로
-        바꾸면 테이블이 없는 상태가 "아직 추론이 없다"와 구분되지 않는다.
-
-        추론이 정말 없는 날은 조회가 0행을 주고 섹션이 안 그려진다. 그건 정상 흐름이다.
-        """
-        since = (self.now.astimezone(KST_TIMEZONE) - timedelta(days=THESIS_WINDOW_DAYS)).date()
-        today = self.now.astimezone(KST_TIMEZONE).date()
-        cursor.execute(THESIS_CALIBRATION, (since,))
-        rows = cursor.fetchall()
-        cursor.execute(
-            THESIS_BACKLOG,
-            (list(THESIS_HORIZONS), since, list(FORECAST_SLOTS), list(NARRATED_SLOTS), today),
-        )
-        backlog = cursor.fetchone()
-        if backlog is None:
-            # 위와 같은 이유다. 밀린 건수가 0으로 보이는 것이 가장 나쁜 거짓말이다.
-            raise OpsQueryError("thesis backlog query returned no row")
-        return ThesisHealth(
-            horizons=tuple(
-                ThesisHorizon(
-                    horizon_days=row[0],
-                    graded=row[1],
-                    mean_brier=float(row[2]) if row[2] is not None else None,
-                    flat_outcomes=row[3],
-                    narrated=row[4],
-                    supported=row[5],
-                    contradicted=row[6],
-                    unresolved=row[7],
-                    return_graded=row[8],
-                    mean_return_error_pct=float(row[9]) if row[9] is not None else None,
-                    band_graded=row[10],
-                    band_hits=row[11],
-                )
-                for row in rows
-            ),
-            ungraded=backlog[0],
-            unnarrated=backlog[1],
-        )
 
 
 def silent_sources(activity: tuple[SourceActivity, ...], now: datetime) -> tuple[ExpectedSource, ...]:
@@ -347,74 +236,8 @@ def render_blocks(summary: OpsSummary) -> list[dict[str, Any]]:
     if summary.failures:
         rendered.append(blocks.section("*최근 실패*\n" + "\n".join(_failure_line(item) for item in summary.failures)))
 
-    rendered += _thesis_blocks(summary.thesis)
     rendered.append(blocks.context([f"평가 대기 {summary.assessment_backlog}건"]))
     return rendered
-
-
-def _thesis_blocks(health: ThesisHealth) -> list[dict[str, Any]]:
-    """추론 품질 섹션. 채점된 것이 하나도 없으면 아예 넣지 않는다.
-
-    시장 브리핑에서 뺀 것이 여기 온다(2026-08-21). 읽는 사람이 달라서다 — 오늘 전망은
-    시장을 보는 사람이 읽고, "우리 추론이 잘 맞고 있나"는 운영자가 본다.
-
-    **해설 전문은 싣지 않는다.** 숫자가 이상할 때 DB를 열면 된다. 매일 해설 몇 편이
-    운영 리포트에 쌓이면 정작 봐야 할 실패 목록이 묻힌다.
-    """
-    if not health.horizons and not health.has_backlog:
-        return []
-
-    rendered: list[dict[str, Any]] = []
-    if health.horizons:
-        rendered += blocks.table_section(
-            f"추론 품질 · 최근 {health.window_days}일",
-            ("지평", "채점", "Brier", "크기 오차", "밴드 적중", "판정(지지/반박/보류)"),
-            [_horizon_row(item) for item in health.horizons],
-        )
-        # baseline을 매번 다시 설명하지 않도록 한 줄로 붙인다.
-        rendered.append(
-            blocks.context(
-                [
-                    f"균등 확률 baseline {UNIFORM_BRIER}",
-                    "낮을수록 좋다",
-                    "판정은 Brier와 다른 것을 잰다 — 저쪽은 방향, 이쪽은 이유",
-                    "밴드 적중은 60~80퍼센트가 목표대 — 너무 높으면 폭을 넓게 부른 것이다",
-                ]
-            )
-        )
-    if health.has_backlog:
-        # 목표 영업일이 지났는데도 안 된 것만 센다. 아직 안 지난 것은 정상이다.
-        rendered.append(blocks.section(f"*추론 적체*\n미채점 {health.ungraded}건 · 미해설 {health.unnarrated}건"))
-    return rendered
-
-
-def _horizon_row(item: ThesisHorizon) -> tuple[str, str, str, str, str, str]:
-    if item.mean_brier is None:
-        brier = "-"
-    else:
-        # baseline보다 나은지를 기호로 갈라 준다. 숫자만 보면 매번 0.667과 비교해야 한다.
-        mark = "✓" if item.beats_uniform else "✗"
-        brier = f"{item.mean_brier:.3f} {mark}"
-    if item.mean_return_error_pct is None:
-        # 지평 1·3·5는 크기를 받지 않는다. 빈 칸이 정상이다.
-        sizing = "-"
-    else:
-        # 부호가 뜻이다. 표본 수를 함께 적는다 — flat과 미채점이 빠져 Brier의 n과 다르다.
-        gap = "과소" if item.mean_return_error_pct > 0 else "과대"
-        sizing = f"{item.mean_return_error_pct:+.2f}%p {gap} (n={item.return_graded})"
-    if not item.band_graded:
-        # 오차 폭을 받기 전 판의 추론이다. 0/0을 0퍼센트로 그리면 "한 번도 못 맞혔다"로 읽힌다.
-        band = "-"
-    else:
-        band = f"{item.band_hits}/{item.band_graded} ({item.band_hits / item.band_graded:.0%})"
-    return (
-        f"T+{item.horizon_days}",
-        str(item.graded),
-        brier,
-        sizing,
-        band,
-        f"{item.supported}/{item.contradicted}/{item.unresolved}",
-    )
 
 
 def render_text(summary: OpsSummary) -> str:
@@ -429,8 +252,6 @@ def render_text(summary: OpsSummary) -> str:
         problems.append(f"실패 {len(summary.failures)}건")
     if summary.assessment_backlog > ASSESSMENT_BACKLOG_LIMIT:
         problems.append(f"평가 적체 {summary.assessment_backlog}건")
-    if summary.thesis.has_backlog:
-        problems.append(f"추론 적체 {summary.thesis.ungraded + summary.thesis.unnarrated}건")
     return "수집 운영 현황 · " + " · ".join(problems)
 
 

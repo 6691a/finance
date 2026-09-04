@@ -142,9 +142,10 @@ class PositioningStock(StrEnum):
     `disclosure_event.stock_code`와 같은 체계라 공시와 포지션을 한 키로 잇는다. 내부 이름
     (`SAMSUNG_ELECTRONICS` 같은 것)을 새로 만들지 않는 이유가 그것이다.
 
-    `modules.collectors.document.dart.DartCompany`와 값이 같아야 하고
-    `tests/collectors/test_kis_positioning.py`가 둘을 대조한다. 여기서 그 모듈을 import하지
-    않는 것은 수집기끼리 엮이지 않게 하기 위해서다.
+    **공시 대상과 같을 필요는 없다.** 전에는 `dart.DartCompany`와 값이 같아야 한다는 테스트가
+    있었는데, 공시 대상이 산업 대표 20사로 넓어지면서 그 대조를 지웠다(2026-09-04) — 포지션은
+    KIS가 종목마다 부르는 조회이고 공시는 DART가 회사마다 부르는 조회라, 둘을 묶어 두면 한쪽을
+    넓힐 때 다른 쪽이 함께 끌려온다. 공시·실적 대상의 원본은 `instrument.filing_entity_id`다.
     """
 
     label: str

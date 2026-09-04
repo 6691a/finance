@@ -156,13 +156,22 @@ def test_a_slot_ref_must_point_at_an_earlier_slot_today():
         base_price=Decimal(2650),
     )
     builder = forecast_builder(slot=RunSlot.MIDDAY, earlier_slots=(earlier,))
+    # `slot_ref`는 출처가 아니라 덧붙이는 표시라 요인이 함께 있어야 한다.
     kept = builder.parse(
-        answer(reasons=[{"slot_ref": "pre_open", "direction": "up", "statement": "장전 판단 유지"}])
+        answer(
+            reasons=[
+                {"factor": "KOSPI", "slot_ref": "pre_open", "direction": "up", "statement": "장전 판단 유지"}
+            ]
+        )
     )
     assert kept.reasons[0].slot_ref is RunSlot.PRE_OPEN
 
     dropped = builder.parse(
-        answer(reasons=[{"slot_ref": "pre_close", "direction": "up", "statement": "아직 안 온 슬롯"}])
+        answer(
+            reasons=[
+                {"factor": "KOSPI", "slot_ref": "pre_close", "direction": "up", "statement": "아직 안 온 슬롯"}
+            ]
+        )
     )
     assert dropped.rejected == 1
 
@@ -603,6 +612,85 @@ def test_the_injected_call_id_is_hidden_from_the_model():
         assert "tool_call_id" not in tool.tool_call_schema.model_json_schema().get("properties", {}), tool.name
 
 
+class _EmptyCursor(_RecordingCursor):
+    def execute(self, statement, parameters=()):
+        self.rows = []
+
+
+class _EmptyConnection:
+    def cursor(self):
+        return _EmptyCursor()
+
+
+def test_an_empty_document_result_does_not_make_that_factor_citable():
+    """0건은 본 것이 아니다.
+
+    첫 운영일 `recent_disclosures` 12회가 전부 `[]`였는데(두 회사 범위라 하루 창은 대개 빈다)
+    플래그는 세워져 `DISCLOSURE` 이유가 검증을 통과할 수 있었다. 행 하나 못 본 요인은
+    `queried_factors`에 안 들어간다.
+    """
+    from modules.kospi.toolbox import KospiToolbox
+
+    toolbox = KospiToolbox(_EmptyConnection(), as_of_at=datetime(2026, 9, 2, 23, 35, tzinfo=UTC))
+    assert toolbox.run("recent_disclosures", {"hours": 24}) == "[]"
+    assert json.loads(toolbox.run("recent_news", {"hours": 24})) == {"total": 0, "shown": 0, "items": []}
+
+    assert Factor.DISCLOSURE not in toolbox.queried_factors
+    assert Factor.NEWS not in toolbox.queried_factors
+
+
+class _NewsCursor(_RecordingCursor):
+    def execute(self, statement, parameters=()):
+        published = datetime(2026, 9, 2, 20, 0, tzinfo=UTC)
+        # 마지막 칸이 창 안의 전체 수다. 두 행을 주고 총계는 303이라 잘린 상태다.
+        self.rows = [
+            (1, "브로드컴 가이던스 실망", "einfomax", published, 7, "negative", "반도체 센티먼트", ["시간외 급락"], ["005930"], 303),
+            (2, "이란, 미군 기지 공격", "einfomax", published, 8, "negative", "지정학", [], [], 303),
+        ]
+
+
+class _NewsConnection:
+    def cursor(self):
+        return _NewsCursor()
+
+
+def test_recent_news_tells_the_model_how_many_it_did_not_see():
+    """303건 중 30건을 주면서 그 말을 안 하면 모델은 다 봤다고 믿는다. `total`과 `shown`이
+    다르면 잘린 것이다."""
+    from modules.kospi.toolbox import KospiToolbox
+
+    toolbox = KospiToolbox(_NewsConnection(), as_of_at=datetime(2026, 9, 2, 23, 35, tzinfo=UTC))
+    page = json.loads(toolbox.run("recent_news", {"hours": 24}))
+
+    assert page["total"] == 303
+    assert page["shown"] == 2
+    assert [item["document_id"] for item in page["items"]] == [1, 2]
+    assert Factor.NEWS in toolbox.queried_factors
+
+
+def test_the_disclosure_tool_description_matches_the_collected_scope(capsys):
+    """수집 범위가 시장 전체가 아니라는 말이 툴 설명에 있어야 모델이 전체 공시를 기대하고
+    매번 한 번씩 부르지 않는다.
+
+    **회사 수를 마스터 시드와 대조한다.** 전에는 `DartCompany` Enum의 회사명을 하나씩
+    대조했는데 명단이 `instrument.filing_entity_id`로 옮겨 가면서 그 Enum이 사라졌다
+    (2026-09-04). 숫자만 적어 두면 명단이 바뀐 날 설명이 조용히 거짓이 되므로 여기서 센다.
+    """
+    import re
+
+    from modules.kospi.tool_args import TOOL_DESCRIPTIONS
+    from tests.helpers import NO_REVISION_REASON, head_sql, revision_files
+
+    description = TOOL_DESCRIPTIONS["recent_disclosures"]
+    assert "시장 전체 공시가 아니" in description
+
+    if not revision_files():
+        pytest.skip(NO_REVISION_REASON)
+    seeded = len(re.findall(r"SET filing_entity_id = '\d+'", head_sql(capsys)))
+    assert seeded > 0
+    assert f"{seeded}사" in description, description
+
+
 # --- 모자란 답은 한 번 되묻는다 -------------------------------------------------
 
 
@@ -857,3 +945,52 @@ def test_the_tool_budget_clears_every_factor_plus_the_document_tools():
     # `factor_history`가 부를 수 있는 요인은 15개다(뉴스·공시는 자기 툴이 따로 있다).
     # 문서 툴 둘과 되물을 여유를 더한다.
     assert MAX_TOOL_CALLS >= len(HISTORY_FACTORS) + 2
+
+
+# --- 이유의 출처 --------------------------------------------------------------
+
+
+def test_a_reason_without_a_source_is_dropped():
+    """**출처 없는 이유를 남기지 않는다.**
+
+    2026-09-03에 요인도 메모도 없는 이유 넷이 그대로 저장됐다. 값은 진짜였지만(코스피
+    자기 봉과 기준가), 요인별 성적을 볼 때 빈 칸이 "출처가 없다"인지 "지수 자체를
+    봤다"인지 가릴 수 없었다. `slot_ref`는 출처가 아니다.
+    """
+    builder = forecast_builder(slot=RunSlot.MIDDAY)
+    draft = builder.parse(
+        answer(reasons=[{"direction": "up", "statement": "저점 매수가 확인돼 상방이 열려 있다"}])
+    )
+
+    assert draft.rejected == 1
+    assert not draft.reasons
+
+
+def test_the_index_itself_is_a_factor_that_needs_no_tool_call():
+    """봉과 기준가는 프롬프트에 이미 실려 있다. 그것을 부를 툴은 없다."""
+    from modules.kospi.domain import HISTORY_FACTORS, RELATION_FACTORS
+
+    assert Factor.KOSPI not in HISTORY_FACTORS
+    # 관계 그래프에도 안 들어간다 — 지수가 자기와 같은 방향인 것은 언제나 참이다.
+    assert Factor.KOSPI not in {spec.code for spec in RELATION_FACTORS}
+
+    # 그런데도 이유의 출처로는 통한다(아무것도 조회하지 않은 실행에서).
+    builder = forecast_builder(queried=set())
+    draft = builder.parse(
+        answer(reasons=[{"factor": "KOSPI", "direction": "up", "statement": "직전일 -3.99%는 p75를 넘는다"}])
+    )
+    assert draft.rejected == 0
+    assert draft.reasons[0].factor is Factor.KOSPI
+
+
+def test_the_index_itself_cannot_become_a_relation_edge():
+    """관찰이 `KOSPI`를 적으면 버린다 — 조회한 요인만 통과하는 규칙이 그대로 막는다."""
+    builder = review_builder(queried={Factor.SOX})
+    draft = builder.parse(
+        review_answer(
+            observations=[{"factor": "KOSPI", "sign": "same", "strength": 3, "note": "지수가 올랐다"}]
+        )
+    )
+
+    assert not draft.observations
+    assert draft.rejected == 1

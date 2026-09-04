@@ -49,10 +49,8 @@ from modules.kospi.domain import (
     MAX_TOOL_CALLS,
     MAX_TOOL_RESULT_CHARS,
     MAX_TOOL_RESULTS,
-    MAX_VALUE_SCORE,
     MAX_WINDOW_HOURS,
     MIN_HISTORY_DAYS,
-    MIN_VALUE_SCORE,
     MIN_WINDOW_HOURS,
     Factor,
     FactorSource,
@@ -72,6 +70,7 @@ from modules.kospi.tools import (
     FactorHistoryPayload,
     FactorPoint,
     FlowPoint,
+    NewsPage,
     NewsRow,
     StockPoint,
 )
@@ -227,35 +226,39 @@ class KospiToolbox:
         self._queried.add(code)
         return self._body(payload)
 
-    def _tool_recent_news(self, hours: int = DEFAULT_WINDOW_HOURS, min_score: int = MIN_VALUE_SCORE) -> str:
+    def _tool_recent_news(self, hours: int = DEFAULT_WINDOW_HOURS) -> str:
         self._charge()
         span = _clamp(hours, MIN_WINDOW_HOURS, MAX_WINDOW_HOURS, DEFAULT_WINDOW_HOURS)
-        score = _clamp(min_score, MIN_VALUE_SCORE, MAX_VALUE_SCORE, MIN_VALUE_SCORE)
         rows = self._fetch(
             RECENT_NEWS,
             {
                 "window_start": self._as_of_at - timedelta(hours=span),
                 "as_of_at": self._as_of_at,
-                "min_score": score,
                 "limit": MAX_TOOL_RESULTS,
             },
         )
-        self._saw_news = True
+        # **0건이면 본 것이 아니다.** 빈 결과에 플래그를 세우면 행 하나 못 봤는데
+        # `factor: NEWS` 이유가 검증을 통과한다.
+        self._saw_news = bool(rows)
         return self._body(
-            [
-                NewsRow(
-                    document_id=row[0],
-                    title=row[1],
-                    source=row[2],
-                    published_at=row[3],
-                    value_score=row[4],
-                    direction=row[5],
-                    reason=row[6],
-                    new_facts=list(row[7] or []),
-                    tickers=tuple(row[8] or ()),
-                )
-                for row in rows
-            ]
+            NewsPage(
+                total=int(rows[0][9]) if rows else 0,
+                shown=len(rows),
+                items=tuple(
+                    NewsRow(
+                        document_id=row[0],
+                        title=row[1],
+                        source=row[2],
+                        published_at=row[3],
+                        value_score=row[4],
+                        direction=row[5],
+                        reason=row[6],
+                        new_facts=list(row[7] or []),
+                        tickers=tuple(row[8] or ()),
+                    )
+                    for row in rows
+                ),
+            )
         )
 
     def _tool_recent_disclosures(self, hours: int = DEFAULT_WINDOW_HOURS) -> str:
@@ -270,7 +273,9 @@ class KospiToolbox:
                 "limit": MAX_TOOL_RESULTS,
             },
         )
-        self._saw_disclosures = True
+        # 두 회사 범위라 하루 창은 대개 빈다(09-03 실측 12회 전부 `[]`). 그때 `DISCLOSURE`가
+        # 인용 가능해지면 안 본 공시를 근거로 쓸 수 있다.
+        self._saw_disclosures = bool(rows)
         return self._body(
             [
                 DisclosureRow(

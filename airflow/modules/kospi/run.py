@@ -19,12 +19,9 @@ from collections.abc import Callable
 from datetime import date, datetime
 from typing import Any
 
-from modules import llm
 from modules.kospi import common
 from modules.kospi.domain import PROMPT_VERSION, RunSlot, change_pct
-from modules.kospi.generation import ForecastBuilder
 from modules.kospi.store import KospiStore
-from modules.kospi.toolbox import KospiToolbox
 
 logger = logging.getLogger(__name__)
 
@@ -45,6 +42,13 @@ def build_and_store(
 
     Airflow가 Pydantic 모델을 어떻게 직렬화하는지에 기대지 않으려고 dict로 나간다.
     """
+    # **무거운 것은 여기서 올린다.** LangChain은 첫 import에 몇 초를 쓰는데, DagBag은 모든
+    # DAG 파일을 주기적으로 다시 파싱하면서 태스크는 돌리지 않는다. 모듈 수준에 두면
+    # 전망을 만들지도 않는 파싱이 매번 그 무게를 문다(2026-09-03 실측 202개 모듈).
+    from modules import llm
+    from modules.kospi.generation import ForecastBuilder
+    from modules.kospi.toolbox import KospiToolbox
+
     store = KospiStore(connection)
 
     existing = {row.slot: row for row in store.forecasts(run_date)}

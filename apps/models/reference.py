@@ -33,6 +33,11 @@ class SeriesKind(StrEnum):
     **`tips_rate`도 `government_bond`가 아니다.** 실질금리와 기대인플레는 명목 국채 금리를
     분해한 값이라 만기가 같다. 국채에 넣으면 미국 10년물이 두 개로 보인다. 둘을 한 종류로
     두는 이유는 반대로 **더하면 명목이 되기 때문**이다 — 따로 보면 뜻이 없다.
+
+    **`sentiment`는 설문이 만드는 값이다.** 소비자심리지수와 기업경기실사지수가 그것이고,
+    실측이 만드는 `activity`와 가른다. 둘은 틀릴 때 틀리는 방식이 다르다 — 한 종류로 두면
+    "실물이 어떤가"를 묻는 쿼리가 심리를 함께 그린다. 반대로 **선행종합지수는 `activity`다.**
+    설문이 아니라 실물 지표의 합성이다.
     """
 
     GOVERNMENT_BOND = "government_bond"
@@ -44,6 +49,7 @@ class SeriesKind(StrEnum):
     ACTIVITY = "activity"
     BALANCE_SHEET = "balance_sheet"
     BALANCE_SHEET_ITEM = "balance_sheet_item"
+    SENTIMENT = "sentiment"
 
 
 class IndicatorSeries(EntityBase):
@@ -68,7 +74,8 @@ class IndicatorSeries(EntityBase):
         ),
         CheckConstraint(
             "kind IN ('government_bond', 'money_market', 'policy_rate', 'tips_rate', "
-            "'credit_spread', 'price_index', 'activity', 'balance_sheet', 'balance_sheet_item')",
+            "'credit_spread', 'price_index', 'activity', 'balance_sheet', 'balance_sheet_item', "
+            "'sentiment')",
             name="ck_indicator_series_kind",
         ),
         # 만기가 없는 지표는 NULL이다. 0으로 채우지 않는다. 0을 넣으면 만기별 비교 쿼리가
@@ -121,9 +128,9 @@ class IndicatorSeries(EntityBase):
         nullable=False,
         comment=(
             "시계열의 종류(government_bond, money_market, policy_rate, tips_rate, credit_spread, "
-            "price_index, activity, balance_sheet 또는 balance_sheet_item). 국채 곡선에서 단기 자금시장 "
-            "금리·정책금리·실질금리·신용스프레드를 가르고, 단위가 다른 거시지표와 대차대조표 잔액을 "
-            "그 곡선에서 뺀다"
+            "price_index, activity, balance_sheet, balance_sheet_item 또는 sentiment). 국채 곡선에서 "
+            "단기 자금시장 금리·정책금리·실질금리·신용스프레드를 가르고, 단위가 다른 거시지표와 "
+            "대차대조표 잔액과 설문이 만드는 심리지수를 그 곡선에서 뺀다"
         ),
     )
     label: Mapped[str] = mapped_column(
@@ -249,6 +256,10 @@ class Instrument(EntityBase):
     **행이 있다는 것과 `is_watched`는 다른 뜻이다.** 행이 있으면 문서에서 그 종목을 알아보고
     리서치 리포트를 받는다. `is_watched`가 참이어야 시세까지 받는다. 읽는 쪽은
     `instrument/select_taggable.sql`(전체)과 `select_watched.sql`(시세 대상) 중 하나를 고른다.
+
+    **`filing_entity_id`는 세 번째 축이다.** 시세와 규제 공시는 대상이 다르다 — 공시·실적은
+    받지만 시세는 안 받는 종목이 있다. `select_filing_entities.sql`이 그 목록이고, 셋을 한
+    플래그로 묶으면 DART 대상을 늘릴 때 분봉·수급·실시간 구독까지 함께 끌려온다.
     """
 
     __tablename__ = "instrument"
@@ -318,4 +329,22 @@ class Instrument(EntityBase):
         default=True,
         server_default=text("true"),
         comment="시세를 수집할 대상 여부. 거짓이면 문서 태그 후보로만 쓴다",
+    )
+    filing_entity_id: Mapped[str | None] = mapped_column(
+        Text,
+        nullable=True,
+        comment=(
+            "그 나라 공시 규제기관이 이 회사에 붙인 고유번호. 값이 있으면 규제 공시·실적 수집 대상이고 "
+            "NULL이면 아니다. 발급 기관은 market이 정한다(kospi·kosdaq=금융감독원 DART 회사 고유번호 8자리, "
+            "nyse·nasdaq=SEC EDGAR CIK). 그래서 읽는 쪽은 market을 함께 건다"
+        ),
+    )
+    sector: Mapped[str | None] = mapped_column(
+        Text,
+        nullable=True,
+        comment=(
+            "이 종목이 대표하는 산업(예: 반도체, 자동차, 화장품). 한국 거시 지표를 회사가 아니라 "
+            "산업 단위로 집계하기 위한 축이며 대표 기업이 교체돼도 이름이 바뀌지 않는다. "
+            "값이 바뀌는 것이 전제라 Enum과 CHECK를 두지 않는다"
+        ),
     )

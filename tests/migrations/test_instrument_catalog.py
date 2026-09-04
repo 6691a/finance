@@ -10,7 +10,6 @@ import re
 import pytest
 
 from modules.collectors import kis
-from modules.collectors.document.dart import DartCompany
 from modules.collectors.market.kis_positioning import PositioningStock
 from tests.helpers import NO_REVISION_REASON, head_sql, revision_files
 
@@ -25,9 +24,16 @@ def test_every_collected_stock_has_a_master_row(stock, capsys):
     assert f"'{stock.label}'" in sql
 
 
-def test_the_two_collectors_agree_on_the_stock_list():
-    # 공시와 포지션이 같은 종목을 봐야 한 키로 이어진다.
-    assert {stock.value for stock in PositioningStock} == {company.value for company in DartCompany}
+def test_the_filing_targets_cover_every_positioned_stock(capsys):
+    """포지션 종목은 공시 대상 안에 있어야 한다. **같을 필요는 없다.**
+
+    전에는 `dart.DartCompany`와 정확히 같아야 한다는 대조였다. 공시·실적 대상이 산업 대표
+    20사로 넓어지면서 그 Enum 자체가 사라졌고(명단은 `instrument.filing_entity_id`가 든다),
+    남는 사실은 이 방향 하나다 — 포지션을 보는 종목의 공시를 못 받는 일이 없어야 한다.
+    """
+    seeded = seeded_filing_entities(head_sql(capsys))
+
+    assert {stock.value for stock in PositioningStock} <= set(seeded)
 
 
 def test_instruments_are_seeded_by_the_migration_not_the_app(capsys):
@@ -67,3 +73,64 @@ def test_only_the_collected_stocks_are_watched(capsys):
     assert watched == {stock.value for stock in PositioningStock}
     # 마스터가 시세 목록보다 넓다는 것이 이 확장의 전제다. 같아지면 태그 후보가 다시 좁아진 것이다.
     assert len(seeded) > len(watched)
+
+
+FILING_ENTITY_UPDATE = re.compile(
+    r"UPDATE instrument SET filing_entity_id = '(?P<entity_id>\d+)', sector = '(?P<sector>[^']+)' "
+    r"WHERE market = 'kospi' AND ticker = '(?P<ticker>[^']+)'"
+)
+
+
+def seeded_filing_entities(sql: str) -> dict[str, tuple[str, str]]:
+    return {match["ticker"]: (match["entity_id"], match["sector"]) for match in FILING_ENTITY_UPDATE.finditer(sql)}
+
+
+def test_every_filing_entity_has_a_sector(capsys):
+    """공시·실적 대상 스무 곳에 회사 번호와 섹터가 함께 들어간다.
+
+    **섹터가 비면 거시 집계가 회사 단위로 떨어진다.** 그러면 대표를 교체한 해의 점프가
+    산업 변화인지 명단 변화인지 가릴 수 없다.
+    """
+    seeded = seeded_filing_entities(head_sql(capsys))
+
+    assert len(seeded) == 20
+    assert all(entity_id and sector for entity_id, sector in seeded.values())
+    # 반도체만 둘이고 나머지는 섹터당 하나다.
+    sectors = [sector for _, sector in seeded.values()]
+    assert len(set(sectors)) == 19
+    assert sectors.count("반도체") == 2
+
+
+def test_the_two_verified_corp_codes_did_not_change(capsys):
+    """옛 `DartCompany`가 들고 있던 값 둘. `corpCode.xml`로 확인했다(실측 2026-08-12).
+
+    Enum이 사라지면서 이 값을 대조할 자리가 없어졌다. 여기 남겨 두는 것은 마스터로 옮기는
+    동안 번호가 바뀌지 않았다는 사실 하나를 잠그기 위해서다.
+    """
+    seeded = seeded_filing_entities(head_sql(capsys))
+
+    assert seeded["005930"][0] == "00126380"
+    assert seeded["000660"][0] == "00164779"
+
+
+def test_filing_entity_ids_are_dart_corp_codes(capsys):
+    """한국 시장의 번호는 DART 회사 고유번호 8자리다.
+
+    발급 기관은 `market`이 정한다. 미국 종목이 들어오면 같은 칸에 SEC CIK가 들어가므로,
+    자릿수를 여기서 잠가 두면 그때 이 테스트가 갈릴 자리를 알려 준다.
+    """
+    for entity_id, _ in seeded_filing_entities(head_sql(capsys)).values():
+        assert len(entity_id) == 8 and entity_id.isdigit()
+
+
+def test_watched_stays_narrower_than_the_filing_entities(capsys):
+    """시세 대상은 늘지 않는다.
+
+    이 칸을 만든 이유가 그것이다 — 공시를 스무 곳으로 넓히면서 분봉·수급·실시간 구독까지
+    함께 끌고 가지 않으려고 축을 나눴다.
+    """
+    sql = head_sql(capsys)
+    seeded = {match["ticker"]: match["watched"] == "true" for match in INSTRUMENT_INSERT.finditer(sql)}
+    watched = {ticker for ticker, is_watched in seeded.items() if is_watched}
+
+    assert watched < set(seeded_filing_entities(sql))

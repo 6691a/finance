@@ -85,7 +85,7 @@
 | `migrations/` | Alembic. 리비전 파일은 `migrations/versions` 하나를 모든 별칭이 공유한다 |
 | `migrations/routing.py` | 어떤 테이블이 어떤 DB 별칭에 속하는지 판단하는 순수 함수 |
 | `airflow/dags/` | Airflow DAG |
-| `airflow/modules/` | DAG이 쓰는 공유 코드. 도메인 폴더(`collectors/`·`briefing/`·`expectation/`·`technical/`·`thesis/`·`causal/`·`graph/`)로 나누고 최상위에는 공용 잎만 둔다. 하위 패키지 `__init__.py`는 비운다 — 재수출하면 가벼운 모듈 하나를 import해도 LangChain이 딸려 온다. (아래 규칙) |
+| `airflow/modules/` | DAG이 쓰는 공유 코드. 도메인 폴더(`collectors/`·`briefing/`·`expectation/`·`technical/`·`kospi/`)로 나누고 최상위에는 공용 잎만 둔다. 하위 패키지 `__init__.py`는 비운다 — 재수출하면 가벼운 모듈 하나를 import해도 LangChain이 딸려 온다. (아래 규칙) |
 | `airflow/modules/collectors/` | 수집기. 도메인 폴더(`market/`·`document/`·`indicator/`·`calendar/`·`analyst/`)로 나눈다. 전환 진행 상황은 [docs/convention/collectors-class-migration.md](../docs/convention/collectors-class-migration.md) |
 | `tests/` | pytest |
 | `notebooks/` | 손으로 돌려 보는 Jupyter 노트북. 파서·수집기가 실제 데이터에서 무엇을 하는지 눈으로 확인하는 자리다. **`.gitignore`에 있어 커밋되지 않는다** — 실행하면 앱키와 시세 응답이 출력에 남는다. **DAG도 서비스도 여기를 import하지 않는다**: 코드의 원본은 언제나 `airflow/`와 `apps/`이고 노트북은 그것을 부르기만 한다 |
@@ -93,7 +93,7 @@
 `apps/models/`의 모듈은 도메인 단위로 나눈다(`raw.py`, `reference.py`, `content.py`).
 한 도메인이 커지면 그 안에서 다시 패키지로 나눈다(2026-08-25) — `market/`이
 `sessions.py`·`series.py`·`fundamentals.py`·`positioning.py`·`investor_flow.py`,
-`analysis/`가 `thesis.py`·`events.py`·`technical.py`다.
+`analysis/`가 `kospi.py`·`events.py`·`technical.py`다.
 테이블은 스키마를 지정하지 않고 연결의 `search_path`(PostgreSQL 기본 `public`)를 그대로 따르므로
 파일 이름이 PostgreSQL 스키마와 대응하지 않는다.
 
@@ -163,7 +163,7 @@ provider 수명은 뜻을 갖는다 — 엔진 풀처럼 프로세스에 한 벌
 도메인 단위로 나뉜 것과 같다.
 
 - `<리소스>.py` — 그 리소스 하나의 것. 파일 이름이 리소스 이름이고 네 폴더에서 같다
-  (`thesis.py`가 넷에 하나씩). **한 리소스를 고칠 때 열 파일이 넷으로 정해진다.**
+  (`health.py`가 넷에 하나씩). **한 리소스를 고칠 때 열 파일이 넷으로 정해진다.**
 - `common.py` — **그 층의 리소스들이 공유하는 것만.** 리포지토리는 행 묶음 베이스와
   목록 상한, 서비스는 `Decimal` → JSON number 같은 변환, 스키마는 공통 베이스와 시각
   표기 애노테이션이다. 리소스 하나에만 쓰이는 것을 여기 두지 않는다 — 쓰는 쪽이 하나면
@@ -175,7 +175,7 @@ provider 수명은 뜻을 갖는다 — 엔진 풀처럼 프로세스에 한 벌
 `routes/`만 둘이 더 붙는다.
 
 - **`router`는 파일마다 하나**이고 경로 접두와 `tags`도 그 파일이 정한다
-  (`APIRouter(prefix="/api/theses", tags=["thesis"])`). 그래야 리소스를 더할 때 `app.py`가
+  (`APIRouter(prefix="/api/health", tags=["health"])`). 그래야 리소스를 더할 때 `app.py`가
   아니라 새 파일 하나만 는다. `__init__.py`는 그것들을 `routers` 튜플로 재수출하고
   `app.py`가 순회한다.
 - **wiring은 패키지를 통째로 건다**(`WiringConfiguration(packages=["apps.api.routes"])`).
@@ -226,18 +226,18 @@ npm --prefix frontend run build
 
 ## `airflow/modules/`의 폴더
 
-- **한 도메인의 파일이 셋 이상이면 폴더로 내리고 접두어를 뗀다.** `collectors/`·`briefing/`·`expectation/`·`technical/`·`thesis/`·`causal/`·`graph/`가 그 형태다(뒤의 셋은 2026-08-27). `modules.thesis.thesis_domain`이 아니라 `modules.thesis.domain`이다 — `collectors/`가 파일 이름에 남긴 접두어는 **제공처**라 뜻이 있고, `thesis_`는 **폴더가 될 것**이 이름에 붙어 있던 것이다.
-- **하위 패키지 `__init__.py`는 빈 파일이다.** 재수출하면 `modules.thesis.domain` 하나를 import해도 LangChain이 딸려 와 DagBag이 그 무게를 문다. `tests/modules/test_import_weight.py`가 그 경계를 재고 있어 재수출은 그 테스트를 즉시 깬다.
-- **최상위에 남는 것은 공용 잎 열둘이다**(`db`·`sql`·`upsert`·`utility`·`period`·`schema`·`slack`·`llm`·`prompt`·`market_session`·`assessment`·`dedup`). 열은 300줄 미만이고 둘이 넘는다(`assessment` 637, `llm` 350 — 2026-09-01 실측). `graph/`는 둘(`projection`·`query`)인데 사용자 결정으로 내렸다(2026-09-01) — "셋 이상" 기준의 예외이고 이동은 따로 커밋했다. **`core/` 같은 폴더로 모으지 않는다** — 114개 파일 226줄을 고치고 얻는 것이 목록 열 줄이다(2026-08-27 실측). **줄 수는 폴더로 내리는 기준이 아니다** — 기준은 "한 도메인의 파일이 셋 이상인가"이고, 잎 하나가 길어진 것은 그 파일을 나눌 문제다.
+- **한 도메인의 파일이 셋 이상이면 폴더로 내리고 접두어를 뗀다.** `collectors/`·`briefing/`·`expectation/`·`technical/`·`kospi/`가 그 형태다(2026-08-27에 셋을 내렸다). `modules.kospi.kospi_domain`이 아니라 `modules.kospi.domain`이다 — `collectors/`가 파일 이름에 남긴 접두어는 **제공처**라 뜻이 있고, 도메인 접두어는 **폴더가 될 것**이 이름에 붙어 있던 것이다.
+- **하위 패키지 `__init__.py`는 빈 파일이다.** 재수출하면 `modules.kospi.domain` 하나를 import해도 LangChain이 딸려 와 DagBag이 그 무게를 문다. `tests/modules/test_import_weight.py`가 그 경계를 재고 있어 재수출은 그 테스트를 즉시 깬다. **사슬은 둘로 온다**(2026-09-03에 둘 다 생겼다). ① 가벼운 모듈이 무거운 모듈에서 타입 하나를 가져오는 것 — `from X import Y`가 `X`를 통째로 실행하므로 이름 하나가 202개를 끌고 온다. 그 값을 무거운 의존성 없는 잎으로 뺀다(`modules/usage.py`). ② 흐름 클래스를 모듈 수준에서 올리는 것 — 부르는 쪽이 함수 안에서 늦게 올린다(`kospi/run.py`·`review.py`, `briefing/chart.py`가 matplotlib에 같은 형태). 타입에만 쓰는 이름은 `TYPE_CHECKING`으로 남긴다.
+- **최상위에 남는 것은 공용 잎 열둘이다**(`db`·`sql`·`upsert`·`utility`·`period`·`schema`·`slack`·`llm`·`prompt`·`market_session`·`assessment`·`dedup`·`usage`). 열은 300줄 미만이고 둘이 넘는다(`assessment` 637, `llm` 350 — 2026-09-01 실측). `graph/`는 둘(`projection`·`query`)인데 사용자 결정으로 내렸다(2026-09-01) — "셋 이상" 기준의 예외이고 이동은 따로 커밋했다. **`core/` 같은 폴더로 모으지 않는다** — 114개 파일 226줄을 고치고 얻는 것이 목록 열 줄이다(2026-08-27 실측). **줄 수는 폴더로 내리는 기준이 아니다** — 기준은 "한 도메인의 파일이 셋 이상인가"이고, 잎 하나가 길어진 것은 그 파일을 나눌 문제다.
 - **접두어를 떼면 바인딩 이름이 짧아져 지역 변수와 겹칠 수 있다**(`from modules import technical` → `from modules.technical import indicators`). `ruff`의 `F823`이 그것을 잡는 유일한 장치이므로 기계적 치환 직후에 `ruff`를 먼저 돌린다. 2026-08-27 이동에서 셋이 걸렸다.
-- **이동과 파일 분리를 같은 커밋에 두지 않는다.** 어느 쪽이 회귀를 만들었는지 못 가른다. `thesis/toolbox.py`는 2026-09-01에 셋을 떼어 1,556→920줄이 됐다 — 인자 스키마(`tool_args.py`), 행 변환(`tool_rows.py`), 툴 호출 원장(`tool_ledger.py`). 원장은 상태를 쥐므로 파일이 아니라 클래스(`ToolCallLedger`)로 갈랐고 툴박스가 그것을 소유한다.
+- **이동과 파일 분리를 같은 커밋에 두지 않는다.** 어느 쪽이 회귀를 만들었는지 못 가른다. 옛 추론의 툴박스는 2026-09-01에 셋을 떼어 1,556→920줄이 됐다 — 인자 스키마(`tool_args.py`), 행 변환(`tool_rows.py`), 툴 호출 원장(`tool_ledger.py`)이고 `kospi/`가 그 배치를 이어받았다. 원장은 상태를 쥐므로 파일이 아니라 클래스(`ToolCallLedger`)로 갈랐고 툴박스가 그것을 소유한다.
 - **`dags/`는 폴더로 나누지 않는다.** DagBag은 하위 폴더를 재귀로 훑지만 `dag_id`가 경로와 무관해 UI에 그룹이 생기지 않는다(그 일은 `tags`가 한다). DAG은 파일당 얇고 접두어가 이미 정렬을 해 준다.
 
 ## 클래스와 함수를 가르는 기준
 
 **상태를 쥔 동작은 클래스로 묶고, 상태 없는 변환은 함수로 둔다.** 저장소 전체 규칙이다.
 
-- 클래스로 묶는 것: 자격 증명·토큰·DB 연결·기준 시각·출처 행처럼 여러 호출에 걸쳐 안 변하는 값을 들고 도는 동작. 그 값이 함수마다 인자로 다시 들어가고 있으면 그게 신호다. 기준 구현은 `collectors/analyst/kis_opinion.py`의 `KisAnalystOpinionCollector`, `collectors/document/naver_research.py`의 `NaverResearchCollector`, `assessment.py`의 `DocumentAssessor`, `thesis/toolbox.py`의 `ThesisToolbox`·`ThesisBuilder`·`FollowupNarrator`. 연결을 쥐는 흐름 코드는 `thesis/nxt_review.py`의 `NxtAfterHoursReview`, `thesis/common.py`의 `ThesisRun`, `thesis/store.py`의 `ThesisStore`가 기준이다.
+- 클래스로 묶는 것: 자격 증명·토큰·DB 연결·기준 시각·출처 행처럼 여러 호출에 걸쳐 안 변하는 값을 들고 도는 동작. 그 값이 함수마다 인자로 다시 들어가고 있으면 그게 신호다. 기준 구현은 `collectors/analyst/kis_opinion.py`의 `KisAnalystOpinionCollector`, `collectors/document/naver_research.py`의 `NaverResearchCollector`, `assessment.py`의 `DocumentAssessor`, `kospi/toolbox.py`의 `KospiToolbox`, `kospi/generation.py`의 `ForecastBuilder`·`ReviewBuilder`. 연결과 기준 시각을 쥐는 코드는 `kospi/store.py`의 `KospiStore`가 기준이다.
 - 생성자는 그 실행 동안 안 변하는 것만 받는다. 종목·구간처럼 호출마다 바뀌는 것은 메서드 인자다.
 - 함수로 두는 것: 파싱·정규화·계산처럼 감쌀 상태가 없는 것, 그 클래스의 관심사가 아닌 조회(`watched_stocks`). 클래스 안이 읽기 좋으면 `@staticmethod`.
 - 데이터 모양은 언제나 Pydantic 모델이다. 수집기 클래스 안에 중첩하지 않는다.
@@ -280,16 +280,16 @@ npm --prefix frontend run build
 
 **`dict[str, Any]`·`list[dict]`·`Mapping[str, Any]`를 반환 타입으로 쓰지 않는다.** 모듈 경계를 넘는 값은 모델로 선언한다. 이유는 셋이다. 키 오타가 런타임까지 살아 있고(프롬프트나 JSONB로 나가는 값이면 아무도 못 잡는다), 부르는 쪽이 무슨 키를 기대해도 되는지 코드에 안 남고, pyrefly가 대신 볼 수 있는 것을 사람이 보게 된다.
 
-기준 구현은 `airflow/modules/thesis/state.py`(`ObservedState`·`TechnicalState`·`PastThesis`)와 `airflow/modules/technical/indicators.py`(`DailyBar`·`TechnicalSnapshot`·`SignalEvent`)다.
+기준 구현은 `airflow/modules/kospi/state.py`(`ObservedState`·`ReviewState`·`RelationRow`·`MemoryRow`)와 `airflow/modules/technical/indicators.py`(`DailyBar`·`TechnicalSnapshot`·`SignalEvent`)다.
 
 - 모델은 `ConfigDict(frozen=True)`다. 재시도 경로에서 값이 바뀌면 원본과 저장값이 어긋난다.
 - **JSON으로 바꾸는 것은 경계에서 한 번뿐이다.** `model_dump(mode="json")`을 프롬프트 조립과 DB 저장 자리에서만 부른다. 중간 층은 모델을 그대로 들고 간다. `json.dumps(..., default=str)`로 때우지 않는다 — `date`가 조용히 문자열이 되는 자리가 늘어난다.
 - **`dict[str, 모델]`은 괜찮다.** 키가 심볼·종목코드처럼 열린 값이면 매핑이 맞는 모양이다. 금지하는 것은 값이 `Any`인 매핑이다.
 - **키와 값이 층을 섞으면 한 단 내린다.** `{"as_of_date": ..., "KOSPI": {...}}`는 모델로 표현할 수 없다. `{"as_of_date": ..., "subjects": {"KOSPI": {...}}}`로 만든다.
-- **모델을 두는 곳은 그 값을 만드는 모듈이다.** 단 그 모듈이 LangChain·Airflow를 import하는데 다른 모듈도 같은 모델을 봐야 하면 무거운 의존성이 없는 모듈로 따로 뺀다(`thesis/state.py`가 그 예다). 소비자가 하나뿐이어도 그 모듈이 이미 크면 따로 뺀다(`thesis/tools.py`).
+- **모델을 두는 곳은 그 값을 만드는 모듈이다.** 단 그 모듈이 LangChain·Airflow를 import하는데 다른 모듈도 같은 모델을 봐야 하면 무거운 의존성이 없는 모듈로 따로 뺀다(`kospi/state.py`가 그 예다). 소비자가 하나뿐이어도 그 모듈이 이미 크면 따로 뺀다(`kospi/tools.py`).
 - 테스트도 모델로 넘긴다. 픽스처가 맨 dict면 프롬프트에 실릴 키가 테스트에서만 존재할 수 있다.
 
-**wire 조립 경계는 예외다.** Slack 블록, LangGraph 노드 반환, JSON Schema, 검증 전 외부 응답 파싱, 그리고 모델을 JSON으로 펴는 자리(`thesis._tool_row`·`_body`)는 dict로 둔다. 그 dict는 제공처 규격이거나 모델을 JSON으로 바꾸는 경계 그 자체라 모델로 감싸면 같은 검증이 두 번이 된다. 그 밖의 도메인 값은 **처음부터 모델로 쓴다.**
+**wire 조립 경계는 예외다.** Slack 블록, LangGraph 노드 반환, JSON Schema, 검증 전 외부 응답 파싱, 그리고 모델을 JSON으로 펴는 자리(`kospi/tool_rows.py`)는 dict로 둔다. 그 dict는 제공처 규격이거나 모델을 JSON으로 바꾸는 경계 그 자체라 모델로 감싸면 같은 검증이 두 번이 된다. 그 밖의 도메인 값은 **처음부터 모델로 쓴다.**
 
 ### 그 밖의 타입 규칙
 
@@ -300,6 +300,62 @@ npm --prefix frontend run build
 - API 요청·응답, 설정, 외부 입력 검증에는 Pydantic 모델과 `Field`, validator를 사용한다.
 - 제공처 이름, URL, 종목 코드, 외부 식별자처럼 값이 열려 있는 필드는 `str` 또는 `Text`로 유지한다.
 - 단순 문자열을 의미 없이 Pydantic 모델이나 Enum으로 감싸지 않고, 유효성 규칙이나 제한된 값 집합이 있을 때 사용한다.
+
+## 점수와 정규화 기준
+
+**우리가 산출하는 점수·가중치·정규화 기준은 0~1이다.** 방향이 있으면 -1~+1이다.
+LLM에게 매기게 하는 점수도 같은 눈금으로 받는다.
+
+`0~8`, `0~5`, `1~3` 같은 눈금이 코드마다 다르면 값을 보는 사람이 매번 상한을 찾아봐야 하고,
+항목을 하나 더하는 순간 상한이 바뀌어 옛 값과 새 값을 비교할 수 없게 된다. 실제로 그렇게
+됐다 — `document.value_score`가 4항목 합 `0~8`이라 다섯째 항목을 더하려 하자 눈금이 통째로
+흔들렸다(2026-09-03).
+
+### 규칙
+
+- **점수 하나는 질문 하나만 묻는다.** 한 칸에 두 뜻을 담으면 그 칸이 낮을 때 어느 쪽이 낮은지
+  못 가린다. "관련성이면서 영향력"인 칸을 만들지 않는다.
+- **항목이 여럿이면 항목마다 0~1로 매기고 저장한다.** 항목은 컬럼이거나 **고정 키를 가진
+  JSONB 객체**다. 항목이 자주 늘 것 같으면 JSONB로 시작하고, 조회 조건이 굳으면 컬럼으로
+  뺀다(`document.assessment`의 규칙과 같다).
+- **합은 반드시 별도 필드 하나로 둔다. 그 값도 0~1이다.** 합치는 방법은 **더하기가 아니라
+  평균**이다 — 그래야 항목 수가 바뀌어도 눈금이 그대로다. JSONB 안의 항목을 매번 더해서
+  정렬하지 않는다. 정렬·필터가 표현식이 되면 항목이 늘 때마다 모든 소비자가 그 표현식을
+  고쳐야 한다.
+- **정수로 반올림하지 않는다.** `Numeric`으로 저장한다(소수 셋째 자리면 충분하다).
+  0~1을 정수로 접으면 값이 둘뿐이다. 눈금이 거칠면 동점이 쌓이고, 동점을 자르는 순간
+  **무엇이 선택될지가 무관한 컬럼(대개 시각)으로 결정된다** — 실측에서 상위 30건의 8자리가
+  평가 시각 순으로 뽑히고 있었다(2026-09-03).
+- **가중치를 붙여 하나로 접지 않는다.** 소비자마다 무겁게 보는 항목이 다르다. 항목을 그대로
+  노출하고 **정렬은 부르는 쪽이 정한다**(`ORDER BY market_impact DESC, value_score DESC`).
+  판정은 코드가 하고 모델은 값만 낸다는 규칙(`writing-llm-flows` 4)이 여기서도 같다.
+- **범위는 DB `CHECK`로 함께 막는다.** 폭주만 받는 안전망이고 정합성은 저장 전 검증이 본다.
+- **표시할 때 퍼센트로 바꾸는 것은 표현 층의 일이다.** Slack이 `0.92`를 `92%`로 적을 수는
+  있어도 저장값을 92로 두지 않는다.
+
+### LLM에게 점수를 받을 때
+
+- **앵커 없이 0~1을 주면 0.6~0.8에 뭉친다.** 항목마다 `0.0 / 0.3 / 0.7 / 1.0`이 무슨 뜻인지
+  프롬프트가 밝히고, **"0을 쓰는 것을 주저하지 마라"를 함께 준다.** 앵커가 있는 항목과 한 줄
+  질문만 있는 항목의 분포가 실제로 갈렸다.
+- 앵커는 눈금의 뜻이지 허용 값 목록이 아니다. 사이 값을 쓸 수 있다.
+- **자기보고 확신도를 점수로 받지 않는다.** 실측에서 안 맞았다(`writing-llm-flows` 1).
+
+### 예외
+
+퍼센트·bp·원·주 같은 **물리량**, 개수, 그리고 **제공처나 외부 규격이 정한 값**은 그대로
+둔다. 기대 등락률(`expected_change_pct`)과 폭(`band_pct`)이 퍼센트인 것은 이 규칙과 무관하다.
+
+### 기준 구현
+
+- `airflow/modules/kospi/domain.py`의 `relation_weight` — 관측 세기(1·2·3)를 `MAX_STRENGTH`로
+  나눠 -1~+1로 접는다. 부호가 있는 쪽의 본보기이고 이 저장소에 남은 유일한 기준 구현이다.
+- 설계는 `docs/analysis/economic-document-archive-design.md` §6.8.
+
+**옛 눈금이 남아 있는 자리 둘.** `document.value_score`(0~8, §6.8이 고친다)와 코스피 관측의
+`strength`(1·2·3). 후자는 `relation_weight`가 코드에서 정규화하므로 밖으로 나가는 값은 이미
+규칙을 지킨다 — 모델이 내는 원값까지 0~1로 바꾸는 것은 프롬프트 판이 올라가는 일이라
+20영업일 동결 뒤에 판단한다.
 
 ## 오류 처리 규칙
 
@@ -341,8 +397,8 @@ npm --prefix frontend run build
 **실행 시각으로 "지금 어느 모드인가"를 추론하지 않는다.** 한 DAG가 여러 시각에 돌면서
 `logical_date`의 시각으로 모드를 가르면, 모드가 실행자의 의도가 아니라 시계에서 나온다.
 `logical_date`가 없는 수동 실행은 벽시계로 떨어져 **UI의 Trigger 버튼이 조용히 다른 모드를
-돌린다.** 2026-08-21에 `market_thesis_analysis`를 `market_thesis_forecast`(장전)와
-`market_thesis_review`(장후)로 나눈 이유가 이것이다.
+돌린다.** 2026-08-21에 옛 추론의 단일 DAG를 장전·장후로 나눈 이유가 이것이고,
+`kospi_forecast_daily`·`kospi_intraday_daily`·`kospi_review_daily`가 그 배치를 이어받았다.
 
 나누면 따라오는 것:
 
@@ -356,8 +412,8 @@ npm --prefix frontend run build
 (`slack_kr_market_briefing`이 그 예다).
 
 **한 DAG에 슬롯이 여럿이면 슬롯을 벽시계로 떨어뜨리지 않는 장치를 함께 둔다.**
-`market_thesis_intraday`(장중 전망 넷)가 그 형태다 — 넷이 같은 봉과 같은 문서 평가를 같은
-이유로 기다려 DAG 하나이고, `thesis.intraday.resolve_slot`이 ① Param → ② `logical_date` →
+`kospi_intraday_daily`(장중 전망 둘)가 그 형태다 — 둘이 같은 봉과 같은 문서 평가를 같은
+이유로 기다려 DAG 하나이고, `kospi.intraday.resolve_slot`이 ① Param → ② `logical_date` →
 ③ **실패** 순으로 슬롯을 정한다. 가까운 슬롯으로 반올림하지도 않는다. 조용히 다른 슬롯을
 도는 것보다 안 도는 편이 낫다는 것이 2026-08-21에 얻은 교훈이고, 그것을 지키면 시각이
 여럿인 것 자체는 문제가 아니다. 슬롯 시각의 원본은 상수 하나(`INTRADAY_SLOT_TIMES`)이고
@@ -372,8 +428,8 @@ DAG를 나눈 뒤 공유 모듈에 `if mode == "..."`가 남으면 절반만 나
   글자 그대로 같은 것이다. 모드는 **값으로 흘러갈 수는 있다**(`run_slot`을 저장 함수에
   넘기는 것) — 금지하는 것은 그 값으로 **분기**하는 것이다.
 - **모드마다 다른 것은 모드별 모듈이 갖는다.** 기준 시각, readiness guard, 조회 창의 시작,
-  어느 세션을 볼지 같은 것이다. 기준 구현은 `airflow/modules/thesis/common.py`와
-  `thesis/forecast.py`·`thesis/review.py` 셋이다.
+  어느 세션을 볼지 같은 것이다. 기준 구현은 `airflow/modules/kospi/common.py`와
+  `kospi/forecast.py`·`kospi/intraday.py`·`kospi/review.py` 넷이다.
 - 공유 함수가 모드별 값을 **인자로 받게** 만들면 분기가 사라진다. `observed_state`가
   슬롯 대신 세션 날짜를 받는 것이 그 형태다 — 어느 세션을 볼지는 부르는 쪽이 정한다.
 

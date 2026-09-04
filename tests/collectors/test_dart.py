@@ -19,11 +19,11 @@ from modules.collectors.document.dart import (
     EARNINGS_FACT_UPSERT,
     SOURCE_RECORD_INSERT,
     DartCollector,
-    DartCompany,
     DartPayloadError,
     DartStatusError,
     Disclosure,
     DisclosureFetch,
+    FilingEntity,
     disclosure_text,
     is_material,
     is_provisional,
@@ -34,6 +34,9 @@ from modules.collectors.document.dart import (
 
 API_KEY = SecretStr("key")
 COLLECTOR = DartCollector(API_KEY)
+SAMSUNG = FilingEntity(stock_code="005930", name="삼성전자", filing_entity_id="00126380", sector="반도체")
+HYNIX = FilingEntity(stock_code="000660", name="SK하이닉스", filing_entity_id="00164779", sector="반도체")
+ENTITIES = (SAMSUNG, HYNIX)
 SOURCE_RECORD_ID = 21
 STARTED_AT = datetime(2026, 8, 12, 22, 0, tzinfo=UTC)
 COMPLETED_AT = datetime(2026, 8, 12, 22, 0, 2, tzinfo=UTC)
@@ -252,17 +255,24 @@ def test_earnings_upsert_uses_the_five_part_natural_key():
     assert "ON CONFLICT (provider, rcept_no, statement_scope, amount_basis, metric)" in EARNINGS_FACT_UPSERT
 
 
-def test_company_codes_match_the_verified_mapping():
-    # corpCode.xml로 확인했다(실측 2026-08-12).
-    assert DartCompany.SAMSUNG_ELECTRONICS.corp_code == "00126380"
-    assert DartCompany.SK_HYNIX.corp_code == "00164779"
-    assert {company.value for company in DartCompany} == {"005930", "000660"}
+def test_the_disclosure_list_asks_with_the_filing_entity_id(monkeypatch):
+    """대상 명단이 코드가 아니라 `instrument.filing_entity_id`에 있다.
+
+    회사 번호가 옛 `DartCompany` Enum과 같은지는 마스터 시드 쪽에서 본다
+    (`tests/migrations/test_instrument_catalog.py`).
+    """
+    get = fake_get([list_body([LIST_ROW])])
+    monkeypatch.setattr(dart, "_get", get)
+
+    COLLECTOR.fetch_disclosures(SAMSUNG, date(2026, 7, 24), date(2026, 7, 30))
+
+    assert get.calls[0][1]["corp_code"] == "00126380"
 
 
 def test_disclosure_list_strips_padding_and_parses_the_date(monkeypatch):
     monkeypatch.setattr(dart, "_get", fake_get([list_body([LIST_ROW])]))
 
-    fetch = COLLECTOR.fetch_disclosures(DartCompany.SAMSUNG_ELECTRONICS, date(2026, 7, 24), date(2026, 7, 30))
+    fetch = COLLECTOR.fetch_disclosures(SAMSUNG, date(2026, 7, 24), date(2026, 7, 30))
 
     disclosure = fetch.disclosures[0]
     assert disclosure.report_name == "연결재무제표기준영업(잠정)실적(공정공시)"
@@ -274,7 +284,7 @@ def test_disclosure_list_strips_padding_and_parses_the_date(monkeypatch):
 def test_no_data_status_is_zero_rows_not_a_failure(monkeypatch):
     monkeypatch.setattr(dart, "_get", fake_get([list_body([], status="013")]))
 
-    fetch = COLLECTOR.fetch_disclosures(DartCompany.SK_HYNIX, date(2026, 7, 24), date(2026, 7, 30))
+    fetch = COLLECTOR.fetch_disclosures(HYNIX, date(2026, 7, 24), date(2026, 7, 30))
 
     assert fetch.disclosures == ()
 
@@ -283,7 +293,7 @@ def test_other_statuses_are_raised(monkeypatch):
     monkeypatch.setattr(dart, "_get", fake_get([list_body([], status="020")]))
 
     with pytest.raises(DartStatusError) as error:
-        COLLECTOR.fetch_disclosures(DartCompany.SK_HYNIX, date(2026, 7, 24), date(2026, 7, 30))
+        COLLECTOR.fetch_disclosures(HYNIX, date(2026, 7, 24), date(2026, 7, 30))
 
     assert error.value.code == "020"
 
@@ -292,7 +302,7 @@ def test_disclosure_list_follows_every_page(monkeypatch):
     get = fake_get([list_body([LIST_ROW], total_page=2, total_count=2), list_body([LIST_ROW], total_page=2)])
     monkeypatch.setattr(dart, "_get", get)
 
-    fetch = COLLECTOR.fetch_disclosures(DartCompany.SAMSUNG_ELECTRONICS, date(2026, 7, 24), date(2026, 7, 30))
+    fetch = COLLECTOR.fetch_disclosures(SAMSUNG, date(2026, 7, 24), date(2026, 7, 30))
 
     assert fetch.page_count == 2
     assert len(fetch.disclosures) == 2
@@ -311,7 +321,7 @@ def test_a_paging_field_that_is_missing_fails_instead_of_disabling_the_check(mon
     monkeypatch.setattr(dart, "_get", fake_get([json.dumps(payload).encode()]))
 
     with pytest.raises(dart.DartPayloadError) as error:
-        COLLECTOR.fetch_disclosures(DartCompany.SAMSUNG_ELECTRONICS, date(2026, 7, 24), date(2026, 7, 30))
+        COLLECTOR.fetch_disclosures(SAMSUNG, date(2026, 7, 24), date(2026, 7, 30))
 
     assert missing in str(error.value)
 
@@ -342,6 +352,8 @@ def test_material_report_classification():
     assert is_material("주식등의대량보유상황보고서(일반)")
     assert is_material("최대주주등소유주식변동신고서")
     assert is_material("연결재무제표기준영업(잠정)실적(공정공시)")
+    assert is_material("영업(잠정)실적(공정공시)")
+    assert is_material("[기재정정]연결재무제표기준영업(잠정)실적(공정공시)")
 
     # 소음. 전체의 95퍼센트가 이 하나다.
     assert not is_material("임원ㆍ주요주주특정증권등소유상황보고서")
@@ -358,8 +370,10 @@ def test_periodic_reports_never_get_a_body():
     assert not is_material("분기보고서 (2026.03)")
     assert not is_material("[기재정정]사업보고서 (2025.12)")
 
-    # `증권발행실적보고서`는 정기보고서가 아니라 `실적` 조각에 걸려 남는다.
-    assert is_material("증권발행실적보고서")
+    # `증권발행실적보고서`는 정기보고서가 아니지만 화이트리스트에도 안 걸린다. 조각이
+    # `실적`이던 때는 걸렸는데, 증권사가 ELS·DLS를 발행할 때마다 내는 형식 공시라
+    # 대상을 20사로 넓히자 통과분의 3분의 1을 차지했다(2026-09-04 실측).
+    assert not is_material("증권발행실적보고서")
 
 
 def test_disclosure_text_drops_style_before_tags():

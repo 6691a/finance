@@ -1,7 +1,7 @@
 import pytest
 
 from modules.collectors.kis import DomesticFuture, DomesticIndex, DomesticStock
-from modules.collectors.market.kis_overseas_index import OverseasIndex
+from modules.collectors.market.kis_overseas_index import AsiaIndex, OverseasIndex
 from modules.collectors.market.yahoo import QuoteSymbol
 from tests.helpers import NO_REVISION_REASON, head_sql, revision_files
 
@@ -147,6 +147,20 @@ def test_us_spot_indexes_are_seeded_under_kis(symbol, capsys):
     assert f"'yahoo', '{symbol}'" not in sql
 
 
+# 아시아 지수는 두 제공처가 같은 심볼로 쌓는다. 분봉·일봉은 KIS, 옛 이력은 Yahoo다.
+ASIA_COUNTRIES = {"NIKKEI225": "JP", "SSE_COMP": "CN", "HSI": "HK", "TAIEX": "TW"}
+
+
+@pytest.mark.parametrize("index", sorted(AsiaIndex, key=lambda index: index.value))
+def test_asia_spot_indexes_are_seeded_under_both_providers(index, capsys):
+    """`(provider, symbol)`이 자연키라 KIS 행이 따로 있어야 KIS 봉이 마스터와 붙는다. 라벨은 Yahoo 행과 같다."""
+    sql = head_sql(capsys)
+
+    assert f"'kis', '{index.value}', 'index', '{ASIA_COUNTRIES[index.value]}'" in sql
+    assert f"'yahoo', '{index.value}', 'index', '{ASIA_COUNTRIES[index.value]}'" in sql
+    assert sql.count(f"'{index.label}'") >= 2
+
+
 def test_every_kind_covers_every_collected_symbol():
     # 심볼을 늘릴 때 위 집합 중 한 곳에 넣는 것을 잊지 않게 한다.
     assert collected_symbols() == ALL_EXPECTED
@@ -182,14 +196,16 @@ def test_kospi_is_seeded_under_the_domestic_collector(capsys):
 
 
 def test_stock_symbols_match_the_other_collectors():
-    """봉과 수급을 한 화면에서 겹치려면 종목 식별자가 같아야 한다."""
-    from modules.collectors.document.dart import DartCompany
+    """봉과 수급을 한 화면에서 겹치려면 종목 식별자가 같아야 한다.
+
+    **공시는 여기 없다.** 공시·실적 대상은 `instrument.filing_entity_id`가 정하고 이 셋보다
+    넓다(2026-09-04). 그 포함 관계는 `tests/migrations/test_instrument_catalog.py`가 본다.
+    """
     from modules.collectors.market.kis_investor_flow import InvestorFlowStock
 
     codes = {stock.value for stock in DomesticStock}
 
     assert codes == {stock.value for stock in InvestorFlowStock}
-    assert codes == {company.value for company in DartCompany}
 
 
 @pytest.mark.parametrize("symbol", sorted({"005930", "000660"}))

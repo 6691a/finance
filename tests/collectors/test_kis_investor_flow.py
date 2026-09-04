@@ -213,12 +213,14 @@ def test_the_slot_is_part_of_the_stock_natural_key():
 
 
 def test_stock_codes_match_the_other_collectors():
-    """공시·포지션과 한 키로 이으려면 세 수집기의 종목 코드가 같아야 한다."""
-    from modules.collectors.document.dart import DartCompany
+    """포지션과 한 키로 이으려면 두 수집기의 종목 코드가 같아야 한다.
+
+    **공시는 여기 없다.** 공시·실적 대상은 `instrument.filing_entity_id`가 정하고 이 둘보다
+    넓다(2026-09-04). 그 포함 관계는 `tests/migrations/test_instrument_catalog.py`가 본다.
+    """
     from modules.collectors.market.kis_positioning import PositioningStock
 
     codes = {stock.value for stock in InvestorFlowStock}
-    assert codes == {company.value for company in DartCompany}
     assert codes == {stock.value for stock in PositioningStock}
 
 

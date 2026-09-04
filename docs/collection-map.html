@@ -105,8 +105,8 @@
       </tr>
       <tr>
         <td><span class="tag rate">금리·거시</span></td>
-        <td>미국·한국·독일·일본·영국·유로 지역 46개 시계열</td>
-        <td>FRED·ECOS·BBK·MOF·BOE·ECB 수집 DAG 8개</td>
+        <td>미국·한국·독일·일본·영국·유로 지역 67개 시계열(금리·물가·실물·대차대조표·심리)</td>
+        <td>FRED·ECOS·BBK·MOF·BOE·ECB 수집 DAG 12개</td>
         <td><code>indicator_observation</code></td>
       </tr>
       <tr>
@@ -139,6 +139,7 @@
       <tr><td>화–토 07:40</td><td><code>fred_macro_daily</code></td><td>미국 월간 거시지표 5종</td></tr>
       <tr><td>평일 07:50–20:10</td><td><code>python -m apps.realtime.main</code></td><td>삼성전자·SK하이닉스 KRX/NXT 체결 → 잠정 1분봉</td></tr>
       <tr><td>화–토 08:00</td><td><code>ecos_market_rate_daily</code></td><td>한국 국채·CD 금리 5종</td></tr>
+      <tr><td>월요일 10:00</td><td><code>ecos_sentiment_monthly</code></td><td>소비자심리지수·업황실적BSI·선행종합지수</td></tr>
       <tr><td>화–토 08:10</td><td><code>bbk_bund_daily</code></td><td>독일 국채금리 9종</td></tr>
       <tr><td>화–토 08:10</td><td><code>kis_market_positioning_daily</code></td><td>신용·증시자금·공매도·대차</td></tr>
       <tr><td>화–토 08:20</td><td><code>mof_jgb_daily</code></td><td>일본 국채금리 6종</td></tr>
@@ -258,6 +259,8 @@
           <td><code>CPI_M PPI_M RETAIL_SALES_M UNEMPLOYMENT_M NONFARM_PAYROLL_M</code></td></tr>
       <tr><td>한국은행 ECOS</td><td>화–토 08:00</td>
           <td><code>KTB2Y KTB3Y KTB10Y KTB30Y CD91D</code></td></tr>
+      <tr><td>한국은행 ECOS · 심리·경기</td><td>월요일 10:00</td>
+          <td><code>CSI_M BSI_M LEADING_M</code> — 월간</td></tr>
       <tr><td>독일연방은행 BBK</td><td>화–토 08:10</td>
           <td><code>DE1Y DE2Y DE3Y DE5Y DE7Y DE10Y DE15Y DE20Y DE30Y</code></td></tr>
       <tr><td>일본 재무성 MOF</td><td>화–토 08:20</td>

@@ -1,13 +1,12 @@
 # 코스피 일일 전망 v2 — 관계 그래프·메모·툴 호출로 오늘의 등락을 말한다
 
-- 날짜: 2026-09-02
-- 상태: **구현 완료, 배포 전.** 코드·리비전·테스트가 워킹 트리에 있고 `pytest`·`ruff`가
-  통과한다(3,054개). **운영에서 한 번도 안 돌았다** — 남은 것은 리비전 반영과 첫 실행이다.
+- 날짜: 2026-09-02(작성), 2026-09-03(운영 기동·옛 기능 삭제)
+- 상태: **운영 중.** 2026-09-03에 슬롯 셋과 관찰이 돌았고 채점까지 확인했다. 관계 그래프는
+  8거래일(8/24~9/2)을 백필해 관측 34건이 쌓였다. 프롬프트 판 4.
   디버깅 노트북은 `notebooks/kospi_forecast_debug.ipynb`(`.gitignore` 대상).
-- 대체 대상: [market-thesis/](market-thesis/README.md) 전부와
-  [market-causal-graph.md](market-causal-graph.md). 이 문서는 그 둘을 **참조하지 않고** 새로
-  쓴다. 옛 코드·테이블(`thesis*`·`market_causal_*`)·문서는 이 기능이 돈 뒤 삭제하고 DB도
-  초기화한다(사용자 결정, 2026-09-02). 삭제 규칙은 §9의 2.
+- 대체 대상: 옛 시장 추론(`market_thesis_*`)과 주간 인과 그래프(`market_causal_weekly`).
+  **둘 다 2026-09-03에 코드·문서를 지웠다** — 기록은 git 이력에 있다(삭제 직전 커밋
+  `e04264f`). 표 열둘은 아직 데이터를 든 채 남아 있고 별도 리비전이 지운다. 경위는 §9.3.
 - 산출물: `apps/models/analysis/kospi.py`(표 셋)와 수기 리비전 `a1c74f0b8e35`,
   `airflow/modules/kospi/`(`domain`·`state`·`tools`·`tool_args`·`tool_ledger`·`toolbox`·
   `graph`·`store`·`generation`·`common`·`run`·`forecast`·`intraday`·`review`·`render` 열다섯),
@@ -15,14 +14,15 @@
   `airflow/sql/postgres/`의 `kospi_tools/` 여섯·`kospi_forecast/` 여덟·`kospi_llm_run/` 셋,
   `airflow/dags/kospi_forecast_daily.py`·`kospi_intraday_daily.py`·`kospi_review_daily.py`,
   `modules/llm.py`의 `kospi_model()`, 테스트 넷(`test_kospi_domain`·`test_kospi_pipeline`·
-  `test_kospi_models`·`test_kospi_schema`, 54개).
+  `test_kospi_models`·`test_kospi_schema`, 99개). 저장소 전체는 2,336개.
 - 관련 원본: [운영 안내](../operations.md), 수집 계약은 [collection/](../collection/),
   LLM 흐름 규칙은 `.claude/skills/writing-llm-flows/SKILL.md`.
 
 ## 0. 왜 새로 만드나
 
-기존 시장 추론은 84건 채점에서 무작위 찍기와 성적이 같았다(Brier 0.668, 균등 추측 0.667 —
-[TUNING.md](market-thesis/TUNING.md) §6, 2026-08-28). 기능이 많았다 — 대상 넷, 툴 열다섯,
+기존 시장 추론은 84건 채점에서 무작위 찍기와 성적이 같았다(Brier 0.668, 균등 추측 0.667,
+2026-08-28 실측). 배포 뒤 70건으로 다시 재니 방향 적중이 32.9%였고 같은 구간의 "매일 상승"
+기준선이 48.6%였다 — **기준선보다 아래였다.** 기능이 많았다 — 대상 넷, 툴 열다섯,
 확률 셋, 지평 넷, 슬롯 다섯, 자유 어휘 그래프 — 그래서 무엇이 문제인지 가를 수 없었고, 8일에
 프롬프트 판이 여덟 번 올라 어떤 변경의 효과도 재지 못했다.
 
@@ -346,7 +346,7 @@ earlier_slots_today:
 | 툴 | 인자 | 주는 것 |
 | --- | --- | --- |
 | `factor_history` | `factor: Factor`, `days ≤ 30` | 그 요인의 일별 값과 전일 대비 변화(단위는 §3.1). 요인의 자리별 SQL 파일 넷을 코드의 매핑이 고른다. 장중에는 수급 요인에 오늘 누적 행이 한 줄 더 붙는다 |
-| `recent_news` | `hours ≤ 48`, `min_score 0~8` | 평가된 문서 상위 N — 제목·발행 시각·`direction`·`value_score`·태그·평가 요약 |
+| `recent_news` | `hours ≤ 48` | 평가된 문서 상위 N — 제목·발행 시각·`direction`·`value_score`·태그·평가 요약. `total`(창 안의 전체)과 `shown`(돌려준 수)을 함께 실어 잘렸는지 보인다 |
 | `recent_disclosures` | `hours ≤ 48` | 본문 있는 DART 공시 — 회사·보고서명·접수 시각·본문 앞부분 |
 
 셋 다 `as_of_at` 상한을 건다. `NEWS`·`DISCLOSURE` 요인은 `factor_history`가 아니라 뒤의 둘로
@@ -674,6 +674,101 @@ DAG도 서비스도 import하지 않는다. 20영업일 판정이 반복될 것 
 `airflow/modules/kospi/report.py`로 올려 테스트를 붙이고 ops 브리핑에 싣는다 — 지금은 한 번
 볼 것이라 안 옮겼다.
 
+## 8.7 아시아 축이 요인에 없다 — 2026-09-03 14:10 급락이 드러낸 것 (미구현)
+
+### 그날 실제로 일어난 일
+
+```
+KST 14:00  6,645     정상
+KST 14:10  6,592     하락 시작
+KST 14:20  6,478     -2.5%  (20분 만에)
+KST 14:30  6,497
+KST 14:50  6,581     되돌림
+KST 15:30  6,579     +0.26% 마감  ← 아무 일 없었던 것처럼
+```
+
+한국·중국·일본 지수가 **같은 시각에 함께** 움직였다. 전해 들은 원인은 **일본은행 50bp
+빅스텝 인상 루머**이고, 프로그램 매물이 쏟아졌다가 루머라 바로 되돌렸다.
+
+### 왜 우리 전망이 이것을 말할 수 없었나
+
+**① 일본·중국이 `Factor`에 없다. 데이터는 이미 있는데.**
+
+`quote_daily`와 `index_daily`에 **`NIKKEI225`·`SSE_COMP`·`HSI`·`TAIEX`·`USDJPY`·`USDCNH`가
+매일 들어오고 있다**(2026-09-04 실측). 그런데 §3.1 요인 목록 열일곱에 아시아가 하나도 없다 —
+미국(SP500·NASDAQ·SOX·VIX·US10Y·DXY)과 국내(수급 셋·KTB10Y·KRBASE·USDKRW·삼성·하이닉스)뿐이다.
+
+그래서 모델은 "엔이 급등 중이다"·"닛케이가 같이 빠졌다"를 **값으로 조회할 방법이 없다.**
+`USDJPY`는 문서 태그로는 최근 7일 95건이 붙었는데 `factor_history`로는 못 부른다. 관계
+그래프에도 안 쌓이므로 "엔 급등이 코스피와 어떻게 움직였나"의 가중치가 영영 생기지 않는다.
+
+**② 재료는 오전에 다 들어와 있었다.** 그날 수집된 문서 중:
+
+```
+01:05 수집  달러-엔 돌연 급락…장중 158.202엔까지 굴러떨어져(상보)          6점
+09:05 수집  [외환] 日 '레이트 체크' 의심에 1,350원대로 급락…연저점 또 경신  8점
+12:05 수집  채권 딜러들, 글로벌 현장에서 보는 '엔 캐리' 청산 징후는         8점
+```
+
+**엔 캐리 청산 징후가 8점으로 이미 프롬프트에 실릴 수 있었다.** 그런데 툴이 제목과 평가
+요약만 주고 본문을 안 줘서(6.1), 모델이 "그래서 오늘 오후에 무슨 일이 나나"를 읽을 재료가
+없다. 8점짜리 제목 한 줄로는 지수 요인과 이어 붙일 수 없다.
+
+**③ 슬롯과 수집 주기가 어긋나 `pre_close`가 급락을 못 봤다.**
+
+```
+14:05  마지막 수집 배치        ← pre_close(14:35)가 보는 마지막 문서
+14:10  급락 시작
+14:20  저점 6,478
+14:35  pre_close 슬롯 기준 시각  ← 급락은 봉으로 보이지만 이유는 문서에 없다
+14:48  급락을 다룬 첫 기사 발행
+15:05  그 기사 수집             ← 슬롯이 30분 뒤에 돌았어도 못 봤다
+```
+
+문서 수집이 매시 :05이고 슬롯이 :35라, **슬롯은 항상 30분 전까지의 뉴스만 본다.** 장중에
+터진 사건은 구조적으로 다음 슬롯에서야 보이고, `pre_close`는 다음 슬롯이 없다.
+
+**④ 사건 기사가 시황 기사보다 낮은 점수를 받았다.**
+
+```
+7점  코스피 하락 전환, 6,500선 턱걸이…외인·개인·기관 1조4천억 순매도   (14:48 발행)
+6점  코스피, 돌연 급락 후 6,500대 되돌림…0.26% 오른 6,579.48 마감      (15:34 발행)
+7점  국내 주식 마감 시황 - 30분 만에 3% 급락 후 회복(9월 3일) - 신한투자증권
+```
+
+그날 코스피 최대 사건을 다룬 셋이 6~7점인데, 같은 창의 `8월 수출` 리포트 넷은 전부 8점이다.
+[economic-document-archive-design.md](economic-document-archive-design.md) §6.8이 고치려는
+것이 정확히 이 순서다.
+
+### 무엇을 한다
+
+**넷 다 서로 다른 자리이고 크기가 다르다.** 값싼 것부터.
+
+| # | 무엇 | 크기 | 언제 |
+| --- | --- | --- | --- |
+| 1 | 아시아 요인 넷을 `Factor`에 더한다 — `NIKKEI225`·`SSE_COMP`·`USDJPY`·`USDCNH` | §3.1 표 네 줄, `Factor` 네 값, `FACTOR_SPECS` 네 항목. **SQL은 안 는다**(전부 `QUOTE_DAILY` 자리다) | 동결 뒤 |
+| 2 | 툴이 본문 앞부분을 준다 — 상위 10건에 `left(body, 300)` | `select_news.sql` 한 칸, `NewsRow` 한 필드 | §6.8과 함께 |
+| 3 | 장중 슬롯 앞에 문서 수집을 한 번 더 돌린다 | `document_ingestion_hourly`를 :05·:30 둘로, 또는 장중만 별도 cron | 별건 |
+| 4 | 사건 기사가 시황 리포트보다 위로 오게 | [§6.8](economic-document-archive-design.md) 그 자체 | 진행 중 |
+
+**1번은 동결 뒤다.** 요인이 열일곱에서 스물하나가 되면 `factor_history`로 볼 수 있는 것이
+열다섯에서 열아홉이 되고, 툴 상한 25에서 문서 툴 둘을 빼면 스물셋이라 **아직 들어간다.**
+다만 모델이 보는 것이 크게 달라져 20영업일 표본을 둘로 가른다.
+
+**요인을 더할 때 확인할 것 둘.** ① `NIKKEI225`·`SSE_COMP`는 `index_daily`에도 `quote_daily`에도
+있다 — 어느 쪽을 원본으로 쓸지 정하고 §3.1에 적는다. ② 최근 5일 실측에서 둘 다 마지막
+행이 `2026-09-02`로 하루 늦다. 장전 슬롯이 "어제 닛케이"를 못 보는 날이 생기는지, 아니면
+수집이 밀린 것인지 먼저 재야 한다. **재기 전에 요인으로 올리면 빈 표가 프롬프트에 실린다.**
+
+### 이 절이 답하지 못하는 것
+
+**루머는 기사가 되기 전에 가격에 반영된다.** 14:10에 던진 프로그램은 어느 매체보다 빨랐고,
+우리가 무슨 짓을 해도 그 순서는 못 뒤집는다. 1~3번이 하는 일은 "급락을 미리 맞힌다"가 아니라
+**"엔 급등과 닛케이 동조가 진행 중이라는 것을 값으로 보고 있다"**까지다. 그다음 슬롯과
+장후 관찰이 그 관계를 `OBSERVED` 엣지로 쌓으면, 다음번 같은 조합에서 폭을 넓게 부르는 것이
+이 설계가 낼 수 있는 최선이다. 그것을 못 하고 있는 지금이 문제이지, 루머를 맞히지 못하는
+것은 문제가 아니다.
+
 ## 9. 남은 확인
 
 구현하면서 잰 것과 아직 안 잰 것을 가른다.
@@ -708,15 +803,60 @@ DAG도 서비스도 import하지 않는다. 20영업일 판정이 반복될 것 
    `BAR_STALENESS` 15분, 관계 반감기 5일·창 15관측·조회 90일, 모델 타임아웃 900초.
    **실측 없음.** 프로토타입 뒤 조정하고 근거를 여기 적는다.
 
-### 9.3 옛것의 삭제
+### 9.3 옛것의 삭제 (2026-09-03 실행)
 
-`thesis_llm_run`은 주간 인과 그래프(`market_causal_weekly`)도 쓴다. 옛 데이터가 지금 어떤
-상태인지는 확인하지 않았다(2026-09-02). 규칙 하나만 정해 둔다 — **로컬 DB는 테스트 중 전부
-지우고 다시 만들어도 된다. 운영 DB는 절대 지우지 않는다.**
+**둘을 함께 지웠다.** 옛 시장 추론(`market_thesis_*` 넷)과 주간 인과 그래프
+(`market_causal_weekly`)다. 인과 그래프는 사용자가 이 날 "이것도 안 쓴다"로 정했다.
 
-순서: ① 새 DAG 셋 운영 기동 ② 옛 DAG 다섯 pause ③ 옛 테이블 drop 리비전 ④ 옛 모듈·문서
-삭제 ⑤ Neo4j 옛 라벨(`Event`·`Channel`·`Target`) 삭제. **이번 리비전은 아무 것도 지우지
-않는다.**
+**한 커밋에 넣을 수밖에 없었다** — 둘이 서로를 물고 있었다.
+
+    thesis → causal   `thesis/common.py`가 `market_causal_direction/select_for_thesis.sql`을 읽는다
+    causal → thesis   `models/analysis/causal.py`가 `thesis_llm_run.id`로 외래키를 둘 건다
+
+어느 쪽을 먼저 지워도 다른 쪽이 import에서 죽는다. 그래서 순서를 나누는 대신 커밋을 셋으로
+갈랐다 — ① 빌려주던 부품 되찾기 ② 코드·문서 삭제 ③ 표 drop 리비전.
+
+**부품 둘이 다른 기능에 빌려져 있었다**(①에서 옮겼다).
+
+| 무엇 | 어디로 | 왜 |
+| --- | --- | --- |
+| `ThesisDirection` | `technical.SignalDirection` | `technical_signal.direction`이 쓴다. 이름만 thesis였다. `FLAT`은 이 표에 들어간 적이 없어 함께 뺐다 |
+| `DART_VIEWER_URL` | `briefing/disclosures.py` | 공시 원문 링크 문자열. 쓰는 데가 거기 하나다 |
+
+`classify_outcome`·`FLAT_THRESHOLD_PCT`는 안 옮겼다 — 소비자가 `technical/base_rate.py`
+하나였고 그것도 추론 전용이라 같이 지웠다.
+
+**②에서 지운 것**(코드 약 28,000줄): DAG 다섯, `modules/thesis/`·`causal/`·`graph/`,
+`technical/base_rate.py`, 프롬프트 넷, 모델 둘, API 리소스(`thesis` 넷 + 쓰는 쪽이 0이 된
+`repository/common.py`·`service/common.py`), SQL 57개, 테스트 20파일,
+`docs/analysis/market-thesis/` 21개와 `market-causal-graph.md`.
+
+**고친 것**: `briefing/ops.py`(추론 채점·적체 절), `modules/llm.py`(모델 함수 넷과
+`THESIS_TIMEOUT_SECONDS`), 모델 패키지 `__init__` 둘, API 배선, README, `docs/README.md`,
+`docs/operations.md`.
+
+**옮긴 테스트 둘.** `test_dag_module_attributes.py`와 `test_import_weight.py`는 지운 기능만
+재고 있었지만 담긴 교훈이 새 기능에도 그대로라 kospi로 옮겼다. **후자가 옮기자마자 사실
+하나를 드러냈다** — `kospi/store.py`가 `modules.llm`에서 `TokenUsage`를 가져오는데 그
+모듈이 LangChain을 끌고 와서, 슬롯 모듈 넷이 202개를 문다. 옛 추론이 파일을 여섯으로
+가르며 피했던 형태다. 삭제와 다른 손잡이라 고치지 않고 테스트가 그 상태를 잠근다
+(`test_the_kospi_slot_modules_still_carry_langchain`).
+
+**③은 아직 안 했다.** 표 열둘이 3,250행을 든 채 남아 있다.
+
+| 표 | 행 |
+| --- | --- |
+| `thesis` · `thesis_outcome` · `thesis_evidence` | 118 · 263 · 931 |
+| `thesis_llm_run` · `thesis_precedent` · `thesis_tool_call` | 69 · 552 · 1,105 |
+| `market_event` · `market_channel` | 11 · 9 |
+| `market_causal_path` · `step` · `evidence` · `direction` | 51 · 78 · 57 · 6 |
+
+`technical_signal.rule_version`의 컬럼 주석이 아직 `thesis.prompt_version`을 가리킨다.
+**DB 주석이라 모델만 고치면 autogenerate가 매번 `COMMENT ON` 차이를 낸다** — ③의 리비전에서
+함께 고친다.
+
+**로컬 DB는 테스트 중 전부 지우고 다시 만들어도 된다. 운영 DB는 절대 지우지 않는다.**
+Neo4j 옛 라벨(`Event`·`Channel`·`Target`)은 코스피 백필 전에 이미 비웠다.
 
 ## 10. 배포 순서와 무엇을 언제 보나
 

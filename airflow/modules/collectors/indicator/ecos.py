@@ -60,6 +60,9 @@ MARKET_RATE_STAT_CODE = "817Y002"  # 1.3.2.1. 시장금리(일별)
 POLICY_RATE_STAT_CODE = "722Y001"  # 1.3.1. 한국은행 기준금리 및 여수신금리
 FOREIGN_POLICY_RATE_STAT_CODE = "902Y006"  # 9.1.1.3. 국제 주요국 중앙은행 정책금리
 BALANCE_SHEET_STAT_CODE = "103Y002"  # 1.4.1. 한국은행 주요계정(말잔)
+CONSUMER_SURVEY_STAT_CODE = "511Y002"  # 6.2.1. 소비자동향조사(전국, 월)
+BUSINESS_SURVEY_STAT_CODE = "512Y015"  # 6.1.1.3. 기업경기조사(매출액가중 실적)
+BUSINESS_CYCLE_STAT_CODE = "901Y067"  # 8.1.2. 경기종합지수
 
 DAILY_CYCLE = "D"
 MONTHLY_CYCLE = "M"
@@ -68,6 +71,13 @@ MONTHLY_CYCLE = "M"
 # 같아야 한다. 잔액은 통화별로 다르므로 계열이 들고 간다.
 SERIES_UNIT = "Percent"
 BALANCE_SHEET_UNIT = "Billions of Won"
+# 심리 계열은 ECOS가 단위를 `null`로 준다(실측 2026-09-04). 그래서 `source_unit_name`이
+# 빈 문자열이고, 저장 표기는 우리가 만든다. **BSI를 `Index`로 두지 않는다** — 확산지수는
+# 기준연도가 아니라 100을 중립으로 삼는 다른 축이라, 한 화면에 놓으면 기준이 섞인다.
+NO_SOURCE_UNIT = ""
+DIFFUSION_INDEX_UNIT = "Diffusion Index (100 = neutral)"
+SENTIMENT_INDEX_UNIT = "Index Long-run Average=100"
+BUSINESS_CYCLE_UNIT = "Index 2020=100"
 
 
 class EcosSeries(StrEnum):
@@ -105,6 +115,7 @@ class EcosSeries(StrEnum):
     unit: str
     kind: str
     label: str
+    item_code2: str
 
     def __new__(
         cls,
@@ -116,6 +127,7 @@ class EcosSeries(StrEnum):
         unit: str,
         kind: str,
         label: str,
+        item_code2: str = "",
     ) -> Self:
         member = str.__new__(cls, series_id)
         member._value_ = series_id
@@ -126,6 +138,9 @@ class EcosSeries(StrEnum):
         member.unit = unit
         member.kind = kind
         member.label = label
+        # 통계표가 축을 둘 쓰면 항목코드도 둘이다(기업경기조사는 산업 × 조사항목). 축이
+        # 하나인 통계표에서는 빈 문자열이고 URL에 붙지 않는다.
+        member.item_code2 = item_code2
         return member
 
     @property
@@ -175,6 +190,51 @@ class EcosSeries(StrEnum):
         "한국은행 총자산(월별)",
     )
 
+    # 심리와 경기. 좌표·주기·단위는 2026-09-04에 `StatisticItemList`와 실제 응답으로 확인했다.
+    #
+    # **소비자심리지수와 기업경기실사지수는 통계표 축이 둘이다.** 소비자동향조사는
+    # (조사항목 `FME`, 대상 `99988`=전체)이고 기업경기조사는 (산업 `99988`=전산업,
+    # 조사항목 `AA`=업황실적BSI)이다. 축 하나만 넘기면 ECOS가 오류가 아니라 데이터 없음
+    # (`INFO-200`)으로 답해 조용한 0건이 된다.
+    #
+    # **기업경기조사는 전망(`512Y014`)과 실적(`512Y015`)이 다른 통계표다.** 실적을 쓴다 —
+    # 전망은 응답자가 미래를 말한 값이라 실물과 어긋난 구간을 그 자체로 해석해야 하고,
+    # 지금 필요한 것은 "지금 어떤가"다. 전망이 필요해지면 `BSI_OUTLOOK_M`으로 따로 더한다.
+    CSI_M = (
+        "CSI_M",
+        CONSUMER_SURVEY_STAT_CODE,
+        "FME",
+        MONTHLY_CYCLE,
+        NO_SOURCE_UNIT,
+        SENTIMENT_INDEX_UNIT,
+        "sentiment",
+        "소비자심리지수(월별)",
+        "99988",
+    )
+    BSI_M = (
+        "BSI_M",
+        BUSINESS_SURVEY_STAT_CODE,
+        "99988",
+        MONTHLY_CYCLE,
+        NO_SOURCE_UNIT,
+        DIFFUSION_INDEX_UNIT,
+        "sentiment",
+        "전산업 업황실적BSI(월별)",
+        "AA",
+    )
+    # **선행종합지수는 `sentiment`가 아니라 `activity`다.** 설문이 아니라 실물 지표의
+    # 합성이고, `activity`는 이미 단위가 갈려 있다(달러·퍼센트·명·건).
+    LEADING_M = (
+        "LEADING_M",
+        BUSINESS_CYCLE_STAT_CODE,
+        "I16A",
+        MONTHLY_CYCLE,
+        BUSINESS_CYCLE_UNIT,
+        BUSINESS_CYCLE_UNIT,
+        "activity",
+        "선행종합지수(월별)",
+    )
+
 
 # DAG이 태스크를 매핑하는 단위. 시장금리는 일별로, 정책금리와 잔액은 주별로 돈다.
 #
@@ -185,6 +245,10 @@ MARKET_RATE_KINDS = frozenset({"government_bond", "money_market"})
 MARKET_RATE_SERIES: tuple[str, ...] = tuple(series.value for series in EcosSeries if series.kind in MARKET_RATE_KINDS)
 POLICY_RATE_SERIES: tuple[str, ...] = tuple(series.value for series in EcosSeries if series.kind == "policy_rate")
 BALANCE_SHEET_SERIES: tuple[str, ...] = tuple(series.value for series in EcosSeries if series.kind == "balance_sheet")
+
+# 심리·경기 계열. **`sentiment`로만 고르지 않는다** — 선행종합지수가 `activity`인데 같은
+# 월간 DAG이 돈다. 종류를 직접 적는 것이 시장금리 목록과 같은 규칙이다.
+SENTIMENT_SERIES: tuple[str, ...] = ("CSI_M", "BSI_M", "LEADING_M")
 
 # 데이터가 없다는 정상 응답. 휴장일만 걸린 구간이거나 아직 발표 전이다.
 NO_DATA_CODE = "INFO-200"
@@ -248,6 +312,11 @@ class EcosRequest(BaseModel):
         return self.series.item_code
 
     @property
+    def item_code2(self) -> str:
+        """둘째 축의 항목코드. 축이 하나인 통계표에서는 빈 문자열이다."""
+        return self.series.item_code2
+
+    @property
     def period_bounds(self) -> tuple[str, str]:
         """URL에 넣는 조회 구간 표기. 주기가 정한다.
 
@@ -283,7 +352,9 @@ class EcosRawRow(BaseModel):
 
     item_code: str = Field(alias="ITEM_CODE1")
     item_name: str = Field(alias="ITEM_NAME1")
-    unit_name: str = Field(alias="UNIT_NAME")
+    # 둘째 축이 없는 통계표는 `null`로 온다. 심리·경기 계열은 단위도 `null`이다(실측 2026-09-04).
+    item_code2: str | None = Field(alias="ITEM_CODE2", default=None)
+    unit_name: str | None = Field(alias="UNIT_NAME", default=None)
     time: str = Field(alias="TIME")
     value: str | None = Field(alias="DATA_VALUE", default=None)
 
@@ -411,7 +482,10 @@ def parse_observations(body: bytes, request: EcosRequest) -> tuple[EcosObservati
         if row.item_code != request.item_code:
             # 항목코드가 요청과 다르면 값이 엉뚱한 시계열로 저장된다.
             raise EcosPayloadError(f"ECOS returned item {row.item_code!r} for a request of {request.item_code!r}")
-        if row.unit_name != series.source_unit_name:
+        if request.item_code2 and (row.item_code2 or "") != request.item_code2:
+            # 축이 둘인 통계표에서 둘째 축이 어긋나면 같은 산업의 다른 조사항목이 섞인다.
+            raise EcosPayloadError(f"ECOS returned item2 {row.item_code2!r} for a request of {request.item_code2!r}")
+        if (row.unit_name or "") != series.source_unit_name:
             raise EcosPayloadError(f"ECOS changed the unit of {row.item_code} to {row.unit_name!r}")
         if not row.value:
             continue
@@ -459,6 +533,8 @@ class EcosCollector:
                 request.series.cycle,
                 *request.period_bounds,
                 request.item_code,
+                # 축이 하나인 통계표에 빈 조각을 붙이면 경로가 `//`가 되어 데이터 없음으로 답한다.
+                *((request.item_code2,) if request.item_code2 else ()),
             )
         )
 

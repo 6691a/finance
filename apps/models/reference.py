@@ -34,6 +34,10 @@ class SeriesKind(StrEnum):
     분해한 값이라 만기가 같다. 국채에 넣으면 미국 10년물이 두 개로 보인다. 둘을 한 종류로
     두는 이유는 반대로 **더하면 명목이 되기 때문**이다 — 따로 보면 뜻이 없다.
 
+    **`sentiment`는 설문이 만드는 값이다.** 소비자심리지수와 기업경기실사지수가 그것이고,
+    실측이 만드는 `activity`와 가른다. 둘은 틀릴 때 틀리는 방식이 다르다 — 한 종류로 두면
+    "실물이 어떤가"를 묻는 쿼리가 심리를 함께 그린다. 반대로 **선행종합지수는 `activity`다.**
+    설문이 아니라 실물 지표의 합성이다.
     """
 
     GOVERNMENT_BOND = "government_bond"
@@ -45,6 +49,7 @@ class SeriesKind(StrEnum):
     ACTIVITY = "activity"
     BALANCE_SHEET = "balance_sheet"
     BALANCE_SHEET_ITEM = "balance_sheet_item"
+    SENTIMENT = "sentiment"
 
 
 class IndicatorSeries(EntityBase):
@@ -69,7 +74,8 @@ class IndicatorSeries(EntityBase):
         ),
         CheckConstraint(
             "kind IN ('government_bond', 'money_market', 'policy_rate', 'tips_rate', "
-            "'credit_spread', 'price_index', 'activity', 'balance_sheet', 'balance_sheet_item')",
+            "'credit_spread', 'price_index', 'activity', 'balance_sheet', 'balance_sheet_item', "
+            "'sentiment')",
             name="ck_indicator_series_kind",
         ),
         # 만기가 없는 지표는 NULL이다. 0으로 채우지 않는다. 0을 넣으면 만기별 비교 쿼리가
@@ -122,9 +128,9 @@ class IndicatorSeries(EntityBase):
         nullable=False,
         comment=(
             "시계열의 종류(government_bond, money_market, policy_rate, tips_rate, credit_spread, "
-            "price_index, activity, balance_sheet 또는 balance_sheet_item). 국채 곡선에서 단기 자금시장 "
-            "금리·정책금리·실질금리·신용스프레드를 가르고, 단위가 다른 거시지표와 대차대조표 잔액을 "
-            "그 곡선에서 뺀다"
+            "price_index, activity, balance_sheet, balance_sheet_item 또는 sentiment). 국채 곡선에서 "
+            "단기 자금시장 금리·정책금리·실질금리·신용스프레드를 가르고, 단위가 다른 거시지표와 "
+            "대차대조표 잔액과 설문이 만드는 심리지수를 그 곡선에서 뺀다"
         ),
     )
     label: Mapped[str] = mapped_column(

@@ -270,6 +270,7 @@ DAG마다 절을 두지 않습니다. 상세는 각 DAG 파일의 `doc_md`에 �
 | `fred_treasury_daily` | 화~토 07:30 | `indicator_observation` | FRED |
 | `fred_macro_daily` | 화~토 07:40 | `indicator_observation` | FRED |
 | `ecos_market_rate_daily` | 화~토 08:00 | `indicator_observation` | 한국은행 ECOS |
+| `ecos_sentiment_monthly` | 월요일 10:00 | `indicator_observation`(소비자심리·업황BSI·선행지수) | 한국은행 ECOS |
 | `bbk_bund_daily` | 화~토 08:10 | `indicator_observation` | 분데스방크 |
 | `mof_jgb_daily` | 화~토 08:20 | `indicator_observation` | 일본 재무성 |
 | `boe_gilt_daily` | 화~토 08:40 | `indicator_observation` | 잉글랜드은행 |

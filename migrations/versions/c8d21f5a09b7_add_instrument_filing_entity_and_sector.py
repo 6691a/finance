@@ -1,7 +1,7 @@
 """add instrument filing entity id and sector
 
 Revision ID: c8d21f5a09b7
-Revises: d5b8c204e7f1
+Revises: b7e2d4a91c35
 Create Date: 2026-09-04 10:00:00.000000
 
 산업 대표 20사를 **한국 거시 지표의 표본**으로 쓰기 위한 두 칸이다. 설계는
@@ -59,7 +59,7 @@ from alembic import op
 
 # revision identifiers, used by Alembic.
 revision: str = "c8d21f5a09b7"
-down_revision: str | Sequence[str] | None = "d5b8c204e7f1"
+down_revision: str | Sequence[str] | None = "b7e2d4a91c35"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 

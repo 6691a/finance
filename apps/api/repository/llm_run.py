@@ -1,11 +1,15 @@
 """LLM 실행 원장 조회. **조회 단위가 대화다.**
 
-`thesis.py`와 같은 형태다 — 세션 팩토리를 생성자로 받고, 응답 하나가 세션 하나이며,
-`relationship()` 대신 `IN` 배치 조회로 읽고 파이썬이 그룹핑한다.
+세션 팩토리를 생성자로 받고, 응답 하나가 세션 하나이며, `relationship()` 대신 `IN` 배치
+조회로 읽고 파이썬이 그룹핑한다.
 
-**실행일 필터의 축은 `started_at`이다.** `run_date`가 아니다 — T+5 해설의 `run_date`는
-과거 원 추론일이라 그것으로 거르면 오늘 실행한 해설이 목록에서 빠진다. KST 날짜를
-UTC 경계로 바꾸는 것은 `apps/core/utility.kst_day_bounds`가 하고 조회문은 `>=`·`<`만 본다.
+**읽는 표가 `kospi_llm_run`·`kospi_tool_call`이다**(2026-09-03에 갈아 끼웠다). 옛
+`thesis_llm_run`을 읽던 자리이고 경로(`/api/llm-runs`)와 화면 모양은 그대로다 — 바뀐 것은
+대화의 종류가 둘(`forecast`·`review`)로 좁아지고 **메모 칸 일곱이 는 것**이다.
+
+**실행일 필터의 축은 `started_at`이다.** `run_date`가 아니다 — 장후 관찰의 `run_date`는
+그날 세션 날짜라 자정을 넘겨 도는 실행이 목록에서 빠진다. KST 날짜를 UTC 경계로 바꾸는
+것은 `apps/core/utility.kst_day_bounds`가 하고 조회문은 `>=`·`<`만 본다.
 """
 
 from collections.abc import Sequence
@@ -18,28 +22,24 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from apps.api.repository.common import DEFAULT_LIMIT, RowBundle
 from apps.models.analysis import (
-    LlmRunStatus,
-    Thesis,
-    ThesisLlmRun,
-    ThesisOutcome,
-    ThesisToolCall,
+    KospiForecast,
+    KospiLlmRun,
+    KospiLlmRunStatus,
+    KospiToolCall,
 )
 
 
 class LlmRunListRows(RowBundle):
-    runs: tuple[ThesisLlmRun, ...] = ()
+    runs: tuple[KospiLlmRun, ...] = ()
     has_more: bool = False
-    # 실행 id → 산출물 수(생성 대화는 추론 수, 해설 대화는 해설한 지평 수)
+    # 실행 id → 그 대화가 만든 전망 수. 관찰 대화는 0이다.
     produced: dict[int, int] = Field(default_factory=dict)
 
 
 class LlmRunDetailRows(RowBundle):
-    run: ThesisLlmRun
-    tool_calls: tuple[ThesisToolCall, ...] = ()
-    theses: tuple[Thesis, ...] = ()
-    outcomes: tuple[ThesisOutcome, ...] = ()
-    # 해설된 지평의 원 추론. 라벨과 대상 코드가 outcome 행에 없다.
-    subjects: dict[int, Thesis] = Field(default_factory=dict)
+    run: KospiLlmRun
+    tool_calls: tuple[KospiToolCall, ...] = ()
+    forecasts: tuple[KospiForecast, ...] = ()
 
 
 class LlmRunReadRepository:
@@ -63,43 +63,33 @@ class LlmRunReadRepository:
     ) -> Select[Any]:
         """목록 조회문. **끝 경계가 열려 있다**(`< started_to`).
 
-        `subject_code` 필터를 두지 않는다 — 대화 하나가 여러 대상을 다루고 실패·중단
-        대화에는 산출물이 아예 없다. 대상으로 찾는 것은 `/api/theses`가 답한다.
-
         `limit + 1`을 읽어 다음 쪽이 있는지만 본다. 총 건수는 세지 않는다.
         """
-        statement = select(ThesisLlmRun).where(
-            ThesisLlmRun.started_at >= started_from,
-            ThesisLlmRun.started_at < started_to,
+        statement = select(KospiLlmRun).where(
+            KospiLlmRun.started_at >= started_from,
+            KospiLlmRun.started_at < started_to,
         )
         if kinds:
-            statement = statement.where(ThesisLlmRun.kind.in_(kinds))
+            statement = statement.where(KospiLlmRun.kind.in_(kinds))
         if statuses:
-            statement = statement.where(ThesisLlmRun.status.in_(statuses))
+            statement = statement.where(KospiLlmRun.status.in_(statuses))
         if run_slots:
-            statement = statement.where(ThesisLlmRun.run_slot.in_(run_slots))
+            # **관찰 대화는 슬롯이 null이다.** 슬롯으로 거르면 그것들이 빠지는데, 그것이
+            # 이 필터의 뜻이다 — "그 슬롯의 전망 대화만".
+            statement = statement.where(KospiLlmRun.slot.in_(run_slots))
         return (
-            statement.order_by(ThesisLlmRun.started_at.desc(), ThesisLlmRun.id.desc())
+            statement.order_by(KospiLlmRun.started_at.desc(), KospiLlmRun.id.desc())
             .limit(limit + 1)
             .offset(offset)
         )
 
     @staticmethod
-    def produced_thesis_statement(run_ids: Sequence[int]) -> Select[Any]:
-        """생성 대화의 산출물 수."""
+    def produced_statement(run_ids: Sequence[int]) -> Select[Any]:
+        """대화가 만든 전망 수. 관찰 대화는 행이 없어 0으로 읽힌다."""
         return (
-            select(Thesis.llm_run_id, func.count(Thesis.id))
-            .where(Thesis.llm_run_id.in_(run_ids))
-            .group_by(Thesis.llm_run_id)
-        )
-
-    @staticmethod
-    def narrated_outcome_statement(run_ids: Sequence[int]) -> Select[Any]:
-        """해설 대화의 산출물 수."""
-        return (
-            select(ThesisOutcome.narration_run_id, func.count(ThesisOutcome.id))
-            .where(ThesisOutcome.narration_run_id.in_(run_ids))
-            .group_by(ThesisOutcome.narration_run_id)
+            select(KospiForecast.llm_run_id, func.count(KospiForecast.id))
+            .where(KospiForecast.llm_run_id.in_(run_ids))
+            .group_by(KospiForecast.llm_run_id)
         )
 
     # --- 공개 조회 -----------------------------------------------------------
@@ -115,7 +105,7 @@ class LlmRunReadRepository:
         limit: int = DEFAULT_LIMIT,
         offset: int = 0,
     ) -> LlmRunListRows:
-        """실행 목록 한 쪽. 왕복 셋이고 한 세션 안이다."""
+        """실행 목록 한 쪽. 왕복 둘이고 한 세션 안이다."""
         async with self._session_factory() as session:
             found = list(
                 (
@@ -135,15 +125,13 @@ class LlmRunReadRepository:
             has_more = len(found) > limit
             found = found[:limit]
             if not found:
-                return LlmRunListRows()
-            run_ids = [run.id for run in found]
+                return LlmRunListRows(has_more=has_more)
             produced = {
                 run_id: count
-                for run_id, count in await session.execute(self.produced_thesis_statement(run_ids))
-            }
-            produced |= {
-                run_id: count
-                for run_id, count in await session.execute(self.narrated_outcome_statement(run_ids))
+                for run_id, count in await session.execute(
+                    self.produced_statement([run.id for run in found])
+                )
+                if run_id is not None
             }
         return LlmRunListRows(runs=tuple(found), has_more=has_more, produced=produced)
 
@@ -151,68 +139,44 @@ class LlmRunReadRepository:
         """상세에 필요한 행 전부. **결과 전문은 뺀다** — 단건 조회가 준다."""
         async with self._session_factory() as session:
             run = (
-                await session.execute(select(ThesisLlmRun).where(ThesisLlmRun.id == llm_run_id))
+                await session.execute(select(KospiLlmRun).where(KospiLlmRun.id == llm_run_id))
             ).scalar_one_or_none()
             if run is None:
                 return None
             tool_calls = list(
                 (
                     await session.execute(
-                        select(ThesisToolCall)
-                        .where(ThesisToolCall.llm_run_id == llm_run_id)
-                        .order_by(ThesisToolCall.seq)
+                        select(KospiToolCall)
+                        .where(KospiToolCall.llm_run_id == llm_run_id)
+                        .order_by(KospiToolCall.seq)
                     )
                 ).scalars()
             )
-            theses = list(
+            forecasts = list(
                 (
                     await session.execute(
-                        select(Thesis)
-                        .where(Thesis.llm_run_id == llm_run_id)
-                        .order_by(Thesis.subject_kind, Thesis.subject_code)
+                        select(KospiForecast)
+                        .where(KospiForecast.llm_run_id == llm_run_id)
+                        .order_by(KospiForecast.run_date, KospiForecast.as_of_at)
                     )
                 ).scalars()
-            )
-            outcomes = list(
-                (
-                    await session.execute(
-                        select(ThesisOutcome)
-                        .where(ThesisOutcome.narration_run_id == llm_run_id)
-                        .order_by(ThesisOutcome.thesis_id, ThesisOutcome.horizon_days)
-                    )
-                ).scalars()
-            )
-            subject_ids = [row.thesis_id for row in outcomes]
-            subjects = (
-                {}
-                if not subject_ids
-                else {
-                    row.id: row
-                    for row in (
-                        await session.execute(select(Thesis).where(Thesis.id.in_(subject_ids)))
-                    ).scalars()
-                }
             )
         return LlmRunDetailRows(
-            run=run,
-            tool_calls=tuple(tool_calls),
-            theses=tuple(theses),
-            outcomes=tuple(outcomes),
-            subjects=subjects,
+            run=run, tool_calls=tuple(tool_calls), forecasts=tuple(forecasts)
         )
 
-    async def tool_call_row(self, llm_run_id: int, seq: int) -> ThesisToolCall | None:
+    async def tool_call_row(self, llm_run_id: int, seq: int) -> KospiToolCall | None:
         """툴 호출 하나. **결과 전문이 여기에만 있다.**"""
         async with self._session_factory() as session:
             return (
                 await session.execute(
-                    select(ThesisToolCall).where(
-                        ThesisToolCall.llm_run_id == llm_run_id,
-                        ThesisToolCall.seq == seq,
+                    select(KospiToolCall).where(
+                        KospiToolCall.llm_run_id == llm_run_id,
+                        KospiToolCall.seq == seq,
                     )
                 )
             ).scalar_one_or_none()
 
 
 # 상태 값을 라우트가 리터럴로 적지 않게 모델 Enum에서 뽑는다.
-LLM_RUN_STATUSES: tuple[str, ...] = tuple(status.value for status in LlmRunStatus)
+LLM_RUN_STATUSES: tuple[str, ...] = tuple(status.value for status in KospiLlmRunStatus)

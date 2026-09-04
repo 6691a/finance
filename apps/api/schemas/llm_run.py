@@ -1,7 +1,8 @@
 """LLM 실행 원장의 응답 계약.
 
-**조회 단위가 추론이 아니라 대화다.** 대화 하나가 여러 추론을 만들고 실패 대화에는
-추론이 없다 — 그래서 툴 호출 배열은 `apps/api/schemas/thesis.py`가 아니라 여기 있다.
+**조회 단위가 전망이 아니라 대화다.** 대화 하나가 전망 하나를 만들거나(`forecast`) 아무
+것도 안 만들고 그래프에만 쓴다(`review`) — 그래서 툴 호출 배열이 전망 스키마가 아니라
+여기 있다.
 
 **목록의 `tool_call_count`와 상세의 `tool_calls`는 다른 칸이다.** 앞은 건수, 뒤는 배열이다.
 한 이름을 목록에서는 정수로 상세에서는 배열로 내면 프런트의 `LlmRunDetail extends
@@ -9,6 +10,9 @@ LlmRunItem`이 그 자리에서 깨진다.
 
 **결과 전문(`result`)은 단건 응답에만 있다.** 상세의 목록에 실으면 왕복 하나가 수 MB가
 된다 — 툴 하나를 골랐을 때만 가져온다.
+
+**메모 칸 일곱은 `review`에만 값이 있다.** 전망 대화에서는 전부 null이다 — 0으로 채우면
+"0건"과 "해당 없음"이 같아 보인다.
 """
 
 from datetime import date
@@ -30,7 +34,7 @@ class ToolCallSummary(ApiModel):
     )
     round_no: int = Field(description="몇 번째 tool round의 요청인가(1부터). 한 라운드가 모델 응답 하나다.")
     tool_call_id: str = Field(description="제공처가 준 tool call id. 요청과 결과를 잇는 키다.")
-    tool_name: str = Field(description="부른 툴 이름.")
+    tool_name: str = Field(description="부른 툴 이름(factor_history·recent_news·recent_disclosures).")
     arguments: dict[str, Any] = Field(
         default_factory=dict, description="모델이 보낸 인자 원본(StructuredTool 검증 전)."
     )
@@ -72,29 +76,29 @@ class ToolCallDetail(ToolCallSummary):
     )
 
 
-class ProducedThesis(ApiModel):
-    """이 대화가 만든 추론 하나. 목록 화면의 링크가 이것을 쓴다."""
+class ProducedForecast(ApiModel):
+    """이 대화가 만든 전망 하나. 목록 화면의 링크가 이것을 쓴다."""
 
-    id: int = Field(description="추론 id.")
     run_date: date = Field(description="대상 세션 날짜(KST).")
-    run_slot: str = Field(description="대상 슬롯.")
-    subject_kind: str = Field(description="대상 종류.")
-    subject_code: str = Field(description="대상 식별자.")
-    label: str = Field(description="그 시점의 표시 이름.")
-    url: str = Field(description="추론 상세 경로.")
+    slot: str = Field(description="pre_open·midday·pre_close.")
+    direction: str = Field(description="up·down.")
+    expected_change_pct: float = Field(description="기준가 대비 기대 등락률(%).")
+    band_pct: float = Field(description="± 폭(%p).")
+    hit: bool | None = Field(default=None, description="방향 적중. 채점 전은 null이다.")
+    url: str = Field(description="전망 상세 경로.")
 
 
-class NarratedOutcome(ApiModel):
-    """이 대화가 해설한 지평 하나."""
+class MemoryLedger(ApiModel):
+    """관찰 대화가 메모에 한 일. **`review` 대화에만 있다.**"""
 
-    thesis_id: int = Field(description="해설이 붙은 원 추론의 id.")
-    horizon_days: int = Field(description="해설한 지평(1·3·5). KRX 영업일 수다.")
-    subject_code: str = Field(description="원 추론의 대상 식별자.")
-    label: str = Field(description="원 추론 시점의 표시 이름.")
-    verdict: str | None = Field(
-        default=None, description="원 추론의 이유가 이후 보도로 지지됐나(supported/contradicted/unresolved)."
+    written: int | None = Field(default=None, description="새로 쓴 메모 수.")
+    rejected: int | None = Field(
+        default=None, description="상한·중복으로 버린 수. 상한을 치고 있는지가 여기서 보인다."
     )
-    url: str = Field(description="원 추론 상세 경로.")
+    kept: int | None = Field(default=None, description="유지 판정을 받은 수.")
+    dropped: int | None = Field(default=None, description="모델이 내리라고 한 수.")
+    unreviewed: int | None = Field(default=None, description="답에서 빠져 코드가 센 수.")
+    expired: int | None = Field(default=None, description="나이 상한으로 코드가 내린 수.")
 
 
 class LlmRunItem(ApiModel):
@@ -103,31 +107,22 @@ class LlmRunItem(ApiModel):
     id: int = Field(description="대화 레코드 id.")
     kind: str = Field(
         description=(
-            "대화의 종류. forecast·review·nxt_review는 추론 생성, narration은 사후 해설. "
-            "**슬롯에서 유도할 수 없다** — 같은 post_close에 둘 다 있다."
+            "forecast는 전망, review는 장후 관찰이다. **관찰은 전망을 만들지 않는다** — "
+            "그래프와 메모에만 쓴다."
         )
     )
-    run_date: date = Field(
-        description=(
-            "대화가 대상으로 삼은 세션 날짜(KST). **해설이면 원 추론일이다** — "
-            "실행일이 아니므로 목록 필터의 축과 다르다."
-        )
-    )
-    run_slot: str | None = Field(
+    run_date: date = Field(description="대화가 대상으로 삼은 세션 날짜(KST). 실행일이 아니다.")
+    slot: str | None = Field(
         default=None,
-        description=(
-            "대상 슬롯. 해설이면 원 추론의 슬롯이다. **인과 그래프(`causal`) 실행은 null이다** — "
-            "그 대화의 축은 슬롯이 아니라 주(week)다."
-        ),
+        description="대상 슬롯. **관찰(`review`) 대화는 null이다** — 그 축은 슬롯이 아니라 하루다.",
     )
-    horizon_days: int | None = Field(
-        default=None, description="해설 대화의 지평(1·3·5). 생성 대화는 null이다."
+    as_of_at: UtcDatetime = Field(
+        description="이 대화의 조회 기준 시각(UTC). **벽시계가 아니라 이 값이 축이다** — 배치가 밀려도 이 시각 뒤의 행은 안 본다."
     )
-    as_of_at: UtcDatetime = Field(description="이 대화의 툴 조회 기준 시각(UTC). event-time cutoff다.")
     dag_run_id: str = Field(description="이 대화를 돌린 Airflow dag_run_id.")
     try_number: int = Field(description="그 태스크의 시도 번호(1부터). 재시도는 새 대화다.")
     llm_model: str = Field(description="이 대화를 돈 모델 식별자.")
-    prompt_version: str = Field(description="프롬프트 판. 해설은 `<판>/<변형>` 형태다.")
+    prompt_version: str = Field(description="프롬프트 판. 전망과 관찰이 따로 오른다.")
     started_at: UtcDatetime = Field(description="대화를 시작한 시각(UTC). **목록 필터와 정렬의 축이다.**")
     finished_at: UtcDatetime | None = Field(
         default=None, description="끝난 시각(UTC). null이면 종료를 기록하지 못했다는 뜻이다."
@@ -143,39 +138,39 @@ class LlmRunItem(ApiModel):
         )
     )
     error: str | None = Field(default=None, description="실패 사유. status가 failed일 때만 있다.")
-    tool_rounds: int = Field(description="조사 왕복 수. 왕복 하나가 모델 호출 하나다.")
-    tool_call_count: int = Field(
+    tool_rounds: int | None = Field(
+        default=None, description="조사 왕복 수. 왕복 하나가 모델 호출 하나다."
+    )
+    tool_call_count: int | None = Field(
+        default=None,
         description=(
             "기록된 툴 호출 수. **상한을 재는 카운터와 다른 수다** — 모르는 툴과 인자 검증 "
             "실패도 세지만 툴박스의 예산 카운터는 함수에 진입한 것만 센다."
-        )
+        ),
     )
-    tool_result_chars: int = Field(
-        description="모델에게 실제로 돌아간 결과의 누적 문자 수(delivered=true만)."
+    tool_result_chars: int | None = Field(
+        default=None, description="모델에게 실제로 돌아간 결과의 누적 문자 수(delivered=true만)."
     )
-    investigation_truncated: bool = Field(
-        default=False,
+    truncated: bool | None = Field(
+        default=None,
         description=(
             "모델이 툴을 더 부르겠다고 했는데 상한에서 끊긴 실행인가. 스스로 끝낸 실행과 "
             "`tool_rounds` 하나로는 구분되지 않는다."
         ),
     )
+    rejected: int | None = Field(
+        default=None,
+        description="검증이 버린 이유·관찰 수. **0이 아니면 모델이 조회하지 않은 것을 인용했다.**",
+    )
+    observations_written: int | None = Field(
+        default=None, description="그래프에 쓴 관측 수. `review` 대화에만 있다."
+    )
+    memories: MemoryLedger = Field(
+        default_factory=MemoryLedger, description="메모 원장 여섯. `review` 대화에만 값이 있다."
+    )
     produced_count: int = Field(
         default=0,
-        description=(
-            "이 대화가 만든 산출물 수. 생성 대화는 추론 수, 해설 대화는 해설한 지평 수다. "
-            "**실패·running 실행은 0이다.**"
-        ),
-    )
-    subjects_requested: int | None = Field(
-        default=None,
-        description="이 대화에 요청한 대상 수. 한 대화가 대상 여럿을 다루는 흐름에만 있다.",
-    )
-    subjects_answered: int | None = Field(
-        default=None,
-        description=(
-            "그중 모델이 실제로 답한 수. **요청보다 적으면 조용히 빠진 대상이 있다는 뜻이다.**"
-        ),
+        description="이 대화가 만든 전망 수. **관찰·실패·running 실행은 0이다.**",
     )
     prompt_tokens: int | None = Field(default=None, description="입력 토큰. 캐시분을 포함한다.")
     cached_prompt_tokens: int | None = Field(
@@ -207,9 +202,6 @@ class LlmRunDetail(LlmRunItem):
             "실패 전까지의 기록이라 실패 실행에도 값이 있다."
         ),
     )
-    produced_theses: tuple[ProducedThesis, ...] = Field(
-        default=(), description="이 대화가 만든 추론. 해설·실패·running 실행은 빈 배열이다."
-    )
-    narrated_outcomes: tuple[NarratedOutcome, ...] = Field(
-        default=(), description="이 대화가 해설한 지평. 생성·실패·running 실행은 빈 배열이다."
+    produced_forecasts: tuple[ProducedForecast, ...] = Field(
+        default=(), description="이 대화가 만든 전망. 관찰·실패·running 실행은 빈 배열이다."
     )

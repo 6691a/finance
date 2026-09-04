@@ -1,8 +1,10 @@
 // 실행 목록. **필터는 전부 URL query string에 둔다** — 새로고침·뒤로 가기·링크 공유가
 // 같은 화면을 복원한다.
 //
-// **대상 필터가 없다.** 대화 하나가 여러 대상을 다루고 실패·중단 대화에는 산출물이 아예
-// 없다. 대상으로 찾는 것은 `/theses`가 답한다.
+// **대상 필터가 없다.** 대상이 코스피 하나라 가를 것이 없다.
+//
+// **메모 칸 일곱은 관찰(`review`) 대화에만 값이 있다.** 전망 행에 0을 그리면 "0건"과
+// "해당 없음"이 같아 보이므로 `—`로 둔다.
 
 import { Link, useSearchParams } from "react-router-dom";
 
@@ -10,22 +12,24 @@ import { query, useJson } from "../api";
 import { Async, Empty } from "../components/AsyncState";
 import Pager, { pageOf } from "../components/Pager";
 import { durationText, integerText, kstText } from "../format";
-import type { LlmRunList } from "../types";
+import { FORECAST_SLOTS, RUN_KINDS, labelOf } from "../labels";
+import type { LlmRunItem, LlmRunList } from "../types";
 
-const KINDS = ["forecast", "review", "nxt_review", "narration"];
+const KINDS = ["forecast", "review"];
 const STATUSES = ["running", "succeeded", "failed"];
-const SLOTS = [
-  "pre_open",
-  "intraday_morning",
-  "intraday_midday",
-  "intraday_afternoon",
-  "pre_close",
-  "post_close",
-  "post_nxt_close",
-];
+const SLOTS = ["pre_open", "midday", "pre_close"];
+
+/** 메모 원장 한 칸. **관찰 대화가 아니면 `—`다.** */
+export function memoryText(run: LlmRunItem): string {
+  const ledger = run.memories;
+  if (ledger.written === null) return "—";
+  return `+${ledger.written} 유지${ledger.kept ?? 0} 내림${ledger.dropped ?? 0}${
+    ledger.rejected ? ` 거절${ledger.rejected}` : ""
+  }`;
+}
 
 /** 상태를 **색으로만** 구분하지 않는다. 배지 안에 글자가 있고 색은 거들 뿐이다. */
-function StatusBadge({ status, truncated }: { status: string; truncated: boolean }) {
+function StatusBadge({ status, truncated }: { status: string; truncated: boolean | null }) {
   const text = status === "running" ? "종료 미기록" : status === "succeeded" ? "성공" : "실패";
   const tone = status === "succeeded" ? "badge-ok" : status === "failed" ? "badge-bad" : "";
   return (
@@ -125,7 +129,6 @@ export default function RunsPage() {
                     <th scope="col">대상일</th>
                     <th scope="col">종류</th>
                     <th scope="col">슬롯</th>
-                    <th scope="col">지평</th>
                     <th scope="col">모델</th>
                     <th scope="col">판</th>
                     <th scope="col">시도</th>
@@ -134,8 +137,10 @@ export default function RunsPage() {
                     <th scope="col">툴</th>
                     <th scope="col">결과 문자</th>
                     <th scope="col">소요</th>
-                    <th scope="col">산출물</th>
-                    <th scope="col">대상(답/요청)</th>
+                    <th scope="col">전망</th>
+                    <th scope="col">관측</th>
+                    <th scope="col">메모</th>
+                    <th scope="col">버림</th>
                     <th scope="col">입력(캐시)</th>
                     <th scope="col">출력(사고)</th>
                   </tr>
@@ -149,25 +154,22 @@ export default function RunsPage() {
                         </Link>
                       </td>
                       <td>{run.run_date}</td>
-                      <td>{run.kind}</td>
-                      <td>{run.run_slot ?? "—"}</td>
-                      <td>{run.horizon_days === null ? "—" : `T+${run.horizon_days}`}</td>
+                      <td>{labelOf(RUN_KINDS, run.kind)}</td>
+                      <td>{run.slot === null ? "—" : labelOf(FORECAST_SLOTS, run.slot)}</td>
                       <td>{run.llm_model}</td>
                       <td>{run.prompt_version}</td>
                       <td>{run.try_number}</td>
                       <td>
-                        <StatusBadge status={run.status} truncated={run.investigation_truncated} />
+                        <StatusBadge status={run.status} truncated={run.truncated === true} />
                       </td>
-                      <td>{run.tool_rounds}</td>
-                      <td>{run.tool_call_count}</td>
+                      <td>{run.tool_rounds ?? "—"}</td>
+                      <td>{run.tool_call_count ?? "—"}</td>
                       <td>{integerText(run.tool_result_chars)}</td>
                       <td>{durationText(run.duration_ms)}</td>
                       <td>{run.produced_count}</td>
-                      <td>
-                        {run.subjects_requested === null
-                          ? "—"
-                          : `${run.subjects_answered ?? 0}/${run.subjects_requested}`}
-                      </td>
+                      <td>{run.observations_written ?? "—"}</td>
+                      <td>{memoryText(run)}</td>
+                      <td className={run.rejected ? "warn" : undefined}>{run.rejected ?? "—"}</td>
                       <td>
                         {run.prompt_tokens === null
                           ? "—"

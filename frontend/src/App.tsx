@@ -1,33 +1,33 @@
 // 클라이언트 라우트와 공통 shell.
 //
-// **화면 루트는 `/runs`다.** 실패한 실행에는 thesis가 없어서 실행 목록이 "무슨 일이
-// 있었나"를 가장 넓게 답한다. `/theses`는 12단계 목록 API를 그대로 쓰는 보조 탐색 경로다.
+// **첫 화면은 대시보드이고 추론의 얼굴은 `/forecast`다.** 대상이 코스피 하나로 좁아져서
+// "오늘 무엇이라고 말했나"가 곧 그 기능의 전부다.
 //
-// 15단계가 원자료 여섯을 더했다(시세·지표·문서·수급·사건·수집). 그쪽은 **추론이 딛고 선
-// 원자료**라 내비게이션에서 추론 화면(실행·판단·품질) 앞에 둔다.
+// 원자료 여섯(시세·지표·문서·수급·사건·수집)은 **추론이 딛고 선 것**이라 내비게이션에서
+// 추론 화면(전망·관계·메모·실행·품질) 앞에 둔다.
 
 import { NavLink, Navigate, Route, Routes } from "react-router-dom";
 
 import Boundary from "./components/Boundary";
-import CausalDetailPage from "./pages/CausalDetailPage";
-import DashboardPage from "./pages/DashboardPage";
-import CausalPage from "./pages/CausalPage";
 import CollectionPage from "./pages/CollectionPage";
 import CurvePage from "./pages/CurvePage";
+import DashboardPage from "./pages/DashboardPage";
 import DocumentDetailPage from "./pages/DocumentDetailPage";
 import DocumentsPage from "./pages/DocumentsPage";
 import EventsPage from "./pages/EventsPage";
+import ForecastDetailPage from "./pages/ForecastDetailPage";
+import ForecastPage from "./pages/ForecastPage";
 import IndicatorDetailPage from "./pages/IndicatorDetailPage";
 import IndicatorsPage from "./pages/IndicatorsPage";
+import MemoriesPage from "./pages/MemoriesPage";
 import PositioningPage from "./pages/PositioningPage";
 import QualityPage from "./pages/QualityPage";
 import QuoteDetailPage from "./pages/QuoteDetailPage";
 import QuotesPage from "./pages/QuotesPage";
+import RelationDetailPage from "./pages/RelationDetailPage";
+import RelationsPage from "./pages/RelationsPage";
 import RunDetailPage from "./pages/RunDetailPage";
 import RunsPage from "./pages/RunsPage";
-import ThesesPage from "./pages/ThesesPage";
-import ThesisDetailPage from "./pages/ThesisDetailPage";
-import ThesisGraphPage from "./pages/ThesisGraphPage";
 import ToolCallPage from "./pages/ToolCallPage";
 
 export default function App() {
@@ -43,9 +43,10 @@ export default function App() {
           <NavLink to="/positioning">수급</NavLink>
           <NavLink to="/events">사건</NavLink>
           <NavLink to="/collection">수집</NavLink>
-          <NavLink to="/causal">인과</NavLink>
+          <NavLink to="/forecast">전망</NavLink>
+          <NavLink to="/relations">관계</NavLink>
+          <NavLink to="/memories">메모</NavLink>
           <NavLink to="/runs">실행</NavLink>
-          <NavLink to="/theses">판단</NavLink>
           <NavLink to="/quality">품질</NavLink>
         </nav>
       </header>
@@ -53,8 +54,8 @@ export default function App() {
         {/* 렌더 예외가 흰 화면이 되지 않게 한다. 무엇이 터졌는지 그 자리에 남는다. */}
         <Boundary>
           <Routes>
-            {/* **첫 화면이 대시보드다.** 전에는 `/runs`로 보냈는데, 실행 목록은
-                "무슨 일이 있었나"의 한 갈래일 뿐이라 수집·추론·인과가 안 보였다. */}
+            {/* **첫 화면이 대시보드다.** 실행 목록은 "무슨 일이 있었나"의 한 갈래일
+                뿐이라 수집·전망·관계가 안 보인다. */}
             <Route path="/" element={<Navigate to="/dashboard" replace />} />
             <Route path="/dashboard" element={<DashboardPage />} />
             <Route path="/quotes" element={<QuotesPage />} />
@@ -68,14 +69,15 @@ export default function App() {
             <Route path="/positioning" element={<PositioningPage />} />
             <Route path="/events" element={<EventsPage />} />
             <Route path="/collection" element={<CollectionPage />} />
-            <Route path="/causal" element={<CausalPage />} />
-            <Route path="/causal/:pathId" element={<CausalDetailPage />} />
+            {/* 정적 경로가 동적 경로보다 먼저 온다 — 뒤면 `memories`가 요인 코드로 물린다. */}
+            <Route path="/forecast" element={<ForecastPage />} />
+            <Route path="/forecast/:runDate/:slot" element={<ForecastDetailPage />} />
+            <Route path="/relations" element={<RelationsPage />} />
+            <Route path="/relations/:factor" element={<RelationDetailPage />} />
+            <Route path="/memories" element={<MemoriesPage />} />
             <Route path="/runs" element={<RunsPage />} />
             <Route path="/runs/:llmRunId" element={<RunDetailPage />} />
             <Route path="/runs/:llmRunId/tool-calls/:seq" element={<ToolCallPage />} />
-            <Route path="/theses" element={<ThesesPage />} />
-            <Route path="/theses/:thesisId" element={<ThesisDetailPage />} />
-            <Route path="/theses/:thesisId/graph" element={<ThesisGraphPage />} />
             <Route path="/quality" element={<QualityPage />} />
               <Route path="*" element={<p className="state">없는 화면이다.</p>} />
           </Routes>

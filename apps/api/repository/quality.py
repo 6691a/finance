@@ -1,11 +1,14 @@
-"""품질 집계 조회. **조회 셋을 나눠 읽고 합치는 것은 서비스가 한다.**
+"""품질 집계 조회. **조회 둘을 나눠 읽고 합치는 것은 서비스가 한다.**
 
-한 조회로 합치지 않는 이유는 셋의 단위가 다르기 때문이다 — 채점은 `thesis_outcome` 행
-단위, 툴 평균은 **서로 다른 실행** 단위, 판정은 해설이 붙은 행 단위다. 억지로 한 SELECT에
-넣으면 실행 하나가 추론 수만큼 곱해져 툴 평균이 조용히 편향된다.
+한 조회로 합치지 않는 이유는 둘의 단위가 다르기 때문이다 — 전망 채점은 `kospi_forecast`
+행 단위, 관찰 통계는 `kospi_llm_run` 실행 단위다. 억지로 한 SELECT에 넣으면 실행 하나가
+전망 수만큼 곱해져 평균이 조용히 편향된다.
 
 **행 모양은 여기서 Pydantic 모델로 못 박는다.** SQLAlchemy `Row`를 그대로 서비스로
 넘기면 칸 이름 오타가 실행 시점까지 산다.
+
+**평균이 아니라 합과 건수를 가져온다.** 서비스가 마지막에 한 번만 나눈다 — 그래야 주를
+합칠 때 평균의 평균이 되지 않는다.
 """
 
 from collections.abc import Sequence
@@ -17,11 +20,10 @@ from sqlalchemy import Date, Select, cast, func, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from apps.models.analysis import (
-    LlmRunStatus,
-    Thesis,
-    ThesisLlmRun,
-    ThesisOutcome,
-    ThesisVerdict,
+    KospiForecast,
+    KospiLlmRun,
+    KospiLlmRunKind,
+    KospiLlmRunStatus,
 )
 
 
@@ -32,57 +34,50 @@ class QualityRow(BaseModel):
 
 
 class ForecastGrade(QualityRow):
-    """채점 집계 한 행. 키는 `(week_start, horizon_days, run_slot, llm_model, prompt_version)`."""
+    """전망 채점 집계 한 행. 키는 `(week_start, slot, llm_model, prompt_version)`."""
 
     week_start: date
-    horizon_days: int
-    run_slot: str
+    slot: str
     llm_model: str
     prompt_version: str
-    mean_brier: float | None = None
-    brier_samples: int = 0
-    mean_return_error_pct: float | None = None
-    mae_return_pct: float | None = None
-    return_samples: int = 0
+    graded: int = 0
+    pending: int = 0
+    hits: int = 0
+    within_band: int = 0
+    abs_error_sum: float | None = None
+    band_sum: float | None = None
+    expected_sum: float | None = None
+    weak: int = 0
+    rejected_reasons: int = 0
 
 
-class ForecastRunStat(QualityRow):
-    """툴 사용 집계 한 행. **서로 다른 실행만 센다** — 같은 키의 같은 실행은 한 번이다."""
+class ReviewStat(QualityRow):
+    """관찰 실행 집계 한 행. 키는 `(week_start, llm_model, prompt_version)`."""
 
     week_start: date
-    horizon_days: int
-    run_slot: str
     llm_model: str
     prompt_version: str
-    mean_tool_calls: float | None = None
-    mean_tool_result_chars: float | None = None
-    run_samples: int = 0
-
-
-class NarrativeGrade(QualityRow):
-    """판정 집계 한 행. 키는 `(week_start, horizon_days, llm_model, prompt_version)`."""
-
-    week_start: date
-    horizon_days: int
-    llm_model: str
-    prompt_version: str
-    supported: int = 0
-    contradicted: int = 0
-    unresolved: int = 0
-    verdict_samples: int = 0
+    runs: int = 0
+    observations_written: int = 0
+    memories_written: int = 0
+    memories_rejected: int = 0
+    memories_dropped: int = 0
+    memories_expired: int = 0
+    rejected: int = 0
+    tool_calls_sum: int = 0
+    truncated: int = 0
 
 
 class QualityRows(QualityRow):
-    """한 응답이 필요로 하는 집계 셋."""
+    """한 응답이 필요로 하는 집계 둘."""
 
-    forecast_grades: tuple[ForecastGrade, ...] = ()
-    forecast_runs: tuple[ForecastRunStat, ...] = ()
-    narrative: tuple[NarrativeGrade, ...] = ()
+    forecast: tuple[ForecastGrade, ...] = ()
+    review: tuple[ReviewStat, ...] = ()
 
 
-def _week_start() -> Any:
+def week_of(column: Any) -> Any:
     """주의 시작(월요일). `run_date`가 이미 KST 세션 날짜라 여기서 시간대를 다시 바꾸지 않는다."""
-    return cast(func.date_trunc("week", Thesis.run_date), Date).label("week_start")
+    return cast(func.date_trunc("week", column), Date).label("week_start")
 
 
 class QualityReadRepository:
@@ -94,159 +89,125 @@ class QualityReadRepository:
     # --- 조회문 (테스트가 컴파일해서 본다) ---------------------------------------
 
     @staticmethod
-    def _scoped(
-        statement: Select[Any],
-        *,
-        run_date_from: date,
-        run_date_to: date,
-        run_slots: Sequence[str],
-        subject_codes: Sequence[str],
-        horizon_days: Sequence[int],
+    def forecast_statement(
+        *, run_date_from: date, run_date_to: date, slots: Sequence[str] = ()
     ) -> Select[Any]:
-        """세 조회가 같은 필터를 쓴다. 한 자리에 두지 않으면 표 둘이 다른 모집단을 센다."""
-        statement = statement.where(
-            Thesis.run_date >= run_date_from,
-            Thesis.run_date <= run_date_to,
+        """전망 채점 집계. 채점 전 행도 `pending`으로 센다 — 빼면 표가 "아직 없다"를 못 말한다."""
+        week = week_of(KospiForecast.run_date)
+        statement = select(
+            week,
+            KospiForecast.slot,
+            KospiForecast.llm_model,
+            KospiForecast.prompt_version,
+            func.count().filter(KospiForecast.graded_at.is_not(None)).label("graded"),
+            func.count().filter(KospiForecast.graded_at.is_(None)).label("pending"),
+            func.count().filter(KospiForecast.hit.is_(True)).label("hits"),
+            func.count().filter(KospiForecast.within_band.is_(True)).label("within_band"),
+            func.sum(
+                func.abs(KospiForecast.actual_change_pct - KospiForecast.expected_change_pct)
+            ).label("abs_error_sum"),
+            func.sum(KospiForecast.band_pct)
+            .filter(KospiForecast.graded_at.is_not(None))
+            .label("band_sum"),
+            func.sum(KospiForecast.expected_change_pct)
+            .filter(KospiForecast.graded_at.is_not(None))
+            .label("expected_sum"),
+            func.count().filter(KospiForecast.weak.is_(True)).label("weak"),
+            func.coalesce(func.sum(KospiForecast.rejected_reasons), 0).label("rejected_reasons"),
+        ).where(
+            KospiForecast.run_date >= run_date_from,
+            KospiForecast.run_date <= run_date_to,
         )
-        if run_slots:
-            statement = statement.where(Thesis.run_slot.in_(run_slots))
-        if subject_codes:
-            statement = statement.where(Thesis.subject_code.in_(subject_codes))
-        if horizon_days:
-            statement = statement.where(ThesisOutcome.horizon_days.in_(horizon_days))
-        return statement
+        if slots:
+            statement = statement.where(KospiForecast.slot.in_(slots))
+        return statement.group_by(
+            week, KospiForecast.slot, KospiForecast.llm_model, KospiForecast.prompt_version
+        ).order_by(week.desc(), KospiForecast.slot)
 
-    @classmethod
-    def forecast_grade_statement(cls, **scope: Any) -> Select[Any]:
-        """채점 집계. **`count()`는 컬럼을 세므로 NULL 지평이 표본에 안 들어간다.**"""
-        week = _week_start()
-        statement = (
-            select(
-                week,
-                ThesisOutcome.horizon_days,
-                Thesis.run_slot,
-                Thesis.llm_model,
-                Thesis.prompt_version,
-                func.avg(ThesisOutcome.brier_score).label("mean_brier"),
-                func.count(ThesisOutcome.brier_score).label("brier_samples"),
-                func.avg(ThesisOutcome.return_error_pct).label("mean_return_error_pct"),
-                func.avg(func.abs(ThesisOutcome.return_error_pct)).label("mae_return_pct"),
-                func.count(ThesisOutcome.return_error_pct).label("return_samples"),
-            )
-            .select_from(Thesis)
-            .join(ThesisOutcome, ThesisOutcome.thesis_id == Thesis.id)
-        )
-        return (
-            cls._scoped(statement, **scope)
-            .group_by(week, ThesisOutcome.horizon_days, Thesis.run_slot, Thesis.llm_model, Thesis.prompt_version)
-            .order_by(week, ThesisOutcome.horizon_days, Thesis.run_slot)
-        )
-
-    @classmethod
-    def forecast_run_statement(cls, **scope: Any) -> Select[Any]:
-        """툴 사용 집계. **`DISTINCT` 뒤에 평균을 낸다.**
-
-        실행 하나가 여러 추론을 만들므로 조인 결과에서 그대로 평균을 내면 추론이 많은
-        실행이 그 수만큼 가중된다. 키와 실행 id로 먼저 눌러서 실행 하나가 한 행이 되게 한다.
-        """
-        week = _week_start()
-        inner = (
-            select(
-                week,
-                ThesisOutcome.horizon_days.label("horizon_days"),
-                Thesis.run_slot.label("run_slot"),
-                Thesis.llm_model.label("llm_model"),
-                Thesis.prompt_version.label("prompt_version"),
-                ThesisLlmRun.id.label("run_id"),
-                ThesisLlmRun.tool_calls.label("tool_calls"),
-                ThesisLlmRun.tool_result_chars.label("tool_result_chars"),
-            )
-            .select_from(Thesis)
-            .join(ThesisOutcome, ThesisOutcome.thesis_id == Thesis.id)
-            .join(ThesisLlmRun, ThesisLlmRun.id == Thesis.llm_run_id)
-            .where(ThesisLlmRun.status == LlmRunStatus.SUCCEEDED)
-        )
-        deduped = cls._scoped(inner, **scope).distinct().subquery()
+    @staticmethod
+    def review_statement(*, run_date_from: date, run_date_to: date) -> Select[Any]:
+        """관찰 실행 집계. **성공한 실행만 센다** — 실패 실행의 null 칸이 평균을 흔든다."""
+        week = week_of(KospiLlmRun.run_date)
         return (
             select(
-                deduped.c.week_start,
-                deduped.c.horizon_days,
-                deduped.c.run_slot,
-                deduped.c.llm_model,
-                deduped.c.prompt_version,
-                func.avg(deduped.c.tool_calls).label("mean_tool_calls"),
-                func.avg(deduped.c.tool_result_chars).label("mean_tool_result_chars"),
-                func.count(deduped.c.run_id).label("run_samples"),
-            )
-            .group_by(
-                deduped.c.week_start,
-                deduped.c.horizon_days,
-                deduped.c.run_slot,
-                deduped.c.llm_model,
-                deduped.c.prompt_version,
-            )
-            .order_by(deduped.c.week_start, deduped.c.horizon_days, deduped.c.run_slot)
-        )
-
-    @classmethod
-    def narrative_statement(cls, **scope: Any) -> Select[Any]:
-        """판정 집계. **키에 `run_slot`이 없다** — 해설은 슬롯이 아니라 지평으로 갈린다."""
-        week = _week_start()
-
-        def tally(value: ThesisVerdict) -> Any:
-            return func.count(ThesisOutcome.verdict).filter(ThesisOutcome.verdict == value).label(value.value)
-
-        statement = (
-            select(
                 week,
-                ThesisOutcome.horizon_days,
-                ThesisOutcome.llm_model,
-                ThesisOutcome.prompt_version,
-                tally(ThesisVerdict.SUPPORTED),
-                tally(ThesisVerdict.CONTRADICTED),
-                tally(ThesisVerdict.UNRESOLVED),
-                func.count(ThesisOutcome.verdict).label("verdict_samples"),
+                KospiLlmRun.llm_model,
+                KospiLlmRun.prompt_version,
+                func.count().label("runs"),
+                func.coalesce(func.sum(KospiLlmRun.observations_written), 0).label(
+                    "observations_written"
+                ),
+                func.coalesce(func.sum(KospiLlmRun.memories_written), 0).label("memories_written"),
+                func.coalesce(func.sum(KospiLlmRun.memories_rejected), 0).label("memories_rejected"),
+                func.coalesce(func.sum(KospiLlmRun.memories_dropped), 0).label("memories_dropped"),
+                func.coalesce(func.sum(KospiLlmRun.memories_expired), 0).label("memories_expired"),
+                func.coalesce(func.sum(KospiLlmRun.rejected), 0).label("rejected"),
+                func.coalesce(func.sum(KospiLlmRun.tool_calls), 0).label("tool_calls_sum"),
+                func.count().filter(KospiLlmRun.truncated.is_(True)).label("truncated"),
             )
-            .select_from(Thesis)
-            .join(ThesisOutcome, ThesisOutcome.thesis_id == Thesis.id)
-            .where(ThesisOutcome.verdict.is_not(None))
-        )
-        return (
-            cls._scoped(statement, **scope)
-            .group_by(week, ThesisOutcome.horizon_days, ThesisOutcome.llm_model, ThesisOutcome.prompt_version)
-            .order_by(week, ThesisOutcome.horizon_days)
+            .where(
+                KospiLlmRun.run_date >= run_date_from,
+                KospiLlmRun.run_date <= run_date_to,
+                KospiLlmRun.kind == KospiLlmRunKind.REVIEW,
+                KospiLlmRun.status == KospiLlmRunStatus.SUCCEEDED,
+            )
+            .group_by(week, KospiLlmRun.llm_model, KospiLlmRun.prompt_version)
+            .order_by(week.desc())
         )
 
     # --- 공개 조회 -----------------------------------------------------------
 
-    async def quality_rows(
-        self,
-        *,
-        run_date_from: date,
-        run_date_to: date,
-        run_slots: Sequence[str] = (),
-        subject_codes: Sequence[str] = (),
-        horizon_days: Sequence[int] = (),
+    async def summary_rows(
+        self, *, run_date_from: date, run_date_to: date, slots: Sequence[str] = ()
     ) -> QualityRows:
-        """집계 셋. 왕복 셋이고 한 세션 안이다."""
-        scope = {
-            "run_date_from": run_date_from,
-            "run_date_to": run_date_to,
-            "run_slots": run_slots,
-            "subject_codes": subject_codes,
-            "horizon_days": horizon_days,
-        }
+        """집계 둘. 왕복 둘이고 한 세션 안이다."""
         async with self._session_factory() as session:
-            grades = await self._rows(session, self.forecast_grade_statement(**scope), ForecastGrade)
-            runs = await self._rows(session, self.forecast_run_statement(**scope), ForecastRunStat)
-            narrative = await self._rows(session, self.narrative_statement(**scope), NarrativeGrade)
+            forecast = (
+                await session.execute(
+                    self.forecast_statement(
+                        run_date_from=run_date_from, run_date_to=run_date_to, slots=slots
+                    )
+                )
+            ).all()
+            review = (
+                await session.execute(
+                    self.review_statement(run_date_from=run_date_from, run_date_to=run_date_to)
+                )
+            ).all()
         return QualityRows(
-            forecast_grades=tuple(grades),
-            forecast_runs=tuple(runs),
-            narrative=tuple(narrative),
+            forecast=tuple(
+                ForecastGrade(
+                    week_start=row.week_start,
+                    slot=str(row.slot),
+                    llm_model=row.llm_model,
+                    prompt_version=row.prompt_version,
+                    graded=row.graded or 0,
+                    pending=row.pending or 0,
+                    hits=row.hits or 0,
+                    within_band=row.within_band or 0,
+                    abs_error_sum=None if row.abs_error_sum is None else float(row.abs_error_sum),
+                    band_sum=None if row.band_sum is None else float(row.band_sum),
+                    expected_sum=None if row.expected_sum is None else float(row.expected_sum),
+                    weak=row.weak or 0,
+                    rejected_reasons=row.rejected_reasons or 0,
+                )
+                for row in forecast
+            ),
+            review=tuple(
+                ReviewStat(
+                    week_start=row.week_start,
+                    llm_model=row.llm_model,
+                    prompt_version=row.prompt_version,
+                    runs=row.runs or 0,
+                    observations_written=row.observations_written or 0,
+                    memories_written=row.memories_written or 0,
+                    memories_rejected=row.memories_rejected or 0,
+                    memories_dropped=row.memories_dropped or 0,
+                    memories_expired=row.memories_expired or 0,
+                    rejected=row.rejected or 0,
+                    tool_calls_sum=row.tool_calls_sum or 0,
+                    truncated=row.truncated or 0,
+                )
+                for row in review
+            ),
         )
-
-    @staticmethod
-    async def _rows(session: AsyncSession, statement: Select[Any], model: type[QualityRow]) -> list[Any]:
-        """집계 행을 모델로. 라벨 이름이 곧 필드 이름이라 대조가 여기서 한 번에 된다."""
-        return [model.model_validate(row._mapping, from_attributes=True) for row in await session.execute(statement)]

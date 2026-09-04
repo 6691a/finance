@@ -1,109 +1,101 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, test } from "vitest";
 
-import { GRAPH } from "./fixtures";
-import { edgeId, elementsOf, filterElements, nodeLabel, nodeType } from "./graph";
+import { edgeId, factorOf, nodeLabel, relationElements, weightClass } from "./graph";
+import type { RelationGraph, RelationItem } from "./types";
 
-describe("elementsOf", () => {
-  it("입력을 바꾸지 않는다", () => {
-    const before = JSON.stringify(GRAPH);
-    elementsOf(GRAPH);
-    expect(JSON.stringify(GRAPH)).toBe(before);
+function graph(overrides: Partial<RelationGraph> = {}): RelationGraph {
+  return {
+    as_of_date: "2026-09-03",
+    nodes: [
+      { id: "index:KOSPI", kind: "index", label: "코스피", n_obs: 0 },
+      { id: "factor:FOREIGN_NET_BUY", kind: "factor", label: "외국인 순매수", n_obs: 12 },
+      { id: "factor:VIX", kind: "factor", label: "VIX", n_obs: 0 },
+    ],
+    edges: [
+      { source: "factor:FOREIGN_NET_BUY", target: "index:KOSPI", weight: 0.8, n_obs: 12 },
+    ],
+    ...overrides,
+  };
+}
+
+describe("weightClass", () => {
+  test("부호가 방향을 정한다", () => {
+    expect(weightClass(0.8)).toBe("direction-up");
+    expect(weightClass(-0.15)).toBe("direction-down");
   });
 
-  it("API node id를 그대로 보존한다", () => {
-    // `Evidence` 노드 id가 `evidence_ref` 그 자체다. 프런트가 새 id를 만들면 상세와 못 잇는다.
-    const ids = elementsOf(GRAPH)
-      .filter((element) => element.group === "nodes")
-      .map((element) => element.data["id"]);
+  test("0은 어느 쪽도 아니다 — 관측이 없을 때뿐이다", () => {
+    expect(weightClass(0)).toBe("");
+  });
+});
 
-    expect(ids).toEqual(["thesis:1", "thesis:2", "document:4471", "mystery:1"]);
+describe("relationElements", () => {
+  test("코스피가 중심이고 요인이 그것을 가리킨다", () => {
+    const elements = relationElements(graph());
+
+    const center = elements.find((element) => element.data["center"] === true);
+    expect(center?.data["id"]).toBe("index:KOSPI");
+    const edge = elements.find((element) => element.group === "edges");
+    expect(edge?.data["source"]).toBe("factor:FOREIGN_NET_BUY");
+    expect(edge?.data["target"]).toBe("index:KOSPI");
   });
 
-  it("edge id를 type:start:end로 만든다", () => {
-    // API edge에는 id가 없다. 원 판단 CITES와 precedent pair가 유일하다는 계약 위에서 만든다.
-    expect(edgeId(GRAPH.edges[0]!)).toBe("CITES:thesis:1:document:4471");
-    const ids = elementsOf(GRAPH)
-      .filter((element) => element.group === "edges")
-      .map((element) => element.data["id"]);
-    expect(new Set(ids).size).toBe(ids.length);
+  test("관측이 없는 요인도 노드로 남는다 — 숨기면 '관계 없음'으로 읽힌다", () => {
+    const elements = relationElements(graph());
+
+    const ids = elements.filter((element) => element.group === "nodes").map((n) => n.data["id"]);
+    expect(ids).toContain("factor:VIX");
+    expect(elements.filter((element) => element.group === "edges")).toHaveLength(1);
   });
 
-  it("중심 노드에 표시를 남긴다", () => {
-    const center = elementsOf(GRAPH).find((element) => element.data["id"] === "thesis:1");
+  test("엣지 두께가 가중치 크기를 따른다", () => {
+    const strong = relationElements(graph()).find((element) => element.group === "edges");
+    const weak = relationElements(
+      graph({ edges: [{ source: "factor:VIX", target: "index:KOSPI", weight: 0.05, n_obs: 1 }] }),
+    ).find((element) => element.group === "edges");
 
-    expect(center?.data["center"]).toBe(true);
-    expect(center?.classes).toContain("center");
+    expect(Number(strong?.data["width"])).toBeGreaterThan(Number(weak?.data["width"]));
+    // 아주 작은 값도 선으로 보여야 한다.
+    expect(Number(weak?.data["width"])).toBeGreaterThan(1);
   });
 
-  it("모르는 label과 edge type은 회색 기본으로 떨어지고 죽지 않는다", () => {
-    const elements = elementsOf(GRAPH);
-    const mystery = elements.find((element) => element.data["id"] === "mystery:1");
-    const whisper = elements.find((element) => element.data["type"] === "WHISPERS");
-
-    expect(mystery?.data["nodeType"]).toBe("other");
-    expect(whisper?.data["edgeType"]).toBe("other");
-    // 원본 type은 버리지 않는다. 화면이 그것을 그대로 보인다.
-    expect(whisper?.data["type"]).toBe("WHISPERS");
-  });
-
-  it("한쪽 끝이 없는 엣지는 버린다", () => {
-    // Cytoscape는 없는 끝을 만나면 예외를 던진다.
-    const broken = {
-      ...GRAPH,
-      edges: [{ type: "CITES", start: "thesis:1", end: "document:9999", properties: {} }],
-    };
-
-    expect(elementsOf(broken).filter((element) => element.group === "edges")).toEqual([]);
-  });
-
-  it("서버 properties를 style key로 그대로 쓰지 않는다", () => {
-    const node = elementsOf(GRAPH).find((element) => element.data["id"] === "thesis:1");
-
-    // style이 보는 것은 우리가 만든 칸이고, 원본은 `properties` 안에 통째로 남는다.
-    expect(node?.data["nodeType"]).toBe("thesis");
-    expect((node?.data["properties"] as Record<string, unknown>)["brier_score"]).toBe(0.51);
+  test("엣지 id는 양 끝으로 만든다 — 서버가 안 준다", () => {
+    expect(edgeId({ source: "factor:VIX", target: "index:KOSPI", weight: 0, n_obs: 0 })).toBe(
+      "factor:VIX->index:KOSPI",
+    );
   });
 });
 
 describe("nodeLabel", () => {
-  it("판단은 이름·날짜·슬롯을 쓴다", () => {
-    expect(nodeLabel(GRAPH.nodes[0]!)).toBe("코스피\n2026-08-26\nintraday_midday");
+  test("요인은 이름과 관측 수를 함께 보인다", () => {
+    expect(nodeLabel("VIX", "factor", 3)).toBe("VIX\n3회");
   });
 
-  it("근거는 제목을 쓴다", () => {
-    expect(nodeLabel(GRAPH.nodes[2]!)).toBe("반도체 수출 증가");
-  });
-
-  it("쓸 이름이 없으면 id로 떨어진다", () => {
-    // 빈 원을 그리지 않는다.
-    expect(nodeLabel(GRAPH.nodes[3]!)).toBe("mystery:1");
-    expect(nodeType(GRAPH.nodes[3]!.labels)).toBe("other");
+  test("지수는 이름 하나다", () => {
+    expect(nodeLabel("코스피", "index", 0)).toBe("코스피");
   });
 });
 
-describe("filterElements", () => {
-  it("노드를 끄면 그 노드에 붙은 엣지도 함께 사라진다", () => {
-    const shown = filterElements(elementsOf(GRAPH), {
-      nodeTypes: ["thesis"],
-      edgeTypes: ["cites", "informed_by", "other"],
-    });
+describe("factorOf", () => {
+  const items: RelationItem[] = [
+    {
+      factor: "VIX",
+      label: "VIX",
+      weight: -0.33,
+      n_obs: 3,
+      last_date: "2026-08-26",
+      last_note: "위험자산 약세",
+      recent_signs: ["inverse"],
+      url: "/api/relations/VIX",
+    },
+  ];
 
-    expect(shown.filter((element) => element.group === "nodes").map((element) => element.data["id"])).toEqual([
-      "thesis:1",
-      "thesis:2",
-    ]);
-    expect(shown.filter((element) => element.group === "edges").map((element) => element.data["type"])).toEqual([
-      "INFORMED_BY",
-    ]);
+  test("고른 노드가 요인이면 그 행을 준다", () => {
+    expect(factorOf(items, "factor:VIX")?.factor).toBe("VIX");
   });
 
-  it("엣지 종류만 끄면 노드는 남는다", () => {
-    const shown = filterElements(elementsOf(GRAPH), {
-      nodeTypes: ["thesis", "evidence", "other"],
-      edgeTypes: ["informed_by"],
-    });
-
-    expect(shown.filter((element) => element.group === "nodes").length).toBe(4);
-    expect(shown.filter((element) => element.group === "edges").length).toBe(1);
+  test("코스피 노드나 빈 선택은 행이 없다", () => {
+    expect(factorOf(items, "index:KOSPI")).toBeNull();
+    expect(factorOf(items, null)).toBeNull();
   });
 });

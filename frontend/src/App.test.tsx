@@ -8,7 +8,19 @@ import { MemoryRouter } from "react-router-dom";
 import { afterEach, expect, it, vi } from "vitest";
 
 import App from "./App";
-import { CALL_DETAIL, GRAPH, QUALITY, RUN_DETAIL, RUN_LIST, THESIS_DETAIL, THESIS_LIST } from "./fixtures";
+import {
+  ACCURACY,
+  CALL_DETAIL,
+  FORECAST_DETAIL,
+  FORECAST_LIST,
+  MEMORY_LIST,
+  OBSERVATION_LIST,
+  QUALITY,
+  RELATION_GRAPH,
+  RELATION_LIST,
+  RUN_DETAIL,
+  RUN_LIST,
+} from "./fixtures";
 import { stubFetch } from "./test-harness";
 
 // jsdom에는 canvas도 `matchMedia`도 없다. 여기서 볼 것은 라우트 등록이지 그리기가 아니라
@@ -51,12 +63,14 @@ const CLIENT_ROUTES = [
   "/indicators",
   "/indicators/curve",
   "/indicators/:provider/:seriesId",
+  "/forecast",
+  "/forecast/:runDate/:slot",
+  "/relations",
+  "/relations/:factor",
+  "/memories",
   "/runs",
   "/runs/:llmRunId",
   "/runs/:llmRunId/tool-calls/:seq",
-  "/theses",
-  "/theses/:thesisId",
-  "/theses/:thesisId/graph",
   "/quality",
 ];
 
@@ -68,12 +82,20 @@ function renderApp(path: string) {
   );
 }
 
-it("화면 루트는 실행 목록이다", async () => {
-  // 실패한 실행에는 thesis가 없어서 실행 목록이 가장 넓게 답한다.
-  stubFetch({ "/api/llm-runs": RUN_LIST });
+it("화면 루트는 대시보드다", async () => {
+  // 실행 목록은 "무슨 일이 있었나"의 한 갈래일 뿐이라 수집·전망·관계가 안 보인다.
+  stubFetch({
+    "/api/llm-runs": RUN_LIST,
+    "/api/forecasts/accuracy": ACCURACY,
+    "/api/forecasts": FORECAST_LIST,
+    "/api/relations/memories": MEMORY_LIST,
+    "/api/relations": RELATION_LIST,
+    "/api/collection": { items: [], since: "2026-09-03T00:00:00Z" },
+    "/api/documents": { items: [], limit: 100, offset: 0, has_more: false },
+  });
   renderApp("/");
 
-  expect(await screen.findByRole("heading", { name: "LLM 실행" })).toBeTruthy();
+  expect(await screen.findByRole("heading", { name: "대시보드" })).toBeTruthy();
 });
 
 it("정한 클라이언트 라우트가 전부 있다", async () => {
@@ -81,11 +103,15 @@ it("정한 클라이언트 라우트가 전부 있다", async () => {
     "/api/llm-runs/9/tool-calls/1": CALL_DETAIL,
     "/api/llm-runs/9": RUN_DETAIL,
     "/api/llm-runs": RUN_LIST,
-    "/api/theses/quality": QUALITY,
-    "/api/theses/1/graph": GRAPH,
-    "/api/theses/1": THESIS_DETAIL,
-    "/api/theses": THESIS_LIST,
-    "/api/documents/1": { ...THESIS_DETAIL, body: null, summary: null, assessment: null, detected_at: "2026-08-27T00:00:00Z", content_hash: "a", assessed_content_hash: "a", source_slug: "cnbc", external_id: "x", title: "t", document_type: "article", published_at: "2026-08-27T00:00:00Z", content_level: "metadata_only", canonical_url: null, value_score: null, direction: null, assessed_at: null, instruments: [], indicators: [] },
+    "/api/forecasts/quality": QUALITY,
+    "/api/forecasts/accuracy": ACCURACY,
+    "/api/forecasts/2026-09-03/midday": FORECAST_DETAIL,
+    "/api/forecasts": FORECAST_LIST,
+    "/api/relations/graph": RELATION_GRAPH,
+    "/api/relations/memories": MEMORY_LIST,
+    "/api/relations/US10Y": OBSERVATION_LIST,
+    "/api/relations": RELATION_LIST,
+    "/api/documents/1": { body: null, summary: null, assessment: null, detected_at: "2026-08-27T00:00:00Z", content_hash: "a", assessed_content_hash: "a", source_slug: "cnbc", external_id: "x", title: "t", document_type: "article", published_at: "2026-08-27T00:00:00Z", content_level: "metadata_only", canonical_url: null, value_score: null, direction: null, assessed_at: null, instruments: [], indicators: [] },
     "/api/documents": { items: [], limit: 100, offset: 0, has_more: false },
     "/api/positioning": { items: [] },
     "/api/events": { items: [] },
@@ -95,7 +121,9 @@ it("정한 클라이언트 라우트가 전부 있다", async () => {
   for (const route of CLIENT_ROUTES) {
     const path = route
       .replace(":llmRunId", "9")
-      .replace(":thesisId", "1")
+      .replace(":runDate", "2026-09-03")
+      .replace(":slot", "midday")
+      .replace(":factor", "US10Y")
       .replace(":documentId", "1")
       .replace(":seq", "1");
     const view = renderApp(path);
@@ -129,9 +157,8 @@ it("404는 목록으로 돌아가는 링크가 있는 화면이다", async () =>
   expect(screen.getByRole("link", { name: "목록으로" })).toBeTruthy();
 });
 
-it("상단 내비게이션은 대시보드와 원자료 여섯, 인과, 추론 셋이다", () => {
-  // 15단계가 원자료 여섯을 더했다. **추론이 딛고 선 원자료라 앞에 둔다.**
-  // 인과 그래프는 원자료를 사후에 엮은 것이라 원자료 뒤, 추론 앞이다.
+it("상단 내비게이션은 대시보드와 원자료 여섯, 추론 다섯이다", () => {
+  // 원자료 여섯은 **추론이 딛고 선 것**이라 앞에 둔다.
   stubFetch({});
   renderApp("/nope");
 
@@ -144,9 +171,10 @@ it("상단 내비게이션은 대시보드와 원자료 여섯, 인과, 추론 �
     "수급",
     "사건",
     "수집",
-    "인과",
+    "전망",
+    "관계",
+    "메모",
     "실행",
-    "판단",
     "품질",
   ]);
 });

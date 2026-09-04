@@ -2,7 +2,7 @@
 
 **여기서 선언한 것이 생성자로 주입된다.** 업무 코드는 파라미터로 의존성을 받고,
 컨테이너를 들여다보는 자리는 라우터의 `@inject` 경계 하나뿐이다 —
-`container.thesis_repository()`를 업무 코드가 직접 부르면 그건 Service Locator이지
+`container.forecast_repository()`를 업무 코드가 직접 부르면 그건 Service Locator이지
 의존성 주입이 아니다.
 
 **`apps/core/container.py`를 그대로 쓰지 않는다.** 그 모듈은 본문에서
@@ -16,29 +16,28 @@ from dependency_injector import containers, providers
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from apps.api.repository import (
-    CausalGraphReadRepository,
     CollectionReadRepository,
     DocumentReadRepository,
     EventReadRepository,
+    ForecastReadRepository,
     IndicatorReadRepository,
+    KospiGraphReadRepository,
     LlmRunReadRepository,
-    MarketCausalReadRepository,
     PositioningReadRepository,
     QualityReadRepository,
     QuoteReadRepository,
-    ThesisReadRepository,
 )
 from apps.api.service import (
     CollectionReadService,
     DocumentReadService,
     EventReadService,
+    ForecastReadService,
     IndicatorReadService,
     LlmRunReadService,
-    MarketCausalReadService,
     PositioningReadService,
     QualityReadService,
     QuoteReadService,
-    ThesisReadService,
+    RelationReadService,
 )
 from apps.core.database import Database
 
@@ -81,21 +80,21 @@ class ApiContainer(containers.DeclarativeContainer):
 
     # 조회마다 새 인스턴스다. 상태가 세션 팩토리뿐이라 비용이 없고, `Singleton`으로 두면
     # 나중에 요청 상태를 담게 될 때 조용히 새어 나간다.
-    thesis_repository = providers.Factory(
-        ThesisReadRepository,
+    forecast_repository = providers.Factory(
+        ForecastReadRepository,
         session_factory=session_factory,
     )
 
     # **라우터가 주입받는 것은 이쪽이다.** 리포지토리는 store만 알고 응답 계약을 모른다 —
-    # 그 경계가 "Neo4j로 갈아끼워도 응답은 그대로"를 지탱한다.
-    thesis_service = providers.Factory(
-        ThesisReadService,
-        repository=thesis_repository,
+    # 그 경계가 "저장소를 갈아끼워도 응답은 그대로"를 지탱한다.
+    forecast_service = providers.Factory(
+        ForecastReadService,
+        repository=forecast_repository,
     )
 
     # 실행 원장과 품질 집계도 같은 모양이다 — 리소스마다 리포지토리 하나와 서비스 하나이고
     # 둘 다 `Factory`다. 리포지토리를 하나로 합치지 않는 이유는 조회 단위가 다르기
-    # 때문이다: 추론은 판단 한 건, 실행은 대화 한 번, 품질은 주 단위 집계다.
+    # 때문이다: 전망은 슬롯 한 건, 실행은 대화 한 번, 품질은 주 단위 집계다.
     llm_run_repository = providers.Factory(
         LlmRunReadRepository,
         session_factory=session_factory,
@@ -171,25 +170,19 @@ class ApiContainer(containers.DeclarativeContainer):
         repository=event_repository,
     )
 
-    causal_repository = providers.Factory(
-        MarketCausalReadRepository,
-        session_factory=session_factory,
-    )
-
     # **`main.py`가 채운다.** 드라이버는 연결 풀이라 프로세스에 한 벌이고, 그 수명은
     # 여기가 아니라 진입점이 쥔다 — 종료할 때 닫아야 하기 때문이다. 안 주면 `None`이고
-    # 그때는 그래프 라우트만 503이다.
+    # 그때는 관계·메모 라우트만 503이다.
     neo4j_driver = providers.Object(None)
 
-    causal_graph_repository = providers.Factory(
-        CausalGraphReadRepository,
+    kospi_graph_repository = providers.Factory(
+        KospiGraphReadRepository,
         driver=neo4j_driver,
     )
 
-    causal_service = providers.Factory(
-        MarketCausalReadService,
-        repository=causal_repository,
-        graph_repository=causal_graph_repository,
+    relation_service = providers.Factory(
+        RelationReadService,
+        repository=kospi_graph_repository,
     )
 
     collection_repository = providers.Factory(

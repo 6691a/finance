@@ -14,91 +14,102 @@ function tables() {
   return screen.getAllByRole("table");
 }
 
-it("원 추론의 판을 바꿔도 해설 표의 행이 갈라지지 않는다", async () => {
-  stubFetch({ "/api/theses/quality": QUALITY });
+it("전망의 판을 바꿔도 관찰 표의 행이 갈라지지 않는다", async () => {
+  stubFetch({ "/api/forecasts/quality": QUALITY });
   renderAt("/quality", "/quality", <QualityPage />);
 
-  await screen.findByRole("heading", { name: "예측 품질" });
-  const [forecast, narrative] = tables();
-  // 예측 표에는 판 둘, 해설 표에는 하나다.
+  await screen.findByRole("heading", { name: "전망" });
+  const [forecast, review] = tables();
+  // 전망 표에는 판 둘, 관찰 표에는 하나다.
   expect(forecast!.querySelectorAll("tbody tr").length).toBe(2);
-  expect(narrative!.querySelectorAll("tbody tr").length).toBe(1);
+  expect(review!.querySelectorAll("tbody tr").length).toBe(1);
 });
 
-it("해설 표의 판은 예측 표에 나타나지 않는다", async () => {
-  stubFetch({ "/api/theses/quality": QUALITY });
+it("관찰 표에는 슬롯이 없다 — 관찰은 하루에 한 번이다", async () => {
+  stubFetch({ "/api/forecasts/quality": QUALITY });
   renderAt("/quality", "/quality", <QualityPage />);
 
-  await screen.findByRole("heading", { name: "예측 품질" });
-  const [forecast, narrative] = tables();
+  await screen.findByRole("heading", { name: "전망" });
+  const [forecast, review] = tables();
 
-  expect(forecast!.textContent).not.toContain("2/informed");
-  expect(narrative!.textContent).toContain("2/informed");
-  expect(narrative!.textContent).not.toContain("pre_open");
+  expect(forecast!.textContent).toContain("장전");
+  expect(review!.textContent).not.toContain("장전");
 });
 
-it("표본 수는 metric마다 따로 보인다", async () => {
-  stubFetch({ "/api/theses/quality": QUALITY });
+it("표본 수는 비율 옆에 함께 보인다", async () => {
+  stubFetch({ "/api/forecasts/quality": QUALITY });
   renderAt("/quality", "/quality", <QualityPage />);
 
-  await screen.findByRole("heading", { name: "예측 품질" });
+  await screen.findByRole("heading", { name: "전망" });
   const row = tables()[0]!.querySelectorAll("tbody tr")[0]!;
 
-  // Brier 12건, 크기 오차 4건, 실행 3건이 한 행 안에서 각자 보인다.
-  expect(row.textContent).toContain("n=12");
+  // 4건에서 나온 75%가 100건처럼 읽히면 안 된다.
   expect(row.textContent).toContain("n=4 (표본 부족)");
-  expect(row.textContent).toContain("n=3 (표본 부족)");
+  expect(row.textContent).toContain("75.0%");
 });
 
-it("null metric을 0으로 바꾸지 않는다", async () => {
-  stubFetch({ "/api/theses/quality": QUALITY });
+it("채점 0건의 비율을 0%로 바꾸지 않는다", async () => {
+  stubFetch({ "/api/forecasts/quality": QUALITY });
   renderAt("/quality", "/quality", <QualityPage />);
 
-  await screen.findByRole("heading", { name: "예측 품질" });
+  await screen.findByRole("heading", { name: "전망" });
   const empty = tables()[0]!.querySelectorAll("tbody tr")[1]!;
 
   expect(empty.textContent).toContain("—");
-  expect(empty.textContent).not.toContain("0.000");
+  expect(empty.textContent).not.toContain("0.0%");
 });
 
-it("Brier·크기 오차·판정을 합친 점수가 없다", async () => {
-  stubFetch({ "/api/theses/quality": QUALITY });
+it("적중·밴드·오차를 합친 점수가 없다", async () => {
+  stubFetch({ "/api/forecasts/quality": QUALITY });
   renderAt("/quality", "/quality", <QualityPage />);
 
-  await screen.findByRole("heading", { name: "예측 품질" });
+  await screen.findByRole("heading", { name: "전망" });
   const headers = [...document.querySelectorAll("th")].map((node) => node.textContent ?? "");
 
+  // 서로 다른 것을 재고 단위도 다르다.
   expect(headers).not.toContain("종합");
-  expect(headers.filter((text) => text.includes("Brier")).length).toBe(2);
+  expect(headers).toContain("방향");
+  expect(headers).toContain("밴드");
+  expect(headers).toContain("평균 오차");
 });
 
-it("baseline은 통과·미달로만 말한다", async () => {
-  stubFetch({ "/api/theses/quality": QUALITY });
+it("찍기 대비는 넘음·못 넘음으로만 말한다", async () => {
+  stubFetch({ "/api/forecasts/quality": QUALITY });
   renderAt("/quality", "/quality", <QualityPage />);
 
-  await screen.findByRole("heading", { name: "예측 품질" });
-  expect(screen.getByText("통과")).toBeTruthy();
-  // 표본이 없는 행은 판단하지 않는다 — `미달`로 채우지 않는다.
-  expect(screen.queryByText("미달")).toBeNull();
+  await screen.findByRole("heading", { name: "전망" });
+  expect(screen.getByText("넘음")).toBeTruthy();
+  // 표본이 없는 행은 판단하지 않는다 — `못 넘음`으로 채우지 않는다.
+  expect(screen.queryByText("못 넘음")).toBeNull();
 });
 
-it("표본 0이면 빈 상태와 필터 초기화가 보인다", async () => {
-  stubFetch({ "/api/theses/quality": { forecast: [], narrative: [], uniform_brier: 0.6666666666666666 } });
-  renderAt("/quality?subject_code=NOPE", "/quality", <QualityPage />);
+it("폭이 오차를 못 덮으면 그렇게 적는다", async () => {
+  stubFetch({ "/api/forecasts/quality": QUALITY });
+  renderAt("/quality", "/quality", <QualityPage />);
 
-  expect(await screen.findByText("이 조건에 채점된 추론이 없다.")).toBeTruthy();
-  expect(screen.getByText("이 조건에 판정이 붙은 해설이 없다.")).toBeTruthy();
-  expect(screen.getByRole("button", { name: "필터 초기화" })).toBeTruthy();
+  await screen.findByRole("heading", { name: "전망" });
+  // 평균 오차 1.5%p에 평균 폭 1.4%p — 구조적으로 못 맞히는 폭이다.
+  expect(screen.getByText("부족")).toBeTruthy();
+});
+
+it("표본 0이면 빈 상태를 표 대신 보인다", async () => {
+  stubFetch({
+    "/api/forecasts/quality": { forecast: [], review: [], coin_flip_hit_rate: 0.5 },
+  });
+  renderAt("/quality?slot=midday", "/quality", <QualityPage />);
+
+  expect(await screen.findByText("이 조건에 전망이 없다.")).toBeTruthy();
+  expect(screen.getByText("이 조건에 관찰이 없다.")).toBeTruthy();
 });
 
 it("필터가 URL을 통해 요청까지 간다", async () => {
-  const log = stubFetch({ "/api/theses/quality": QUALITY });
-  renderAt("/quality?slot=pre_open&horizon_days=0", "/quality", <QualityPage />);
+  const log = stubFetch({ "/api/forecasts/quality": QUALITY });
+  renderAt("/quality?slot=pre_open", "/quality", <QualityPage />);
 
-  await screen.findByRole("heading", { name: "예측 품질" });
-  expect(log.paths[0]).toBe("/api/theses/quality?slot=pre_open&horizon_days=0");
+  await screen.findByRole("heading", { name: "전망" });
+  expect(log.paths[0]).toBe("/api/forecasts/quality?slot=pre_open");
 
-  await userEvent.selectOptions(screen.getByLabelText("지평"), "5");
-  await screen.findByRole("heading", { name: "예측 품질" });
-  expect(log.paths[1]).toBe("/api/theses/quality?slot=pre_open&horizon_days=5");
+  await userEvent.selectOptions(screen.getByLabelText("슬롯"), "midday");
+  await screen.findByRole("heading", { name: "전망" });
+  expect(log.paths[1]).toBe("/api/forecasts/quality?slot=midday");
 });

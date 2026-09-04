@@ -12,8 +12,8 @@ import pytest
 from dependency_injector import providers
 
 from apps.api.container import ApiContainer
-from apps.api.repository import ThesisReadRepository
-from apps.api.service import ThesisReadService
+from apps.api.repository import ForecastReadRepository
+from apps.api.service import ForecastReadService
 from apps.core.database import Database
 from tests.api.conftest import container, databases
 
@@ -35,9 +35,9 @@ def test_the_repository_is_a_new_instance_per_call():
     """`Singleton`으로 두면 나중에 요청 상태를 담게 될 때 조용히 새어 나간다."""
     built = container()
 
-    first, second = built.thesis_repository(), built.thesis_repository()
+    first, second = built.forecast_repository(), built.forecast_repository()
 
-    assert isinstance(first, ThesisReadRepository)
+    assert isinstance(first, ForecastReadRepository)
     assert first is not second
 
 
@@ -45,7 +45,7 @@ def test_the_repository_gets_its_session_factory_by_constructor():
     """조회 코드가 컨테이너를 들여다보지 않는다 — 그건 Service Locator다."""
     built = container()
 
-    repository = built.thesis_repository()
+    repository = built.forecast_repository()
 
     assert repository._session_factory is built.database().get_session_factory("prod")
 
@@ -54,16 +54,16 @@ def test_the_service_gets_its_repository_by_constructor():
     """층이 갈린 것을 컨테이너가 증명한다 — 서비스는 세션을 모르고 리포지토리는 계약을 모른다."""
     built = container()
 
-    service = built.thesis_service()
+    service = built.forecast_service()
 
-    assert isinstance(service, ThesisReadService)
-    assert isinstance(service._repository, ThesisReadRepository)
+    assert isinstance(service, ForecastReadService)
+    assert isinstance(service._repository, ForecastReadRepository)
 
 
 def test_the_service_is_a_new_instance_per_call():
     built = container()
 
-    assert built.thesis_service() is not built.thesis_service()
+    assert built.forecast_service() is not built.forecast_service()
 
 
 def test_the_session_factory_follows_the_configured_alias():
@@ -78,7 +78,7 @@ def test_a_missing_alias_fails_loudly_at_the_composition_root():
     built = ApiContainer(settings=SimpleNamespace(databases=databases()), db_alias="typo")
 
     with pytest.raises(KeyError):
-        built.thesis_service()
+        built.forecast_service()
 
 
 def test_the_alias_guard_and_the_container_agree_on_read_only():

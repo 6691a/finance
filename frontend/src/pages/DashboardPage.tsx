@@ -10,16 +10,17 @@
 import { Link } from "react-router-dom";
 
 import { query, useJson } from "../api";
-import { integerText, kstText } from "../format";
-import { CAUSAL_BIASES, labelOf } from "../labels";
+import { bandText, kstText } from "../format";
+import { FORECAST_SLOTS, RUN_KINDS, labelOf } from "../labels";
 import type {
-  CausalDirectionRow,
-  CausalPathRow,
   DocumentList,
+  ForecastAccuracy,
+  ForecastList,
   LlmRunList,
+  MemoryList,
   Paged,
+  RelationList,
   SourceHealth,
-  ThesisList,
 } from "../types";
 
 /** 오늘까지 N일 전. 카드마다 창이 다르다 — 수집은 하루, 추론은 그 주다. */
@@ -53,23 +54,21 @@ export default function DashboardPage() {
     "/api/collection/health?hours=24&limit=5",
   );
   const runs = useJson<LlmRunList>("/api/llm-runs?limit=5");
-  const theses = useJson<ThesisList>("/api/theses?limit=5");
-  const causal = useJson<Paged<CausalPathRow>>(
-    `/api/causal/paths${query({ from: daysAgo(21), limit: 5 })}`,
-  );
+  const forecasts = useJson<ForecastList>(`/api/forecasts${query({ from: daysAgo(2), limit: 6 })}`);
+  const accuracy = useJson<ForecastAccuracy>("/api/forecasts/accuracy");
+  // **가중치 상위가 "지금 무엇이 시장을 밀고 있나"다.** 목록이 그 순으로 온다.
+  const relations = useJson<RelationList>("/api/relations?limit=5");
+  const memories = useJson<MemoryList>("/api/relations/memories?retired=false&limit=5");
   const documents = useJson<DocumentList>(`/api/documents${query({ from: daysAgo(1), limit: 5 })}`);
-  // **추론이 실제로 읽는 값이 이것이다.** 경로가 아니라 대상별로 접은 방향성이 관측 상태로 간다.
-  const directions = useJson<Paged<CausalDirectionRow>>(
-    `/api/causal/directions${query({ from: daysAgo(28), limit: 5 })}`,
-  );
 
   const stale = health.data?.items[0] ?? null;
   const failed = (health.data?.items ?? []).filter((item) => item.failed > 0);
   const running = runs.data?.items.filter((item) => item.status === "running") ?? [];
   const latestRun = runs.data?.items[0] ?? null;
-  const latestThesis = theses.data?.items[0] ?? null;
-  const latestPath = causal.data?.items[0] ?? null;
-  const latestDirection = directions.data?.items[0] ?? null;
+  const today = forecasts.data?.items[0]?.run_date ?? null;
+  const todaySlots = (forecasts.data?.items ?? []).filter((item) => item.run_date === today);
+  const total = accuracy.data?.rows.find((row) => row.slot === "all") ?? null;
+  const strongest = (relations.data?.items ?? []).filter((item) => item.n_obs > 0);
   const unassessed = (documents.data?.items ?? []).filter((item) => item.assessed_at === null);
 
   return (
@@ -109,7 +108,7 @@ export default function DashboardPage() {
             <>
               <Line
                 label="마지막 실행"
-                value={`${latestRun.kind} · ${kstText(latestRun.started_at)}`}
+                value={`${labelOf(RUN_KINDS, latestRun.kind)} · ${kstText(latestRun.started_at)}`}
               />
               {/* **running은 "지금 도는 중"이기도 하고 "끊긴 것"이기도 하다.** 세어서 보이되
                   둘을 가르지 않는다 — 이 기록만으로는 가를 수 없다. */}
@@ -121,47 +120,61 @@ export default function DashboardPage() {
           )}
         </Card>
 
-        <Card title="추론" to="/theses">
-          {latestThesis === null ? (
-            <p className="state">추론이 없다.</p>
+        <Card title="오늘의 전망" to="/forecast">
+          {todaySlots.length === 0 ? (
+            <p className="state">최근 이틀에 전망이 없다.</p>
           ) : (
             <>
+              <Line label="세션" value={today ?? "—"} />
+              {todaySlots.map((item) => (
+                <Line
+                  key={item.slot}
+                  label={labelOf(FORECAST_SLOTS, item.slot)}
+                  value={`${item.direction === "up" ? "▲" : "▼"} ${bandText(
+                    item.expected_change_pct,
+                    item.band_pct,
+                  )}${item.graded_at === null ? " · 채점 대기" : item.hit ? " · 방향 ○" : " · 방향 ✗"}`}
+                />
+              ))}
+            </>
+          )}
+        </Card>
+
+        <Card title="요인 관계" to="/relations">
+          {strongest.length === 0 ? (
+            <p className="state">아직 관측이 없다. **관계가 없다는 뜻이 아니다.**</p>
+          ) : (
+            <>
+              {strongest.slice(0, 3).map((item) => (
+                <Line
+                  key={item.factor}
+                  label={item.label}
+                  value={`${item.weight >= 0 ? "+" : ""}${item.weight.toFixed(2)} (관측 ${item.n_obs}회)`}
+                />
+              ))}
+              {/* 메모는 관계로 담기지 않는 것이다. 상한 20건이라 그 수 자체가 신호다. */}
               <Line
-                label="마지막 추론"
-                value={`${latestThesis.run_date} ${latestThesis.run_slot} · ${latestThesis.label}`}
-              />
-              <Line
-                label="기준가"
-                value={
-                  latestThesis.base_price === null
-                    ? "기록 전"
-                    : integerText(latestThesis.base_price)
-                }
+                label="활성 메모"
+                value={memories.data === null ? "—" : `${memories.data.items.length}건`}
               />
             </>
           )}
         </Card>
 
-        <Card title="인과 그래프" to="/causal">
-          {latestPath === null ? (
-            <p className="state">최근 3주에 경로가 없다.</p>
+        <Card title="적중" to="/quality">
+          {total === null || total.graded === 0 ? (
+            <p className="state">아직 채점된 전망이 없다.</p>
           ) : (
             <>
-              <Line label="마지막 주" value={latestPath.week_start} />
-              {/* **예측이 아니라 사전 맥락이다** — 주 W를 W+2 월요일에 접으므로 추론이 보는
-                  것은 최소 9일 전 인과다. 그 나이를 화면이 밝힌다. */}
+              {/* **표본 수를 비율과 함께 보인다.** 3건에서 나온 67%가 100건처럼 읽히면 안 된다. */}
+              <Line label="채점" value={`${total.graded}건`} />
               <Line
-                label="접힌 방향성"
-                value={
-                  latestDirection === null
-                    ? "아직 없음"
-                    : `${latestDirection.week_start} · ${latestDirection.target_code} ${labelOf(CAUSAL_BIASES, latestDirection.bias)}`
-                }
+                label="방향"
+                value={total.hit_rate === null ? "—" : `${(total.hit_rate * 100).toFixed(0)}%`}
               />
-              {/* 대상에서 출발한 경로가 있어야 주를 넘는 사슬이 선다. */}
               <Line
-                label="대상에서 출발한 경로"
-                value={`${(causal.data?.items ?? []).filter((row: CausalPathRow) => row.source_kind === "target").length}건(최근 5건 중)`}
+                label="밴드"
+                value={total.band_rate === null ? "—" : `${(total.band_rate * 100).toFixed(0)}%`}
               />
             </>
           )}

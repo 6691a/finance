@@ -46,36 +46,46 @@ const HEALTH = {
 
 const EMPTY = { items: [], limit: 5, offset: 0, has_more: false };
 
+const EMPTY_ACCURACY = {
+  since: "2026-09-01",
+  until: "2026-09-03",
+  rows: [
+    {
+      slot: "all",
+      graded: 0,
+      hits: 0,
+      within_band: 0,
+      hit_rate: null,
+      band_rate: null,
+      mean_abs_error: null,
+      pending: 0,
+    },
+  ],
+};
+
 /** 나머지 카드는 비워 두고 한 카드만 본다. 대시보드는 조회 여섯을 나란히 부른다. */
 const ALL_EMPTY = {
   "/api/collection/health": EMPTY,
   "/api/llm-runs": EMPTY,
-  "/api/theses": EMPTY,
-  "/api/causal/paths": EMPTY,
-  "/api/causal/directions": EMPTY,
+  "/api/forecasts/accuracy": EMPTY_ACCURACY,
+  "/api/forecasts": EMPTY,
+  "/api/relations/memories": EMPTY,
+  "/api/relations": EMPTY,
   "/api/documents": EMPTY,
 };
 
 it("이미 있는 조회를 나란히 부른다", async () => {
   // **대시보드 전용 집계 라우트를 만들지 않는다.** 그 라우트만 아는 규칙이 생기면 화면이
   // 바뀔 때마다 서버를 고쳐야 한다.
-  const log = stubFetch({
-    "/api/collection/health": HEALTH,
-    "/api/llm-runs": EMPTY,
-    "/api/theses": EMPTY,
-    "/api/causal/paths": EMPTY,
-    "/api/documents": EMPTY,
-    "/api/causal/directions": EMPTY,
-  });
+  const log = stubFetch({ ...ALL_EMPTY, "/api/collection/health": HEALTH });
   renderAt("/dashboard", "/dashboard", <DashboardPage />);
 
   await screen.findByRole("heading", { name: "대시보드" });
   for (const prefix of [
     "/api/collection/health",
     "/api/llm-runs",
-    "/api/theses",
-    "/api/causal/paths",
-    "/api/causal/directions",
+    "/api/forecasts",
+    "/api/relations",
     "/api/documents",
   ]) {
     expect(log.paths.some((path) => path.startsWith(prefix))).toBe(true);
@@ -99,7 +109,10 @@ it("없는 것을 0으로 채우지 않는다", async () => {
   await screen.findByRole("heading", { name: "대시보드" });
   expect(screen.getByText(/최근 24시간에 수집 기록이 없다/)).toBeTruthy();
   expect(screen.getByText(/실행 기록이 없다/)).toBeTruthy();
-  expect(screen.getByText(/최근 3주에 경로가 없다/)).toBeTruthy();
+  expect(screen.getByText(/최근 이틀에 전망이 없다/)).toBeTruthy();
+  // 관측 0은 "관계가 없다"가 아니라 "아직 모른다"다.
+  expect(screen.getByText(/관계가 없다는 뜻이 아니다/)).toBeTruthy();
+  expect(screen.getByText(/아직 채점된 전망이 없다/)).toBeTruthy();
 });
 
 it("카드 제목이 그 화면으로 가는 링크다", async () => {
@@ -108,5 +121,6 @@ it("카드 제목이 그 화면으로 가는 링크다", async () => {
 
   await screen.findByRole("heading", { name: "대시보드" });
   expect(screen.getByRole("link", { name: "수집" }).getAttribute("href")).toBe("/collection");
-  expect(screen.getByRole("link", { name: "인과 그래프" }).getAttribute("href")).toBe("/causal");
+  expect(screen.getByRole("link", { name: "오늘의 전망" }).getAttribute("href")).toBe("/forecast");
+  expect(screen.getByRole("link", { name: "요인 관계" }).getAttribute("href")).toBe("/relations");
 });

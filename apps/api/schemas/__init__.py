@@ -6,27 +6,11 @@
 **파일은 리소스 단위로 나눈다**(`apps/models/`가 도메인 단위로 나뉜 것과 같은 규칙).
 `common.py`는 그 리소스들이 공유하는 형태 — 공통 베이스와 시각 표기다.
 
-`__init__.py`는 **재수출만** 한다. 부르는 쪽은 `from apps.api.schemas import ThesisDetail`
+`__init__.py`는 **재수출만** 한다. 부르는 쪽은 `from apps.api.schemas import ForecastDetail`
 하나로 끝내고 어느 파일에 있는지 몰라도 된다. 모델을 더할 때 여기 이름을 빠뜨리면
 `ruff`가 잡지 못하므로 함께 넣는다.
 """
 
-from apps.api.schemas.causal import (
-    CausalChannelList,
-    CausalChannelRow,
-    CausalChannelTally,
-    CausalDirectionList,
-    CausalDirectionRow,
-    CausalEventList,
-    CausalEventRow,
-    CausalEvidenceRow,
-    CausalGraph,
-    CausalGraphEdge,
-    CausalGraphNode,
-    CausalPathDetail,
-    CausalPathList,
-    CausalPathRow,
-)
 from apps.api.schemas.collection import (
     InstrumentList,
     InstrumentRow,
@@ -62,7 +46,14 @@ from apps.api.schemas.event import (
     SignalList,
     SignalRow,
 )
-from apps.api.schemas.graph import GraphEdge, GraphNode, GraphResponse
+from apps.api.schemas.forecast import (
+    ForecastAccuracy,
+    ForecastAccuracyRow,
+    ForecastDetail,
+    ForecastItem,
+    ForecastList,
+    ForecastReason,
+)
 from apps.api.schemas.health import Health
 from apps.api.schemas.indicator import (
     CurveCountry,
@@ -76,8 +67,8 @@ from apps.api.schemas.llm_run import (
     LlmRunDetail,
     LlmRunItem,
     LlmRunList,
-    NarratedOutcome,
-    ProducedThesis,
+    MemoryLedger,
+    ProducedForecast,
     ToolCallDetail,
     ToolCallSummary,
 )
@@ -103,10 +94,10 @@ from apps.api.schemas.positioning import (
     StockLendingRow,
 )
 from apps.api.schemas.quality import (
-    UNIFORM_BRIER,
+    COIN_FLIP_HIT_RATE,
     ForecastQualityRow,
-    NarrativeQualityRow,
     QualityResponse,
+    ReviewQualityRow,
 )
 from apps.api.schemas.quote import (
     BarSeries,
@@ -114,36 +105,24 @@ from apps.api.schemas.quote import (
     QuoteSymbolItem,
     QuoteSymbolList,
 )
-from apps.api.schemas.thesis import (
-    EvidenceCitation,
-    LlmRunSummary,
-    PrecedentRef,
-    ThesisDetail,
-    ThesisList,
-    ThesisOutcomeItem,
-    ThesisSummary,
+from apps.api.schemas.relation import (
+    MemoryItem,
+    MemoryList,
+    ObservationItem,
+    ObservationList,
+    RelationEdge,
+    RelationGraph,
+    RelationItem,
+    RelationList,
+    RelationNode,
 )
 
 __all__ = [
-    "UNIFORM_BRIER",
+    "COIN_FLIP_HIT_RATE",
     "AnalystOpinionList",
     "AnalystOpinionRow",
     "ApiModel",
     "BarSeries",
-    "CausalChannelList",
-    "CausalChannelRow",
-    "CausalChannelTally",
-    "CausalDirectionList",
-    "CausalDirectionRow",
-    "CausalEventList",
-    "CausalEventRow",
-    "CausalEvidenceRow",
-    "CausalGraph",
-    "CausalGraphEdge",
-    "CausalGraphNode",
-    "CausalPathDetail",
-    "CausalPathList",
-    "CausalPathRow",
     "CreditBalanceList",
     "CreditBalanceRow",
     "CreditRankingList",
@@ -168,11 +147,13 @@ __all__ = [
     "EventExtractionRow",
     "EventOutcomeList",
     "EventOutcomeRow",
-    "EvidenceCitation",
+    "ForecastAccuracy",
+    "ForecastAccuracyRow",
+    "ForecastDetail",
+    "ForecastItem",
+    "ForecastList",
     "ForecastQualityRow",
-    "GraphEdge",
-    "GraphNode",
-    "GraphResponse",
+    "ForecastReason",
     "Health",
     "IndicatorPoints",
     "IndicatorSeriesItem",
@@ -187,7 +168,6 @@ __all__ = [
     "LlmRunDetail",
     "LlmRunItem",
     "LlmRunList",
-    "LlmRunSummary",
     "MarketFundsList",
     "MarketFundsRow",
     "MarketLendingRow",
@@ -195,13 +175,21 @@ __all__ = [
     "MarketMovementPoint",
     "MarketSessionList",
     "MarketSessionRow",
-    "NarratedOutcome",
-    "NarrativeQualityRow",
-    "PrecedentRef",
-    "ProducedThesis",
+    "MemoryItem",
+    "MemoryLedger",
+    "MemoryList",
+    "ObservationItem",
+    "ObservationList",
+    "ProducedForecast",
     "QualityResponse",
     "QuoteSymbolItem",
     "QuoteSymbolList",
+    "RelationEdge",
+    "RelationGraph",
+    "RelationItem",
+    "RelationList",
+    "RelationNode",
+    "ReviewQualityRow",
     "ShortSaleList",
     "ShortSaleRow",
     "SignalList",
@@ -213,10 +201,6 @@ __all__ = [
     "StockFlowList",
     "StockFlowRow",
     "StockLendingRow",
-    "ThesisDetail",
-    "ThesisList",
-    "ThesisOutcomeItem",
-    "ThesisSummary",
     "ToolCallDetail",
     "ToolCallSummary",
     "UtcDatetime",

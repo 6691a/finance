@@ -8,7 +8,8 @@ import { Link, useParams } from "react-router-dom";
 
 import { useJson } from "../api";
 import { Async } from "../components/AsyncState";
-import { durationText, integerText, kstText, kstTimeText } from "../format";
+import { bandText, durationText, integerText, kstText, kstTimeText } from "../format";
+import { FORECAST_SLOTS, RUN_KINDS, labelOf } from "../labels";
 import type { LlmRunDetail, ToolCallSummary } from "../types";
 
 function rounds(calls: ToolCallSummary[]): [number, ToolCallSummary[]][] {
@@ -39,7 +40,7 @@ export default function RunDetailPage() {
       {(run) => (
         <section>
           <h2>
-            실행 {run.id} · {run.kind}
+            실행 {run.id} · {labelOf(RUN_KINDS, run.kind)}
           </h2>
           <div className="panel">
             <dl className="meta">
@@ -61,8 +62,13 @@ export default function RunDetailPage() {
               <dd>{run.status}</dd>
               <dt>대상일 · 슬롯</dt>
               <dd>
-                {run.run_date} · {run.run_slot ?? "—"}
-                {run.horizon_days === null ? "" : ` · T+${run.horizon_days}`}
+                {run.run_date} ·{" "}
+                {run.slot === null ? "하루 전체" : labelOf(FORECAST_SLOTS, run.slot)}
+              </dd>
+              <dt>조회 기준 시각</dt>
+              <dd>
+                {/* **벽시계가 아니라 이 값이 축이다** — 배치가 밀려도 이 뒤의 행은 안 본다. */}
+                <time dateTime={run.as_of_at}>{kstText(run.as_of_at)}</time>
               </dd>
               <dt>모델 · 판 · 시도</dt>
               <dd>
@@ -72,20 +78,36 @@ export default function RunDetailPage() {
               <dd>{run.dag_run_id}</dd>
               <dt>왕복 · 툴 · 결과 문자</dt>
               <dd>
-                {run.tool_rounds} · {run.tool_call_count} · {integerText(run.tool_result_chars)}
+                {run.tool_rounds ?? "—"} · {run.tool_call_count ?? "—"} ·{" "}
+                {integerText(run.tool_result_chars)}
               </dd>
-              <dt>대상(답/요청)</dt>
+              <dt>버린 인용</dt>
               <dd>
-                {run.subjects_requested === null ? (
+                {run.rejected === null ? (
                   "—"
+                ) : run.rejected === 0 ? (
+                  "없음"
                 ) : (
-                  <>
-                    {run.subjects_answered ?? 0}/{run.subjects_requested}
-                    {/* 요청보다 적으면 조용히 빠진 대상이 있다는 뜻이라 밝힌다. */}
-                    {(run.subjects_answered ?? 0) < run.subjects_requested && " · 빠진 대상이 있다"}
-                  </>
+                  /* **0이 아니면 모델이 조회하지 않은 것을 인용했다.** */
+                  <span className="warn">{run.rejected}건</span>
                 )}
               </dd>
+              {run.observations_written !== null && (
+                <>
+                  <dt>그래프에 쓴 관측</dt>
+                  <dd>{run.observations_written}건</dd>
+                  <dt>메모</dt>
+                  <dd>
+                    새로 {run.memories.written ?? 0} · 유지 {run.memories.kept ?? 0} · 내림{" "}
+                    {run.memories.dropped ?? 0} · 만료 {run.memories.expired ?? 0} · 빠짐{" "}
+                    {run.memories.unreviewed ?? 0}
+                    {run.memories.rejected ? (
+                      /* **0이 아니면 상한을 치고 있다.** */
+                      <span className="warn"> · 거절 {run.memories.rejected}</span>
+                    ) : null}
+                  </dd>
+                </>
+              )}
               <dt>입력 토큰(캐시)</dt>
               <dd>
                 {run.prompt_tokens === null
@@ -105,7 +127,7 @@ export default function RunDetailPage() {
                 가를 수 없고, 아래 툴 기록이 전부라고 보장하지도 않는다.
               </p>
             )}
-            {run.investigation_truncated && (
+            {run.truncated === true && (
               <p className="warn">모델이 툴을 더 부르겠다고 했는데 왕복 상한에서 끊겼다.</p>
             )}
             {run.error !== null && <p className="warn">실패 사유: {run.error}</p>}
@@ -154,22 +176,21 @@ export default function RunDetailPage() {
           )}
 
           <h3>산출물</h3>
-          {run.produced_theses.length === 0 && run.narrated_outcomes.length === 0 ? (
-            <p className="state">이 실행이 남긴 산출물이 없다.</p>
+          {run.produced_forecasts.length === 0 ? (
+            <p className="state">
+              {run.kind === "review"
+                ? "관찰 대화는 전망을 만들지 않는다 — 그래프와 메모에만 쓴다."
+                : "이 실행이 남긴 전망이 없다."}
+            </p>
           ) : (
             <ul>
-              {run.produced_theses.map((thesis) => (
-                <li key={thesis.id}>
-                  <Link to={`/theses/${thesis.id}`}>
-                    {thesis.label} ({thesis.subject_code}) · {thesis.run_date} {thesis.run_slot}
-                  </Link>
-                </li>
-              ))}
-              {run.narrated_outcomes.map((outcome) => (
-                <li key={`${outcome.thesis_id}:${outcome.horizon_days}`}>
-                  <Link to={`/theses/${outcome.thesis_id}`}>
-                    {outcome.label} ({outcome.subject_code}) · T+{outcome.horizon_days} ·{" "}
-                    {outcome.verdict ?? "판정 없음"}
+              {run.produced_forecasts.map((forecast) => (
+                <li key={`${forecast.run_date}:${forecast.slot}`}>
+                  <Link to={`/forecast/${forecast.run_date}/${forecast.slot}`}>
+                    {forecast.run_date} {labelOf(FORECAST_SLOTS, forecast.slot)} ·{" "}
+                    {forecast.direction === "up" ? "▲" : "▼"}{" "}
+                    {bandText(forecast.expected_change_pct, forecast.band_pct)}
+                    {forecast.hit === null ? "" : forecast.hit ? " · 방향 ○" : " · 방향 ✗"}
                   </Link>
                 </li>
               ))}

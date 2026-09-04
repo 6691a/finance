@@ -1,8 +1,8 @@
-// 품질. **표를 둘로 나눈다** — 예측 품질의 판과 해설 품질의 판은 서로 독립으로 움직인다.
-// 한 행에 놓으면 "판 7이 이유 지지율도 올렸다"로 읽히는데 그 손잡이는 움직인 적이 없다.
+// 품질. **표를 둘로 나눈다** — 전망 판과 관찰 판은 서로 독립으로 움직인다. 한 행에
+// 놓으면 전망 판을 올린 효과가 관찰 쪽 변화로 읽힌다.
 //
-// 첫 판은 접근 가능한 주별 표가 기준 화면이다. 정확도 선 그래프와 차트 패키지는 넣지
-// 않는다 — 표본이 쌓인 뒤 표보다 추이를 읽는 시간이 실제로 오래 걸릴 때 다시 본다.
+// 주별 표가 기준 화면이다. 정확도 선 그래프는 넣지 않는다 — 표본이 쌓인 뒤 표보다 추이를
+// 읽는 시간이 실제로 오래 걸릴 때 다시 본다.
 //
 // **자동 승격 루프가 아니다.** 시장 상태가 바뀌므로 누적 평균만 보고 판을 올리지 않는다.
 
@@ -10,26 +10,24 @@ import { useSearchParams } from "react-router-dom";
 
 import { query, useJson } from "../api";
 import { Async, Empty } from "../components/AsyncState";
-import { integerText, numberText } from "../format";
+import { numberText, percentText } from "../format";
+import { FORECAST_SLOTS, labelOf } from "../labels";
 import type { QualityResponse } from "../types";
 
-const SLOTS = [
-  "pre_open",
-  "intraday_morning",
-  "intraday_midday",
-  "intraday_afternoon",
-  "pre_close",
-  "post_close",
-  "post_nxt_close",
-];
-const HORIZONS = ["0", "1", "3", "5"];
+const SLOTS = ["pre_open", "midday", "pre_close"];
 
-// 이 아래면 평균 옆에 "표본 부족"을 붙인다. 기간을 자동으로 넓히지는 않는다 —
+// 이 아래면 비율 옆에 "표본 부족"을 붙인다. 기간을 자동으로 넓히지는 않는다 —
 // 창이 조용히 달라지면 두 판을 같은 조건으로 비교했다고 믿을 수 없다.
 const THIN_SAMPLES = 10;
 
-function samplesText(count: number): string {
+export function samplesText(count: number): string {
   return count < THIN_SAMPLES ? `n=${count} (표본 부족)` : `n=${count}`;
+}
+
+/** 폭이 오차를 덮는가. **덮지 못하면 구조적으로 못 맞히는 폭이다.** */
+export function bandVerdict(band: number | null, error: number | null): string {
+  if (band === null || error === null) return "—";
+  return band >= error ? "덮음" : "부족";
 }
 
 export default function QualityPage() {
@@ -37,12 +35,8 @@ export default function QualityPage() {
   const from = params.get("from") ?? "";
   const to = params.get("to") ?? "";
   const slot = params.get("slot") ?? "";
-  const subject = params.get("subject_code") ?? "";
-  const horizon = params.get("horizon_days") ?? "";
 
-  const resource = useJson<QualityResponse>(
-    `/api/theses/quality${query({ from, to, slot, subject_code: subject, horizon_days: horizon })}`,
-  );
+  const resource = useJson<QualityResponse>(`/api/forecasts/quality${query({ from, to, slot })}`);
 
   const set = (name: string, value: string) => {
     const next = new URLSearchParams(params);
@@ -69,131 +63,118 @@ export default function QualityPage() {
             <option value="">전부</option>
             {SLOTS.map((value) => (
               <option key={value} value={value}>
-                {value}
+                {labelOf(FORECAST_SLOTS, value)}
               </option>
             ))}
           </select>
         </label>
-        <label>
-          대상 코드
-          <input
-            type="text"
-            value={subject}
-            placeholder="KOSPI"
-            onChange={(event) => set("subject_code", event.target.value)}
-          />
-        </label>
-        <label>
-          지평
-          <select value={horizon} onChange={(event) => set("horizon_days", event.target.value)}>
-            <option value="">전부</option>
-            {HORIZONS.map((value) => (
-              <option key={value} value={value}>
-                T+{value}
-              </option>
-            ))}
-          </select>
-        </label>
-        <button type="button" onClick={() => setParams(new URLSearchParams())}>
-          필터 초기화
-        </button>
       </div>
 
-      <Async resource={resource} what="품질 집계" back="/quality">
+      <Async resource={resource} what="품질" back="/quality">
         {(data) => (
           <>
-            <h3>예측 품질</h3>
-            <p className="state">
-              키의 모델·판은 **원 추론을 생성한 실행의 값**이다. 균등 확률 baseline은{" "}
-              {numberText(data.uniform_brier)}이다.
-            </p>
+            <h3>전망</h3>
             {data.forecast.length === 0 ? (
-              <Empty>이 조건에 채점된 추론이 없다.</Empty>
+              <Empty>이 조건에 전망이 없다.</Empty>
             ) : (
               <table>
                 <caption>
-                  Brier는 방향, 크기 오차는 폭을 잰다. **합친 종합 점수를 만들지 않는다.**
-                  표본 수는 metric마다 다르다 — 결측 조건이 다르기 때문이다.
+                  주 · 슬롯 · 모델 · 판이 키다. **방향이 둘뿐이라 찍기의 기대 적중률이{" "}
+                  {percentText(data.coin_flip_hit_rate)}이고**, 그것을 못 넘는 판은 뜻이 없다.
+                  채점 0건이면 비율이 `—`이지 0%가 아니다.
                 </caption>
                 <thead>
                   <tr>
                     <th scope="col">주</th>
-                    <th scope="col">지평</th>
                     <th scope="col">슬롯</th>
                     <th scope="col">모델</th>
                     <th scope="col">판</th>
-                    <th scope="col">평균 Brier</th>
-                    <th scope="col">Brier 표본</th>
-                    <th scope="col">baseline 통과</th>
-                    <th scope="col">평균 크기 오차</th>
-                    <th scope="col">절대 평균</th>
-                    <th scope="col">크기 표본</th>
-                    <th scope="col">평균 툴</th>
-                    <th scope="col">평균 결과 문자</th>
-                    <th scope="col">실행 표본</th>
+                    <th scope="col">채점</th>
+                    <th scope="col">방향</th>
+                    <th scope="col">찍기 대비</th>
+                    <th scope="col">밴드</th>
+                    <th scope="col">평균 오차</th>
+                    <th scope="col">평균 폭</th>
+                    <th scope="col">폭 판정</th>
+                    <th scope="col">평균 기대</th>
+                    <th scope="col">약한 답</th>
+                    <th scope="col">버린 이유</th>
                   </tr>
                 </thead>
                 <tbody>
                   {data.forecast.map((row) => (
-                    <tr
-                      key={`${row.week_start}:${row.horizon_days}:${row.run_slot}:${row.llm_model}:${row.prompt_version}`}
-                    >
+                    <tr key={`${row.week_start}:${row.slot}:${row.prompt_version}`}>
                       <td>{row.week_start}</td>
-                      <td>T+{row.horizon_days}</td>
-                      <td>{row.run_slot}</td>
+                      <td>{labelOf(FORECAST_SLOTS, row.slot)}</td>
                       <td>{row.llm_model}</td>
                       <td>{row.prompt_version}</td>
-                      <td>{numberText(row.mean_brier)}</td>
-                      <td>{samplesText(row.brier_samples)}</td>
                       <td>
-                        {row.beats_uniform === null ? "—" : row.beats_uniform ? "통과" : "미달"}
+                        {samplesText(row.graded)}
+                        {row.pending > 0 ? ` · 대기 ${row.pending}` : ""}
                       </td>
-                      <td>{numberText(row.mean_return_error_pct, 2)}</td>
-                      <td>{numberText(row.mae_return_pct, 2)}</td>
-                      <td>{samplesText(row.return_samples)}</td>
-                      <td>{numberText(row.mean_tool_calls, 1)}</td>
-                      <td>{row.mean_tool_result_chars === null ? "—" : integerText(Math.round(row.mean_tool_result_chars))}</td>
-                      <td>{samplesText(row.run_samples)}</td>
+                      <td>{percentText(row.hit_rate)}</td>
+                      <td className={row.beats_coin_flip ? "up" : "down"}>
+                        {row.beats_coin_flip === null ? "—" : row.beats_coin_flip ? "넘음" : "못 넘음"}
+                      </td>
+                      <td>{percentText(row.band_rate)}</td>
+                      <td>{numberText(row.mean_abs_error, 2)}</td>
+                      <td>{numberText(row.mean_band_pct, 2)}</td>
+                      <td className={row.mean_band_pct === null ? undefined : "state"}>
+                        {bandVerdict(row.mean_band_pct, row.mean_abs_error)}
+                      </td>
+                      <td>{numberText(row.mean_expected_pct, 2)}</td>
+                      <td className={row.weak ? "warn" : undefined}>{row.weak}</td>
+                      <td className={row.rejected_reasons ? "warn" : undefined}>
+                        {row.rejected_reasons}
+                      </td>
                     </tr>
                   ))}
                 </tbody>
               </table>
             )}
 
-            <h3>해설 품질</h3>
-            <p className="state">
-              `verdict`는 **사후 해설 LLM이 내린 판정**이라 만든 판이 다르다. 원 추론의 판을
-              올려도 이 표의 행은 갈라지지 않는다. 슬롯이 키에 없는 것은 해설이 슬롯이 아니라
-              지평으로 갈리기 때문이다.
-            </p>
-            {data.narrative.length === 0 ? (
-              <Empty>이 조건에 판정이 붙은 해설이 없다.</Empty>
+            <h3>장후 관찰</h3>
+            {data.review.length === 0 ? (
+              <Empty>이 조건에 관찰이 없다.</Empty>
             ) : (
               <table>
-                <caption>이유가 이후 보도로 지지됐는지의 분포. 예측 품질과 합치지 않는다.</caption>
+                <caption>
+                  주 · 모델 · 판이 키다. 슬롯이 없다 — 관찰은 하루에 한 번이다. **거절이 0이
+                  아니면 메모 상한을 치고 있다.**
+                </caption>
                 <thead>
                   <tr>
                     <th scope="col">주</th>
-                    <th scope="col">지평</th>
                     <th scope="col">모델</th>
                     <th scope="col">판</th>
-                    <th scope="col">supported</th>
-                    <th scope="col">contradicted</th>
-                    <th scope="col">unresolved</th>
-                    <th scope="col">판정 표본</th>
+                    <th scope="col">실행</th>
+                    <th scope="col">관측</th>
+                    <th scope="col">실행당 관측</th>
+                    <th scope="col">메모(새로/내림/만료)</th>
+                    <th scope="col">거절</th>
+                    <th scope="col">버린 관찰</th>
+                    <th scope="col">실행당 툴</th>
+                    <th scope="col">상한 끊김</th>
                   </tr>
                 </thead>
                 <tbody>
-                  {data.narrative.map((row) => (
-                    <tr key={`${row.week_start}:${row.horizon_days}:${row.llm_model}:${row.prompt_version}`}>
+                  {data.review.map((row) => (
+                    <tr key={`${row.week_start}:${row.prompt_version}`}>
                       <td>{row.week_start}</td>
-                      <td>T+{row.horizon_days}</td>
                       <td>{row.llm_model}</td>
                       <td>{row.prompt_version}</td>
-                      <td>{row.supported}</td>
-                      <td>{row.contradicted}</td>
-                      <td>{row.unresolved}</td>
-                      <td>{samplesText(row.verdict_samples)}</td>
+                      <td>{samplesText(row.runs)}</td>
+                      <td>{row.observations_written}</td>
+                      <td>{numberText(row.mean_observations, 2)}</td>
+                      <td>
+                        {row.memories_written}/{row.memories_dropped}/{row.memories_expired}
+                      </td>
+                      <td className={row.memories_rejected ? "warn" : undefined}>
+                        {row.memories_rejected}
+                      </td>
+                      <td className={row.rejected ? "warn" : undefined}>{row.rejected}</td>
+                      <td>{numberText(row.mean_tool_calls, 2)}</td>
+                      <td className={row.truncated ? "warn" : undefined}>{row.truncated}</td>
                     </tr>
                   ))}
                 </tbody>

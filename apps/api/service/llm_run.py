@@ -19,12 +19,14 @@ from apps.api.schemas import (
     LlmRunDetail,
     LlmRunItem,
     LlmRunList,
-    NarratedOutcome,
-    ProducedThesis,
+    MemoryLedger,
+    ProducedForecast,
     ToolCallDetail,
     ToolCallSummary,
 )
-from apps.models.analysis import Thesis, ThesisLlmRun, ThesisOutcome, ThesisToolCall
+from apps.api.service.common import number
+from apps.api.service.forecast import forecast_url
+from apps.models.analysis import KospiForecast, KospiLlmRun, KospiLlmRunKind, KospiToolCall
 
 
 def run_url(llm_run_id: int) -> str:
@@ -35,10 +37,6 @@ def tool_call_url(llm_run_id: int, seq: int) -> str:
     return f"/api/llm-runs/{llm_run_id}/tool-calls/{seq}"
 
 
-def thesis_url(thesis_id: int) -> str:
-    return f"/api/theses/{thesis_id}"
-
-
 def duration_ms(started_at: datetime, finished_at: datetime | None) -> int | None:
     """전체 소요. **끝나지 않았으면 null이다** — 지금 시각으로 채우면 조회할 때마다 값이 변한다."""
     if finished_at is None:
@@ -46,13 +44,26 @@ def duration_ms(started_at: datetime, finished_at: datetime | None) -> int | Non
     return int((finished_at - started_at).total_seconds() * 1000)
 
 
-def item_of(run: ThesisLlmRun, produced: int = 0) -> LlmRunItem:
+def memory_ledger_of(run: KospiLlmRun) -> MemoryLedger:
+    """**관찰 대화가 아니면 전부 null이다.** 0으로 채우면 "0건"과 "해당 없음"이 같아 보인다."""
+    if run.kind is not KospiLlmRunKind.REVIEW:
+        return MemoryLedger()
+    return MemoryLedger(
+        written=run.memories_written,
+        rejected=run.memories_rejected,
+        kept=run.memories_kept,
+        dropped=run.memories_dropped,
+        unreviewed=run.memories_unreviewed,
+        expired=run.memories_expired,
+    )
+
+
+def item_of(run: KospiLlmRun, produced: int = 0) -> LlmRunItem:
     return LlmRunItem(
         id=run.id,
         kind=run.kind.value,
         run_date=run.run_date,
-        run_slot=None if run.run_slot is None else run.run_slot.value,
-        horizon_days=run.horizon_days,
+        slot=None if run.slot is None else run.slot.value,
         as_of_at=run.as_of_at,
         dag_run_id=run.dag_run_id,
         try_number=run.try_number,
@@ -66,19 +77,20 @@ def item_of(run: ThesisLlmRun, produced: int = 0) -> LlmRunItem:
         tool_rounds=run.tool_rounds,
         tool_call_count=run.tool_calls,
         tool_result_chars=run.tool_result_chars,
-        investigation_truncated=run.investigation_truncated,
+        truncated=run.truncated,
+        rejected=run.rejected,
+        observations_written=run.observations_written,
+        memories=memory_ledger_of(run),
         produced_count=produced,
-        subjects_requested=run.subjects_requested,
-        subjects_answered=run.subjects_answered,
         prompt_tokens=run.prompt_tokens,
-        cached_prompt_tokens=run.cached_prompt_tokens,
+        cached_prompt_tokens=run.cached_tokens,
         completion_tokens=run.completion_tokens,
         reasoning_tokens=run.reasoning_tokens,
         url=run_url(run.id),
     )
 
 
-def tool_call_of(row: ThesisToolCall) -> ToolCallSummary:
+def tool_call_of(row: KospiToolCall) -> ToolCallSummary:
     """**결과 전문을 싣지 않는다.** 상세 화면의 목록이 이 모양이다."""
     return ToolCallSummary(
         seq=row.seq,
@@ -86,7 +98,9 @@ def tool_call_of(row: ThesisToolCall) -> ToolCallSummary:
         tool_call_id=row.tool_call_id,
         tool_name=row.tool_name,
         arguments=dict(row.arguments or {}),
-        validated_arguments=None if row.validated_arguments is None else dict(row.validated_arguments),
+        validated_arguments=(
+            None if row.validated_arguments is None else dict(row.validated_arguments)
+        ),
         requested_at=row.requested_at,
         duration_ms=row.duration_ms,
         result_chars=row.result_chars,
@@ -97,30 +111,19 @@ def tool_call_of(row: ThesisToolCall) -> ToolCallSummary:
     )
 
 
-def tool_call_detail_of(row: ThesisToolCall) -> ToolCallDetail:
+def tool_call_detail_of(row: KospiToolCall) -> ToolCallDetail:
     return ToolCallDetail(**tool_call_of(row).model_dump(), result=row.result)
 
 
-def produced_of(thesis: Thesis) -> ProducedThesis:
-    return ProducedThesis(
-        id=thesis.id,
-        run_date=thesis.run_date,
-        run_slot=thesis.run_slot.value,
-        subject_kind=thesis.subject_kind.value,
-        subject_code=thesis.subject_code,
-        label=thesis.label,
-        url=thesis_url(thesis.id),
-    )
-
-
-def narrated_of(row: ThesisOutcome, subject: Thesis | None) -> NarratedOutcome:
-    return NarratedOutcome(
-        thesis_id=row.thesis_id,
-        horizon_days=row.horizon_days,
-        subject_code="" if subject is None else subject.subject_code,
-        label="" if subject is None else subject.label,
-        verdict=None if row.verdict is None else row.verdict.value,
-        url=thesis_url(row.thesis_id),
+def produced_of(row: KospiForecast) -> ProducedForecast:
+    return ProducedForecast(
+        run_date=row.run_date,
+        slot=row.slot.value,
+        direction=row.direction.value,
+        expected_change_pct=number(row.expected_change_pct) or 0.0,
+        band_pct=number(row.band_pct) or 0.0,
+        hit=row.hit,
+        url=forecast_url(row.run_date, row.slot.value),
     )
 
 
@@ -134,12 +137,10 @@ def build_list(rows: LlmRunListRows, *, limit: int, offset: int) -> LlmRunList:
 
 
 def build_detail(rows: LlmRunDetailRows) -> LlmRunDetail:
-    """실행 상세. **산출물 둘 중 하나는 언제나 빈 배열이다** — 대화 하나가 생성이거나 해설이다."""
     return LlmRunDetail(
-        **item_of(rows.run, len(rows.theses) + len(rows.outcomes)).model_dump(),
+        **item_of(rows.run, len(rows.forecasts)).model_dump(),
         tool_calls=tuple(tool_call_of(row) for row in rows.tool_calls),
-        produced_theses=tuple(produced_of(row) for row in rows.theses),
-        narrated_outcomes=tuple(narrated_of(row, rows.subjects.get(row.thesis_id)) for row in rows.outcomes),
+        produced_forecasts=tuple(produced_of(row) for row in rows.forecasts),
     )
 
 

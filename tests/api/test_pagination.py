@@ -17,15 +17,14 @@ EXEMPT: dict[str, str] = {
     "/api/quotes/daily": "같은 이유",
     "/api/indicators/observations": "한 계열의 열 묶음이다. 상한은 MAX_POINTS다",
     "/api/indicators/curve": "나라별로 묶은 곡선이라 행 목록이 아니다",
-    "/api/theses/quality": "집계 배열 둘이다",
+    "/api/forecasts/quality": "집계 배열 둘이다",
+    "/api/forecasts/accuracy": "슬롯 셋과 합계 한 줄. 행 목록이 아니다",
+    "/api/forecasts/{run_date}/{slot}": "단건",
     "/api/documents/{document_id}": "단건",
     "/api/llm-runs/{llm_run_id}": "단건",
     "/api/llm-runs/{llm_run_id}/tool-calls/{seq}": "단건",
-    "/api/theses/{thesis_id}": "단건",
-    "/api/theses/{thesis_id}/graph": "한 추론의 그래프 하나다",
-    "/api/causal/paths/{path_id}": "단건과 그 주의 경로 전부. 한 주가 한 판이다",
-    "/api/causal/graph": "그래프 투영이다. 노드·엣지 묶음이라 행 목록이 아니다",
-    "/api/causal/graph/targets/{kind}/{code}": "대상 하나에서 뻗은 사슬. 상한은 `limit` 하나다",
+    "/api/relations/graph": "그래프 투영이다. 노드·엣지 묶음이라 행 목록이 아니다",
+    "/api/relations/memories/{memory_id}": "단건",
 }
 
 

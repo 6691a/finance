@@ -1,13 +1,14 @@
 """조회 API의 라우팅·매핑·직렬화.
 
-**가짜는 리포지토리 자리에 둔다.** 그러면 진짜 `ThesisReadService`가 그 위에서 돌아
+**가짜는 리포지토리 자리에 둔다.** 그러면 진짜 `ForecastReadService`가 그 위에서 돌아
 HTTP 경로가 라우팅·매핑·직렬화를 통째로 지나간다 — 없는 것은 세션뿐이다.
 
-끼우는 방법은 `container.thesis_repository.override(...)`다. `dependency_injector`의
+끼우는 방법은 `container.forecast_repository.override(...)`다. `dependency_injector`의
 문서화된 형태이고, 그것이 먹는다는 것 자체가 wiring이 풀렸다는 증거이기도 하다 —
 마커가 안 풀리면 주입 자리에 `Provide` 객체가 그대로 들어온다.
 """
 
+from datetime import date
 from typing import Any
 
 import httpx
@@ -15,70 +16,47 @@ import pytest
 from dependency_injector import providers
 
 from apps.api.app import create_app
-from apps.api.repository import ThesisDetailRows, ThesisGraphRows, ThesisListRows
-from apps.models.analysis import ThesisPrecedent
-from tests.api.conftest import (
-    container,
-    evidence_row,
-    llm_run_row,
-    outcome_row,
-    thesis_row,
-)
+from apps.api.repository import AccuracyRow, ForecastListRows
+from apps.models.analysis import KospiSlot
+from tests.api.conftest import container, forecast_row
 
 
-class FakeRepository:
+class FakeForecasts:
     """행 묶음만 돌려준다. 그 위의 진짜 서비스가 응답 계약을 만든다."""
 
     def __init__(self, **rows: Any) -> None:
         self.rows = rows
         self.calls: list[dict[str, Any]] = []
 
-    def _thesis(self, thesis_id: int) -> Any:
-        return next((row for row in self.rows.get("theses", []) if row.id == thesis_id), None)
-
-    async def list_rows(self, **kwargs: Any) -> ThesisListRows:
+    async def list_rows(self, **kwargs: Any) -> ForecastListRows:
         self.calls.append(kwargs)
-        return ThesisListRows(
-            theses=tuple(self.rows.get("theses", [])),
+        found = tuple(self.rows.get("forecasts", []))
+        return ForecastListRows(
+            forecasts=found,
             has_more=self.rows.get("has_more", False),
-            grades=self.rows.get("summary", {}),
+            reason_counts={row.id: len(row.reasons or ()) for row in found},
         )
 
-    async def detail_rows(self, thesis_id: int) -> ThesisDetailRows | None:
-        thesis = self._thesis(thesis_id)
-        if thesis is None:
-            return None
-        return ThesisDetailRows(
-            thesis=thesis,
-            citations=tuple(self.rows.get("evidence", [])),
-            outcomes=tuple(self.rows.get("outcomes", [])),
-            precedent_ids=tuple(self.rows.get("precedent_ids", [])),
-            neighbours={row.id: row for row in self.rows.get("neighbours", [])},
-            runs={row.id: row for row in self.rows.get("runs", [])},
+    async def detail_row(self, run_date: date, slot: str) -> Any:
+        return next(
+            (
+                row
+                for row in self.rows.get("forecasts", [])
+                if row.run_date == run_date and row.slot.value == slot
+            ),
+            None,
         )
 
-    async def graph_rows(self, thesis_id: int) -> ThesisGraphRows | None:
-        thesis = self._thesis(thesis_id)
-        if thesis is None:
-            return None
-        return ThesisGraphRows(
-            center=thesis,
-            citations=tuple(self.rows.get("evidence", [])),
-            edges=tuple(self.rows.get("precedents", [])),
-            neighbours={row.id: row for row in self.rows.get("neighbours", [])},
-            grades={row.thesis_id: row for row in self.rows.get("grades", [])},
-        )
-
-
-def app_with(fake: FakeRepository):
-    built = container()
-    # provider override가 먹는다는 것 자체가 wiring이 풀렸다는 증거다.
-    built.thesis_repository.override(providers.Object(fake))
-    return create_app(built)
+    async def accuracy_rows(self, **kwargs: Any) -> tuple[AccuracyRow, ...]:
+        self.calls.append(kwargs)
+        return tuple(self.rows.get("accuracy", []))
 
 
 def client(**rows: Any) -> httpx.AsyncClient:
-    app = app_with(FakeRepository(**rows))
+    built = container()
+    # provider override가 먹는다는 것 자체가 wiring이 풀렸다는 증거다.
+    built.forecast_repository.override(providers.Object(FakeForecasts(**rows)))
+    app = create_app(built)
     return httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test")
 
 
@@ -91,10 +69,15 @@ async def test_the_route_set_is_what_we_meant_to_publish():
 
     assert published == {
         "/healthz",
-        "/api/theses",
-        "/api/theses/quality",
-        "/api/theses/{thesis_id}",
-        "/api/theses/{thesis_id}/graph",
+        "/api/forecasts",
+        "/api/forecasts/accuracy",
+        "/api/forecasts/quality",
+        "/api/forecasts/{run_date}/{slot}",
+        "/api/relations",
+        "/api/relations/graph",
+        "/api/relations/memories",
+        "/api/relations/memories/{memory_id}",
+        "/api/relations/{factor}",
         "/api/llm-runs",
         "/api/llm-runs/{llm_run_id}",
         "/api/llm-runs/{llm_run_id}/tool-calls/{seq}",
@@ -127,13 +110,6 @@ async def test_the_route_set_is_what_we_meant_to_publish():
         "/api/collection/records",
         "/api/collection/instruments",
         "/api/collection/sessions",
-        "/api/causal/paths",
-        "/api/causal/directions",
-        "/api/causal/events",
-        "/api/causal/channels",
-        "/api/causal/paths/{path_id}",
-        "/api/causal/graph",
-        "/api/causal/graph/targets/{kind}/{code}",
     }
 
 
@@ -149,224 +125,112 @@ async def test_health_does_not_touch_the_database():
 
 @pytest.mark.asyncio
 async def test_the_service_arrives_by_injection_not_a_lookup():
-    """마커가 안 풀리면 주입 자리에 `Provide` 객체가 들어와 조용히 틀린다.
-
-    서비스가 리포지토리를 생성자로 받은 것도 함께 확인된다 — 안 그러면 조회가 비어 온다.
-    """
-    async with client(theses=[thesis_row()]) as http:
-        reply = await http.get("/api/theses")
+    """마커가 안 풀리면 주입 자리에 `Provide` 객체가 들어와 조용히 틀린다."""
+    async with client(forecasts=[forecast_row()]) as http:
+        reply = await http.get("/api/forecasts")
 
     assert reply.status_code == 200
-    assert reply.json()["items"][0]["id"] == 1
+    assert reply.json()["items"][0]["slot"] == "midday"
 
 
 @pytest.mark.asyncio
-async def test_the_list_carries_the_expected_return_and_the_grade_summary():
-    async with client(theses=[thesis_row()], summary={1: (2, 1, 0.51)}) as http:
-        payload = (await http.get("/api/theses")).json()
+async def test_the_list_carries_the_axis_the_change_is_measured_against():
+    """**목록에도 축을 싣는다.** 슬롯 규칙을 몰라도 "이 0.6퍼센트가 무엇 대비인가"가 읽혀야 한다."""
+    async with client(forecasts=[forecast_row()]) as http:
+        item = (await http.get("/api/forecasts")).json()["items"][0]
 
-    item = payload["items"][0]
-    assert item["up_return_pct"] == 0.8
-    assert item["down_return_pct"] == 1.2
-    assert (item["graded_horizons"], item["narrated_horizons"], item["mean_brier"]) == (2, 1, 0.51)
-    # 이유와 관측 상태는 목록에 없다. 100건이면 응답이 수백 KB가 된다.
-    assert "up_reasoning" not in item
-    assert "input_state" not in item
-
-
-@pytest.mark.asyncio
-async def test_the_list_says_what_the_expected_return_is_measured_against():
-    """**목록에도 축을 싣는다.**
-
-    소비자가 목록만 보고도 슬롯 규칙 없이 "이 1.2퍼센트가 무엇 대비인가"를 읽어야 한다.
-    그것이 이 칸들을 만든 이유다 — 전에는 장중 기준가가 `input_state` JSONB에만 있었고
-    장전 기준가는 아예 없었다.
-    """
-    async with client(theses=[thesis_row()]) as http:
-        item = (await http.get("/api/theses")).json()["items"][0]
-
-    assert item["base_price"] == 6825.11
-    assert item["base_return_pct"] == -1.26
+    assert item["base_price"] == 6652.75
+    assert item["so_far_pct"] == 1.37
     # 축의 시각은 `as_of_at`이 아니라 그 슬롯이 실제로 본 봉의 시각이다.
     assert item["base_at"] != item["as_of_at"]
     assert item["base_at"].endswith("Z")
 
 
 @pytest.mark.asyncio
-async def test_the_list_carries_the_error_band_of_each_direction():
-    async with client(theses=[thesis_row()]) as http:
-        item = (await http.get("/api/theses")).json()["items"][0]
+async def test_the_list_leaves_the_reasons_and_the_state_to_the_detail():
+    """한 건이 수 KB다. 목록에 실으면 한 쪽이 메가 단위가 된다."""
+    async with client(forecasts=[forecast_row()]) as http:
+        item = (await http.get("/api/forecasts")).json()["items"][0]
 
-    assert (item["up_return_band_pct"], item["down_return_band_pct"]) == (0.3, 0.4)
-
-
-@pytest.mark.asyncio
-async def test_times_end_with_z_not_an_offset():
-    """프로젝트 규칙이 `Z`를 요구한다. Pydantic 기본 직렬화는 `+00:00`이다."""
-    async with client(theses=[thesis_row()]) as http:
-        payload = (await http.get("/api/theses")).json()
-
-    assert payload["items"][0]["as_of_at"].endswith("Z")
-    assert "+00:00" not in payload["items"][0]["as_of_at"]
+    assert "reasons" not in item
+    assert "input_state" not in item
+    # 대신 건수만 준다 — 화면이 "이유 2건"을 그릴 수 있다.
+    assert item["reason_count"] == 2
 
 
 @pytest.mark.asyncio
-async def test_probabilities_are_json_numbers_not_strings():
-    """`Decimal`을 그대로 두면 클라이언트가 매번 파싱한다."""
-    async with client(theses=[thesis_row()]) as http:
-        payload = (await http.get("/api/theses")).json()
+async def test_the_pre_open_slot_has_no_so_far_because_the_market_is_shut():
+    async with client(forecasts=[forecast_row(slot=KospiSlot.PRE_OPEN)]) as http:
+        item = (await http.get("/api/forecasts")).json()["items"][0]
 
-    assert isinstance(payload["items"][0]["prob_up"], float)
-
-
-@pytest.mark.asyncio
-async def test_a_limit_over_the_cap_is_refused():
-    """날짜 구간이 넓을 때의 폭주를 막는다."""
-    async with client(theses=[]) as http:
-        assert (await http.get("/api/theses", params={"limit": 201})).status_code == 422
-        assert (await http.get("/api/theses", params={"limit": 200})).status_code == 200
+    assert item["so_far_pct"] is None
 
 
 @pytest.mark.asyncio
-async def test_the_default_window_is_two_weeks_of_kst_days():
-    """`run_date`가 KST 세션 날짜라 UTC 날짜로 창을 잡으면 하루가 어긋난다."""
-    fake = FakeRepository(theses=[])
-    app = app_with(fake)
+async def test_an_ungraded_forecast_says_null_not_zero():
+    """0으로 채우면 "아직 안 쟀다"와 "0이었다"가 같아 보인다."""
+    async with client(forecasts=[forecast_row()]) as http:
+        item = (await http.get("/api/forecasts")).json()["items"][0]
 
-    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as http:
-        await http.get("/api/theses")
-
-    window = fake.calls[0]
-    assert (window["run_date_to"] - window["run_date_from"]).days == 13
+    assert item["actual_change_pct"] is None
+    assert item["hit"] is None
+    assert item["graded_at"] is None
 
 
 @pytest.mark.asyncio
-async def test_a_missing_thesis_is_a_404_not_an_empty_body():
-    async with client(theses=[]) as http:
-        assert (await http.get("/api/theses/999")).status_code == 404
-        assert (await http.get("/api/theses/999/graph")).status_code == 404
+async def test_the_detail_is_addressed_by_its_natural_key():
+    """`id`를 쓰면 같은 슬롯이 두 주소를 갖는다."""
+    async with client(forecasts=[forecast_row()]) as http:
+        reply = await http.get("/api/forecasts/2026-09-03/midday")
+
+    payload = reply.json()
+    assert reply.status_code == 200
+    assert payload["reasons"][0]["factor"] == "FOREIGN_NET_BUY"
+    assert payload["reasons"][1]["memory_id"] == 17
+    assert payload["input_state"]["run_date"] == "2026-09-03"
 
 
 @pytest.mark.asyncio
-async def test_the_detail_splits_the_original_citations_from_the_narrative_ones():
-    """지평별 사후 인용이 원 판단의 근거에 섞이면 "왜 그 결론인가"가 흐려진다."""
-    rows = {
-        "theses": [thesis_row()],
-        "evidence": [evidence_row(), evidence_row(horizon=1, rank=1)],
-        "outcomes": [outcome_row(0), outcome_row(1, narration_run_id=10)],
-        "runs": [llm_run_row(), llm_run_row(10)],
-    }
-    async with client(**rows) as http:
-        payload = (await http.get("/api/theses/1")).json()
+async def test_a_missing_forecast_is_a_404_not_an_empty_body():
+    async with client(forecasts=[forecast_row()]) as http:
+        reply = await http.get("/api/forecasts/2026-09-02/pre_open")
 
-    assert len(payload["evidence"]) == 1
-    assert payload["evidence"][0]["direction"] == "down"
-    horizon_one = next(row for row in payload["outcomes"] if row["horizon_days"] == 1)
-    assert len(horizon_one["evidence"]) == 1
-    # 사후 인용에는 방향·경로가 없다(DB에서 NULL이다).
-    assert horizon_one["evidence"][0]["direction"] is None
+    assert reply.status_code == 404
 
 
 @pytest.mark.asyncio
-async def test_the_size_grade_only_shows_up_on_horizon_zero():
-    """크기의 창이 확률과 같은 창이라 5영업일 누적에 대조하면 항상 과소로 나온다."""
-    rows = {"theses": [thesis_row()], "outcomes": [outcome_row(0), outcome_row(1)]}
-    async with client(**rows) as http:
-        payload = (await http.get("/api/theses/1")).json()
+async def test_the_static_accuracy_path_wins_over_the_date_path():
+    """`/accuracy`가 `{run_date}/{slot}`보다 먼저 등록돼 있어야 한다."""
+    async with client(accuracy=[AccuracyRow(slot="midday", graded=2, hits=1, error_sum=1.0)]) as http:
+        reply = await http.get("/api/forecasts/accuracy")
 
-    by_horizon = {row["horizon_days"]: row for row in payload["outcomes"]}
-    assert by_horizon[0]["return_error_pct"] == 0.3
-    assert by_horizon[1]["return_error_pct"] is None
-
-
-@pytest.mark.asyncio
-async def test_the_detail_links_its_conversation_without_copying_the_tool_calls():
-    """대화 하나가 여러 thesis를 만든다. 같은 배열을 모든 상세에 복제하지 않는다."""
-    async with client(theses=[thesis_row()], runs=[llm_run_row()]) as http:
-        payload = (await http.get("/api/theses/1")).json()
-
-    assert payload["llm_run"]["id"] == 9
-    # **건수이지 배열이 아니다.** 배열은 실행 상세가 준다.
-    assert payload["llm_run"]["tool_call_count"] == 11
-    assert "arguments" not in str(payload["llm_run"])
+    assert reply.status_code == 200
+    rows = {row["slot"]: row for row in reply.json()["rows"]}
+    assert rows["midday"]["hit_rate"] == 0.5
+    assert rows["midday"]["mean_abs_error"] == 0.5
 
 
 @pytest.mark.asyncio
-async def test_a_thesis_from_before_the_ledger_still_renders():
-    """리비전 전 행은 `llm_run_id`가 NULL이다. 화면 전체를 실패시키지 않는다."""
-    async with client(theses=[thesis_row(llm_run_id=None)]) as http:
-        payload = (await http.get("/api/theses/1")).json()
+async def test_a_slot_with_no_rows_is_still_a_row_with_null_rates():
+    """빠뜨리면 "그 슬롯은 안 돈다"와 "아직 채점이 없다"가 같아 보인다."""
+    async with client(accuracy=[]) as http:
+        rows = {row["slot"]: row for row in (await http.get("/api/forecasts/accuracy")).json()["rows"]}
 
-    assert payload["llm_run"] is None
-
-
-@pytest.mark.asyncio
-async def test_the_graph_uses_the_names_stage_four_pinned():
-    """`4-graph.md` 2절이 정한 라벨·관계 이름을 글자 그대로 쓴다."""
-    rows = {
-        "theses": [thesis_row()],
-        "evidence": [evidence_row(), evidence_row(horizon=1)],
-        "precedents": [ThesisPrecedent(thesis_id=1, precedent_id=2)],
-        "neighbours": [thesis_row(2, "KOSDAQ", llm_run_id=None)],
-        "grades": [outcome_row(0)],
-    }
-    async with client(**rows) as http:
-        payload = (await http.get("/api/theses/1/graph")).json()
-
-    assert payload["center"] == "thesis:1"
-    labels = {label for node in payload["nodes"] for label in node["labels"]}
-    assert labels == {"Thesis", "Evidence"}
-    assert {edge["type"] for edge in payload["edges"]} == {"CITES", "INFORMED_BY"}
+    assert set(rows) == {"pre_open", "midday", "pre_close", "all"}
+    assert rows["pre_open"]["hit_rate"] is None
+    assert rows["pre_open"]["graded"] == 0
 
 
 @pytest.mark.asyncio
-async def test_the_graph_ids_reuse_the_evidence_ref_syntax():
-    """`Evidence` 노드 id가 `evidence_ref` 그 자체다. 접두가 kind와 같은 것을 모델이 보장한다."""
-    async with client(theses=[thesis_row()], evidence=[evidence_row()]) as http:
-        payload = (await http.get("/api/theses/1/graph")).json()
+async def test_the_totals_row_sums_the_slots_instead_of_averaging_them():
+    """평균의 평균이 되면 슬롯마다 표본이 다를 때 값이 틀린다."""
+    accuracy = [
+        AccuracyRow(slot="pre_open", graded=4, hits=1, within_band=2, error_sum=4.0),
+        AccuracyRow(slot="midday", graded=1, hits=1, within_band=1, error_sum=0.5),
+    ]
+    async with client(accuracy=accuracy) as http:
+        rows = {row["slot"]: row for row in (await http.get("/api/forecasts/accuracy")).json()["rows"]}
 
-    assert {node["id"] for node in payload["nodes"]} == {"thesis:1", "document:4471"}
-
-
-@pytest.mark.asyncio
-async def test_the_graph_never_carries_narrative_citations():
-    """지평마다 같은 ref가 반복돼 엣지가 부푼다. 사후 인용은 상세에만 남는다."""
-    rows = {"theses": [thesis_row()], "evidence": [evidence_row(horizon=1), evidence_row(horizon=3)]}
-    async with client(**rows) as http:
-        payload = (await http.get("/api/theses/1/graph")).json()
-
-    assert payload["edges"] == []
-    assert {node["id"] for node in payload["nodes"]} == {"thesis:1"}
-
-
-@pytest.mark.asyncio
-async def test_the_graph_node_carries_the_zero_horizon_grade():
-    """`(:Thesis)` 속성은 단수인데 채점은 지평 넷짜리 다중 행이다. 지평 0을 싣는다."""
-    async with client(theses=[thesis_row()], grades=[outcome_row(0)]) as http:
-        payload = (await http.get("/api/theses/1/graph")).json()
-
-    center = next(node for node in payload["nodes"] if node["id"] == "thesis:1")
-    assert center["properties"]["brier_score"] == 0.51
-    # projection이지 미러가 아니다. 프롬프트 스냅샷은 안 싣는다.
-    assert "input_state" not in center["properties"]
-
-
-@pytest.mark.asyncio
-async def test_every_graph_edge_is_unique_within_the_response():
-    """프런트가 `type:start:end`로 안정적인 id를 만들 수 있어야 한다.
-
-    같은 (thesis, horizon, kind, ref)가 두 번 오는 일은 `uq_thesis_evidence_ref`가 DB에서
-    막는다. 그래서 투영이 방어적으로 중복을 지우지 않는다 — 지우면 그 UNIQUE가 깨진 날을
-    조용히 덮는다.
-    """
-    rows = {
-        "theses": [thesis_row()],
-        "evidence": [evidence_row(rank=1), evidence_row(rank=2, ref="disclosure:2026")],
-        "precedents": [ThesisPrecedent(thesis_id=1, precedent_id=2)],
-        "neighbours": [thesis_row(2, "KOSDAQ", llm_run_id=None)],
-    }
-    async with client(**rows) as http:
-        payload = (await http.get("/api/theses/1/graph")).json()
-
-    keys = [(edge["type"], edge["start"], edge["end"]) for edge in payload["edges"]]
-    assert len(keys) == len(set(keys))
+    assert rows["all"]["graded"] == 5
+    assert rows["all"]["hit_rate"] == 0.4
+    assert rows["all"]["mean_abs_error"] == 0.9

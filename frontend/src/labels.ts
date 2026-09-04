@@ -58,45 +58,6 @@ export const DIRECTIONS: Labels = {
   flat: "보합",
 };
 
-/** 인과 경로가 대상을 민 방향. 값은 방향과 같지만 뜻이 "밀었다"라 말이 다르다. */
-export const CAUSAL_SIGNS: Labels = {
-  up: "위로",
-  down: "아래로",
-};
-
-/**
- * 인과 주장의 성격. **셋 다 인과의 증명이 아니다.**
- *
- * 가르는 것은 확신의 세기가 아니라 **무엇이 뒷받침하는가**다 — 문서가 말했다 >
- * 값이 그렇게 움직였다 > 우리가 이었다.
- */
-export const CAUSAL_CONFIDENCES: Labels = {
-  observed: "문서가 말함",
-  endpoint_observed: "양 끝 값",
-  plausible: "해석",
-};
-
-/** 인과 경로의 출발점 종류. 대상 출발이 있어야 다중 홉이 이어진다. */
-export const CAUSAL_SOURCE_KINDS: Labels = {
-  event: "사건",
-  target: "대상",
-};
-
-/** 인과 대상이 어느 마스터에서 오는지. 값의 성격이 아니라 저장소를 가른다. */
-export const CAUSAL_TARGET_KINDS: Labels = {
-  instrument: "종목",
-  index: "국내 지수",
-  quote: "해외 지수·환율·선물",
-  indicator: "지표",
-};
-
-/** 인과 경로가 인용한 근거의 종류. 셋에 흩어져 있어 `ref`가 `<kind>:<id>`다. */
-export const CAUSAL_EVIDENCE_KINDS: Labels = {
-  document: "문서",
-  disclosure: "공시",
-  technical_signal: "기술적 신호",
-};
-
 /**
  * 문서 본문을 받아 봤는가, 못 받았다면 왜인가.
  *
@@ -117,14 +78,42 @@ export const ATTACHMENT_KINDS: Labels = {
 };
 
 /**
- * 한 주를 대상 하나로 접은 방향.
- *
- * **`mixed`는 "모른다"가 아니라 "밀고 당겼다"이다** — 세기가 갈린 것을 LLM이 그렇게 읽은
- * 것이라 `up_count`가 더 많아도 `mixed`일 수 있다.
+ * 전망 슬롯. **이름을 시각이 아니라 뜻으로 짓는다** — 슬롯 시각은 운영 손잡이여서
+ * 30분을 옮기는 순간 `slot_1135` 같은 이름은 거짓이 된다.
  */
-export const CAUSAL_BIASES: Labels = {
-  up: "위로",
-  down: "아래로",
-  mixed: "엇갈림",
-  flat: "정체",
+export const FORECAST_SLOTS: Labels = {
+  pre_open: "장전",
+  midday: "장중",
+  pre_close: "마감전",
+};
+
+/** LLM 대화의 종류. 전망은 답을 만들고 관찰은 그래프와 메모에만 쓴다. */
+export const RUN_KINDS: Labels = {
+  forecast: "전망",
+  review: "장후 관찰",
+};
+
+/**
+ * 관측의 부호. **"같음"은 요인이 오르면 코스피도 올랐다는 뜻**이지 상관계수가 아니다.
+ */
+export const OBSERVATION_SIGNS: Labels = {
+  same: "같음",
+  inverse: "반대",
+};
+
+/** 관측의 세기. **3이 "주도했다"**이고 1은 "같이 움직였지만 부차적"이다. */
+export const OBSERVATION_STRENGTHS: Labels = {
+  "1": "부차",
+  "2": "보통",
+  "3": "주도",
+};
+
+/**
+ * 메모를 내린 이유. **모델이 정한 것과 코드가 정한 것을 가른다** — 뒤엣것은 판정이
+ * 아니라 울타리다.
+ */
+export const RETIRE_REASONS: Labels = {
+  dropped: "모델이 내림",
+  unreviewed: "두 번 검토에서 빠짐",
+  expired: "나이 상한",
 };

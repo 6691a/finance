@@ -14,12 +14,11 @@ from apps.api.app import create_app
 from apps.api.repository import LlmRunDetailRows, LlmRunListRows
 from apps.api.repository.llm_run import LlmRunReadRepository
 from apps.core.utility import KST
-from apps.models.analysis import LlmRunKind, LlmRunStatus
+from apps.models.analysis import KospiLlmRunKind, KospiLlmRunStatus
 from tests.api.conftest import (
     container,
+    forecast_row,
     llm_run_row,
-    outcome_row,
-    thesis_row,
     tool_call_row,
 )
 
@@ -46,9 +45,7 @@ class FakeRepository:
         return LlmRunDetailRows(
             run=run,
             tool_calls=tuple(self.rows.get("tool_calls", [])),
-            theses=tuple(self.rows.get("theses", [])),
-            outcomes=tuple(self.rows.get("outcomes", [])),
-            subjects={row.id: row for row in self.rows.get("subjects", [])},
+            forecasts=tuple(self.rows.get("forecasts", [])),
         )
 
     async def tool_call_row(self, llm_run_id: int, seq: int) -> Any:
@@ -85,7 +82,7 @@ async def test_the_service_arrives_by_injection_not_a_lookup():
 
 @pytest.mark.asyncio
 async def test_the_window_filters_the_execution_day_not_the_target_day():
-    """T+5 해설의 `run_date`는 과거 원 추론일이다. 그것으로 거르면 오늘 실행한 해설이 빠진다."""
+    """자정을 넘겨 도는 실행이 `run_date`로 거르면 목록에서 빠진다."""
     fake = FakeRepository(runs=[])
     app = app_with(fake)
 
@@ -112,7 +109,7 @@ async def test_the_default_window_is_two_weeks_of_kst_days():
 
 @pytest.mark.asyncio
 async def test_there_is_no_subject_filter_on_runs():
-    """대화 하나가 여러 대상을 다루고 실패 대화에는 산출물이 아예 없다."""
+    """대상이 코스피 하나다 — 가를 것이 없다."""
     async with client(runs=[]) as http:
         reply = await http.get("/api/llm-runs", params={"subject_code": "KOSPI"})
 
@@ -124,7 +121,7 @@ async def test_there_is_no_subject_filter_on_runs():
 async def test_a_run_that_never_recorded_its_end_has_no_duration():
     """`running`은 "시작했지만 종료를 기록하지 못했다"이기도 하다. 지금 시각으로 채우면
     조회할 때마다 값이 변한다."""
-    async with client(runs=[llm_run_row(status=LlmRunStatus.RUNNING)]) as http:
+    async with client(runs=[llm_run_row(status=KospiLlmRunStatus.RUNNING)]) as http:
         item = (await http.get("/api/llm-runs")).json()["items"][0]
 
     assert item["status"] == "running"
@@ -179,8 +176,8 @@ async def test_the_raw_and_validated_arguments_stay_side_by_side():
     async with client(**rows) as http:
         calls = (await http.get("/api/llm-runs/9")).json()["tool_calls"]
 
-    assert calls[0]["arguments"] == {"limit": 5}
-    assert calls[0]["validated_arguments"] == {"limit": 5, "kind": "document"}
+    assert calls[0]["arguments"] == {"factor": "US10Y", "days": 10}
+    assert calls[0]["validated_arguments"] == {"factor": "US10Y", "days": 10}
     assert calls[1]["validated_arguments"] is None
     assert calls[1]["error_kind"] == "validation"
     assert calls[1]["duration_ms"] is None
@@ -213,38 +210,56 @@ async def test_a_failed_call_carries_the_error_instead_of_a_result():
         payload = (await http.get("/api/llm-runs/9/tool-calls/1")).json()
 
     assert payload["result"] is None
-    assert payload["error"] == "limit must be <= 20"
+    assert payload["error"] == "days must be <= 30"
 
 
 @pytest.mark.asyncio
-async def test_a_generation_run_links_its_theses_and_a_narration_run_its_outcomes():
-    """생성과 해설은 산출물의 종류가 다르다. 둘 중 하나는 언제나 빈 배열이다."""
-    async with client(runs=[llm_run_row()], theses=[thesis_row()]) as http:
-        generation = (await http.get("/api/llm-runs/9")).json()
+async def test_a_forecast_run_links_its_forecast_and_a_review_run_links_none():
+    """관찰 대화는 전망을 만들지 않는다 — 그래프와 메모에만 쓴다."""
+    async with client(runs=[llm_run_row()], forecasts=[forecast_row()]) as http:
+        forecast = (await http.get("/api/llm-runs/9")).json()
 
-    assert [row["id"] for row in generation["produced_theses"]] == [1]
-    assert generation["narrated_outcomes"] == []
-    assert generation["produced_count"] == 1
+    assert [row["slot"] for row in forecast["produced_forecasts"]] == ["midday"]
+    assert forecast["produced_forecasts"][0]["url"] == "/api/forecasts/2026-09-03/midday"
+    assert forecast["produced_count"] == 1
 
-    rows = {
-        "runs": [llm_run_row(10, LlmRunKind.NARRATION)],
-        "outcomes": [outcome_row(1, narration_run_id=10)],
-        "subjects": [thesis_row()],
+    async with client(runs=[llm_run_row(10, KospiLlmRunKind.REVIEW)]) as http:
+        review = (await http.get("/api/llm-runs/10")).json()
+
+    assert review["produced_forecasts"] == []
+    assert review["produced_count"] == 0
+    assert review["slot"] is None
+
+
+@pytest.mark.asyncio
+async def test_the_memory_ledger_is_null_on_a_forecast_run():
+    """0으로 채우면 "0건"과 "해당 없음"이 같아 보인다."""
+    async with client(runs=[llm_run_row()]) as http:
+        forecast = (await http.get("/api/llm-runs")).json()["items"][0]
+
+    assert forecast["memories"] == {
+        "written": None,
+        "rejected": None,
+        "kept": None,
+        "dropped": None,
+        "unreviewed": None,
+        "expired": None,
     }
-    async with client(**rows) as http:
-        narration = (await http.get("/api/llm-runs/10")).json()
+    assert forecast["observations_written"] is None
 
-    assert narration["produced_theses"] == []
-    assert narration["narrated_outcomes"][0]["horizon_days"] == 1
-    assert narration["narrated_outcomes"][0]["label"] == "코스피"
-    assert narration["narrated_outcomes"][0]["verdict"] == "supported"
+    async with client(runs=[llm_run_row(10, KospiLlmRunKind.REVIEW)]) as http:
+        review = (await http.get("/api/llm-runs")).json()["items"][0]
+
+    assert review["memories"]["written"] == 1
+    assert review["memories"]["kept"] == 2
+    assert review["observations_written"] == 4
 
 
 @pytest.mark.asyncio
 async def test_a_failed_run_still_shows_what_it_managed_to_record():
     """실패 전 툴 기록과 마지막 오류가 남는다. 산출물만 비어 있다."""
     rows = {
-        "runs": [llm_run_row(status=LlmRunStatus.FAILED)],
+        "runs": [llm_run_row(status=KospiLlmRunStatus.FAILED)],
         "tool_calls": [tool_call_row(1)],
     }
     async with client(**rows) as http:
@@ -253,7 +268,7 @@ async def test_a_failed_run_still_shows_what_it_managed_to_record():
     assert payload["status"] == "failed"
     assert payload["error"] == "모델이 붙지 않았다"
     assert len(payload["tool_calls"]) == 1
-    assert payload["produced_theses"] == []
+    assert payload["produced_forecasts"] == []
 
 
 @pytest.mark.asyncio
@@ -277,4 +292,4 @@ def test_the_list_statement_reads_one_more_row_than_the_page():
     compiled = str(statement.compile(compile_kwargs={"literal_binds": True}))
 
     assert "LIMIT 51" in compiled
-    assert "ORDER BY thesis_llm_run.started_at DESC" in compiled
+    assert "ORDER BY kospi_llm_run.started_at DESC" in compiled

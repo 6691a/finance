@@ -1,11 +1,10 @@
 """LLM 실행 원장 라우트.
 
-**실행일 필터의 축은 `started_at`이다.** 원 추론의 `run_date`가 아니다 — T+5 해설의
-`run_date`는 과거 원 추론일이라, 그것으로 거르면 오늘 실행한 해설이 목록에서 빠진다.
-KST 날짜를 받아 UTC 경계로 바꾸는 것은 `apps/core/utility.kst_day_bounds`가 한다.
+**실행일 필터의 축은 `started_at`이다.** 대화가 대상으로 삼은 `run_date`가 아니다 —
+자정을 넘겨 도는 실행이 그것으로는 목록에서 빠진다. KST 날짜를 받아 UTC 경계로 바꾸는
+것은 `apps/core/utility.kst_day_bounds`가 한다.
 
-**대상(`subject_code`) 필터를 두지 않는다.** 대화 하나가 여러 대상을 다루고 실패·중단
-대화에는 산출물이 아예 없다. 대상으로 찾는 것은 `/api/theses`가 답한다.
+**대상 필터를 두지 않는다.** 대상이 코스피 하나다 — 가를 것이 없다.
 """
 
 from datetime import date, timedelta
@@ -34,11 +33,16 @@ async def list_llm_runs(
     service: ServiceDep,
     started_from: Annotated[date | None, Query(alias="from", description="실행 시작일(KST, 포함)")] = None,
     started_to: Annotated[date | None, Query(alias="to", description="실행 종료일(KST, 포함)")] = None,
-    kind: Annotated[list[str] | None, Query(description="LlmRunKind 값. 여러 번 줄 수 있다")] = None,
+    kind: Annotated[
+        list[str] | None, Query(description="forecast·review. 여러 번 줄 수 있다")
+    ] = None,
     status: Annotated[
         list[str] | None, Query(description="running·succeeded·failed. 여러 번 줄 수 있다")
     ] = None,
-    slot: Annotated[list[str] | None, Query(description="RunSlot 값. 여러 번 줄 수 있다")] = None,
+    slot: Annotated[
+        list[str] | None,
+        Query(description="pre_open·midday·pre_close. **관찰 대화는 슬롯이 없어 함께 빠진다**"),
+    ] = None,
     limit: Annotated[int, Query(ge=1, le=MAX_LIMIT)] = DEFAULT_LIMIT,
     offset: Annotated[int, Query(ge=0)] = 0,
 ) -> LlmRunList:

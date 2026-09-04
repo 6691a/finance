@@ -52,7 +52,7 @@ flowchart LR
     GRAPH["Neo4j<br/>코스피 관계 그래프 Factor → Index (원본)<br/>주간 인과 그래프 투영 Event → Channel → Target"]
 
     SLACK["Slack 브리핑 5종"]
-    API["apps/api — FastAPI 조회 API"]
+    API["apps/api — FastAPI 조회 API + frontend/dist 화면"]
 
     KIS -->|REST| COL
     DART --> COL
@@ -149,10 +149,11 @@ flowchart LR
 | 캐시 | Redis | 실시간 수집 버퍼 |
 | LLM | LangChain / LangGraph, xAI Grok, OpenAI 호환 API | 툴 호출 루프와 구조화 출력 |
 | API | FastAPI, dependency-injector | 읽기 전용 조회, 생성자 주입 + provider override 테스트 |
+| 화면 | React 19, TypeScript, Vite, Cytoscape.js, uPlot | 상주 서비스가 아니라 `dist`를 조회 API가 같은 origin에서 줍니다 |
 | 수집 | httpx, scrapling(+playwright) | REST와 HTML을 같은 규약으로 |
 | 관측 | Sentry (Airflow / 상주 서비스 각각) | 에러·로그·트레이싱·프로파일링 |
 | 배포 | Docker Compose (Synology NAS), just | 이미지 3종, bind-mount 배포 |
-| 품질 | pytest, ruff, pyrefly, pre-commit | 테스트 3,101개 |
+| 품질 | pytest, ruff, pyrefly, pre-commit, vitest | 테스트 3,078개(Python) · 166개(화면) |
 
 ## 설계하면서 고민한 것들
 
@@ -203,6 +204,7 @@ INSERT 컬럼과 `ON CONFLICT` 키를 ORM metadata와 맞춰 보는 테스트도
 | `apps/models/` | SQLAlchemy 모델. 테이블 정의의 원본 |
 | `apps/realtime/` | KIS 실시간 WebSocket 수집 상주 서비스 |
 | `apps/api/` | 읽기 전용 조회 API (routes → service → repository) |
+| `frontend/` | 수집·전망·관계·메모를 읽는 화면. Vite가 구운 `dist`를 조회 API가 줍니다 |
 | `apps/core/` | 설정·DB·Redis·공통 변환 |
 | `migrations/` | Alembic. 리비전 하나를 여러 DB alias가 공유하고 라우팅은 순수 함수가 판단합니다 |
 | `docs/` | 설계 문서. 수집 계약, 분석 설계, 운영 안내 |

@@ -11,131 +11,144 @@ export type UtcText = string;
 /** `2026-08-26` KST 세션 날짜. */
 export type DayText = string;
 
-export interface ThesisSummary {
-  id: number;
-  run_date: DayText;
-  run_slot: string;
-  as_of_at: UtcText;
-  subject_kind: string;
-  subject_code: string;
-  label: string;
-  prob_up: number;
-  prob_down: number;
-  prob_flat: number;
-  up_return_pct: number | null;
-  down_return_pct: number | null;
-  /** `up_return_pct`의 ± 폭(퍼센트포인트). **상한이 아니라 구간의 반이다.** */
-  up_return_band_pct: number | null;
-  down_return_band_pct: number | null;
-  /** **확률 셋과 등락률 둘의 분모.** 이 가격에서 그 세션 마감까지가 채점 창이다. */
-  base_price: number | null;
-  base_at: UtcText | null;
-  /** 직전 세션 종가에서 `base_price`까지 **이미 온** 등락률. 예측과 축이 다르다. */
-  base_return_pct: number | null;
-  graded_horizons: number;
-  narrated_horizons: number;
-  mean_brier: number | null;
-}
+// --- 코스피 일일 전망 ---------------------------------------------------------
 
-export interface ThesisList {
-  items: ThesisSummary[];
-  limit: number;
-  offset: number;
-  has_more: boolean;
-}
-
-export interface EvidenceCitation {
-  rank: number;
-  kind: string;
-  ref: string;
-  title: string;
-  url: string | null;
+export interface ForecastReason {
+  /** 인용한 요인 코드. 관계 화면으로 링크한다. */
+  factor: string | null;
+  /** 인용한 메모 id. */
+  memory_id: number | null;
+  /** 인용한 같은 날 앞 슬롯. */
+  slot_ref: string | null;
   direction: string | null;
-  mechanism: string | null;
-  detail: Record<string, unknown>;
+  statement: string;
 }
 
-export interface PrecedentRef {
-  id: number;
+export interface ForecastItem {
   run_date: DayText;
-  run_slot: string;
-  subject_kind: string;
-  subject_code: string;
-  label: string;
-  prob_up: number;
-  prob_down: number;
-  prob_flat: number;
-}
-
-/** 추론 상세가 잇는 대화 요약. **`tool_call_count`는 건수이고 배열이 아니다.** */
-export interface LlmRunSummary {
-  id: number;
-  kind: string;
-  status: string;
-  llm_model: string;
-  prompt_version: string;
-  try_number: number;
-  started_at: UtcText;
-  finished_at: UtcText | null;
-  tool_rounds: number;
-  tool_call_count: number;
-  tool_result_chars: number;
-  error: string | null;
-}
-
-export interface ThesisOutcomeItem {
-  horizon_days: number;
+  /** `pre_open`·`midday`·`pre_close`. **슬롯이 기준가의 뜻을 정한다.** */
+  slot: string;
   as_of_at: UtcText;
-  evaluated_at: UtcText | null;
-  actual_return_pct: number | null;
-  actual_outcome: string | null;
-  brier_score: number | null;
-  predicted_return_pct: number | null;
-  return_error_pct: number | null;
-  /** 실현된 방향의 ± 폭 스냅샷. **밴드 적중은 `abs(return_error_pct) <= 이 값`이다.** */
-  predicted_band_pct: number | null;
-  narrative: string | null;
-  verdict: string | null;
-  narrative_at: UtcText | null;
-  llm_model: string | null;
-  prompt_version: string | null;
-  narration_run: LlmRunSummary | null;
-  evidence: EvidenceCitation[];
-}
-
-export interface ThesisDetail extends ThesisSummary {
-  up_reasoning: string;
-  down_reasoning: string;
-  flat_reasoning: string;
-  input_state: Record<string, unknown>;
-  tool_rounds: number;
-  llm_model: string;
+  base_price: number;
+  base_at: UtcText;
+  /** 전일 종가 대비 현재가 등락률. **장전은 null이다** — 아직 안 열렸다. */
+  so_far_pct: number | null;
+  direction: string;
+  expected_change_pct: number;
+  band_pct: number;
+  reason_count: number;
+  /** 이유 0건으로 저장된 약한 답. 화면이 머리표를 붙인다. */
+  weak: boolean;
+  rejected_reasons: number;
+  actual_change_pct: number | null;
+  hit: boolean | null;
+  within_band: boolean | null;
+  graded_at: UtcText | null;
   prompt_version: string;
+  llm_model: string;
+  llm_run_id: number | null;
+  llm_run_url: string | null;
+  url: string;
+}
+
+export interface ForecastList extends Paged<ForecastItem> {}
+
+export interface ForecastDetail extends ForecastItem {
+  /** 저장된 순서 그대로. **그 순서가 중요도다.** */
+  reasons: ForecastReason[];
+  /** 모델이 본 관측 상태 전부. 모양이 판마다 바뀌므로 표로 그리지 않는다. */
+  input_state: Record<string, unknown>;
   dag_run_id: string;
-  llm_run: LlmRunSummary | null;
-  evidence: EvidenceCitation[];
-  outcomes: ThesisOutcomeItem[];
-  precedents: PrecedentRef[];
 }
 
-export interface GraphNode {
+export interface ForecastAccuracyRow {
+  /** 슬롯 하나이거나 `all`(합계). */
+  slot: string;
+  /** **비율의 분모이고 반드시 함께 보인다.** */
+  graded: number;
+  hits: number;
+  within_band: number;
+  /** 채점 0건이면 null이다 — 0.0이 아니다. */
+  hit_rate: number | null;
+  band_rate: number | null;
+  mean_abs_error: number | null;
+  pending: number;
+}
+
+export interface ForecastAccuracy {
+  since: DayText;
+  until: DayText;
+  rows: ForecastAccuracyRow[];
+}
+
+// --- 요인 관계와 메모 (Neo4j) --------------------------------------------------
+
+export interface RelationItem {
+  factor: string;
+  label: string;
+  /** -1~1. 최근 관측에 기울어 있다(반감기 5일). */
+  weight: number;
+  /** **0이면 weight를 읽지 않는다** — 0은 "모른다"다. */
+  n_obs: number;
+  last_date: DayText | null;
+  last_note: string;
+  /** 감쇠 없는 최근 부호 셋. 가중치와 어긋나면 관계가 바뀌는 중이다. */
+  recent_signs: string[];
+  url: string;
+}
+
+export interface RelationList extends Paged<RelationItem> {}
+
+export interface ObservationItem {
+  factor: string;
+  observed_on: DayText;
+  sign: string;
+  strength: number;
+  note: string;
+  /** 오늘 기준 이 관측 하나의 무게(0~1). */
+  weight: number;
+  llm_run_id: number | null;
+  llm_run_url: string | null;
+}
+
+export interface ObservationList extends Paged<ObservationItem> {}
+
+export interface RelationNode {
   id: string;
-  labels: string[];
-  properties: Record<string, unknown>;
+  kind: string;
+  label: string;
+  n_obs: number;
 }
 
-export interface GraphEdge {
-  type: string;
-  start: string;
-  end: string;
-  properties: Record<string, unknown>;
+export interface RelationEdge {
+  source: string;
+  target: string;
+  weight: number;
+  n_obs: number;
 }
 
-export interface GraphResponse {
-  center: string;
-  nodes: GraphNode[];
-  edges: GraphEdge[];
+export interface RelationGraph {
+  as_of_date: DayText;
+  nodes: RelationNode[];
+  edges: RelationEdge[];
 }
+
+export interface MemoryItem {
+  id: number;
+  created_on: DayText;
+  text: string;
+  factor: string | null;
+  verify_count: number;
+  unreviewed_count: number;
+  last_verified_on: DayText | null;
+  /** null이면 활성이다. */
+  retired_on: DayText | null;
+  retire_reason: string | null;
+  llm_run_id: number | null;
+  llm_run_url: string | null;
+}
+
+export interface MemoryList extends Paged<MemoryItem> {}
 
 export interface ToolCallSummary {
   seq: number;
@@ -157,32 +170,33 @@ export interface ToolCallDetail extends ToolCallSummary {
   result: string | null;
 }
 
-export interface ProducedThesis {
-  id: number;
+export interface ProducedForecast {
   run_date: DayText;
-  run_slot: string;
-  subject_kind: string;
-  subject_code: string;
-  label: string;
+  slot: string;
+  direction: string;
+  expected_change_pct: number;
+  band_pct: number;
+  hit: boolean | null;
   url: string;
 }
 
-export interface NarratedOutcome {
-  thesis_id: number;
-  horizon_days: number;
-  subject_code: string;
-  label: string;
-  verdict: string | null;
-  url: string;
+/** 관찰 대화가 메모에 한 일. **`review`가 아니면 전부 null이다.** */
+export interface MemoryLedger {
+  written: number | null;
+  rejected: number | null;
+  kept: number | null;
+  dropped: number | null;
+  unreviewed: number | null;
+  expired: number | null;
 }
 
 export interface LlmRunItem {
   id: number;
+  /** `forecast`는 전망, `review`는 장후 관찰이다. */
   kind: string;
   run_date: DayText;
-  /** **인과 그래프(`causal`) 실행은 null이다** — 그 대화의 축은 슬롯이 아니라 주다. */
-  run_slot: string | null;
-  horizon_days: number | null;
+  /** **관찰 대화는 null이다** — 그 축은 슬롯이 아니라 하루다. */
+  slot: string | null;
   as_of_at: UtcText;
   dag_run_id: string;
   try_number: number;
@@ -193,14 +207,15 @@ export interface LlmRunItem {
   duration_ms: number | null;
   status: string;
   error: string | null;
-  tool_rounds: number;
-  tool_call_count: number;
-  tool_result_chars: number;
-  investigation_truncated: boolean;
+  tool_rounds: number | null;
+  tool_call_count: number | null;
+  tool_result_chars: number | null;
+  truncated: boolean | null;
+  /** **0이 아니면 모델이 조회하지 않은 것을 인용했다.** */
+  rejected: number | null;
+  observations_written: number | null;
+  memories: MemoryLedger;
   produced_count: number;
-  subjects_requested: number | null;
-  /** 요청보다 적으면 조용히 빠진 대상이 있다. */
-  subjects_answered: number | null;
   /** 캐시분을 포함한 입력 토큰. */
   prompt_tokens: number | null;
   /** `prompt_tokens`에 포함된다 — 이 부분이 훨씬 싸다. */
@@ -211,51 +226,57 @@ export interface LlmRunItem {
   url: string;
 }
 
-export interface LlmRunList {
-  items: LlmRunItem[];
-  limit: number;
-  offset: number;
-  has_more: boolean;
-}
+export interface LlmRunList extends Paged<LlmRunItem> {}
 
 export interface LlmRunDetail extends LlmRunItem {
   tool_calls: ToolCallSummary[];
-  produced_theses: ProducedThesis[];
-  narrated_outcomes: NarratedOutcome[];
+  produced_forecasts: ProducedForecast[];
 }
+
+// --- 품질 집계 ---------------------------------------------------------------
 
 export interface ForecastQualityRow {
   week_start: DayText;
-  horizon_days: number;
-  run_slot: string;
+  slot: string;
   llm_model: string;
   prompt_version: string;
-  mean_brier: number | null;
-  brier_samples: number;
-  beats_uniform: boolean | null;
-  mean_return_error_pct: number | null;
-  mae_return_pct: number | null;
-  return_samples: number;
-  mean_tool_calls: number | null;
-  mean_tool_result_chars: number | null;
-  run_samples: number;
+  /** **모든 비율의 분모다.** */
+  graded: number;
+  pending: number;
+  hits: number;
+  hit_rate: number | null;
+  beats_coin_flip: boolean | null;
+  within_band: number;
+  band_rate: number | null;
+  mean_abs_error: number | null;
+  /** **`mean_abs_error`보다 작으면 구조적으로 못 맞히는 폭이다.** */
+  mean_band_pct: number | null;
+  mean_expected_pct: number | null;
+  weak: number;
+  rejected_reasons: number;
 }
 
-export interface NarrativeQualityRow {
+export interface ReviewQualityRow {
   week_start: DayText;
-  horizon_days: number;
   llm_model: string;
   prompt_version: string;
-  supported: number;
-  contradicted: number;
-  unresolved: number;
-  verdict_samples: number;
+  runs: number;
+  observations_written: number;
+  mean_observations: number | null;
+  memories_written: number;
+  /** **0이 아니면 상한을 치고 있다.** */
+  memories_rejected: number;
+  memories_dropped: number;
+  memories_expired: number;
+  rejected: number;
+  mean_tool_calls: number | null;
+  truncated: number;
 }
 
 export interface QualityResponse {
   forecast: ForecastQualityRow[];
-  narrative: NarrativeQualityRow[];
-  uniform_brier: number;
+  review: ReviewQualityRow[];
+  coin_flip_hit_rate: number;
 }
 
 // --- 15단계: 수집 원자료 -------------------------------------------------------
@@ -795,132 +816,4 @@ export interface Paged<T> extends Items<T> {
   limit: number;
   offset: number;
   has_more: boolean;
-}
-
-/**
- * 인과 그래프의 경로 하나. 출발점 → 채널 체인 → 대상이다.
- *
- * **출발점은 사건 또는 대상이다.** `source_kind`가 어느 칸이 채워졌는지 말한다 — 대상이
- * 다시 원인이 되는 경로가 있어야 `VIX → NASDAQ100_FUT → SOX → 005930`이 이어진다.
- */
-export interface CausalPathRow {
-  id: number;
-  week_start: DayText;
-  source_kind: string;
-  event_id: number | null;
-  event_title: string | null;
-  event_occurred_on: DayText | null;
-  source_target_kind: string | null;
-  /** 같은 주 다른 경로의 대상이다 — 그래서 그래프에서 노드가 이어진다. */
-  source_target_code: string | null;
-  source_sign: string | null;
-  /** 값의 성격이 아니라 저장소를 가른다 — `US10Y`는 시세, `KTB10Y`는 지표다. */
-  target_kind: string;
-  target_code: string;
-  /** 사건 쪽에서 대상 쪽 순서다. */
-  channels: string[];
-  sign: string;
-  /**
-   * observed는 근거 문서가 말함, endpoint_observed는 양 끝 값이 그렇게 움직임,
-   * plausible은 해석. **셋 다 인과의 증명이 아니다.**
-   */
-  confidence: string;
-  reasoning: string;
-  return_week_change: number;
-  return_t1_change: number;
-  return_t5_change: number;
-  /** percent·basis_point. **숫자만 읽으면 안 된다.** */
-  return_unit: string;
-  llm_run_id: number | null;
-}
-
-/** 경로가 인용한 근거 하나. `<kind>:<id>` 규약은 서버가 이미 풀어서 준다. */
-export interface CausalEvidenceRow {
-  path_id: number;
-  ref: string;
-  kind: string;
-  /** 문서만 채운다. 다른 종류는 식별자를 그대로 보인다. */
-  title: string | null;
-  /** 문서는 화면 상세 경로, 공시는 DART 뷰어. 모르는 종류는 null이다. */
-  url: string | null;
-}
-
-/** 경로 하나와 **그 사건이 그 주에 뻗은 경로 전부**. 자기 자신을 포함한다. */
-export interface CausalPathDetail {
-  path: CausalPathRow;
-  /** **그 주의 경로 전부.** 사건이 아니라 주로 묶는다 — 대상이 다시 원인이 되기 때문이다. */
-  siblings: CausalPathRow[];
-  /** 그 주 경로들이 인용한 근거 전부. `path_id`로 갈라 읽는다. */
-  evidence: CausalEvidenceRow[];
-}
-
-export interface CausalEventRow {
-  id: number;
-  title: string;
-  occurred_on: DayText;
-  first_seen_week: DayText;
-  paths: number;
-}
-
-export interface CausalChannelRow {
-  id: number;
-  name: string;
-  first_seen_week: DayText;
-  steps: number;
-}
-
-/** 그래프 DB가 준 노드 하나. **키는 Postgres의 자연키를 편 문자열이다.** */
-export interface CausalGraphNode {
-  id: string;
-  kind: string;
-  label: string;
-}
-
-/** 엣지 하나. `path_id`와 `week_start`가 가드의 값이다. */
-export interface CausalGraphEdge {
-  source: string;
-  target: string;
-  type: string;
-  path_id: number | null;
-  week_start: DayText | null;
-  position: number | null;
-}
-
-/**
- * 탐색용 서브그래프. **원본이 아니라 투영이다** — 실현 등락·근거는 경로 응답이 갖는다.
- *
- * 그래프 DB가 꺼져 있으면 이 응답 대신 503이 오고, 화면은 경로 목록으로 그림을 조립한다.
- */
-export interface CausalGraph {
-  source: string;
-  week_start: DayText | null;
-  nodes: CausalGraphNode[];
-  edges: CausalGraphEdge[];
-}
-
-/** 채널 하나가 그 대상을 어느 쪽으로 몇 번 밀었나. */
-export interface CausalChannelTally {
-  name: string;
-  up: number;
-  down: number;
-}
-
-/**
- * 한 주의 인과 그래프를 대상 하나로 접은 방향성.
- *
- * **예측이 아니라 사전 맥락이다** — 주 `W`를 `W+2` 월요일에 접으므로 최소 9일 전 인과다.
- * `bias`는 LLM이 정하고 세기는 코드가 세므로 **둘이 어긋나는 것이 정상이다.**
- */
-export interface CausalDirectionRow {
-  week_start: DayText;
-  target_kind: string;
-  target_code: string;
-  bias: string;
-  reasoning: string;
-  up_count: number;
-  down_count: number;
-  flat_count: number;
-  path_ids: number[];
-  channels: CausalChannelTally[];
-  llm_run_id: number | null;
 }

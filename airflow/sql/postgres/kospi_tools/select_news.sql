@@ -10,9 +10,13 @@
 --
 -- 종목 태그를 배열로 접어 문서당 한 행을 지킨다. 대표에 연결된 중복은 뺀다.
 --
--- 점수 하한 인자는 없앴다(2026-09-03). 24시간 창의 후보가 303건인데 `LIMIT`이 상위 30을
--- 자르므로 하한 0·2·3이 전부 같은 답이었다 — 모델이 돌리고 있다고 믿는 손잡이가 연결돼
--- 있지 않았다. 없는 편이 있는 척하는 것보다 낫다.
+-- 점수 하한(`min_value_score`)은 **모델이 고르는 인자가 아니라 코드 상수**다
+-- (`domain.NEWS_MIN_VALUE_SCORE`, 2026-09-04). `LIMIT`이 하한을 대신한다는 2026-09-03의
+-- 판단은 창이 넓을 때만 참이었다 — 좁은 창은 후보가 30건 밑이라 `LIMIT`이 아무것도 자르지
+-- 않고 창 안 전부가 그대로 간다. 근거는 상수 옆에 있다.
+--
+-- **`total`도 하한 뒤로 센다.** 잘림 표시가 "네가 볼 수 있었던 것 중 몇 건"이어야 하고,
+-- 하한이 버린 것까지 세면 모델이 못 본 쓰레기를 사건으로 남겨 둔다.
 WITH bounds AS (
     SELECT %(window_start)s::timestamptz AS window_start,
            %(as_of_at)s::timestamptz AS as_of_at
@@ -41,6 +45,8 @@ WHERE document.canonical_document_id IS NULL
   AND document.detected_at <= bounds.as_of_at
   AND document.assessed_at <= bounds.as_of_at
   AND document.updated_at <= bounds.as_of_at
+  -- 하한 밑은 전망의 근거가 될 수 없는 문서다(부고·인사·행사).
+  AND document.value_score >= %(min_value_score)s
 GROUP BY document.id
 ORDER BY document.value_score DESC NULLS LAST, document.assessed_at DESC
 LIMIT %(limit)s

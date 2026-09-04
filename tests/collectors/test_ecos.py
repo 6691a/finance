@@ -12,11 +12,15 @@ from sqlalchemy import Table
 from apps.models.market import IndicatorObservation
 from apps.models.raw import SourceRecord
 from modules.collectors.indicator.ecos import (
+    BALANCE_SHEET_SERIES,
     BALANCE_SHEET_STAT_CODE,
+    BUSINESS_CYCLE_STAT_CODE,
+    CONSUMER_SURVEY_STAT_CODE,
     FOREIGN_POLICY_RATE_STAT_CODE,
     MARKET_RATE_SERIES,
     OBSERVATION_UPSERT,
     POLICY_RATE_SERIES,
+    SENTIMENT_SERIES,
     SERIES_UNIT,
     SOURCE_RECORD_INSERT,
     EcosCollector,
@@ -182,12 +186,67 @@ def test_stored_series_id_is_readable_and_keeps_the_item_code_beside_it():
 
 
 def test_every_series_declares_a_distinct_item_code_and_label():
-    assert len({(series.stat_code, series.item_code) for series in EcosSeries}) == len(EcosSeries)
+    # 축이 둘인 통계표가 있어 좌표는 셋을 함께 본다. `512Y015`의 `99988`(전산업)은 조사항목이
+    # 달라지면 다시 쓰이고, 첫 축만 세면 그때 이 검사가 조용히 통과한다.
+    coordinates = {(series.stat_code, series.item_code, series.item_code2) for series in EcosSeries}
+    assert len(coordinates) == len(EcosSeries)
     assert len({series.label for series in EcosSeries}) == len(EcosSeries)
     # 항목코드는 통계표 안에서만 뜻이 있다. 금리 통계표는 숫자 코드를 쓰지만 국제 정책금리
-    # 통계표는 국가 코드(`JP`)를, 한국은행 주요계정은 계정 코드(`BCAA1`)를 쓴다.
-    lettered_tables = (FOREIGN_POLICY_RATE_STAT_CODE, BALANCE_SHEET_STAT_CODE)
+    # 통계표는 국가 코드(`JP`)를, 한국은행 주요계정은 계정 코드(`BCAA1`)를, 소비자동향조사는
+    # 조사항목 코드(`FME`)를, 경기종합지수는 지수 코드(`I16A`)를 쓴다.
+    lettered_tables = (
+        FOREIGN_POLICY_RATE_STAT_CODE,
+        BALANCE_SHEET_STAT_CODE,
+        CONSUMER_SURVEY_STAT_CODE,
+        BUSINESS_CYCLE_STAT_CODE,
+    )
     assert all(series.item_code.isdigit() for series in EcosSeries if series.stat_code not in lettered_tables)
+
+
+def test_the_two_axis_tables_declare_both_item_codes():
+    """축이 둘인 통계표에 하나만 넘기면 ECOS가 데이터 없음으로 답한다 — 조용한 0건이다."""
+    two_axis = {EcosSeries.CSI_M, EcosSeries.BSI_M}
+
+    assert all(series.item_code2 for series in two_axis)
+    assert all(not series.item_code2 for series in EcosSeries if series not in two_axis)
+    # 소비자동향조사는 (조사항목, 대상)이고 기업경기조사는 (산업, 조사항목)이다. 순서가
+    # 통계표마다 다르므로 좌표를 통째로 잠근다(실측 2026-09-04).
+    assert (EcosSeries.CSI_M.item_code, EcosSeries.CSI_M.item_code2) == ("FME", "99988")
+    assert (EcosSeries.BSI_M.item_code, EcosSeries.BSI_M.item_code2) == ("99988", "AA")
+
+
+def test_the_business_survey_uses_the_actual_table_not_the_outlook_table():
+    """전망(`512Y014`)과 실적(`512Y015`)이 다른 통계표다. 실적을 쓴다."""
+    assert EcosSeries.BSI_M.stat_code == "512Y015"
+
+
+def test_sentiment_series_are_separate_from_the_rate_series():
+    # 월간 계열이라 일별 DAG에 섞이면 매일 같은 값을 다시 쓴다.
+    assert set(SENTIMENT_SERIES) == {"CSI_M", "BSI_M", "LEADING_M"}
+    assert not set(SENTIMENT_SERIES) & set(MARKET_RATE_SERIES)
+    assert not set(SENTIMENT_SERIES) & set(POLICY_RATE_SERIES)
+    assert not set(SENTIMENT_SERIES) & set(BALANCE_SHEET_SERIES)
+    assert all(EcosSeries(value).is_monthly for value in SENTIMENT_SERIES)
+    # 선행종합지수는 설문이 아니라 실물 합성이라 `activity`다. 목록을 kind로 만들지 않는 이유다.
+    assert EcosSeries.LEADING_M.kind == "activity"
+    assert {EcosSeries.CSI_M.kind, EcosSeries.BSI_M.kind} == {"sentiment"}
+
+
+def test_the_url_leaves_out_an_empty_second_item_code():
+    collector = EcosCollector(SecretStr("key"))
+    single = collector.build_url(request_for())
+    double = collector.build_url(
+        EcosRequest(
+            series=EcosSeries.BSI_M,
+            observation_start=date(2026, 1, 1),
+            observation_end=date(2026, 6, 30),
+        )
+    )
+
+    # 빈 조각을 붙이면 경로가 `//`가 되어 ECOS가 데이터 없음으로 답한다.
+    assert "//" not in single.removeprefix("https://")
+    assert single.endswith("/010210000")
+    assert double.endswith("/99988/AA")
 
 
 def test_policy_rate_series_are_separate_from_market_rate_series():

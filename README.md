@@ -35,8 +35,8 @@ flowchart LR
         FEED["뉴스·리서치 피드"]
     end
 
-    subgraph AF["Airflow — DAG 43"]
-        COL["수집 DAG 32<br/>분봉·일봉·수급·공시·실적·매크로·문서"]
+    subgraph AF["Airflow — DAG 44"]
+        COL["수집 DAG 33<br/>분봉·일봉·수급·공시·실적·매크로·문서"]
         ANA["분석 DAG 6<br/>문서 평가(LLM) · 기술 신호(SQL)<br/>코스피 전망·관찰(LLM+툴)<br/>기대 대비 발표(LLM)"]
         BRF["브리핑 DAG 5"]
     end

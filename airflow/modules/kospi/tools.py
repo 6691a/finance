@@ -81,6 +81,19 @@ class NewsRow(_Payload):
     tickers: tuple[str, ...] = ()
 
 
+class NewsPage(_Payload):
+    """`recent_news` 툴의 응답. **잘린 수를 밝힌다.**
+
+    24시간 창의 후보가 303건인데 상위 30건만 가면서 그 사실이 응답에 없었다(2026-09-03 실측).
+    모델은 "하루 기사가 30건이었고 다 봤다"로 읽고, 잘린 273건 안의 사건을 "없었다"고
+    단정할 수 있다. 못 본 것과 없는 것은 다르다.
+    """
+
+    total: int
+    shown: int
+    items: tuple[NewsRow, ...] = ()
+
+
 class DisclosureRow(_Payload):
     """본문이 있는 공시 하나."""
 

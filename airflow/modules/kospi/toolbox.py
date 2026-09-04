@@ -52,6 +52,7 @@ from modules.kospi.domain import (
     MAX_WINDOW_HOURS,
     MIN_HISTORY_DAYS,
     MIN_WINDOW_HOURS,
+    NEWS_MIN_VALUE_SCORE,
     Factor,
     FactorSource,
     FactorUnit,
@@ -234,6 +235,7 @@ class KospiToolbox:
             {
                 "window_start": self._as_of_at - timedelta(hours=span),
                 "as_of_at": self._as_of_at,
+                "min_value_score": NEWS_MIN_VALUE_SCORE,
                 "limit": MAX_TOOL_RESULTS,
             },
         )

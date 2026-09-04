@@ -144,8 +144,27 @@ def test_an_active_memory_can_be_cited():
     assert draft.reasons[0].memory_id == 17
 
 
+def test_an_earlier_slot_carries_the_factor_code_next_to_each_reason():
+    """문장만 넘기면 장중 슬롯이 "S&P500이 올랐다"에서 `SP500`을 다시 짐작해야 한다.
+
+    요인 코드가 붙어야 그 요인을 `factor_history`로 다시 불러 "아직 작용하나"를 판단할 수
+    있다(2026-09-04 — 장전 상방 재료 여섯이 장중에 말없이 사라진 것이 계기다).
+    """
+    from modules.kospi.common import _earlier_reason
+
+    stored = {"factor": "SP500", "memory_id": None, "slot_ref": None, "direction": "up", "statement": "밤사이 상승"}
+    reason = _earlier_reason(stored)
+    assert reason.factor is Factor.SP500
+    assert reason.direction is Direction.UP
+    assert reason.statement == "밤사이 상승"
+
+    from_memory = _earlier_reason({"factor": None, "memory_id": 7, "direction": "down", "statement": "메모"})
+    assert from_memory.factor is None
+    assert from_memory.memory_id == 7
+
+
 def test_a_slot_ref_must_point_at_an_earlier_slot_today():
-    from modules.kospi.state import EarlierSlot
+    from modules.kospi.state import EarlierReason, EarlierSlot
 
     earlier = EarlierSlot(
         slot=RunSlot.PRE_OPEN,
@@ -154,6 +173,7 @@ def test_a_slot_ref_must_point_at_an_earlier_slot_today():
         expected_change_pct=Decimal("1.0"),
         band_pct=Decimal("0.5"),
         base_price=Decimal(2650),
+        reasons=(EarlierReason(direction=Direction.UP, statement="밤사이 상승", factor=Factor.SP500),),
     )
     builder = forecast_builder(slot=RunSlot.MIDDAY, earlier_slots=(earlier,))
     # `slot_ref`는 출처가 아니라 덧붙이는 표시라 요인이 함께 있어야 한다.

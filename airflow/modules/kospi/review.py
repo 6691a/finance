@@ -26,12 +26,11 @@
 import logging
 from collections.abc import Sequence
 from datetime import date
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from airflow.exceptions import AirflowSkipException
 from airflow.sdk import get_current_context
 
-from modules import llm
 from modules.kospi import common
 from modules.kospi.domain import (
     MAX_ACTIVE_MEMORIES,
@@ -47,7 +46,6 @@ from modules.kospi.domain import (
     memory_expired,
     memory_key,
 )
-from modules.kospi.generation import ReviewBuilder, ReviewDraft
 from modules.kospi.graph import (
     GraphWriteResult,
     NewMemory,
@@ -59,8 +57,10 @@ from modules.kospi.graph import (
     write_review,
 )
 from modules.kospi.state import GradedForecast, ReviewState
+
+if TYPE_CHECKING:
+    from modules.kospi.generation import ReviewDraft
 from modules.kospi.store import KospiStore
-from modules.kospi.toolbox import KospiToolbox
 
 logger = logging.getLogger(__name__)
 
@@ -159,6 +159,13 @@ def observe() -> dict[str, Any]:
             forecasts=_graded_forecasts(store, run_date),
         )
 
+        # **무거운 것은 여기서 올린다.** LangChain은 첫 import에 몇 초를 쓰는데, DagBag은
+        # 모든 DAG 파일을 주기적으로 다시 파싱하면서 태스크는 돌리지 않는다. 모듈 수준에
+        # 두면 관찰을 하지도 않는 파싱이 매번 그 무게를 문다(2026-09-03 실측 202개 모듈).
+        from modules import llm
+        from modules.kospi.generation import ReviewBuilder
+        from modules.kospi.toolbox import KospiToolbox
+
         model = llm.kospi_model(common.conversation_id(run_date, "review"))
         toolbox = KospiToolbox(connection, as_of_at=as_of_at)
         builder = ReviewBuilder(model, toolbox, observed=observed)
@@ -235,7 +242,7 @@ def observe() -> dict[str, Any]:
     return _observe_result(run_date, change=change, close=close, draft=draft, plan=plan, written=written)
 
 
-def _require_observations(draft: ReviewDraft, *, change: Any) -> None:
+def _require_observations(draft: "ReviewDraft", *, change: Any) -> None:
     """**조용한 성공을 만들지 않는다.**
 
     크게 움직인 날에 관찰이 0건이면 그것은 답이 아니다. 교정은 그래프가 이미 한 번 했으므로
@@ -251,7 +258,7 @@ def _require_observations(draft: ReviewDraft, *, change: Any) -> None:
 
 
 def plan_memories(
-    draft: ReviewDraft,
+    draft: "ReviewDraft",
     *,
     active: Sequence[StoredMemory],
     as_of_date: date,
@@ -333,7 +340,7 @@ def _observe_result(
     *,
     change: Any,
     close: Any,
-    draft: ReviewDraft,
+    draft: "ReviewDraft",
     plan: dict[str, Any],
     written: GraphWriteResult,
 ) -> dict[str, Any]:

@@ -31,8 +31,8 @@ from modules.kospi.domain import (
     ToolCallRecord,
 )
 from modules.kospi.state import DailyBar, MoveBaseline
-from modules.llm import TokenUsage
 from modules.sql import read_sql
+from modules.usage import TokenUsage
 from modules.utility import atomic
 
 logger = logging.getLogger(__name__)

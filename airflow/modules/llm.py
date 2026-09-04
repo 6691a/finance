@@ -41,7 +41,7 @@ xAI의 프롬프트 캐시는 **서버마다 따로** 저장된다. 같은 대�
 ## 토큰은 콜백이 센다
 
 `AIMessage.usage_metadata`는 응답마다 붙지만 **실패한 대화에는 최종 상태가 없다.** 그래서
-왕복을 세는 자리(`ThesisToolbox.round_count`)와 같은 모양으로, 그래프 밖에 사는 객체가
+왕복을 세는 자리(`KospiToolbox.round_count`)와 같은 모양으로, 그래프 밖에 사는 객체가
 누적한다 — LangChain의 `UsageMetadataCallbackHandler`다. 예외가 나도 그때까지 부른 만큼이
 남고, 부르는 쪽이 원장을 닫으면서 `token_usage()`로 읽는다.
 
@@ -78,9 +78,9 @@ from langchain_core.messages import AIMessage, BaseMessage
 from langchain_core.tools import BaseTool
 from langchain_openai import ChatOpenAI
 from langchain_xai import ChatXAI
-from pydantic import BaseModel, ConfigDict
 
 from modules.prompt import read_fragments
+from modules.usage import TokenUsage
 
 logger = logging.getLogger(__name__)
 
@@ -88,12 +88,7 @@ logger = logging.getLogger(__name__)
 # 온다. 긴 문서 하나가 이 시간을 넘기면 팬아웃 배치 전체가 되돌아가므로 넉넉히 잡는다.
 REQUEST_TIMEOUT_SECONDS = 300.0
 
-# 시장 추론만 더 오래 기다린다. 한 요청이 툴 결과 여러 건을 읽고 대상 전부에 확률·이유를
-# 쓰는 일이라 문서 한 건을 태깅하는 것보다 길다. 2026-08-21 운영 첫 실행이 300초에서
-# `APITimeoutError`로 죽었다. 노트북(`narrator_ab.ipynb`)은 이미 900을 쓰고 있었다.
-#
-
-# 코스피 일일 전망·관찰. 툴이 셋이고 대상이 하나라 옛 추론의 절반으로 시작한다. 여기 걸리면
+# 코스피 일일 전망·관찰. 툴이 셋이고 대상이 하나라 짧게 잡았다. 여기 걸리면
 # `kospi.domain.MAX_TOOL_ROUNDS`를 먼저 의심한다 — 왕복이 늘수록 한 요청이 길어진다.
 #
 # **900은 관측이 아니라 시작값이다.** 실제 소요 분포가 쌓이면 다시 정한다.
@@ -200,27 +195,6 @@ def kospi_model(conv_id: str) -> BaseChatModel:
     )
 
 
-
-class TokenUsage(BaseModel):
-    """대화 하나가 청구된 토큰. `kospi_llm_run`의 네 칸이 이 값을 그대로 받는다.
-
-    넷을 나눠 두는 이유는 **서로 다른 손잡이에 붙기 때문이다.** `prompt`는 왕복마다 대화
-    전체가 재전송된 결과라 프롬프트 블록 크기와 왕복 상한이 움직이고, `reasoning`은 대화에
-    남지 않아 재전송되지도 캐시되지도 않는다. 한 칸으로 묶으면 어느 쪽이 늘었는지 못 가른다.
-
-    **`completion`은 `reasoning`을 포함하고, `cached`는 `prompt`에 포함된다.** 제공처가 사고
-    토큰도 출력 단가로 청구하고, 캐시에서 읽은 입력은 입력 토큰으로 세되 훨씬 싸게 청구한다.
-
-    **`cached`가 없으면 최적화 효과를 못 잰다.** 왕복 하나를 줄여 `prompt`가 20% 줄어도 그
-    20%가 전부 캐시 히트였으면 청구는 거의 그대로다. 반대도 같다. 제공처가 안 알려 주면 0이다.
-    """
-
-    model_config = ConfigDict(frozen=True)
-
-    prompt: int = 0
-    cached: int = 0
-    completion: int = 0
-    reasoning: int = 0
 
 
 def token_usage(handler: UsageMetadataCallbackHandler) -> TokenUsage:

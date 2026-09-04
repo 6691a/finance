@@ -130,3 +130,26 @@ def test_bm25_indexes_write_without_a_mutable_segment(capsys):
     # 이미 쌓인 버퍼는 옵션만 바꿔서는 안 사라진다. VACUUM이 백그라운드 머지로 바꾼다.
     assert "VACUUM document;" in sql
     assert "VACUUM document_attachment;" in sql
+
+
+def test_the_einfomax_split_seeds_eight_sections_and_disables_the_all_article_feed(capsys):
+    """섹션 여덟이 들어오고 전체기사 행이 꺼진다.
+
+    행을 지우지 않는 것이 계약이다 — 지우면 그 행으로 들어온 문서 2,691건이 왜 그 slug를
+    갖는지가 사라진다. `yonhap`을 남긴 것과 같은 판단이다.
+    """
+    sql = head_sql(capsys)
+
+    for slug in (
+        "einfomax_stock",
+        "einfomax_ib",
+        "einfomax_column",
+        "einfomax_policy",
+        "einfomax_bond_fx",
+        "einfomax_realestate",
+        "einfomax_global_stock",
+        "einfomax_world",
+    ):
+        assert f"'{slug}'" in sql
+    assert "UPDATE document_source SET enabled = false WHERE slug = 'einfomax'" in sql
+    assert "DELETE FROM document_source WHERE slug = 'einfomax'" not in sql

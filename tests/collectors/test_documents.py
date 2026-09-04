@@ -12,6 +12,7 @@ from apps.models.raw import SourceRecord
 from modules.collectors.document.documents import (
     DOCUMENT_UPSERT,
     EXISTING_EXTERNAL_IDS,
+    NAIVE_FEED_TIMEZONES,
     SOURCE_RECORD_INSERT,
     TAGGABLE_INSTRUMENTS,
     DocumentPayloadError,
@@ -533,3 +534,71 @@ def test_store_keeps_a_source_record_when_the_feed_has_no_items():
     records = [s for s, _ in connection.recorded_cursor.calls if "INSERT INTO source_record" in s]
     # 새 문서가 없는 시간대와 아직 조회하지 않은 시간대가 구분돼야 한다.
     assert len(records) == 1
+
+
+EINFOMAX_SECTION_RSS = """<?xml version="1.0" encoding="utf-8" ?>
+<rss version="2.0"><channel>
+  <title>연합인포맥스 - 정책/금융</title>
+  <item>
+    <title>[부고] 원희목(유한재단 이사장)씨 모친상</title>
+    <link>https://news.einfomax.co.kr/news/articleView.html?idxno=4433001</link>
+    <description><![CDATA[빈소는 서울아산병원.]]></description>
+    <pubDate>2026-09-04 09:14:34</pubDate>
+  </item>
+  <item>
+    <title>[인사] 금융위원회</title>
+    <link>https://news.einfomax.co.kr/news/articleView.html?idxno=4433002</link>
+    <description><![CDATA[◇ 금융위원회]]></description>
+    <pubDate>2026-09-04 09:20:00</pubDate>
+  </item>
+  <item>
+    <title>[증권가 이모저모] SK하이닉스 '나 혼자 산다'</title>
+    <link>https://news.einfomax.co.kr/news/articleView.html?idxno=4433003</link>
+    <description><![CDATA[증권가에서 도는 이야기.]]></description>
+    <pubDate>2026-09-04 10:00:00</pubDate>
+  </item>
+  <item>
+    <title>국고 3년, 7bp 안팎 하락…"총재 간담회는 '비둘기'"</title>
+    <link>https://news.einfomax.co.kr/news/articleView.html?idxno=4433004</link>
+    <description><![CDATA[국고채 3년물 금리가 하락했다.]]></description>
+    <pubDate>2026-09-04 15:03:24</pubDate>
+  </item>
+</channel></rss>
+"""
+
+
+def test_parse_reads_the_einfomax_section_feed_naive_kst_pubdate():
+    # 섹션 피드도 전체기사와 같은 naive KST를 준다. KST 15:03:24 = UTC 06:03:24.
+    items, _ = parse_feed(EINFOMAX_SECTION_RSS.encode("utf-8"), "einfomax_policy")
+
+    bond = next(item for item in items if item.external_id.endswith("4433004"))
+    assert bond.published_at == datetime(2026, 9, 4, 6, 3, 24, tzinfo=UTC)
+
+
+def test_parse_drops_obituary_and_personnel_titles():
+    # 부고와 인사이동은 어느 출처에서 와도 시장 문서가 아니다.
+    items, _ = parse_feed(EINFOMAX_SECTION_RSS.encode("utf-8"), "einfomax_policy")
+
+    titles = [item.title for item in items]
+    assert not any(title.startswith(("[부고]", "[인사]")) for title in titles)
+
+
+def test_parse_keeps_titles_the_measurement_did_not_clear():
+    # `…이모저모]`와 연재 칼럼은 실측에서 6점 이상을 함께 버려 채택하지 않은 패턴이다.
+    # 그 제목이 계속 들어오는 것이 이 필터의 계약이다.
+    items, _ = parse_feed(EINFOMAX_SECTION_RSS.encode("utf-8"), "einfomax_policy")
+
+    titles = [item.title for item in items]
+    assert "[증권가 이모저모] SK하이닉스 '나 혼자 산다'" in titles
+    assert len(items) == 2
+
+
+def test_seeded_einfomax_sections_all_declare_their_naive_timezone():
+    # 시드 리비전이 넣은 slug가 `NAIVE_FEED_TIMEZONES`에 없으면 그 출처의 published_at이
+    # 조용히 NULL로 저장된다. 둘을 대조하는 자리가 여기다.
+    from migrations.versions.d4c7f1a9e206_split_einfomax_into_section_sources import (
+        EINFOMAX_SECTION_SEED,
+    )
+
+    for row in EINFOMAX_SECTION_SEED:
+        assert row[0] in NAIVE_FEED_TIMEZONES, f"{row[0]} is missing from NAIVE_FEED_TIMEZONES"

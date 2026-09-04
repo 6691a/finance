@@ -1,13 +1,25 @@
-"""삼성전자·SK하이닉스 DART 공시·실적 수집 DAG.
+"""산업 대표 20사 DART 공시·실적 수집 DAG.
 
 지금까지의 수집이 전부 가격과 금리였다. 이 DAG는 **이벤트 축**을 채운다. 실적 발표나 공시를
 모르면 그 시각의 급변을 시장 신호로 오독한다.
 
 결과는 `disclosure_event`와 `earnings_fact`에 쌓인다.
 
+## 대상은 DB가 정한다
+
+`instrument.filing_entity_id`가 채워진 행이 대상이다(`filing_entities`). 전에는
+`DartCompany` StrEnum 두 줄이었는데 산업 대표 20사로 넓히면서 마스터로 옮겼다(2026-09-04).
+
+**`is_watched`(시세 대상)와 다른 축이다.** 한 플래그에 묶어 두면 공시 대상을 늘릴 때
+KIS 분봉·수급·실시간 구독까지 함께 끌려온다. 시세 대상은 여전히 둘이다.
+
+호출은 회사마다 하나이므로 하루 420 run × 20사 = 8,400콜이다. DART 일 한도 2만의 42%이고,
+**50사를 넘어가면** 회사별 조회 대신 `corp_cls`로 시장 전체를 받는 형태로 바꾼다
+(`docs/collection/korea-industry-macro-expansion.md`).
+
 ## 태스크
 
-- `collect_disclosures` — 두 회사의 최근 7일 공시를 받아 접수번호로 upsert한다.
+- `collect_disclosures` — 대상 회사의 최근 7일 공시를 받아 접수번호로 upsert한다.
 - `extract_earnings` — 아직 숫자를 못 얻은 공시만 골라 원문이나 재무제표에서 추출한다.
 
 두 태스크는 차례로 돈다. **공시 이벤트 저장이 실적 추출보다 먼저다.** 잠정실적 표 형식이
@@ -38,7 +50,8 @@ WebSocket이 없다. 화면에 보이는 신선도는 **폴링 주기 + DART 반
 
 ## 실패와 재시도
 
-- **한 회사가 실패해도 다른 회사는 저장한다.** 둘 다 실패해야 태스크가 실패한다.
+- **한 회사가 실패해도 다른 회사는 저장한다.** 전부 실패해야 태스크가 실패한다. 2분마다
+  같은 창을 다시 보므로 하나로 죽이면 경보만 늘고 고쳐지는 것은 없다.
 - HTTP 5xx·네트워크: 그대로 올려 재시도한다.
 - HTTP 400/401/403/404: 설정 오류라 즉시 실패한다.
 - 본문 `status` 오류: 인증·요청 오류(`0100`대)는 즉시 실패, 요청 제한(`020`)은 다음 run으로
@@ -74,11 +87,12 @@ from pydantic import SecretStr
 from modules.collectors.document.dart import (
     STATUS_RATE_LIMIT,
     DartCollector,
-    DartCompany,
     DartHTTPError,
     DartPayloadError,
     DartStatusError,
     Disclosure,
+    FilingEntity,
+    filing_entities,
     is_provisional,
     pending_bodies,
     pending_earnings,
@@ -111,6 +125,15 @@ def _connection() -> Any:
     return PostgresHook(postgres_conn_id=CONNECTION_ID).get_conn()
 
 
+def _entities() -> tuple[FilingEntity, ...]:
+    """수집 대상. **마스터가 비면 실패다** — 0건 성공으로 두면 매 2분이 조용히 아무 것도 안 한다."""
+    with closing(_connection()) as connection:
+        entities = filing_entities(connection)
+    if not entities:
+        raise AirflowFailException("instrument has no filing entity; nothing to collect")
+    return entities
+
+
 def _classify(error: DartHTTPError | DartStatusError) -> None:
     """재시도해도 같은 오류면 즉시 실패시킨다."""
     if isinstance(error, DartHTTPError):
@@ -126,8 +149,8 @@ def _classify(error: DartHTTPError | DartStatusError) -> None:
 
 @dag(
     dag_id="dart_disclosure_intraday",
-    dag_display_name="📄 삼성전자·SK하이닉스 공시·실적 (DART)",
-    description="2분마다 DART에서 두 회사의 새 공시를 받고 잠정·정기 실적을 추출한다.",
+    dag_display_name="📄 산업 대표 20사 공시·실적 (DART)",
+    description="2분마다 DART에서 산업 대표 20사의 새 공시를 받고 잠정·정기 실적을 추출한다.",
     # KST 평일 07:00~20:59 = UTC 평일 22:00~11:59. 장 시작 전부터 장 마감 뒤 공시까지 덮는다.
     schedule="*/2 7-20 * * 1-5",
     start_date=pendulum.datetime(2026, 8, 13, tz=KST_TIMEZONE),  # KST 2026-08-13 00:00 = UTC 2026-08-12 15:00
@@ -153,20 +176,22 @@ def dart_disclosure_intraday():
         end_date = datetime.now(UTC).astimezone(KST_TIMEZONE).date()
         begin_date = end_date - timedelta(days=_lookback_days() - 1)
 
+        entities = _entities()
+
         stored = 0
         failures: list[str] = []
-        for company in DartCompany:
+        for entity in entities:
             try:
-                fetch = collector.fetch_disclosures(company, begin_date, end_date)
+                fetch = collector.fetch_disclosures(entity, begin_date, end_date)
             except (DartHTTPError, DartStatusError) as error:
                 # 한 회사가 실패해도 다른 회사는 저장한다.
                 _classify(error)
-                logger.warning("%s disclosure list failed: %s", company.label, error)
-                failures.append(f"{company.value}({error})")
+                logger.warning("%s disclosure list failed: %s", entity.name, error)
+                failures.append(f"{entity.stock_code}({error})")
                 continue
             except ConnectionError as error:
-                logger.warning("%s disclosure list failed to connect: %s", company.label, error)
-                failures.append(f"{company.value}({error})")
+                logger.warning("%s disclosure list failed to connect: %s", entity.name, error)
+                failures.append(f"{entity.stock_code}({error})")
                 continue
 
             with closing(_connection()) as connection:
@@ -176,12 +201,12 @@ def dart_disclosure_intraday():
                 except DartPayloadError as error:
                     raise AirflowFailException(str(error)) from error
 
-            logger.info("Stored %s disclosures for %s", len(fetch.disclosures), company.label)
+            logger.info("Stored %s disclosures for %s", len(fetch.disclosures), entity.name)
 
-        if len(failures) == len(DartCompany):
+        if len(failures) == len(entities):
             raise ConnectionError(f"Every DART disclosure request failed: {'; '.join(failures)}")
         if failures:
-            logger.warning("%s of %s disclosure lists failed: %s", len(failures), len(DartCompany), "; ".join(failures))
+            logger.warning("%s of %s disclosure lists failed: %s", len(failures), len(entities), "; ".join(failures))
         return stored
 
     @task(task_display_name="실적 추출")
@@ -189,9 +214,10 @@ def dart_disclosure_intraday():
         collector = _collector()
         since = datetime.now(UTC).astimezone(KST_TIMEZONE).date() - timedelta(days=_lookback_days() - 1)
 
+        entities = _entities()
         connection = _connection()
         try:
-            waiting = pending_earnings(connection, tuple(company.value for company in DartCompany), since)
+            waiting = pending_earnings(connection, tuple(entity.stock_code for entity in entities), since)
         finally:
             connection.close()
 
@@ -199,7 +225,7 @@ def dart_disclosure_intraday():
         failures: list[str] = []
         for disclosure in waiting:
             try:
-                fetch = _extract(collector, disclosure)
+                fetch = _extract(collector, disclosure, entities)
             except (DartHTTPError, DartStatusError) as error:
                 _classify(error)
                 logger.warning("%s earnings extraction failed: %s", disclosure.rcept_no, error)
@@ -248,7 +274,10 @@ def dart_disclosure_intraday():
         since = datetime.now(UTC).astimezone(KST_TIMEZONE).date() - timedelta(days=_lookback_days() - 1)
 
         with closing(_connection()) as connection:
-            waiting = pending_bodies(connection, tuple(company.value for company in DartCompany), since)
+            entities = filing_entities(connection)
+            if not entities:
+                raise AirflowFailException("instrument has no filing entity; nothing to collect")
+            waiting = pending_bodies(connection, tuple(entity.stock_code for entity in entities), since)
 
         stored = 0
         failures: list[str] = []
@@ -294,7 +323,7 @@ def dart_disclosure_intraday():
     collect_disclosures() >> extract_earnings() >> collect_bodies()
 
 
-def _extract(collector: DartCollector, disclosure: Disclosure):
+def _extract(collector: DartCollector, disclosure: Disclosure, entities: tuple[FilingEntity, ...]):
     """공시 하나에서 실적을 뽑는다. **대상이 아니면** `None`이다.
 
     **실패는 삼키지 않는다** — 부르는 쪽이 세고 판정한다. 여기서 warning 뒤 `None`을
@@ -307,7 +336,7 @@ def _extract(collector: DartCollector, disclosure: Disclosure):
     if is_provisional(disclosure.report_name):
         return collector.fetch_provisional(disclosure)
     if periodic_report(disclosure.report_name) is not None:
-        return collector.fetch_financials(disclosure)
+        return collector.fetch_financials(disclosure, entities)
     return None
 
 

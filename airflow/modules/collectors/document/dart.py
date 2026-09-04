@@ -1,9 +1,11 @@
-"""OpenDART에서 삼성전자·SK하이닉스의 공시와 실적을 수집한다.
+"""OpenDART에서 공시와 실적을 수집한다.
 
-**분기 실적만 대상이 넓다.** 공시는 `DartCompany` 둘이고, 분기 실적은
-`instrument.filing_entity_id`가 채워진 산업 대표 20사(`filing_entities`)다. 후자는 개별
-기업 분석이 아니라 **한국 거시 지표**를 만들기 위한 표본이다 —
-`docs/collection/korea-industry-macro-expansion.md`.
+**대상은 코드가 아니라 DB가 정한다.** `instrument.filing_entity_id`가 채워진 행이 공시와
+분기 실적의 대상이고 `filing_entities`가 그것을 읽는다. `is_watched`(시세 대상)와 다른
+축이다 — 한 플래그에 묶어 두면 공시 대상을 늘릴 때 분봉·수급·실시간 구독까지 끌려온다.
+
+산업 대표 20사를 대상으로 두는 이유는 개별 기업 분석이 아니라 **한국 거시 지표**다.
+설계는 `docs/collection/korea-industry-macro-expansion.md`에 있다.
 
 저장 대상은 `disclosure_event`와 `earnings_fact`다. 정의의 원본은 백엔드의
 `apps/models/market.py`이며 여기 SQL의 컬럼 이름은 `tests/collectors/test_dart.py`가 그 모델
@@ -93,7 +95,7 @@ from datetime import UTC, date, datetime
 from decimal import Decimal, InvalidOperation
 from enum import StrEnum
 from http.client import HTTPException
-from typing import Any, Self
+from typing import Any
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlencode
 from urllib.request import Request, urlopen
@@ -231,7 +233,12 @@ MATERIAL_REPORT_KEYWORDS: tuple[str, ...] = (
     "증자",
     "대량보유",
     "소유주식변동",  # 최대주주등소유주식변동신고서
-    "실적",  # 연결재무제표기준영업(잠정)실적(공정공시)
+    # **`실적`이 아니라 `(잠정)실적`이다.** 조각을 넓게 잡으면 `증권발행실적보고서`가 걸린다 —
+    # 증권사가 ELS·DLS를 발행할 때마다 내는 형식 공시라 인과 사건이 아니고, 대상을 산업 대표
+    # 20사로 넓히자 화이트리스트 통과분 84건 중 27건이 미래에셋증권의 그것 하나였다
+    # (2026-08-05~09-03 실측). 잠정실적 공시는 `연결재무제표기준영업(잠정)실적(공정공시)`와
+    # `영업(잠정)실적(공정공시)` 둘인데 이 조각이 둘 다 잡는다.
+    "(잠정)실적",
     "기타경영사항",
 )
 
@@ -258,32 +265,12 @@ SOURCE_RECORD_INSERT = read_sql("postgres", "source_record", "insert.sql")
 FILING_ENTITY_SELECT = read_sql("postgres", "instrument", "select_filing_entities.sql")
 
 
-class DartCompany(StrEnum):
-    """수집 대상. 종목코드, DART 회사 고유번호, 회사명을 한 줄에 묶는다.
-
-    회사가 둘뿐이라 마스터 테이블을 만들지 않는다. 고유번호는 `corpCode.xml`에서 확인했다
-    (실측 2026-08-12). 대상이 설정으로 늘어날 때 마스터로 옮긴다.
-    """
-
-    corp_code: str
-    label: str
-
-    def __new__(cls, stock_code: str, corp_code: str, label: str) -> Self:
-        member = str.__new__(cls, stock_code)
-        member._value_ = stock_code
-        member.corp_code = corp_code
-        member.label = label
-        return member
-
-    SAMSUNG_ELECTRONICS = ("005930", "00126380", "삼성전자")
-    SK_HYNIX = ("000660", "00164779", "SK하이닉스")
-
-
 class FilingEntity(BaseModel):
     """규제 공시 수집 대상 한 곳. `instrument` 마스터의 한 행이다.
 
-    `DartCompany`와 달리 이 목록은 코드가 아니라 DB가 갖는다. 공시는 아직 그 Enum이 정하고
-    분기 실적만 이 목록을 쓴다 — `is_watched`(시세 대상)와도 갈라야 해서 축을 따로 뒀다.
+    **명단이 코드가 아니라 DB에 있다.** 전에는 `DartCompany` StrEnum 두 줄이었는데, 대상이
+    스물이 되면서 Enum이 명단을 드는 자리가 아니게 됐다. `is_watched`(시세 대상)와도 갈랐다 —
+    한 플래그에 묶어 두면 공시 대상을 늘릴 때 분봉·수급·실시간 구독까지 끌려온다.
     """
 
     model_config = ConfigDict(frozen=True)
@@ -749,22 +736,26 @@ def parse_financials(payload: dict[str, Any], period_end: date, scope: str) -> t
     return tuple(values)
 
 
-def _paging_field(payload: dict[str, Any], key: str, company: DartCompany) -> int:
+def _paging_field(payload: dict[str, Any], key: str, entity: FilingEntity) -> int:
     """페이지 계산에 쓰는 칸을 정수로 읽는다. 없거나 숫자가 아니면 실패다."""
     value = payload.get(key)
     if value is None:
-        raise DartPayloadError(f"DART list.json for {company.value} has no {key}; the truncation check cannot run")
+        raise DartPayloadError(f"DART list.json for {entity.stock_code} has no {key}; the truncation check cannot run")
     try:
         return int(value)
     except (TypeError, ValueError) as error:
-        raise DartPayloadError(f"DART list.json for {company.value} has a non-numeric {key}: {value!r}") from error
+        raise DartPayloadError(f"DART list.json for {entity.stock_code} has a non-numeric {key}: {value!r}") from error
 
 
-def _company_of(disclosure: Disclosure) -> DartCompany:
-    for company in DartCompany:
-        if company.value == disclosure.stock_code:
-            return company
-    raise DartPayloadError(f"disclosure belongs to an unexpected company: {disclosure.stock_code}")
+def entity_of(entities: tuple[FilingEntity, ...], stock_code: str) -> FilingEntity:
+    """공시가 속한 대상. 목록 밖의 종목이면 실패다.
+
+    회사 번호로 조회하는 API가 있어(`fnlttSinglAcntAll`) 공시에서 그 번호를 되찾아야 한다.
+    """
+    for entity in entities:
+        if entity.stock_code == stock_code:
+            return entity
+    raise DartPayloadError(f"disclosure belongs to an unexpected company: {stock_code}")
 
 
 def _insert_source_record(
@@ -954,7 +945,7 @@ class DartCollector:
 
     def fetch_disclosures(
         self,
-        company: DartCompany,
+        entity: FilingEntity,
         begin_date: date,
         end_date: date,
     ) -> DisclosureFetch:
@@ -970,7 +961,7 @@ class DartCollector:
                 self._call(
                     "list.json",
                     {
-                        "corp_code": company.corp_code,
+                        "corp_code": entity.filing_entity_id,
                         "bgn_de": begin_date.strftime("%Y%m%d"),
                         "end_de": end_date.strftime("%Y%m%d"),
                         "sort": "date",
@@ -990,14 +981,14 @@ class DartCollector:
             rows.extend(payload.get("list") or [])
             # 아래 잘림 검사가 이 두 칸 위에 서 있다. 없는 값을 0·1로 메우면 검사가 조용히
             # 무력화되므로(0이면 늘 통과, 1이면 첫 장에서 끝) 값 자체를 요구한다.
-            total_count = _paging_field(payload, "total_count", company)
-            if page >= _paging_field(payload, "total_page", company):
+            total_count = _paging_field(payload, "total_count", entity)
+            if page >= _paging_field(payload, "total_page", entity):
                 break
 
         # 장 상한에서 멈추면 조회 구간에 구멍이 남는다. 조용히 잘린 목록보다 실패가 낫다.
         if total_count > len(rows):
             raise DartPayloadError(
-                f"DART returned {total_count} disclosures for {company.value} "
+                f"DART returned {total_count} disclosures for {entity.stock_code} "
                 f"but only {len(rows)} were read in {page} pages; narrow the window or raise MAX_PAGES"
             )
 
@@ -1007,8 +998,8 @@ class DartCollector:
             raise DartPayloadError(f"DART disclosure row is malformed: {error}") from None
 
         return DisclosureFetch(
-            company=company.value,
-            corp_code=company.corp_code,
+            company=entity.stock_code,
+            corp_code=entity.filing_entity_id,
             begin_date=begin_date,
             end_date=end_date,
             disclosures=disclosures,
@@ -1088,7 +1079,7 @@ class DartCollector:
             raise DartPayloadError(f"document for {disclosure.rcept_no} has no text")
         return body
 
-    def fetch_financials(self, disclosure: Disclosure) -> EarningsFetch | None:
+    def fetch_financials(self, disclosure: Disclosure, entities: tuple[FilingEntity, ...]) -> EarningsFetch | None:
         """정기보고서의 재무제표를 받는다.
 
         이 API는 접수번호가 아니라 회사·사업연도·보고서코드로 조회한다. **응답 `rcept_no`가
@@ -1110,7 +1101,7 @@ class DartCollector:
                 self._call(
                     "fnlttSinglAcntAll.json",
                     {
-                        "corp_code": _company_of(disclosure).corp_code,
+                        "corp_code": entity_of(entities, disclosure.stock_code).filing_entity_id,
                         "bsns_year": str(year),
                         "reprt_code": report_code,
                         "fs_div": scope,

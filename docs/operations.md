@@ -285,7 +285,7 @@ DAG마다 절을 두지 않습니다. 상세는 각 DAG 파일의 `doc_md`에 �
 | `kis_overseas_index_close` | 화~토 07:30 | `index_bar`(S&P500·나스닥 종합 마감 분봉) | KIS |
 | `yahoo_quote_intraday` | 5분마다(시간 창 없음) | `quote_bar` | Yahoo |
 | `yahoo_quote_daily` | 매일 07:30 | `quote_daily` | Yahoo |
-| `dart_disclosure_intraday` | 평일 07~20시 2분마다 | `disclosure_event`, `earnings_fact` | DART |
+| `dart_disclosure_intraday` | 평일 07~20시 2분마다 | `disclosure_event`, `earnings_fact`(산업 대표 20사) | DART |
 | `dart_multi_earnings_quarterly` | 평일 20:00 | `earnings_fact`(산업 대표 20사 최근 네 분기) | DART |
 | `document_ingestion_hourly` | 매시 05분 | `document`, `document_source` | 공식기관·언론 피드 |
 | `document_body_hourly` | 매시 15분 | `document`(`body`·`body_status`), `document_attachment` | 문서 원문 페이지 |

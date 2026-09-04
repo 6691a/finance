@@ -10,7 +10,6 @@ import re
 import pytest
 
 from modules.collectors import kis
-from modules.collectors.document.dart import DartCompany
 from modules.collectors.market.kis_positioning import PositioningStock
 from tests.helpers import NO_REVISION_REASON, head_sql, revision_files
 
@@ -25,9 +24,16 @@ def test_every_collected_stock_has_a_master_row(stock, capsys):
     assert f"'{stock.label}'" in sql
 
 
-def test_the_two_collectors_agree_on_the_stock_list():
-    # 공시와 포지션이 같은 종목을 봐야 한 키로 이어진다.
-    assert {stock.value for stock in PositioningStock} == {company.value for company in DartCompany}
+def test_the_filing_targets_cover_every_positioned_stock(capsys):
+    """포지션 종목은 공시 대상 안에 있어야 한다. **같을 필요는 없다.**
+
+    전에는 `dart.DartCompany`와 정확히 같아야 한다는 대조였다. 공시·실적 대상이 산업 대표
+    20사로 넓어지면서 그 Enum 자체가 사라졌고(명단은 `instrument.filing_entity_id`가 든다),
+    남는 사실은 이 방향 하나다 — 포지션을 보는 종목의 공시를 못 받는 일이 없어야 한다.
+    """
+    seeded = seeded_filing_entities(head_sql(capsys))
+
+    assert {stock.value for stock in PositioningStock} <= set(seeded)
 
 
 def test_instruments_are_seeded_by_the_migration_not_the_app(capsys):
@@ -95,17 +101,16 @@ def test_every_filing_entity_has_a_sector(capsys):
     assert sectors.count("반도체") == 2
 
 
-def test_filing_entities_cover_the_disclosure_collector(capsys):
-    """공시 수집기가 아는 회사는 전부 마스터에 번호가 있어야 한다.
+def test_the_two_verified_corp_codes_did_not_change(capsys):
+    """옛 `DartCompany`가 들고 있던 값 둘. `corpCode.xml`로 확인했다(실측 2026-08-12).
 
-    반대 방향(번호가 있는데 수집기 Enum에 없는 것)은 **정상이다.** 이 칸이 `is_watched`와
-    다른 축이라는 것이 그 뜻이고, 대상을 넓히는 동안 Enum이 뒤따라온다.
+    Enum이 사라지면서 이 값을 대조할 자리가 없어졌다. 여기 남겨 두는 것은 마스터로 옮기는
+    동안 번호가 바뀌지 않았다는 사실 하나를 잠그기 위해서다.
     """
     seeded = seeded_filing_entities(head_sql(capsys))
 
-    for company in DartCompany:
-        assert company.value in seeded, f"{company.label} 회사 번호가 시드에 없다"
-        assert seeded[company.value][0] == company.corp_code
+    assert seeded["005930"][0] == "00126380"
+    assert seeded["000660"][0] == "00164779"
 
 
 def test_filing_entity_ids_are_dart_corp_codes(capsys):

@@ -241,14 +241,6 @@ def test_every_upsert_matches_its_model(statement, model):
         assert placeholder_count(statement) == len(columns) - 1
 
 
-def test_stock_codes_match_the_dart_collector():
-    """공시와 포지션을 한 키로 이으려면 두 수집기의 종목 코드가 같아야 한다."""
-    from modules.collectors.document.dart import DartCompany
-
-    assert {stock.value for stock in PositioningStock} == {company.value for company in DartCompany}
-    assert {stock.label for stock in PositioningStock} == {company.label for company in DartCompany}
-
-
 def test_credit_balance_keeps_trade_date_and_settlement_date_apart(monkeypatch):
     monkeypatch.setattr(kis_positioning, "send_get", fake_send_get(body(output=[CREDIT_ROW])))
 

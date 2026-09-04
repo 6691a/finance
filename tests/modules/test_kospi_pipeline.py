@@ -612,6 +612,85 @@ def test_the_injected_call_id_is_hidden_from_the_model():
         assert "tool_call_id" not in tool.tool_call_schema.model_json_schema().get("properties", {}), tool.name
 
 
+class _EmptyCursor(_RecordingCursor):
+    def execute(self, statement, parameters=()):
+        self.rows = []
+
+
+class _EmptyConnection:
+    def cursor(self):
+        return _EmptyCursor()
+
+
+def test_an_empty_document_result_does_not_make_that_factor_citable():
+    """0건은 본 것이 아니다.
+
+    첫 운영일 `recent_disclosures` 12회가 전부 `[]`였는데(두 회사 범위라 하루 창은 대개 빈다)
+    플래그는 세워져 `DISCLOSURE` 이유가 검증을 통과할 수 있었다. 행 하나 못 본 요인은
+    `queried_factors`에 안 들어간다.
+    """
+    from modules.kospi.toolbox import KospiToolbox
+
+    toolbox = KospiToolbox(_EmptyConnection(), as_of_at=datetime(2026, 9, 2, 23, 35, tzinfo=UTC))
+    assert toolbox.run("recent_disclosures", {"hours": 24}) == "[]"
+    assert json.loads(toolbox.run("recent_news", {"hours": 24})) == {"total": 0, "shown": 0, "items": []}
+
+    assert Factor.DISCLOSURE not in toolbox.queried_factors
+    assert Factor.NEWS not in toolbox.queried_factors
+
+
+class _NewsCursor(_RecordingCursor):
+    def execute(self, statement, parameters=()):
+        published = datetime(2026, 9, 2, 20, 0, tzinfo=UTC)
+        # 마지막 칸이 창 안의 전체 수다. 두 행을 주고 총계는 303이라 잘린 상태다.
+        self.rows = [
+            (1, "브로드컴 가이던스 실망", "einfomax", published, 7, "negative", "반도체 센티먼트", ["시간외 급락"], ["005930"], 303),
+            (2, "이란, 미군 기지 공격", "einfomax", published, 8, "negative", "지정학", [], [], 303),
+        ]
+
+
+class _NewsConnection:
+    def cursor(self):
+        return _NewsCursor()
+
+
+def test_recent_news_tells_the_model_how_many_it_did_not_see():
+    """303건 중 30건을 주면서 그 말을 안 하면 모델은 다 봤다고 믿는다. `total`과 `shown`이
+    다르면 잘린 것이다."""
+    from modules.kospi.toolbox import KospiToolbox
+
+    toolbox = KospiToolbox(_NewsConnection(), as_of_at=datetime(2026, 9, 2, 23, 35, tzinfo=UTC))
+    page = json.loads(toolbox.run("recent_news", {"hours": 24}))
+
+    assert page["total"] == 303
+    assert page["shown"] == 2
+    assert [item["document_id"] for item in page["items"]] == [1, 2]
+    assert Factor.NEWS in toolbox.queried_factors
+
+
+def test_the_disclosure_tool_description_matches_the_collected_scope(capsys):
+    """수집 범위가 시장 전체가 아니라는 말이 툴 설명에 있어야 모델이 전체 공시를 기대하고
+    매번 한 번씩 부르지 않는다.
+
+    **회사 수를 마스터 시드와 대조한다.** 전에는 `DartCompany` Enum의 회사명을 하나씩
+    대조했는데 명단이 `instrument.filing_entity_id`로 옮겨 가면서 그 Enum이 사라졌다
+    (2026-09-04). 숫자만 적어 두면 명단이 바뀐 날 설명이 조용히 거짓이 되므로 여기서 센다.
+    """
+    import re
+
+    from modules.kospi.tool_args import TOOL_DESCRIPTIONS
+    from tests.helpers import NO_REVISION_REASON, head_sql, revision_files
+
+    description = TOOL_DESCRIPTIONS["recent_disclosures"]
+    assert "시장 전체 공시가 아니" in description
+
+    if not revision_files():
+        pytest.skip(NO_REVISION_REASON)
+    seeded = len(re.findall(r"SET filing_entity_id = '\d+'", head_sql(capsys)))
+    assert seeded > 0
+    assert f"{seeded}사" in description, description
+
+
 # --- 모자란 답은 한 번 되묻는다 -------------------------------------------------
 
 

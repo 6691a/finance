@@ -1,7 +1,7 @@
 # 미국 현물 지수 마감 분봉(KIS)과 미국장 브리핑 섹션 분리
 
 > 작성 기준: 2026-08-22  
-> 상태: 구현 완료(2026-08-22). 수집기는 `KisOverseasIndexCollector` 클래스다(2026-08-23)  
+> 상태: 구현 완료(2026-08-22). 수집기는 `KisOverseasIndexCollector` 클래스다(2026-08-23). §13 아시아 장중 분봉·일봉은 구현 완료, 운영 반영 전(2026-09-04)  
 > 대상: S&P500(`SPX`)·나스닥 종합(`COMP`) 현물 마감 분봉 수집, `slack_us_market_briefing` 표 분리  
 > 의존: `quote_symbol` 마스터, `index_bar`, `market_session`, `modules/briefing/market.py`  
 > 산출물: `airflow/modules/collectors/market/kis_overseas_index.py`, `airflow/dags/kis_overseas_index_close.py`,
@@ -222,3 +222,145 @@ ADR              TSMC ADR / SK하이닉스 ADR
 고친다. **툴 수가 tool call 상한(`MAX_TOOL_CALLS = 12`)과 같아진다** — 상한에 붙는 실행이
 보이면 그 값을 올린다. 새 SQL은 2026-08-22에 운영 DB에 읽기 전용으로 돌려 14행을 확인했다
 (SOX -0.51pct가 KIS 응답의 `prdy_ctrt`와 같았다).
+
+## 13. 아시아 지수 장중 1분봉 `kis_asia_index_intraday`와 확정 일봉 `kis_asia_index_daily` (2026-09-04 추가)
+
+> 상태: 구현 완료(2026-09-04). 운영 반영은 리비전 `b7e2d4a91c35` 적용 뒤 DAG 둘을 켜는 것  
+> 대상: 니케이225·상해종합·항셍·대만가권 장중 1분봉(§13.1~13.6)과 확정 일봉(§13.7)  
+> 산출물: `kis_overseas_index.py`의 `AsiaIndex`·`parse_index_bars`·`fetch_since`, `kis_overseas_index_daily.py`의
+> 타입 완화, `airflow/dags/kis_asia_index_intraday.py`·`kis_asia_index_daily.py`, 리비전 `b7e2d4a91c35`,
+> `tests/collectors/test_kis_asia_index.py`·`tests/dags/test_kis_asia_index_*.py`, README·operations
+
+### 13.1 왜
+
+2026-09-03 14:00~14:27 KST에 코스피가 3.2% 빠졌다 되돌렸다. 일본·중국도 같이 빠졌다는데 우리
+데이터로는 가릴 수 없었다 — `index_bar`의 닛케이가 **하루 7봉**이었다. Yahoo `^N225`는 1분봉을
+하루 390개 주지만 **15분 지연**이고, `yahoo_quote_intraday`의 `lookback_minutes`가 15라
+정렬된 봉이 전부 `since` 앞으로 떨어져 버려졌다. 살아남은 것은 배열 끝의 초 단위 라이브 봉뿐이다
+(`09:25:20`, `14:40:30` 같은 시각이 그 흔적이다).
+
+국내에서 받을 수 있으면 국내를 우선한다. KIS 해외지수 분봉 API가 아시아 지수를 준다(§13.2).
+Yahoo와 똑같이 15분 지연이라 지연에서 얻는 것은 없고, 얻는 것은 **정식 API**라는 점이다.
+
+### 13.2 KIS 실측 (2026-09-04, 운영 앱키)
+
+§3과 같은 엔드포인트다. 코드가 다르다.
+
+| 지수 | KIS 코드 | `hts_kor_isnm` | 시각 기준 |
+| --- | --- | --- | --- |
+| 니케이225 | `JP#NI225` | 일본니케이 225지수 | JST |
+| 상해종합 | `SHANG` | 중국상해종합지수 | CST |
+| 항셍 | `HK#HS` | 항셍지수 | HKT |
+| 대만가권 | `TW#WT` | 대만가권 | 국가표준시(대만) |
+
+- 통상 코드(`N225`·`HSI`·`SHCOMP`·`TWII`)는 **전부 `rt_cd=0`에 0건**이다. 코드의 원본은 KIS 해외지수
+  마스터 `https://new.real.download.dws.co.kr/common/master/frgn_code.mst.zip`(cp949, 첫 글자는 시장
+  구분이고 그 뒤가 코드)이다. `#`은 URL 인코딩하지 않는다 — `JP%23NI225`는 0건이다.
+- 같은 방식으로 되는 것: `HSCE`(홍콩H), `CH#SHA`(상해A), `CZ#399102`(심천 ChiNext), `HK#HSSI`. 이번엔 안 받는다.
+- 102봉 최신순, 1분 간격, `stck_bsop_date`는 **현지 거래일**, `stck_cntg_hour`는 **그 시장 벽시계**다.
+  §3의 뉴욕 벽시계와 같은 규칙이고 시간대만 다르다.
+- **니케이는 15~16분 지연이다.** 10:03:54 KST 조회에 최신 봉이 09:48이었다. Yahoo와 같다.
+- 응답에 **어제 봉이 섞여 온다.** 10:03 조회의 오래된 봉이 전날 14:39였다. 장중 폴링은 이것이 정상이다.
+
+### 13.3 흐름
+
+```
+평일 09:00~17:55 KST, 5분마다 (cron */5 9-17 * * 1-5)
+  KIS inquire-time-indexchartprice ×4  ── 지수마다 최근 102봉, 15분 지연
+    → 봉 시각을 그 지수의 시간대로 읽어 UTC로
+    → bar_at >= now - lookback_minutes(기본 30) 인 봉만 남김
+    → index_bar (provider='kis', symbol=NIKKEI225·SSE_COMP·HSI·TAIEX) upsert
+    → source_record 1행 / 지수 / 폴링  (source_key = asia_index_1m)
+```
+
+창이 17:55까지인 이유: 항셍이 HKT 16:00(KST 17:00) 마감이고 정산 봉이 16:08까지 온다. 15분 지연을
+더하면 17:25 KST에 마지막 봉이 보인다. 도쿄는 15:30, 상해는 KST 16:00, 대만은 KST 14:30 마감이다.
+
+`lookback_minutes` 기본 30: 지연 15분 + 폴링 5분 + 여유. 상한은 102(한 번에 오는 봉 수).
+
+### 13.4 고치는 것
+
+**`collectors/market/kis_overseas_index.py`**
+
+- `AsiaIndex` Enum을 **따로** 둔다. `OverseasIndex`를 늘리지 않는 이유는 `kis_overseas_index_daily`와
+  `kis_overseas_index_close`가 그 Enum을 **통째로 순회**하며 미국 달력과 뉴욕 세션 날짜를 쓰기
+  때문이다. 거기에 니케이가 들어가면 일봉 DAG가 도쿄 날짜를 뉴욕 날짜로 검사하다 죽는다.
+  회원은 `(저장 심볼, KIS 코드, 라벨, 시간대)`다. 저장 심볼은 Yahoo와 같게 둬(`NIKKEI225` 등)
+  `quote_symbol`의 라벨·국가를 공유하고 `(provider, symbol)`로 갈린다.
+- 파싱을 둘로 가른다. `parse_index_bars(body, index)`가 봉마다 자기 `stck_bsop_date`와 **지수의
+  시간대**(`index.timezone` — `OverseasIndex`는 뉴욕, `AsiaIndex`는 현지)로 읽고, 옛
+  `parse_overseas_index_bars`는 그것에 `require_session_bars`(모든 봉이 `session_date`의 것인지)를 얹은
+  것이다. 마감 DAG는 옛 함수를 그대로 부른다(동작 불변, 기존 테스트 무수정 통과). 장중 폴링
+  (`fetch_since`)은 세션 검사 없이 `since`로 자른다 — 어제 봉이 섞여 오는 게 정상이라(§13.2) 그
+  검사를 그대로 쓰면 매 폴링이 죽는다.
+- `store`는 결과 모델이 `source_key`와 `metadata()`를 갖게 해 둘을 같은 코드로 저장한다
+  (`OverseasIndexFetch` → `overseas_index_1m`, `AsiaIndexFetch` → `asia_index_1m`). 아시아 폴링은 0건이
+  정상이라 `latest_bar_at`이 `None`일 수 있고 계보에도 그렇게 남는다.
+
+**`airflow/dags/kis_asia_index_intraday.py`** — `kis_quote_intraday`를 베낀다.
+
+- 휴장 달력이 없다. 한국 휴일에 도쿄가 열고 그 반대도 있어 KRX 달력을 걸면 틀린다. 새 봉 0건은
+  성공이다(휴장·개장 전·마감 뒤). 응답 자체가 비면(`output2` 0건) 그 지수는 실패다.
+- 항목별 실패 수집. **전부 실패했을 때만 죽인다** — 5분 뒤 같은 창을 다시 본다. 실패 목록은
+  `이름(사유)` 형태로 `;` 구분.
+- HTTP 400/403은 즉시 실패, 401은 토큰 한 번 재발급, 나머지는 재시도. §5와 같다.
+- `dag_display_name="🌏 아시아 지수 1분봉 (KIS)"`, tags `kis`·`market`·`intraday`·`asia`.
+
+**마이그레이션** — `quote_symbol`에 `('kis', NIKKEI225|SSE_COMP|HSI|TAIEX, 'index', JP|CN|HK|TW, …)` 넷.
+DDL 변경 없음. §6과 같은 꼴이고 수기로 쓴다.
+
+**테스트**
+
+- 도쿄 시간대 파싱: `20260904 094800` → `2026-09-04T00:48:00Z`.
+- `since` 절단: 어제 봉이 섞인 응답에서 폴링은 최근 봉만 남고, 마감 경로(`require_session_bars`)는 죽는다.
+- 기존 `test_kis_overseas_index.py`가 그대로 통과한다(리팩터 뒤 동작 불변의 증거).
+- 카탈로그 테스트: `AsiaIndex` 회원이 `('kis', symbol)`로 시드돼 있는지. `test_us_spot_indexes_are_seeded_under_kis`와 같은 꼴.
+- DAG cron 창(9~17시)이 §13.3의 시장 마감 + 지연을 덮는지 상수 하나로 대조.
+
+**문서** — README의 DAG 수(42 → 44, 수집 31 → 33)와 하루 흐름 표 두 줄, `docs/operations.md` DAG 표 두 줄.
+
+### 13.5 입출력 예시
+
+```
+요청  FID_INPUT_ISCD=JP#NI225
+응답  {"stck_bsop_date":"20260904","stck_cntg_hour":"094800","optn_prpr":"64709.74", ...}
+      output1.ovrs_nmix_prdy_clpr = "64214.48"
+저장  index_bar ('kis','NIKKEI225', 2026-09-04T00:48:00Z, close 64709.74, previous_close 64214.48)
+```
+
+### 13.6 안 하는 것
+
+- **Yahoo 쪽 아시아 심볼은 그대로 둔다.** `index_daily`(일봉 10년치)가 거기서 온다. `lookback` 수정은
+  KIS가 대신하므로 안 한다. 그 결과 `index_bar`에 같은 지수가 yahoo(성긴 봉)·kis 두 벌 쌓인다.
+- 브리핑 "장중 해외" 표에 같은 지수가 두 줄 뜬다. 게다가 `PROVIDER_VENUES`가 kis를 `KRX`로 적어
+  닛케이 행이 `KRX`로 나온다. **후속 작업이다** — 같은 심볼이면 kis를 고르고 해외 지수의 venue를
+  제공처 이름으로 적는 것.
+- 코스피 전망 요인(`kospi.domain.Factor`)에 닛케이·상해 추가. LLM 흐름이라 따로 설계한다.
+- 급변 감지(장중 슬롯 밖 이벤트 트리거). 이 봉이 쌓인 뒤의 이야기다.
+- 저장 테이블은 `index_bar` 한 벌이다. 나라별 테이블은 안 만든다 — 컬럼이 같고 지역은
+  `quote_symbol.country`가 갖는다. **해외 종목**은 다르다: 나중에 나라별 종목을 받을 때 `stock_bar`에
+  섞지 않고 나라(거래소)별로 가르기로 했다(2026-09-04 사용자 결정). 그때 `exchange` 파티션을 먼저 낸다.
+
+### 13.7 확정 일봉 `kis_asia_index_daily`
+
+처음 설계는 일봉을 Yahoo에 두는 것이었다. 실측이 그것을 뒤집었다(2026-09-04, 운영 DB).
+
+**Yahoo 아시아 일봉은 종가만 맞다.** 같은 날 종가는 KIS와 소수점까지 같았다(09-02 상해 3941.39,
+대만 46164.72, 항셍 25311.21). 그러나 시가·고가·저가가 틀린다 — 최근 66거래일에서 시가가 고가나
+저가와 같은 날이 대만가권 32일, 항셍 12일, 니케이 5일이다(미국 SOX는 2일). 분봉이 하루 7봉이던 것과
+같은 뿌리로, Yahoo가 아시아 지수를 성긴 스냅샷으로 만든다. 그리고 **하루 늦다** — 09-04 10:30에
+Yahoo 아시아 일봉은 09-02까지, KIS·미국은 09-03까지 있었다.
+
+분봉을 KIS로 받으면서 일봉을 Yahoo로 두면 같은 지수의 두 그레인이 다른 기준을 갖는다. 급변 감지가
+"당일 저가 대비"를 볼 때 그 어긋남이 그대로 들어간다. 그래서 일봉도 KIS로 받는다(사용자 결정).
+
+| 항목 | 결정 |
+| --- | --- |
+| API | §3의 일봉 엔드포인트(`inquire-daily-chartprice`, `FHKST03030100`), 코드는 §13.2와 같다. 한 장 100행, 2016년까지 확인(2000년은 0행) |
+| 수집기 | `KisOverseasIndexDailyCollector` 그대로. `fetch`·결과 모델의 `index` 타입만 `OverseasIndex \| AsiaIndex`로 풀었다. 200달력일 창 걷기·멱등 upsert·잘림 판정이 전부 따라온다 |
+| DAG | `kis_asia_index_daily`, 평일 18:00 KST(`0 18 * * 1-5`). 항셍(KST 17:00 마감, 정산 17:08, 지연 15분)이 가장 늦다. 장중 폴링(17:55)이 끝난 뒤다 |
+| 기준 날짜 | run의 `data_interval_end`의 **KST 날짜**. 네 시장의 거래일이 KST 날짜와 같다. 수동 run은 `run_after` |
+| 휴장 | 달력 없음. 쉰 시장은 그 날짜 행이 안 올 뿐이고 창 안의 다른 거래일이 온다. 창 전체가 비면 그 지수는 실패 |
+| 실패 판정 | 하루 한 번 도는 확정 수집이라 **하나라도 실패하면 죽인다**(`kis_overseas_index_daily`와 같다) |
+| Yahoo 행 | 지우지 않는다. 읽는 쪽이 `(provider, symbol)`로 걸어 kis를 본다. 어느 SQL이 어느 provider를 보는지는 후속(§13.6의 브리핑 항목과 같은 작업) |
+| 백필 | `--conf '{"start_date": "2016-08-01", "end_date": "2026-09-04"}'`. 운영 반영 뒤 사용자가 트리거한다 |

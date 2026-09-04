@@ -1,7 +1,7 @@
 import pytest
 
 from modules.collectors.kis import DomesticFuture, DomesticIndex, DomesticStock
-from modules.collectors.market.kis_overseas_index import OverseasIndex
+from modules.collectors.market.kis_overseas_index import AsiaIndex, OverseasIndex
 from modules.collectors.market.yahoo import QuoteSymbol
 from tests.helpers import NO_REVISION_REASON, head_sql, revision_files
 
@@ -145,6 +145,20 @@ def test_us_spot_indexes_are_seeded_under_kis(symbol, capsys):
 
     assert f"'kis', '{symbol}', 'index', 'US', '미국'" in sql
     assert f"'yahoo', '{symbol}'" not in sql
+
+
+# 아시아 지수는 두 제공처가 같은 심볼로 쌓는다. 분봉·일봉은 KIS, 옛 이력은 Yahoo다.
+ASIA_COUNTRIES = {"NIKKEI225": "JP", "SSE_COMP": "CN", "HSI": "HK", "TAIEX": "TW"}
+
+
+@pytest.mark.parametrize("index", sorted(AsiaIndex, key=lambda index: index.value))
+def test_asia_spot_indexes_are_seeded_under_both_providers(index, capsys):
+    """`(provider, symbol)`이 자연키라 KIS 행이 따로 있어야 KIS 봉이 마스터와 붙는다. 라벨은 Yahoo 행과 같다."""
+    sql = head_sql(capsys)
+
+    assert f"'kis', '{index.value}', 'index', '{ASIA_COUNTRIES[index.value]}'" in sql
+    assert f"'yahoo', '{index.value}', 'index', '{ASIA_COUNTRIES[index.value]}'" in sql
+    assert sql.count(f"'{index.label}'") >= 2
 
 
 def test_every_kind_covers_every_collected_symbol():

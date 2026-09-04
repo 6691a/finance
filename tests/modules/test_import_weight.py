@@ -14,15 +14,16 @@ import json
 import subprocess
 import sys
 
-# 코스피의 어휘·순수 함수. LangChain도 Airflow도 모른다.
-KOSPI_LIGHT_MODULES = ("modules.kospi.domain", "modules.kospi.state")
-
-# **슬롯 모듈은 아직 가볍지 않다**(2026-09-03 실측). `kospi/store.py`가 `modules.llm`에서
-# `TokenUsage` 하나를 가져오는데 그 모듈이 LangChain을 끌고 온다 — `modules.kospi.common`이
-# 111개, `forecast`·`intraday`·`review`가 202개를 문다. 옛 추론이 파일을 여섯으로 가르며
-# 피했던 형태가 여기 그대로 있다. 고치려면 `TokenUsage`를 가벼운 모듈로 빼야 하고, 그것은
-# 삭제 작업과 다른 손잡이라 따로 한다. 그때 이 상수를 지우고 위의 것에 합친다.
-KOSPI_SLOT_MODULES = (
+# 코스피 DAG이 모듈 수준에서 import하는 것 전부. 어휘·순수 함수부터 슬롯 진입점까지
+# 하나도 LangChain을 끌고 오면 안 된다.
+#
+# **2026-09-03에 이 목록이 202개를 물고 있었다.** 사슬이 둘이었다 — `store.py`가 타입 하나
+# (`TokenUsage`)를 `modules.llm`에서 가져왔고, `run.py`·`review.py`가 흐름 클래스를 모듈
+# 수준에서 올렸다. 앞의 것은 모델을 가벼운 잎(`modules/usage.py`)으로 빼서, 뒤의 것은
+# import를 함수 안으로 내려서 끊었다.
+KOSPI_DAG_MODULES = (
+    "modules.kospi.domain",
+    "modules.kospi.state",
     "modules.kospi.common",
     "modules.kospi.forecast",
     "modules.kospi.intraday",
@@ -61,20 +62,24 @@ def _heavy_modules_after_importing(modules: tuple[str, ...]) -> list[str]:
     return json.loads(result.stdout.strip().splitlines()[-1])
 
 
-def test_the_kospi_vocabulary_does_not_import_langchain():
-    """어휘와 순수 함수는 어디서 import해도 가벼워야 한다. 채점 함수를 쓰려고 LangChain을
-    올리게 되면 그 모듈은 더 이상 순수 함수 자리가 아니다."""
-    assert _heavy_modules_after_importing(KOSPI_LIGHT_MODULES) == []
+def test_the_kospi_dag_modules_do_not_import_langchain():
+    """DagBag은 모든 DAG 파일을 주기적으로 다시 파싱하면서 태스크는 돌리지 않는다.
 
-
-def test_the_kospi_slot_modules_still_carry_langchain():
-    """**지금 상태를 적어 둔 것이지 지켜야 할 규칙이 아니다.**
-
-    `kospi/store.py` -> `modules.llm`(`TokenUsage`) -> LangChain이 사슬이다. 끊으면 이
-    테스트가 깨지고, 그때 이 함수를 지우고 슬롯 모듈을 위 목록에 넣는다. 그것이 이 테스트의
-    쓸모다 — 고쳐졌는데 아무도 모르는 상태를 막는다.
+    모듈 수준에 무거운 것이 있으면 전망을 만들지도 않는 파싱이 매번 그 무게를 문다.
+    무거운 것은 흐름 모듈(`kospi/generation.py`·`toolbox.py`) 하나에만 있고, 부르는 쪽이
+    함수 안에서 늦게 올린다.
     """
-    assert _heavy_modules_after_importing(KOSPI_SLOT_MODULES) != []
+    assert _heavy_modules_after_importing(KOSPI_DAG_MODULES) == []
+
+
+def test_the_token_usage_model_is_reachable_without_langchain():
+    """**이 사슬이 되살아나는 자리가 여기다.**
+
+    원장에 쓰는 값이라 저장 층이 봐야 하는데, 그것을 만드는 `modules/llm.py`는 LangChain을
+    올린다. `from X import Y`가 `X`를 통째로 실행하므로 이름 하나가 202개를 끌고 왔다.
+    """
+    assert _heavy_modules_after_importing(("modules.usage",)) == []
+    assert _heavy_modules_after_importing(("modules.kospi.store",)) == []
 
 
 def test_the_expectation_judgment_side_does_not_import_langchain():

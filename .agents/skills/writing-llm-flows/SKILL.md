@@ -122,6 +122,13 @@ ToolNode(tools, handle_tool_errors=(ToolLimitExceeded,))
   그대로 실으면 모델이 "오늘"을 하루 어긋나게 읽는다(장전 기준 KST 08:35 = UTC 전날 23:35).
   `kospi.domain.kst_label`과 `briefing/documents.pick_input`의 `as_of_kst`가 그 자리다. 섞어서 줄
   수밖에 없으면 **어느 칸이 어느 시간대인지 프롬프트가 직접 알린다.**
+- **DagBag이 무는 무게를 재라.** 흐름 모듈은 LangChain을 올려도 되지만 **DAG이 모듈
+  수준에서 import하는 것**은 안 된다. 스케줄러가 모든 DAG 파일을 주기적으로 다시 파싱하면서
+  태스크는 돌리지 않으므로, 전망을 만들지도 않는 파싱이 매번 그 무게를 문다. 사슬은 둘로
+  온다 — 가벼운 모듈이 무거운 모듈에서 **타입 하나**를 가져오는 것(그 값을 가벼운 잎으로
+  뺀다. `modules/usage.py`), 흐름 클래스를 **모듈 수준에서** 올리는 것(부르는 쪽이 함수
+  안에서 늦게 올린다. `kospi/run.py`·`review.py`). `tests/modules/test_import_weight.py`가
+  별도 인터프리터로 잰다 — 같은 프로세스에서 재면 다른 테스트가 이미 올린 것이 섞인다.
 - **체크포인터·persistence는 붙이지 않는다.** 재실행 단위는 Airflow 태스크다.
 - **추적은 `LANGSMITH_*` 환경변수로 켠다.** 코드에 추적 호출을 심지 않는다.
   **켜면 프롬프트와 원문이 외부로 나간다는 사실을 문서에 남긴다.**

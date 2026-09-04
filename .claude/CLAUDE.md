@@ -258,11 +258,14 @@ DAG가 쓰는 코드는 **위치는 Airflow를, 규칙은 백엔드를** 따른�
   import해도 LangChain이 딸려 와 DagBag이 그 무게를 문다. `tests/modules/test_import_weight.py`가
   그 경계를 재고 있어 재수출은 그 테스트를 즉시 깬다. 한 수집기의 의존성이 없는 환경에서
   관계없는 DAG이 import 오류로 죽는 것도 같은 이유다.
-  **지금 `kospi/`의 슬롯 모듈 넷은 이 경계를 못 지킨다** — `store.py`가 `modules.llm`에서
-  `TokenUsage` 하나를 가져오는데 그 모듈이 LangChain을 끌고 온다(2026-09-03 실측 202개).
-  같은 테스트가 그 상태를 사실로 잠가 두었으니 고치면 그것이 깨진다.
+  **사슬은 둘로 온다**(2026-09-03에 둘 다 실제로 생겼다). ① 가벼운 모듈이 무거운 모듈에서
+  **타입 하나**를 가져오는 것 — `from X import Y`가 `X`를 통째로 실행하므로 이름 하나가
+  202개를 끌고 온다. 그때는 그 값을 무거운 의존성 없는 잎으로 뺀다(`modules/usage.py`가
+  그것이다). ② 흐름 클래스를 **모듈 수준에서** 올리는 것. 그때는 부르는 쪽이 함수 안에서
+  늦게 올린다(`kospi/run.py`·`review.py`가 그 형태이고 `briefing/chart.py`가 matplotlib에
+  같은 것을 쓴다). 타입에만 쓰는 이름은 `TYPE_CHECKING`으로 남긴다.
 - **최상위에 남는 것은 공용 잎이다.** `db`·`sql`·`upsert`·`utility`·`period`·`schema`·
-  `slack`·`llm`·`prompt`·`market_session`·`assessment`·`dedup` **열둘**이다. 열은 300줄
+  `slack`·`llm`·`prompt`·`market_session`·`assessment`·`dedup`·`usage` **열셋**이다. 열은 300줄
   미만이고 둘이 넘는다(`assessment` 637, `llm` 350 — 2026-09-01 실측).
   **이것들을 `core/` 같은 폴더로 모으지 않는다** — 114개 파일 226줄을 고치고 얻는 것이 목록
   열 줄이다(2026-08-27 실측). 폴더는 파일이 많아서 만드는 것이지 정리해 보이려고 만드는

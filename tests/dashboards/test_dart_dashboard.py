@@ -35,14 +35,18 @@ def test_uid_and_variables_stay_put(dashboard):
     assert [variable["name"] for variable in dashboard["templating"]["list"]] == ["company", "basis", "scope"]
 
 
-def test_the_two_companies_match_the_collector(dashboard):
-    from modules.collectors.document.dart import DartCompany
+def test_the_two_companies_stay_in_the_picker(dashboard):
+    """화면이 고르는 회사 둘. 옛 `DartCompany` Enum과 대조하던 자리다.
 
+    그 Enum은 공시 대상이 산업 대표 20사로 넓어지면서 사라졌고 명단은 이제
+    `instrument.filing_entity_id`가 든다. 대시보드는 Grafana와 함께 걷어낼 예정이라
+    목록을 스물로 늘리지 않고 있던 둘을 그대로 잠근다.
+    """
     company = next(v for v in dashboard["templating"]["list"] if v["name"] == "company")
 
-    for target in DartCompany:
-        assert target.value in company["query"]
-        assert target.label in company["query"]
+    for code, label in (("005930", "삼성전자"), ("000660", "SK하이닉스")):
+        assert code in company["query"]
+        assert label in company["query"]
 
 
 @pytest.mark.parametrize(

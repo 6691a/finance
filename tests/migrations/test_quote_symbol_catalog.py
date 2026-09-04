@@ -182,14 +182,16 @@ def test_kospi_is_seeded_under_the_domestic_collector(capsys):
 
 
 def test_stock_symbols_match_the_other_collectors():
-    """봉과 수급을 한 화면에서 겹치려면 종목 식별자가 같아야 한다."""
-    from modules.collectors.document.dart import DartCompany
+    """봉과 수급을 한 화면에서 겹치려면 종목 식별자가 같아야 한다.
+
+    **공시는 여기 없다.** 공시·실적 대상은 `instrument.filing_entity_id`가 정하고 이 셋보다
+    넓다(2026-09-04). 그 포함 관계는 `tests/migrations/test_instrument_catalog.py`가 본다.
+    """
     from modules.collectors.market.kis_investor_flow import InvestorFlowStock
 
     codes = {stock.value for stock in DomesticStock}
 
     assert codes == {stock.value for stock in InvestorFlowStock}
-    assert codes == {company.value for company in DartCompany}
 
 
 @pytest.mark.parametrize("symbol", sorted({"005930", "000660"}))

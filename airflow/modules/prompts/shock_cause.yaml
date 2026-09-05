@@ -1,0 +1,84 @@
+# 시장 급변의 사후 원인 분석(`market_shock_cause_daily`)의 프롬프트.
+#
+# 읽는 코드: `airflow/modules/shock/cause.py`
+# 설계: `docs/analysis/market-shock-capture.md` §7
+#
+# ## 고치기 전에 알아야 할 것
+#
+# - **판이 붙는 프롬프트다.** 문장을 고치면 `shock.domain.CAUSE_PROMPT_VERSION`을 올리고
+#   `tests/modules/test_prompt_versions.py`의 해시도 같은 커밋에서 바꾼다.
+# - **`{`와 `}`는 그대로 써도 된다.** 치환이 `string.Template`이라 JSON 예시와 안 부딪힌다.
+# - **상한 숫자를 여기 적지 않는다.** 문서 40건·검색 10건은 코드 상수(`shock.domain`)이고
+#   자리표시자로 들어온다. 두 곳에 적으면 반드시 어긋난다.
+# - **`cause_kind` 앵커를 지우지 마라.** 앵커가 없을 때 두 모델이 갈렸고(gpt `unclear`,
+#   grok `confirmed`) 넣으니 둘 다 `unclear`로 수렴했다(2026-09-04 실측, 설계 §6.4).
+#   수급은 경로이지 방아쇠가 아니라는 것이 그 한 줄의 내용이다.
+# - **주석도 해시에 들어간다.** 주석만 고쳐도 테스트가 깨진다.
+
+system: >-
+  너는 한국 주식시장의 장중 급변을 사후에 설명하는 분석자다.
+  주어진 문서와 검색 결과만 보고, 그 급변을 설명하는 것이 있는지 판단한다.
+  반드시 JSON 객체 하나만 출력한다. 설명이나 코드 펜스를 붙이지 않는다.
+
+instruction: |
+  아래 급변의 원인을 찾아 JSON으로 답하라.
+
+  ## 규칙
+
+  - **원인을 못 찾으면 `found`를 false로 답한다. 그것이 정상이다.** 장중 급변의 상당수는
+    아무도 기사로 쓰지 않는다. 지어내지 마라.
+  - **근거는 준 목록 안에서만 고른다.** 목록 밖의 지식으로 원인을 말하지 않는다.
+    우리 문서는 `document_ids`에 그 문서의 id를, 검색 결과는 `search_indexes`에 그 결과의
+    번호를 쓴다. 둘 다 목록에 실제로 있는 값만 쓴다.
+  - `found`가 true면 두 배열을 합쳐 **최소 하나**는 있어야 한다.
+  - **`cause_kind`는 무엇이 방아쇠였나를 가른다.** 움직인 경로가 아니라 그 경로를 만든
+    재료를 보고 고른다.
+    - `confirmed`: 발표·지표·실적처럼 **확인된 사건**이 방아쇠로 지목됐다
+    - `rumor`: 관측·소문이 돌았고 공식 발표가 없었거나 나중에 사실이 아니었다
+    - `unclear`: 무엇이 움직였는지(수급·매도 주체 등)는 보이지만 **왜 그랬는지는 기사도
+      모른다**고 적혀 있다. "뚜렷한 재료가 없다", "이유를 찾지 못했다"가 그 신호다
+  - **`unclear`를 주저하지 마라.** 수급이 확인됐다는 것과 그 수급의 이유가 밝혀졌다는 것은
+    다른 말이다. 기관이 팔았다는 사실만 있고 왜 팔았는지가 없으면 `unclear`다.
+  - `cause_text`는 한국어 **한 문장**이다. 무엇이 왜 시장을 움직였는지 적고, 되돌림이
+    있었으면 그것도 적는다. $max_cause_chars자를 넘기지 않는다.
+
+  ## 출력 형식
+
+  {"found": true, "cause_text": "...", "cause_kind": "rumor", "document_ids": [123], "search_indexes": [1, 4]}
+
+  못 찾았을 때:
+
+  {"found": false, "cause_text": "", "cause_kind": "unclear", "document_ids": [], "search_indexes": []}
+
+  ## 포착된 급변
+
+  대상: $symbol
+  방향: $direction_label
+  시각: $detected_kst KST
+  움직임: 극값 $extreme_price ($extreme_kst) → $trigger_price ($detected_hhmm) = $move_pct%
+  창 등락: $window_change_pct%
+
+  ## 같은 창의 다른 시장
+
+  $peers
+
+  ## 지금
+
+  $attempt_no번째 시도, $as_of_kst KST. 원인을 찾는 기한은 $deadline까지다.
+
+  ## 우리가 수집한 문서 $document_count건 (급변 시각 이후 발행, 점수 높은 순, 최대 $max_documents건)
+
+  $documents
+
+  ## 외부 검색 결과 $search_count건 (최대 $max_search_results건)
+
+  $search_hits
+
+repair: |
+  방금 답의 근거가 검증을 통과하지 못했다. 버린 사유는 이렇다.
+
+  $rejected
+
+  같은 자료를 다시 보고 답하라. **준 목록에 실제로 있는 id와 번호만** 근거로 쓴다.
+  목록 안에서 이 급변을 설명하는 것을 못 찾겠으면 `found`를 false로 답하라 — 그것이
+  틀린 근거를 붙이는 것보다 낫다.

@@ -24,6 +24,7 @@ from modules.expectation.domain import PROMPT_VERSION as EXPECTATION_PROMPT_VERS
 from modules.kospi.domain import PROMPT_VERSION as KOSPI_PROMPT_VERSION
 from modules.kospi.domain import REVIEW_PROMPT_VERSION as KOSPI_REVIEW_PROMPT_VERSION
 from modules.prompt import PROMPT_ROOT
+from modules.shock.domain import CAUSE_PROMPT_VERSION as SHOCK_CAUSE_PROMPT_VERSION
 
 # 판이 붙는 프롬프트 파일. 흐름의 현재 판을 키에 함께 적는다.
 # **문장을 고쳤으면 판을 올리고 이 해시도 같이 바꾼다. 둘을 같은 커밋에서 만진다.**
@@ -48,6 +49,10 @@ PROMPT_HASHES: dict[tuple[str, str], str] = {
     ("kospi_forecast", "5"): "7a9f50fd46b08a4b7e754c46ce38c455c5688dcab2acdac8e18f7a2003f06149",
     # 장후 관찰의 첫 판(2026-09-02). 관찰·새 메모·메모 판정 셋을 한 답에 낸다.
     ("kospi_review", "1"): "e7f0097f2e306984b759ec383d06c08630de98e8043ecb60c10f20f7d5e793f2",
+    # 급변 원인 분석의 첫 판(2026-09-04). `cause_kind` 앵커가 이 판의 핵심이다 — 앵커 없이
+    # 물었을 때 두 모델이 갈렸고(gpt `unclear`, grok `confirmed`) 넣으니 둘 다 `unclear`로
+    # 수렴했다. "수급은 경로이지 방아쇠가 아니다"가 그 한 줄이다.
+    ("shock_cause", "1"): "38c44ee1eeb04cdd046bfa4e46d340a74724b188b205ffdcebb9f7ab68fa106f",
 }
 
 # 현재 판을 어디서 읽는지. 표의 키와 대조하는 데만 쓴다.
@@ -56,6 +61,7 @@ PROMPT_VERSIONS: dict[str, str] = {
     "expectation_extraction": EXPECTATION_PROMPT_VERSION,
     "kospi_forecast": KOSPI_PROMPT_VERSION,
     "kospi_review": KOSPI_REVIEW_PROMPT_VERSION,
+    "shock_cause": SHOCK_CAUSE_PROMPT_VERSION,
 }
 
 # 채점하지 않는 흐름이라 판을 가를 이유가 없는 파일. 표에 넣지 않는다.

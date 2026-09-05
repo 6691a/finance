@@ -146,6 +146,27 @@ def expectation_model() -> BaseChatModel:
     )
 
 
+def shock_model() -> BaseChatModel:
+    """급변의 사후 원인 분석(`modules/shock/cause.py`)이 쓰는 모델.
+
+    **툴이 없다.** 문서와 검색 결과를 프롬프트에 통째로 싣고 한 번 물어 구조화 JSON을
+    받는다 — `document_model`·`expectation_model`과 같은 모양이라 같은 모델로 시작한다.
+    `kospi_model`이 grok인 이유는 툴 호출 품질인데 여기에는 그 축이 없다.
+
+    프롬프트에 실리는 문서 평가(`reason`·`new_facts`)를 쓴 것도 이 모델이라 눈금이 같다.
+
+    2026-09-04 실측에서 grok-4.6과 근거 문서 세 건이 같았고, 갈렸던 `cause_kind`는
+    프롬프트 앵커를 넣자 둘 다 같은 값으로 수렴했다 — 차이가 모델이 아니라 프롬프트에
+    있었다(설계 §6.4).
+    """
+    return ChatOpenAI(
+        model="gpt-5.6-luna",
+        timeout=REQUEST_TIMEOUT_SECONDS,
+        # 재시도는 Airflow가 한다. 위 모듈 docstring 참고.
+        max_retries=0,
+    )
+
+
 def _conversation_headers(conv_id: str) -> dict[str, str]:
     """같은 대화를 같은 서버로 보내는 헤더. 모듈 docstring의 "대화 하나는 서버 하나로" 참고."""
     if not conv_id:

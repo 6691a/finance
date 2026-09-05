@@ -222,3 +222,14 @@ def test_an_empty_baseline_reports_none_not_zero():
     assert empty.abs_p50 is None
     assert empty.up_median is None
     assert empty.up_day_ratio is None
+
+
+def test_the_two_document_score_floors_stay_the_same():
+    """`shock`과 `kospi`가 같은 하한을 쓴다. 서로를 import하지 않아 값이 두 벌이다.
+
+    어긋나면 한 흐름만 부고·인사 기사를 근거로 보게 된다.
+    """
+    from modules.kospi.domain import NEWS_MIN_VALUE_SCORE
+    from modules.shock.domain import MIN_DOCUMENT_SCORE
+
+    assert MIN_DOCUMENT_SCORE == NEWS_MIN_VALUE_SCORE

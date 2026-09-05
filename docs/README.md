@@ -38,6 +38,7 @@
 | [market-episode-analysis.md](analysis/market-episode-analysis.md) | 일봉 변화·추정 매물대·시장 근거를 연결하는 `MarketEpisode` 설계 | **미구현. 구현 계약** |
 | [kospi-forecast.md](analysis/kospi-forecast.md) | 코스피 일일 전망. 관계 그래프(Neo4j)·메모·툴 셋으로 슬롯 셋(장전·장중·마감전)의 방향·등락률·±폭과 이유를 낸다 | **운영 중**(2026-09-03 기동). §8.7(아시아 요인)만 미구현. 옛 `market-thesis/`·`market-causal-graph.md`와 그 코드·표는 같은 날 지웠다 |
 | [kospi-evaluation.md](analysis/kospi-evaluation.md) | **그 전망이 실제로 맞나.** 기준선, 언제 무엇을 보나, 어떤 숫자에 무엇을 정하나. SQL이 문서 안에 있어 이것 하나로 채점이 끝난다 | **동결 중.** 판 4를 2026-09-03부터 20영업일 안 고친다 |
+| [market-shock-capture.md](analysis/market-shock-capture.md) | 장중 ±2% 급변을 사실만으로 포착하고, 원인은 최대 3영업일 동안 사후에 LLM이 찾는다. 아시아 넷과의 동시성이 포착의 핵심이다 | **구현 완료(2026-09-04), 배포 대기.** 포착(분봉)과 원인 분석(LLM+Tavily 검색) 둘 다. 운영에서 돈 적은 없다 |
 
 ## `issues/` — 운영 이슈와 복구
 

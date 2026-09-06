@@ -270,8 +270,8 @@ DAG가 쓰는 코드는 **위치는 Airflow를, 규칙은 백엔드를** 따른�
   늦게 올린다(`kospi/run.py`·`review.py`가 그 형태이고 `briefing/chart.py`가 matplotlib에
   같은 것을 쓴다). 타입에만 쓰는 이름은 `TYPE_CHECKING`으로 남긴다.
 - **최상위에 남는 것은 공용 잎이다.** `db`·`sql`·`upsert`·`utility`·`period`·`schema`·
-  `slack`·`llm`·`prompt`·`market_session`·`assessment`·`dedup`·`usage` **열셋**이다. 열은 300줄
-  미만이고 둘이 넘는다(`assessment` 637, `llm` 350 — 2026-09-01 실측).
+  `slack`·`llm`·`prompt`·`market_session`·`assessment`·`dedup`·`usage`·`untrusted` **열넷**이다.
+  열둘은 300줄 미만이고 둘이 넘는다(`assessment` 637, `llm` 350 — 2026-09-01 실측).
   **이것들을 `core/` 같은 폴더로 모으지 않는다** — 114개 파일 226줄을 고치고 얻는 것이 목록
   열 줄이다(2026-08-27 실측). 폴더는 파일이 많아서 만드는 것이지 정리해 보이려고 만드는
   것이 아니다. **줄 수는 폴더로 내리는 기준이 아니다** — 기준은 "한 도메인의 파일이 셋

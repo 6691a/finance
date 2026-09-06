@@ -38,7 +38,7 @@ from langgraph.graph import END, START, StateGraph
 from langgraph.graph.message import add_messages
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
-from modules import llm
+from modules import llm, untrusted
 from modules.kospi.domain import (
     MAX_BAND_PCT,
     MAX_EXPECTED_CHANGE_PCT,
@@ -562,6 +562,10 @@ class ForecastBuilder(_Builder):
             hit = next((phrase for phrase in FORBIDDEN_PHRASES if phrase in statement), None)
             if hit:
                 dropped.append(f"금지어({hit})")
+                continue
+            if untrusted.has_link(statement):
+                # 근거는 요인·메모 id로 받는다. 문장에 링크가 있으면 툴 결과의 글이 베껴진 것이다.
+                dropped.append("링크")
                 continue
 
             factor = _factor_or_none(item.factor)

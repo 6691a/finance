@@ -337,7 +337,7 @@ ORDER BY exchange, scope, target;
 - 동일 시각 재수집은 중복 행을 만들지 않는다.
 - 장 마감 뒤 복제값이 새 시계열처럼 쌓이지 않는다.
 - WebSocket 재연결 뒤 5분 이내 REST 조정으로 누락 구간이 복구된다.
-- Grafana에서 가격 분봉과 `observed_at` 기준으로 함께 조회할 수 있다.
+- 가격 분봉과 `observed_at` 기준으로 함께 조회할 수 있다.
 
 ## 8. 2차 범위
 

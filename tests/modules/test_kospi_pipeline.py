@@ -18,6 +18,7 @@ from modules.kospi.domain import (
     MAX_UNREVIEWED,
     Direction,
     Factor,
+    FactorUnit,
     KospiError,
     MemoryVerdict,
     ObservationSign,
@@ -27,7 +28,7 @@ from modules.kospi.domain import (
 from modules.kospi.generation import ForecastBuilder, ReviewBuilder
 from modules.kospi.graph import StoredMemory
 from modules.kospi.review import plan_memories
-from modules.kospi.state import MemoryRow, ObservedState, RelationRow, ReviewState
+from modules.kospi.state import FactorMove, MemoryRow, ObservedState, RelationRow, ReviewState
 
 
 class FakeToolbox:
@@ -241,7 +242,13 @@ def test_reasons_have_no_upper_limit_and_keep_their_order():
 # --- 관찰 검증 --------------------------------------------------------------
 
 
-def review_builder(*, queried: set[Factor] | None = None, memories=()) -> ReviewBuilder:
+def move(factor: Factor, **overrides) -> FactorMove:
+    base = {"factor": factor, "label": factor.value, "unit": FactorUnit.PERCENT}
+    base.update(overrides)
+    return FactorMove(**base)
+
+
+def review_builder(*, queried: set[Factor] | None = None, memories=(), tabled: tuple[Factor, ...] = ()) -> ReviewBuilder:
     builder = ReviewBuilder.__new__(ReviewBuilder)
     observed = ReviewState(
         run_date=date(2026, 9, 2),
@@ -250,10 +257,12 @@ def review_builder(*, queried: set[Factor] | None = None, memories=()) -> Review
         previous_close=Decimal("2650.00"),
         change_pct=Decimal("1.00"),
         memories=memories,
+        factor_moves=tuple(move(factor) for factor in tabled),
     )
     builder._observed = observed
     builder._toolbox = FakeToolbox(queried)
     builder._memory_ids = frozenset(row.id for row in memories)
+    builder._tabled = tabled
     return builder
 
 
@@ -300,6 +309,56 @@ def test_a_duplicate_observation_keeps_the_first_one():
     assert len(draft.observations) == 1
     assert draft.observations[0].note == "첫째"
     assert draft.rejected == 1
+
+
+# --- 요인 값 표 — 모델이 요인을 고르지 않는다 (설계 §8.10) ----------------------
+
+
+def test_a_tabled_factor_can_be_observed_without_a_tool_call():
+    """표로 받은 요인은 모델이 값을 봤다. 툴 호출이 증거가 아니라 표가 증거다."""
+    builder = review_builder(queried=set(), tabled=(Factor.SOX,))
+    draft = builder.parse(
+        review_answer(observations=[{"factor": "SOX", "sign": "same", "strength": 2, "note": "SOX +2.1%"}])
+    )
+    assert [item.factor for item in draft.observations] == [Factor.SOX]
+    assert draft.rejected == 0
+    assert draft.unanswered == ()
+
+
+def test_a_none_observation_has_zero_strength_whatever_the_model_wrote():
+    """`none`은 "봤는데 무관"이다. 무관한데 세기가 있을 수 없다."""
+    builder = review_builder(tabled=(Factor.US10Y,))
+    draft = builder.parse(
+        review_answer(observations=[{"factor": "US10Y", "sign": "none", "strength": 2, "note": "금리는 봤지만 무관"}])
+    )
+    assert draft.observations[0].sign is ObservationSign.NONE
+    assert draft.observations[0].strength == 0
+    # 이어진 관찰은 없다 — 큰 날 판정은 `related`를 본다.
+    assert draft.related == ()
+
+
+def test_a_missing_table_row_is_counted_not_filled():
+    """**0으로 채우지 않는다.** 확인하지 않은 것을 기록하지 않는다 — 빠진 줄은 세고 이름을 남긴다."""
+    builder = review_builder(tabled=(Factor.SOX, Factor.US10Y, Factor.VIX))
+    draft = builder.parse(
+        review_answer(observations=[{"factor": "SOX", "sign": "same", "strength": 2, "note": "…"}])
+    )
+    assert [item.factor for item in draft.observations] == [Factor.SOX]
+    assert draft.unanswered == (Factor.US10Y, Factor.VIX)
+    reason = builder._needs_repair(draft)
+    assert reason is not None
+    assert "US10Y" in reason and "VIX" in reason
+
+
+def test_unlisted_drivers_are_kept_up_to_the_cap_without_duplicates():
+    from modules.kospi.domain import MAX_UNLISTED_DRIVERS
+
+    builder = review_builder()
+    items = ["대만 가권 급락", "대만 가권 급락", ""] + [f"이유 {index}" for index in range(MAX_UNLISTED_DRIVERS + 3)]
+    draft = builder.parse(review_answer(unlisted_drivers=items))
+    assert len(draft.unlisted_drivers) == MAX_UNLISTED_DRIVERS
+    assert draft.unlisted_drivers[0] == "대만 가권 급락"
+    assert len(set(draft.unlisted_drivers)) == MAX_UNLISTED_DRIVERS
 
 
 def test_a_memory_review_for_an_unknown_id_is_dropped():
@@ -807,6 +866,98 @@ def test_a_big_move_with_no_observations_is_asked_again_once():
     assert [item.factor for item in draft.observations] == [Factor.US10Y]
 
 
+def test_a_missing_table_row_is_asked_again_once_and_then_left_unanswered():
+    """되묻기는 한 번이다. 두 번째도 빠지면 그 줄은 기록하지 않고 센다 — 채우지 않는다."""
+    from modules.kospi.toolbox import KospiToolbox
+
+    partial = review_answer(observations=[{"factor": "SOX", "sign": "same", "strength": 2, "note": "…"}])
+    model = _ScriptedModel(partial, partial, partial)
+    toolbox = KospiToolbox(_RecordingConnection(), as_of_at=datetime(2026, 9, 2, 10, 0, tzinfo=UTC), include_history=False)
+    observed = ReviewState(
+        run_date=date(2026, 9, 2),
+        as_of_kst="2026-09-02 19:00 KST",
+        close=Decimal("6562.72"),
+        previous_close=Decimal("6535.80"),
+        change_pct=Decimal("0.41"),
+        factor_moves=(move(Factor.SOX), move(Factor.US10Y)),
+    )
+
+    draft = ReviewBuilder(model, toolbox, observed=observed).build()
+
+    assert model.calls == 2
+    assert [item.factor for item in draft.observations] == [Factor.SOX]
+    assert draft.unanswered == (Factor.US10Y,)
+
+
+def test_a_big_move_answered_with_only_none_is_asked_again_once():
+    """전부 `none`인 답은 관찰 0건과 같다 — 크게 움직인 날에는 답이 아니다."""
+    from modules.kospi.toolbox import KospiToolbox
+
+    all_none = review_answer(observations=[{"factor": "SOX", "sign": "none", "strength": 0, "note": "…"}])
+    related = review_answer(observations=[{"factor": "SOX", "sign": "same", "strength": 3, "note": "…"}])
+    model = _ScriptedModel(all_none, related)
+    toolbox = KospiToolbox(_RecordingConnection(), as_of_at=datetime(2026, 9, 2, 10, 0, tzinfo=UTC), include_history=False)
+    observed = ReviewState(
+        run_date=date(2026, 9, 2),
+        as_of_kst="2026-09-02 19:00 KST",
+        close=Decimal("6562.72"),
+        previous_close=Decimal("6835.80"),
+        change_pct=Decimal("-3.99"),
+        factor_moves=(move(Factor.SOX),),
+    )
+
+    draft = ReviewBuilder(model, toolbox, observed=observed).build()
+
+    assert model.calls == 2
+    assert draft.related[0].strength == 3
+
+
+def test_the_review_toolbox_offers_no_factor_history():
+    """관찰은 요인을 고르지 않는다. 값은 표에 있고 툴은 뉴스·공시 둘뿐이다."""
+    from modules.kospi.toolbox import KospiToolbox
+
+    toolbox = KospiToolbox(_RecordingConnection(), as_of_at=datetime(2026, 9, 2, 10, 0, tzinfo=UTC), include_history=False)
+    assert [tool.name for tool in toolbox.tools] == ["recent_news", "recent_disclosures"]
+
+
+def test_factor_moves_covers_every_history_factor_even_with_no_rows():
+    """**빠지는 줄이 없다.** 값이 없어도 줄은 있어야 모델이 그 줄에 답한다."""
+    from modules.kospi.domain import HISTORY_FACTORS
+    from modules.kospi.toolbox import KospiToolbox
+
+    toolbox = KospiToolbox(_EmptyConnection(), as_of_at=datetime(2026, 9, 2, 10, 0, tzinfo=UTC), include_history=False)
+    moves = toolbox.factor_moves()
+    assert tuple(item.factor for item in moves) == HISTORY_FACTORS
+    assert all(item.value is None for item in moves)
+    # 툴이 아니다 — 예산도 원장도 건드리지 않는다.
+    assert toolbox.call_count == 0
+    assert toolbox.tool_calls == ()
+
+
+class _QuoteOnlyCursor(_RecordingCursor):
+    """quote_daily 조회에만 행을 주고 수급·종목·지표는 비운다 — 표마다 열 모양이 다르다."""
+
+    def execute(self, statement, parameters=()):
+        super().execute(statement, parameters)
+        if "quote_daily" not in statement:
+            self.rows = []
+
+
+class _QuoteOnlyConnection:
+    def cursor(self):
+        return _QuoteOnlyCursor()
+
+
+def test_factor_moves_takes_the_latest_row_and_its_change():
+    from modules.kospi.toolbox import KospiToolbox
+
+    toolbox = KospiToolbox(_QuoteOnlyConnection(), as_of_at=datetime(2026, 9, 2, 10, 0, tzinfo=UTC), include_history=False)
+    us10y = next(item for item in toolbox.factor_moves() if item.factor is Factor.US10Y)
+    assert us10y.business_date == date(2026, 9, 2)
+    assert us10y.value == pytest.approx(4.796)
+    assert us10y.change == pytest.approx(0.038)
+
+
 def test_a_quiet_day_with_no_observations_is_not_asked_again():
     from modules.kospi.toolbox import KospiToolbox
 
@@ -952,6 +1103,35 @@ def test_the_review_records_how_many_observations_it_wrote():
 
     source = inspect.getsource(review.observe)
     assert "observations=written.observations" in source
+    # 답 없는 줄과 목록 밖 원인도 원장으로 간다. 없으면 커버리지를 아무도 못 읽는다.
+    assert "observations_unanswered=len(draft.unanswered)" in source
+    assert "unlisted_drivers=list(draft.unlisted_drivers)" in source
+    # 관찰이 요인 값 표를 받고, 표는 툴 없는 툴박스에서 온다.
+    assert "factor_moves=toolbox.factor_moves()" in source
+    assert "include_history=False" in source
+
+
+def test_the_slack_review_hides_none_rows_and_names_unanswered_factors():
+    from modules.kospi.render import render_blocks
+
+    built = {
+        "kind": "review",
+        "run_date": "2026-09-02",
+        "change_pct": "1.00",
+        "close": "2676.50",
+        "observations": [
+            {"factor": "SOX", "label": "필라델피아 반도체", "sign": "same", "strength": 2, "note": "…"},
+            {"factor": "US10Y", "label": "미국 10년물", "sign": "none", "strength": 0, "note": "…"},
+        ],
+        "unanswered": ["VIX"],
+        "unlisted_drivers": ["대만 가권 급락"],
+    }
+    text = json.dumps(render_blocks(built), ensure_ascii=False)
+    assert "필라델피아 반도체" in text
+    assert "미국 10년물" not in text
+    assert "무관 1" in text
+    assert "답 없음 1: VIX" in text
+    assert "대만 가권 급락" in text
 
 
 def test_the_tool_budget_clears_every_factor_plus_the_document_tools():

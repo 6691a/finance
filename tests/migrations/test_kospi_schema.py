@@ -117,3 +117,12 @@ def test_the_observation_count_has_a_denominator_column(capsys):
     # 전망 대화에 값이 들어오면 배선이 어긋난 것이다.
     assert "ck_kospi_llm_run_observations_kind" in sql
     assert "ck_kospi_llm_run_observations_written" in sql
+
+
+def test_the_llm_run_ledger_counts_unanswered_rows_and_keeps_unlisted_drivers(capsys):
+    """설계 §8.10. 표에 있는데 답이 없는 요인은 0으로 채우지 않고 센다. 목록 밖 원인은 자유
+    문장으로 남아 요인 승격 후보가 된다."""
+    sql = head_sql(capsys)
+    assert "observations_unanswered" in sql
+    assert "ck_kospi_llm_run_observations_unanswered" in sql
+    assert "unlisted_drivers" in sql

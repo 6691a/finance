@@ -16,7 +16,7 @@ from decimal import Decimal
 
 from pydantic import BaseModel, ConfigDict
 
-from modules.kospi.domain import Direction, Factor, ObservationSign, RunSlot
+from modules.kospi.domain import Direction, Factor, FactorUnit, ObservationSign, RunSlot
 
 
 class _State(BaseModel):
@@ -184,6 +184,31 @@ class GradedForecast(_State):
     within_band: bool | None = None
 
 
+class FactorMove(_State):
+    """숫자 요인 하나의 그날 값. 장후 관찰이 **요인마다 하나씩** 받는 표의 한 줄이다.
+
+    **모델이 요인을 고르지 않게 하는 자리다**(설계 §8.10). 툴로 조회한 요인만 관찰할 수
+    있던 판 1에서는 모델이 무거운 요인부터 부르고 가벼운 요인은 안 불러 기록이 없었고,
+    기록이 없는 요인의 가중치는 옛 값에 얼어붙었다. 이 표가 있으면 "안 봤다"는 상태가
+    없어진다 — 15줄이 다 오고 모델은 줄마다 `same`/`inverse`/`none`을 답한다.
+
+    `value`가 무엇인지는 요인에 따라 다르다 — 지수·환율은 종가, 금리는 수준, 수급은 그날
+    누적 순매수 수량, 종목은 종가다. `unit`이 `change`의 단위를 말한다.
+    **값이 없으면 칸이 `None`이다.** 0으로 채우지 않는다.
+    """
+
+    factor: Factor
+    label: str
+    unit: FactorUnit
+    # 그 값의 거래일. 요인마다 다를 수 있다(미국 지수는 전날, 수급은 오늘).
+    business_date: date | None = None
+    value: float | None = None
+    # 직전 관측 대비 변화. 단위는 `unit`이다. 금리는 원값 차이라 부르는 쪽이 bp로 읽는다.
+    change: float | None = None
+    # 퍼센트 변화. 금리·수급은 `None`이다.
+    change_pct: float | None = None
+
+
 class ReviewState(_State):
     """장후 관찰이 보는 것 전부.
 
@@ -201,3 +226,5 @@ class ReviewState(_State):
     relations: tuple[RelationRow, ...] = ()
     memories: tuple[MemoryRow, ...] = ()
     forecasts: tuple[GradedForecast, ...] = ()
+    # 숫자 요인 15개의 그날 값. **모델은 이 줄 하나마다 관찰 하나를 답한다.**
+    factor_moves: tuple[FactorMove, ...] = ()

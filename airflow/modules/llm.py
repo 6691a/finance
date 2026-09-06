@@ -99,6 +99,10 @@ KOSPI_TIMEOUT_SECONDS = 900.0
 # 이름은 그대로 남긴다. 네 소비자와 테스트가 이 상수로 쓰고 있다.
 NUMBER_STYLE = read_fragments("shared")["number_style"]
 
+# 밖에서 온 글을 읽는 규칙. 문서·공시·검색 결과를 보는 흐름이 `$untrusted_text`로 받는다.
+# 이 문장은 권고다 — 강제는 `modules/untrusted.py`와 각 흐름의 응답 검증에 있다.
+UNTRUSTED_TEXT = read_fragments("shared")["untrusted_text"]
+
 
 class LlmError(RuntimeError):
     """모델 호출이 실패했다."""

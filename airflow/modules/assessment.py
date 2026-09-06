@@ -85,7 +85,7 @@ from langgraph.graph import END, START, StateGraph
 from langgraph.types import Send
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
 
-from modules import llm
+from modules import llm, untrusted
 from modules.db import Connection
 from modules.llm import UnsupportedResponseFormat
 from modules.prompt import read_prompt
@@ -96,9 +96,15 @@ from modules.upsert import execute_upserts
 logger = logging.getLogger(__name__)
 
 # 프롬프트를 고치면 올린다. 이 값이 오른 문서는 재평가 대상이 된다.
-PROMPT_VERSION = "3"
+# 판 4: 외부 글 읽기 규칙 조각과 `<외부자료>` 구분자(2026-09-06, prompt-injection-defense.md).
+PROMPT_VERSION = "4"
 
 PROMPTS = read_prompt("assessment")
+
+# 모델에게 가는 제목·요약의 길이 상한. RSS 요약은 대개 수백 자이고 그 이상은 본문이다 —
+# 평가는 본문을 안 보기로 했으므로(2026-08-30) 요약이 본문만큼 길면 여기서 자른다.
+MAX_TITLE_CHARS = 300
+MAX_SUMMARY_CHARS = 3000
 
 # 어느 시장의 눈으로 볼 것인가. 문장은 `modules/prompts/assessment.yaml`의 `variants`에 있고
 # 여기 남은 것은 **허용 값 판정**뿐이다 — `LlmSettings`가 이 키로 `LLM_PERSPECTIVE`를 막는데
@@ -234,7 +240,23 @@ class Assessment(BaseModel):
 
 
 # 사람이 읽는 지시. 후보 목록은 실행 시점에 마스터에서 채워 뒤에 이어 붙인다.
-INSTRUCTION = PROMPTS.instruction
+INSTRUCTION = PROMPTS.render("instruction", untrusted_text=llm.UNTRUSTED_TEXT)
+
+
+def screen(document: PendingDocument) -> tuple[str, ...]:
+    """모델을 부르기 전에 제목·요약을 읽는다. 걸린 라벨이 비면 통과다.
+
+    걸린 문서는 모델에게 가지 않고 `AssessmentStore.store_blocked`가 그 사실을 적는다 —
+    점수 없이 평가 완료로 닫혀 다음 실행이 다시 집지 않고, 점수 하한을 보는 소비자
+    (브리핑·급변·코스피 툴)에는 안 실린다.
+    """
+    text = "\n".join(
+        (
+            untrusted.clean(document.title, limit=MAX_TITLE_CHARS),
+            untrusted.clean(document.summary, limit=MAX_SUMMARY_CHARS),
+        )
+    )
+    return untrusted.suspicious(text)
 
 # 형식이 깨졌을 때 붙이는 교정 지시. 한 번만 붙인다.
 REPAIR_INSTRUCTION = PROMPTS.repair
@@ -269,6 +291,8 @@ class AssessmentResult(BaseModel):
     error: str | None = None
     # None은 응답 형식 오류, False는 재시도해도 해결되지 않는 제공처 오류, True는 일시 오류다.
     retryable: bool | None = None
+    # 비어 있지 않으면 모델을 부르지 않았다. `untrusted.suspicious`가 걸린 라벨이다.
+    blocked: tuple[str, ...] = ()
 
 
 class BatchState(TypedDict):
@@ -309,16 +333,18 @@ class DocumentAssessor:
         indicator_lines = "\n".join(
             f"- {provider}:{series_id} ({label})" for provider, series_id, label in candidates.indicators
         )
+        # 출처·발행은 우리 값이라 봉투 밖, 제목·요약은 밖에서 온 글이라 봉투 안이다.
+        body = [f"제목: {untrusted.clean(document.title, limit=MAX_TITLE_CHARS)}"]
+        if document.summary:
+            body.append(f"요약: {untrusted.clean(document.summary, limit=MAX_SUMMARY_CHARS)}")
         parts = [
             INSTRUCTION,
             f"\n## 종목 후보\n{instrument_lines or '(없음)'}",
             f"\n## 지표 후보\n{indicator_lines or '(없음)'}",
             f"\n## 문서\n출처: {document.source_slug}",
             f"발행: {document.published_at.isoformat() if document.published_at else '알 수 없음'}",
-            f"제목: {document.title}",
+            untrusted.wrap("문서", document.id, "\n".join(body)),
         ]
-        if document.summary:
-            parts.append(f"요약: {document.summary}")
         return [SystemMessage(system), HumanMessage("\n".join(parts))]
 
     @staticmethod
@@ -441,6 +467,11 @@ class AssessmentBatch:
         인증·잘못된 요청처럼 즉시 실패시킬 오류고, None은 이 문서의 응답 형식 오류다.
         """
         document: PendingDocument = task["document"]
+        blocked = screen(document)
+        if blocked:
+            # 모델을 부르지 않는다. 실패가 아니라 결과다 — DAG이 점수 없이 닫는다.
+            logger.warning("document %s blocked before the model: %s", document.id, blocked)
+            return {"results": [AssessmentResult(document_id=document.id, blocked=blocked)]}
         try:
             assessment = self._assessor.assess(document, task["candidates"])
         except AssessmentError as error:
@@ -542,6 +573,7 @@ def filter_tags(
 
 PENDING_DOCUMENTS = read_sql("postgres", "document", "select_pending_assessment.sql")
 UPDATE_ASSESSMENT = read_sql("postgres", "document", "update_assessment.sql")
+UPDATE_BLOCKED = read_sql("postgres", "document", "update_blocked.sql")
 INSTRUMENT_CANDIDATES = read_sql("postgres", "instrument", "select_taggable.sql")
 INDICATOR_CANDIDATES = read_sql("postgres", "indicator_series", "select_candidates.sql")
 DOCUMENT_INSTRUMENT_UPSERT = read_sql("postgres", "document_instrument", "upsert.sql")
@@ -645,3 +677,28 @@ class AssessmentStore:
                     DOCUMENT_INDICATOR_UPSERT,
                     [(document.id, tag.provider, tag.series_id) for tag in indicators],
                 )
+
+    def store_blocked(
+        self,
+        document: PendingDocument,
+        blocked: Sequence[str],
+        assessed_at: datetime | None = None,
+    ) -> None:
+        """모델에게 안 보낸 문서를 점수 없이 닫는다.
+
+        `assessment`에 `{"blocked": [...]}`만 남기고 방향·점수·모델은 NULL이다 — 모델이 안
+        낸 값을 지어내지 않는다. 판과 해시를 함께 적어 다음 실행이 다시 집지 않고, 판이
+        오르면(의심 목록이 바뀌면) 다시 본다. 건수는 SQL이 센다:
+        `SELECT count(*) FROM document WHERE assessment ? 'blocked'`.
+        """
+        with self._connection.cursor() as cursor:
+            cursor.execute(
+                UPDATE_BLOCKED,
+                (
+                    json.dumps({"blocked": list(blocked)}, ensure_ascii=False),
+                    self._prompt_revision,
+                    document.content_hash,
+                    assessed_at or datetime.now(UTC),
+                    document.id,
+                ),
+            )

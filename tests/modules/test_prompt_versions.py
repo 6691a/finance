@@ -30,7 +30,13 @@ from modules.shock.domain import CAUSE_PROMPT_VERSION as SHOCK_CAUSE_PROMPT_VERS
 # **문장을 고쳤으면 판을 올리고 이 해시도 같이 바꾼다. 둘을 같은 커밋에서 만진다.**
 PROMPT_HASHES: dict[tuple[str, str], str] = {
     ("assessment", "3"): "98ca6e74ed7f241abeb7b4b459a86a3c22a459ff8189af6c063d92bc92ea8a79",
+    # 판 4는 외부 글 읽기 규칙 조각(`$untrusted_text`)을 넣고 제목·요약을 `<외부자료>`로
+    # 감쌌다(2026-09-06, docs/convention/prompt-injection-defense.md). 판이 오르면 아카이브
+    # 전체가 재평가 대상이 된다 — 그것을 알고 올렸다.
+    ("assessment", "4"): "f4d4c26795895fb8c026b110f2fea86448d442aa8696899f86a056079a4392e3",
     ("expectation_extraction", "1"): "7108eab56e598ff642aeb7269f0f07ab9ef21707798202447db6a6b0a3b52a41",
+    # 판 2는 같은 조각과 구분자를 넣었다(2026-09-06). 본문에 길이 상한(20,000자)이 처음 생겼다.
+    ("expectation_extraction", "2"): "28b977e7586f2bd96abfa6ba41c8ff310dd249cc7034a0651fb4eb7cd05f1699",
     # 코스피 일일 전망의 첫 판(2026-09-02). 옛 추론에서 **가져오지 않은 것**이 이 프롬프트를
     # 정의한다 — 3-클래스 확률과 `flat` 기준선 문장은 캘리브레이션 실패의 자리였다.
     ("kospi_forecast", "1"): "73dd161eb811c1a5bc80e8b0b9e61b27b0150abf3902dae01f849466ae16ae47",
@@ -66,6 +72,9 @@ PROMPT_HASHES: dict[tuple[str, str], str] = {
     # 물었을 때 두 모델이 갈렸고(gpt `unclear`, grok `confirmed`) 넣으니 둘 다 `unclear`로
     # 수렴했다. "수급은 경로이지 방아쇠가 아니다"가 그 한 줄이다.
     ("shock_cause", "1"): "38c44ee1eeb04cdd046bfa4e46d340a74724b188b205ffdcebb9f7ab68fa106f",
+    # 판 2는 외부 글 읽기 규칙 조각을 넣고 문서·검색 결과를 `<외부자료>`로 감쌌다(2026-09-06).
+    # `cause_text`에 "링크를 넣지 마라"가 늘었고 코드가 링크 있는 문장을 버린다.
+    ("shock_cause", "2"): "fd907995c9a19e8d392dd5c21869494c028229cb24a6d9e4fa0c0d9ff2f8fd85",
 }
 
 # 현재 판을 어디서 읽는지. 표의 키와 대조하는 데만 쓴다.

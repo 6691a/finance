@@ -41,11 +41,15 @@ from typing import Any
 
 from pydantic import AwareDatetime, BaseModel, ConfigDict, Field
 
+from modules import untrusted
 from modules.briefing import blocks
 from modules.db import Connection
 from modules.prompt import json_dump
 from modules.sql import read_sql
 from modules.utility import KST_TIMEZONE
+
+# 강조 입력에 실리는 DART 글(보고서명·비고)의 길이 상한.
+MAX_TEXT_CHARS = 500
 
 logger = logging.getLogger(__name__)
 
@@ -250,10 +254,11 @@ def pick_input(batch: DisclosureBatch) -> str:
                 "rcept_no": disclosure.rcept_no,
                 "stock_code": disclosure.stock_code,
                 "company_name": disclosure.company_name,
-                "report_name": disclosure.report_name,
+                # 보고서명·비고는 DART가 준 글이라 정리한다. 나머지는 우리 값이다.
+                "report_name": untrusted.clean(disclosure.report_name, limit=MAX_TEXT_CHARS),
                 "receipt_date": disclosure.receipt_date.isoformat(),
                 "detected_at_kst": disclosure.detected_at.astimezone(KST_TIMEZONE).isoformat(),
-                "remarks": disclosure.remarks,
+                "remarks": untrusted.clean(disclosure.remarks, limit=MAX_TEXT_CHARS) or None,
                 "earnings": [
                     {
                         "metric": line.metric,

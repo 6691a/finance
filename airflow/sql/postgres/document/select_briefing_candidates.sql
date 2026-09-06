@@ -20,6 +20,8 @@ LEFT JOIN document_instrument AS tag
        ON tag.document_id = document.id
 WHERE document.assessed_at >= %s
   AND document.canonical_document_id IS NULL
+  -- 점수 없이 닫힌 문서(의심 문구로 모델에 안 간 것, update_blocked.sql)는 후보가 아니다.
+  AND document.value_score IS NOT NULL
 GROUP BY document.id
 ORDER BY document.value_score DESC NULLS LAST, document.assessed_at DESC
 LIMIT %s

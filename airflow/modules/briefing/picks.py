@@ -50,7 +50,7 @@ from langchain_core.messages import BaseMessage, HumanMessage, SystemMessage
 from langgraph.graph import END, START, StateGraph
 from pydantic import BaseModel, ConfigDict, ValidationError
 
-from modules import llm
+from modules import llm, untrusted
 from modules.llm import UnsupportedResponseFormat
 from modules.prompt import read_prompt
 from modules.schema import SchemaError, json_object, response_format
@@ -67,7 +67,11 @@ MAX_WHY_CHARS = 200
 PROMPTS = read_prompt("document_picks")
 
 SYSTEM_PROMPT = PROMPTS.render(
-    "system", max_reads=MAX_READS, max_watches=MAX_WATCHES, number_style=llm.NUMBER_STYLE
+    "system",
+    max_reads=MAX_READS,
+    max_watches=MAX_WATCHES,
+    number_style=llm.NUMBER_STYLE,
+    untrusted_text=llm.UNTRUSTED_TEXT,
 )
 REPAIR_INSTRUCTION = PROMPTS.repair
 
@@ -149,6 +153,11 @@ class DocumentPicker:
         dropped = len(parsed.picks) - len(kept)
         if dropped:
             logger.warning("dropped %s picks that were not in the candidate list", dropped)
+        # 이유는 문장이지 링크가 아니다. 링크가 있으면 외부 글이 베껴진 것이라 그 건만 버린다.
+        linked = [pick for pick in kept if untrusted.has_link(pick.why)]
+        if linked:
+            logger.warning("dropped %s picks whose reason carried a link", len(linked))
+            kept = [pick for pick in kept if pick not in linked]
 
         return _limit([_shorten(pick) for pick in kept])
 

@@ -22,6 +22,7 @@ from typing import Any
 
 from pydantic import AwareDatetime, BaseModel, ConfigDict
 
+from modules import untrusted
 from modules.briefing import blocks
 from modules.briefing.picks import Pick
 from modules.db import Connection
@@ -30,6 +31,10 @@ from modules.utility import KST_TIMEZONE
 
 BRIEFING_SUMMARY = read_sql("postgres", "document", "select_briefing_summary.sql")
 BRIEFING_CANDIDATES = read_sql("postgres", "document", "select_briefing_candidates.sql")
+
+# 선별 입력에 실리는 외부 글의 길이 상한. 평가 사유는 두 문장이라 넉넉하다.
+MAX_TITLE_CHARS = 300
+MAX_REASON_CHARS = 1000
 
 # 기본 조회 창. 실제 발송은 `window_hours_at`이 직전 발송 슬롯부터 지금까지로 계산한다.
 # 시장에 바로 반영되는 기사(예: 자사주 매입 공시)가 다음날 아침에야 실리면 늦기 때문에
@@ -239,11 +244,12 @@ def pick_input(summary: DocumentSummary) -> str:
         "documents": [
             {
                 "document_id": document.document_id,
-                "title": document.title,
+                # 제목은 밖에서 온 글, 이유는 앞선 모델이 그 글을 보고 쓴 글이다. 둘 다 정리한다.
+                "title": untrusted.clean(document.title, limit=MAX_TITLE_CHARS),
                 "source": document.source_slug,
                 "direction": document.direction,
                 "value_score": document.value_score,
-                "reason": document.reason,
+                "reason": untrusted.clean(document.reason, limit=MAX_REASON_CHARS) or None,
                 "tickers": list(document.tickers),
             }
             for document in summary.candidates

@@ -54,11 +54,20 @@ from pydantic import BaseModel, ConfigDict
 #       **프롬프트 문장은 한 글자도 안 바뀌었다** — 바뀐 것은 모델이 보는 증거다. 창이 좁은
 #       실행에서 부고·임원 인사·행사 공지가 근거 목록에 섞여 있었다. 같은 문장이라도 다른
 #       기사 묶음을 본 실행이라 채점을 한 판으로 셀 수 없어 판을 올린다.
-PROMPT_VERSION = "6"
+# 판 7: 관계 표에 `none` 관측이 실린다(2026-09-06, 설계 §8.10). **전망 문장은 안 바뀌었다** —
+#       바뀐 것은 장후 관찰이고, 그 결과로 가중치와 `recent_signs`에 "봤는데 무관"이 들어와
+#       전망 모델이 보는 관계 표가 달라진다. 판 6과 같은 이유로 판만 올린다.
+PROMPT_VERSION = "7"
 
 # 장후 관찰 프롬프트의 판. 전망과 축이 다르다 — 저쪽은 "잘 맞혔나", 이쪽은 "관계를 잘
 # 읽었나"다. 따로 올린다.
-REVIEW_PROMPT_VERSION = "1"
+#
+# 판 1: 첫 판(2026-09-02). 모델이 `factor_history`로 요인을 골라 조회하고 조회한 것만 관찰.
+# 판 2: **모델이 요인을 고르지 않는다**(2026-09-06, 설계 §8.10). 코드가 숫자 요인 15개의
+#       그날 값을 표로 주고 모델은 줄마다 `same`/`inverse`/`none`으로 답한다. 안 조회한
+#       요인은 기록이 없어 옛 가중치가 얼어붙었고(가중 평균이라 나이가 사라진다), 모델이
+#       무거운 요인부터 조회해 가벼운 요인은 영영 관측이 안 쌓였다. 09-03 실측 15개 중 8개.
+REVIEW_PROMPT_VERSION = "2"
 
 
 class KospiError(RuntimeError):
@@ -352,10 +361,16 @@ def factor_label(code: Factor) -> str:
 
 
 class ObservationSign(StrEnum):
-    """오늘 그 요인이 코스피와 같은 방향이었나."""
+    """오늘 그 요인이 코스피와 같은 방향이었나.
+
+    **`NONE`은 "봤는데 무관"이다.** "안 봤다"(관측 없음, `n_obs=0`)와 다르다. 가중치 셈에
+    0으로 들어가 안 먹히는 요인을 반감기대로 0에 내린다 — 이것이 없으면 관찰이 끊긴 요인의
+    옛 가중치가 얼어붙는다(설계 §8.10).
+    """
 
     SAME = "same"
     INVERSE = "inverse"
+    NONE = "none"
 
 
 class Direction(StrEnum):
@@ -492,6 +507,10 @@ MAX_BAND_PCT = Decimal(5)
 # 저장 자릿수. 모델이 소수점 넷을 내도 두 자리로 접는다.
 CHANGE_QUANTUM = Decimal("0.01")
 
+# 장후 답의 `unlisted_drivers` 상한. 요인 목록 밖인데 오늘 움직인 것의 자유 문장이다.
+# 가중치에 안 들어가고 원장에만 남는다 — 20영업일마다 세어 요인 승격 후보를 고른다.
+MAX_UNLISTED_DRIVERS = 5
+
 # 문장 상한.
 MAX_STATEMENT_CHARS = 200
 MAX_NOTE_CHARS = 200
@@ -602,6 +621,13 @@ class RelationWeight(BaseModel):
     recent_signs: tuple[ObservationSign, ...] = ()
 
 
+def signed_strength(sign: ObservationSign, strength: int) -> int:
+    """관측 하나가 가중치 분자에 넣는 값. `same` +세기, `inverse` −세기, `none` 0."""
+    if sign is ObservationSign.NONE:
+        return 0
+    return strength if sign is ObservationSign.SAME else -strength
+
+
 def relation_weight(
     factor: Factor,
     observations: list[Observation],
@@ -627,7 +653,8 @@ def relation_weight(
     denominator = 0.0
     for item in recent:
         weight = decay_weight(item.observed_on, as_of_date, half_life_days=half_life_days)
-        signed = item.strength if item.sign is ObservationSign.SAME else -item.strength
+        # `none`은 0이다. 분모에는 들어가고 분자에는 안 들어가 안 먹히는 요인을 끌어내린다.
+        signed = signed_strength(item.sign, item.strength)
         numerator += weight * signed
         denominator += weight * MAX_STRENGTH
     return RelationWeight(

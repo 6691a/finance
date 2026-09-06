@@ -109,11 +109,24 @@ def _review_blocks(built: dict[str, Any]) -> list[dict[str, Any]]:
         )
 
     observations = list(built.get("observations") or ())
-    if observations:
-        lines = [_observation_line(item) for item in observations]
+    # `none`은 "봤는데 무관"이라 줄로 안 보인다. 수만 꼬리에 남긴다 — 15줄이 다 `none`인 날
+    # 15줄을 보이면 이어진 것이 안 보인다.
+    related = [item for item in observations if item.get("sign") != "none"]
+    unrelated = len(observations) - len(related)
+    if related:
+        lines = [_observation_line(item) for item in related]
         blocks.append({"type": "section", "text": {"type": "mrkdwn", "text": "*오늘 무엇이 움직였나*\n" + "\n".join(lines)}})
     else:
-        blocks.append({"type": "section", "text": {"type": "mrkdwn", "text": "_관찰 없음 — 조용한 날이다._"}})
+        blocks.append({"type": "section", "text": {"type": "mrkdwn", "text": "_이어진 관찰 없음 — 조용한 날이다._"}})
+    coverage = _coverage_footer(built, unrelated=unrelated)
+    if coverage:
+        blocks.append({"type": "context", "elements": [{"type": "mrkdwn", "text": coverage}]})
+
+    unlisted = list(built.get("unlisted_drivers") or ())
+    if unlisted:
+        blocks.append(
+            {"type": "section", "text": {"type": "mrkdwn", "text": "*요인 목록 밖*\n" + "\n".join(f"• {item}" for item in unlisted)}}
+        )
 
     memories = list(built.get("new_memories") or ())
     if memories:
@@ -165,6 +178,17 @@ def _grade_line(item: dict[str, Any]) -> str:
     hit = "○" if item.get("hit") else "✕"
     within = "○" if item.get("within_band") else "✕"
     return f"• {slot} {arrow} {_signed(expected)}% ± {_plain(band)}%p → 실제 {_signed(actual)}% · 방향 {hit} 폭 {within}"
+
+
+def _coverage_footer(built: dict[str, Any], *, unrelated: int) -> str:
+    """무관 판정 수와 답이 빠진 요인. **빠진 요인은 이름을 보인다** — 0이어야 정상이다."""
+    parts: list[str] = []
+    if unrelated:
+        parts.append(f"무관 {unrelated}")
+    unanswered = list(built.get("unanswered") or ())
+    if unanswered:
+        parts.append(f"⚠ 답 없음 {len(unanswered)}: {', '.join(str(item) for item in unanswered)}")
+    return " · ".join(parts)
 
 
 def _observation_line(item: dict[str, Any]) -> str:

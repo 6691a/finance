@@ -55,10 +55,12 @@ from modules.kospi.domain import (
     NEWS_MIN_VALUE_SCORE,
     Factor,
     FactorSource,
+    FactorSpec,
     FactorUnit,
     ToolCallRecord,
     ToolLimitExceeded,
 )
+from modules.kospi.state import FactorMove
 from modules.kospi.tool_args import (
     TOOL_DESCRIPTIONS,
     FactorHistoryArgs,
@@ -119,9 +121,12 @@ class KospiToolbox:
     생성자가 받는다. 요인·창처럼 호출마다 바뀌는 것은 메서드 인자다.
     """
 
-    def __init__(self, connection: Connection, *, as_of_at: datetime) -> None:
+    def __init__(self, connection: Connection, *, as_of_at: datetime, include_history: bool = True) -> None:
         self._connection = connection
         self._as_of_at = as_of_at
+        # 장후 관찰은 `factor_history`를 안 받는다 — 요인 값은 코드가 `factor_moves()`로 표에
+        # 싣고, 모델이 요인을 고르는 단계가 없어야 커버리지가 보장된다(설계 §8.10).
+        self._include_history = include_history
         self._calls = 0
         self._chars = 0
         # **이 대화가 실제로 값을 본 요인.** 답변 검증이 이것을 읽는다.
@@ -144,13 +149,15 @@ class KospiToolbox:
         함수는 **바인드된 메서드**다. 툴이 연결·기준 시각·예산 같은 이 객체의 상태를 봐야
         해서 모듈 수준 `@tool`을 쓸 수 없다.
         """
-        return [
+        history = [
             StructuredTool.from_function(
                 func=self._ledger.record("factor_history", self._tool_factor_history),
                 name="factor_history",
                 description=TOOL_DESCRIPTIONS["factor_history"],
                 args_schema=FactorHistoryArgs,
             ),
+        ]
+        return (history if self._include_history else []) + [
             StructuredTool.from_function(
                 func=self._ledger.record("recent_news", self._tool_recent_news),
                 name="recent_news",
@@ -208,6 +215,23 @@ class KospiToolbox:
 
     def close_open_records(self) -> None:
         self._ledger.close_open_records()
+
+    # --- 툴이 아닌 조회 ----------------------------------------------------
+
+    def factor_moves(self) -> tuple[FactorMove, ...]:
+        """숫자 요인 전부의 그날 값. **툴이 아니다** — 예산을 안 쓰고 원장에도 안 남는다.
+
+        장후 관찰이 이것을 표로 받아 줄마다 판정한다. `factor_history`와 같은 SQL을 요인마다
+        한 번씩 돈다(창 2 — 직전 대비 변화를 내는 데 필요한 최소). 값이 없는 요인은 칸이
+        `None`인 채로 실린다. 빠지지 않는다 — 빠지면 모델이 그 줄을 답하지 않아도 되고,
+        그러면 "안 봤다"가 다시 생긴다.
+        """
+        moves: list[FactorMove] = []
+        for code in HISTORY_FACTORS:
+            spec = FACTOR_SPECS[code]
+            rows = self._factor_rows(spec.source, spec.key, MIN_HISTORY_DAYS)
+            moves.append(_latest_move(spec, rows))
+        return tuple(moves)
 
     # --- 툴 본체 ----------------------------------------------------------
 
@@ -425,6 +449,24 @@ class KospiToolbox:
             self.finish_round([reply])
             return message_text(reply)
         return str(reply)
+
+
+def _latest_move(spec: FactorSpec, rows: dict[str, Any]) -> FactorMove:
+    """`_factor_rows`의 payload 칸에서 마지막 행 하나를 `FactorMove`로 접는다.
+
+    수급은 그날 누적 수량이 값이고 변화가 없다 — 어제 누적과 오늘 누적의 차이는 뜻이 없다.
+    """
+    base = {"factor": spec.code, "label": spec.label, "unit": spec.unit}
+    if rows.get("points"):
+        point = rows["points"][-1]
+        return FactorMove(**base, business_date=point.date, value=point.value, change=point.change, change_pct=point.change_pct)
+    if rows.get("flows"):
+        flow = rows["flows"][-1]
+        return FactorMove(**base, business_date=flow.date, value=flow.net_buy_qty)
+    if rows.get("stocks"):
+        stock = rows["stocks"][-1]
+        return FactorMove(**base, business_date=stock.date, value=stock.close, change_pct=stock.change_pct)
+    return FactorMove(**base)
 
 
 def _clamp(value: Any, low: int, high: int, fallback: int) -> int:

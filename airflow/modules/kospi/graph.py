@@ -360,7 +360,11 @@ def write_review(
         created_at = _plain_datetime(created_at)
 
     for item in observations:
-        if not MIN_STRENGTH <= item.strength <= MAX_STRENGTH:
+        if item.sign is ObservationSign.NONE:
+            # "봤는데 무관"은 세기가 없다. 0이 아니면 검증이 새어 온 것이다.
+            if item.strength != 0:
+                raise ValueError(f"a none observation has no strength, got {item.strength}")
+        elif not MIN_STRENGTH <= item.strength <= MAX_STRENGTH:
             raise ValueError(f"strength must be {MIN_STRENGTH}~{MAX_STRENGTH}, got {item.strength}")
 
 

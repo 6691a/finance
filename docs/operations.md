@@ -1,7 +1,7 @@
 # 저장소 운영 안내
 
-- 상태: 지금 도는 코드의 설명이다. Grafana 절만 예외 — 사용을 끝내기로 했고(2026-08-26)
-  제거는 웹 화면 배포와 함께 한다.
+- 상태: 지금 도는 코드의 설명이다. Grafana는 2026-08-26에 쓰지 않기로 했고 2026-09-06에
+  compose·대시보드 JSON·테스트를 지웠다.
 - 무엇: 설정·DB alias·마이그레이션·DAG 목록·배포·관측. **저장소를 돌리는 사람과 에이전트가 읽는다.**
   프로젝트가 무엇인지는 루트 [README.md](../README.md)가 갖는다.
 
@@ -269,6 +269,7 @@ DAG마다 절을 두지 않습니다. 상세는 각 DAG 파일의 `doc_md`에 �
 | --- | --- | --- | --- |
 | `fred_treasury_daily` | 화~토 07:30 | `indicator_observation` | FRED |
 | `fred_macro_daily` | 화~토 07:40 | `indicator_observation` | FRED |
+| `fred_signal_daily` | 화~토 07:50 | `indicator_observation`(실질금리·기대인플레·신용스프레드) | FRED |
 | `ecos_market_rate_daily` | 화~토 08:00 | `indicator_observation` | 한국은행 ECOS |
 | `ecos_sentiment_monthly` | 월요일 10:00 | `indicator_observation`(소비자심리·업황BSI·선행지수) | 한국은행 ECOS |
 | `bbk_bund_daily` | 화~토 08:10 | `indicator_observation` | 분데스방크 |
@@ -276,14 +277,22 @@ DAG마다 절을 두지 않습니다. 상세는 각 DAG 파일의 `doc_md`에 �
 | `boe_gilt_daily` | 화~토 08:40 | `indicator_observation` | 잉글랜드은행 |
 | `ecb_yield_curve_daily` | 화~토 08:50 | `indicator_observation` | ECB |
 | `ecb_convergence_monthly` | 수 08:30 | `indicator_observation` | ECB |
+| `policy_rate_weekly` | 월 09:00 | `indicator_observation`(중앙은행 다섯 정책금리) | ECOS·FRED·BoE |
+| `central_bank_assets_weekly` | 월 09:20 | `indicator_observation`(중앙은행 여섯 총자산) | FRED·ECOS·BBK·BoE |
+| `kcs_trade_daily` | 매일 09:30 | `indicator_observation`(10일 단위 수출입 42계열) | 관세청 |
 | `market_calendar_daily` | 매일 07:00 | `market_session` | KIS·NYSE |
 | `kis_quote_intraday` | 평일 08~16시 5분마다 | `quote_bar`, `market_movement_snapshot` | KIS |
 | `kis_investor_flow_intraday` | 평일 09~15시 5분마다 | `market_investor_flow_snapshot` | KIS |
 | `kis_investor_estimate_intraday` | 평일 09:35·10:05·11:25·13:25·14:35 | `stock_investor_estimate_snapshot` | KIS |
 | `kis_investor_trade_daily` | 평일 18:10 | `stock_investor_trade_daily` | KIS |
 | `kis_stock_minute_bars_daily` | 평일 20:40 | `stock_bar` | KIS |
+| `kis_equity_bar_reconcile` | 평일 08~19시 05·35분 | `stock_bar`(실시간 잠정 봉을 REST 확정값으로 조정) | KIS |
+| `kis_index_daily` | 평일 18:20 | `index_daily`(코스피·코스닥·코스피200) | KIS |
+| `kis_future_daily` | 평일 18:30 | `index_future_daily`(코스피200·코스닥150 선물 연결 시계열) | KIS |
+| `kis_analyst_opinion_daily` | 평일 08:20 | `stock_analyst_opinion` | KIS |
 | `kis_market_positioning_daily` | 화~토 08:10 | `krx_*` 6종(신용·공매도·대차·증시자금) | KIS |
 | `kis_overseas_index_close` | 화~토 07:30 | `index_bar`(S&P500·나스닥 종합 마감 분봉) | KIS |
+| `kis_overseas_index_daily` | 화~토 07:35 | `index_daily`(S&P500·나스닥 확정 일봉) | KIS |
 | `kis_asia_index_intraday` | 평일 09~17시 5분마다 | `index_bar`(니케이·상해·항셍·대만 1분봉, 15분 지연) | KIS |
 | `kis_asia_index_daily` | 평일 18:00 | `index_daily`(니케이·상해·항셍·대만 확정 일봉) | KIS |
 | `yahoo_quote_intraday` | 5분마다(시간 창 없음) | `quote_bar` | Yahoo |
@@ -303,6 +312,20 @@ DAG마다 절을 두지 않습니다. 상세는 각 DAG 파일의 `doc_md`에 �
 [DART 공시·실적](collection/dart-disclosure-earnings.md),
 [ECB 회원국 10년물 월평균](collection/ecb-convergence-monthly.md) 문서에 정리했습니다.
 
+### 분석 DAG 목록
+
+수집한 것으로 판단을 만드는 DAG들입니다. 설계는 `docs/analysis/`에 있습니다.
+
+| DAG | 스케줄(KST) | 채우는 테이블 | 무엇 |
+| --- | --- | --- | --- |
+| `technical_signal_daily` | 평일 18:40 | `technical_signal` | 확정 일봉에서 이평·MACD·RSI 교차 사건을 검출한다. LLM 없음 |
+| `event_expectation_hourly` | 매시 45분 | `stock_event_claim`, `stock_event_extraction`, `stock_event_outcome` | 문서에서 실적 기대치를 뽑고 실제값과 대조한다 (LLM) |
+| `kospi_forecast_daily` | 평일 08:35 | `kospi_forecast`, `kospi_llm_run` | 장전 코스피 전망 (LLM+툴) |
+| `kospi_intraday_daily` | 평일 11:35·14:35 | `kospi_forecast`, `kospi_llm_run` | 장중·마감전 코스피 전망. 슬롯은 Param → `logical_date` 순으로 정한다 |
+| `kospi_review_daily` | 평일 19:00 | Neo4j 관계·메모, `kospi_llm_run` | 오늘 무엇이 코스피를 움직였나를 관찰하고 전망을 채점한다 (LLM+툴) |
+
+`document_assessment_hourly`와 급변 포착 둘은 각각 위 수집 표와 아래 급변 표에 있습니다.
+
 ### Slack 브리핑 DAG 목록
 
 수집하지 않고 **읽어서 내보내기만 하는** DAG들입니다. 설계는 [docs/briefing/slack-report-design.md](briefing/slack-report-design.md)에 있습니다.
@@ -313,6 +336,7 @@ DAG마다 절을 두지 않습니다. 상세는 각 DAG 파일의 `doc_md`에 �
 | `slack_us_market_briefing` | 화~토 08:00 | `SLACK_CHANNEL_MARKET` | 밤사이 미국 지수·선물(현물 옆에 선물)·원자재·크립토·ADR, 주요국 10년 금리, 전일 국내 복기 |
 | `slack_document_briefing` | 매일 08:00·12:00·15:30·20:00 | `SLACK_CHANNEL_DOCUMENT` | 직전 발송 이후 평가 집계와 LLM 선별 문서 |
 | `slack_ops_briefing` | 매일 08:00 | `SLACK_CHANNEL_OPS` | 지난 24시간 수집 성공·실패·무소식·0건 |
+| `slack_disclosure_briefing` | 평일 07:00~20:50 10분마다 | `SLACK_CHANNEL_MARKET` | 새 공시 알림. 실적 공시면 숫자와 전년 대비를 붙인다 |
 
 표와 비교값은 SQL 집계가 만듭니다. 시장·운영 브리핑은 LLM을 쓰지 않고, 문서 브리핑만
 후보 선별에 사용합니다. 선별이 실패해도 점수순 대체 목록으로 리포트는 나갑니다.
@@ -446,185 +470,6 @@ airflow dags trigger mof_jgb_daily --conf '{\"source_file\": \"all\", \"observat
 `LANGSMITH_TRACING`, `LANGSMITH_API_KEY`, `LANGSMITH_PROJECT`를 환경에 주면 켜집니다. 코드에는 추적 호출이 없습니다. 비워 두면 아무것도 보내지 않고 호출 경로도 그대로입니다.
 
 **켜면 프롬프트 전문과 문서 본문이 LangSmith로 나갑니다.** 저장 위치가 문제가 되면 `LANGSMITH_ENDPOINT`로 다른 인스턴스를 가리킵니다.
-
-## Grafana
-
-> **2026-08-26에 사용 종료를 결정했습니다.** 아래는 아직 로컬에 남아 있는 구성 설명이고,
-> 대시보드 JSON·compose 서비스·`tests/dashboards/`는 웹 화면 배포와
-> 함께 제거합니다. 지금 새 대시보드를 늘리지 않습니다.
-
-수집한 지수를 차트와 대시보드로 확인하는 용도입니다. `just dev`로 PostgreSQL, Redis와 함께 올라갑니다.
-
-```powershell
-just dev
-```
-
-접속은 <http://localhost:13000>, 계정은 `admin` / `admin` 입니다. 로컬 개발 전용 값이므로 이 포트를 외부에 노출하기 전에 반드시 변경하세요.
-
-`GF_SECURITY_ADMIN_USER`와 `GF_SECURITY_ADMIN_PASSWORD`는 `grafana` 볼륨이 처음 만들어질 때만 적용됩니다. 이미 볼륨이 있는 상태에서 비밀번호를 바꾸려면 컨테이너 안에서 직접 재설정합니다.
-
-```powershell
-docker exec local-grafana-1 grafana cli admin reset-admin-password <new-password>
-```
-
-### Provisioning
-
-| 경로 | 역할 |
-| --- | --- |
-| `compose/local/grafana/provisioning/datasources/` | 로컬 `finance` datasource 정의. Docker의 `db:5432/finance`만 사용합니다. |
-| `compose/local/grafana/provisioning/dashboards/` | dashboard provider 정의. |
-| `compose/local/grafana/dashboards/` | 대시보드 JSON. 하위 디렉터리 구조가 Grafana 폴더 구조가 됩니다. |
-
-datasource는 UI에서 수정할 수 없습니다(`editable: false`). 변경은 YAML을 고치고 컨테이너를 재시작합니다.
-
-```powershell
-docker compose -f compose/local/docker-compose.yaml restart grafana
-docker compose -f compose/local/docker-compose.yaml logs -f grafana
-```
-
-### 대시보드 구성
-
-금리 대시보드는 여섯입니다. 나라(통화권)별로 하나씩, 그리고 그것들을 가로지르는 통합 하나입니다. 독일은 나라별 대시보드가 없고 통합에만 나옵니다.
-
-| 대시보드 | 파일 | 보는 것 |
-| --- | --- | --- |
-| 미국 국채 금리 | `us-treasury.json` | 미국 곡선과 미국 장단기 금리차 |
-| 국내 시장금리 | `korea-market-rate.json` | 국내 곡선, 국내 장단기 금리차, CD 91일 |
-| 일본 국채 금리 | `japan-treasury.json` | 일본 곡선, 일본 장단기 금리차, 초장기 구간 |
-| 영국 국채 금리 | `uk-treasury.json` | 영국 5·10·20년, 20년-5년 금리차 |
-| 유로 지역 국채 금리 | `euro-area-treasury.json` | 유로 지역 AAA 곡선(3개월~30년), 10년-2년 금리차 |
-| 통합 국채 금리 | `global-treasury.json` | 나라 간 비교, 나라 간 금리차, 최신 수익률 곡선 |
-
-나라별 대시보드는 그 나라 이야기만 담습니다. 나라를 가로지르는 비교는 전부 통합에 둡니다. 나라가 늘어날 때 나라별 대시보드는 새로 하나 만들면 되고, 통합은 패널을 **고치지 않습니다.** 통합이 국가와 만기를 `indicator_series` 마스터에서 읽기 때문입니다. 일본을 붙일 때 통합에서 바꾼 것은 `비교 만기` 변수 쿼리 한 줄뿐이고, 영국과 유로 지역을 붙일 때는 그 한 줄조차 고치지 않았습니다. 나라마다 고시하는 만기가 달라, 두 나라 이상이 가진 만기만 목록에 남기도록 `HAVING count(DISTINCT country) > 1`을 걸었습니다. 일본 40년이나 유로 지역 6개월처럼 한 나라만 고시하는 만기는 골라도 비교할 대상이 없습니다.
-
-나머지 대시보드는 금리가 아닌 값을 봅니다. 아래 절들이 다루지 않는 것도 이 표에서 파일 이름을 찾을 수 있습니다.
-
-| 대시보드 | 파일 | 보는 것 |
-| --- | --- | --- |
-| 지수·선물 통합 장중 | `quote-intraday.json` | 국내외 지수·선물 1분봉을 한 화면에 |
-| 지수 장중 | `quote-index.json` | 지수 1분봉 |
-| 지수선물 장중 | `quote-index-future.json` | 지수선물 1분봉 |
-| 종목 장중 | `quote-equity.json` | 삼성전자·SK하이닉스 1분봉 |
-| 환율 장중 | `quote-fx.json` | 환율 1분봉 |
-| 원자재 장중 | `quote-commodity.json` | 원자재 1분봉 |
-| 암호화폐 장중 | `quote-crypto.json` | 암호화폐 1분봉 |
-| 외국인·기관·개인 수급 | `investor-flow.json` | 시장 수급과 종목 추정 수급 |
-| 상승·보합·하락 종목 분포 | `market-movement.json` | 장중 시장 폭(breadth) |
-| 신용·공매도·대차 포지션 | `market-positioning.json` | 신용잔고·공매도·대차·증시자금 |
-| 공시·실적 (DART) | `dart-disclosure.json` | 공시 타임라인과 실적 추이 |
-| 문서 평가 (LLM) | `document-assessment.json` | 점수 분포, 점수 높은 문서, 태그·출처별 집계 |
-
-미국 물가·소매판매(`fred_macro_daily`)만 대시보드가 없습니다. 소비자가 화면이 아니라 리포트 쪽 계산이라 세 계열로 화면을 만들지 않았습니다. 계열이 늘면 그때 만듭니다.
-
-### 미국 국채 대시보드
-
-[compose/local/grafana/dashboards/us-treasury.json](../compose/local/grafana/dashboards/us-treasury.json)은 `indicator_observation` 테이블의 FRED 국채 수익률을 그립니다. `fred_treasury_daily` DAG가 채우는 테이블입니다.
-
-- 만기별 최신 금리 stat. `만기` 변수로 패널이 반복됩니다.
-- 만기별 금리 추이 시계열.
-- 장단기 금리차(10Y - 3M) 시계열. 0 아래는 금리 역전이라 임계선을 함께 그립니다. 이 패널만 `만기` 변수와 무관하게 항상 `DGS10`과 `DGS3MO`를 씁니다.
-- 만기별 최신 관측값과 수집 계보 테이블. `source_record`를 조인해 그 값이 어느 수집 실행에서 왔는지 보여 줍니다.
-- 수집 실행별 정규화 행 수. 실행마다 최근 7일을 다시 조회하므로 정상이면 5~7행이 찍힙니다.
-
-`observation_date`는 시간대가 없는 `date`입니다. 시계열 패널이 쓰려면 timestamptz가 필요하므로 서브쿼리에서 `observation_date::timestamp AT TIME ZONE 'UTC'`로 만든 뒤 매크로에는 컬럼 이름만 넘깁니다. Grafana 매크로 인자 파서가 중첩 괄호를 읽지 못하기 때문입니다.
-
-모든 패널이 `provider = 'fred'`를 함께 겁니다. `indicator_observation`은 제공처가 여럿이고 `series_id`는 제공처 안에서만 고유합니다. `series_id` 하나로 거는 쿼리는 지금은 맞지만 제공처가 늘어나면 조용히 틀립니다.
-
-### 국내 시장금리 대시보드
-
-[compose/local/grafana/dashboards/korea-market-rate.json](../compose/local/grafana/dashboards/korea-market-rate.json)은 같은 `indicator_observation` 테이블의 ECOS 국내 시장금리를 그립니다. `ecos_market_rate_daily` DAG가 채웁니다.
-
-- 만기별 최신 금리 stat. `만기` 변수로 패널이 반복됩니다.
-- 만기별 금리 추이 시계열.
-- 장단기 금리차(국고채 10년 - 3년) 시계열. 국내에서 쓰는 스프레드입니다.
-- 만기별 최신 관측값과 수집 계보 테이블. 원본 `series_id`를 함께 보여 줍니다.
-- 수집 실행별 정규화 행 수. 실행마다 최근 7일을 다시 조회하므로 정상이면 4~5행이 찍히고, 공휴일이 낀 주에는 더 적습니다.
-
-만기 변수의 값은 화면에 보이는 한글 이름이 아니라 저장된 `series_id`(`KTB10Y`)입니다. ECOS 항목코드(`010210000`)는 `MarketRateSeries` Enum과 `source_record.metadata`가 들고 있습니다.
-
-### 일본 국채 대시보드
-
-[compose/local/grafana/dashboards/japan-treasury.json](../compose/local/grafana/dashboards/japan-treasury.json)은 같은 `indicator_observation` 테이블의 재무성 국채 금리를 그립니다. `mof_jgb_daily` DAG가 채웁니다.
-
-- 만기별 최신 금리 stat. `만기` 변수로 패널이 반복됩니다.
-- 만기별 금리 추이 시계열. 계열 이름은 `indicator_series`의 `label`을 조인해 씁니다.
-- 최신 수익률 곡선 막대. 2·5·10·20·30·40년을 만기 순으로 세웁니다. 초장기 구간이 곡선의 끝입니다.
-- 장단기 금리차(10년 - 2년) 시계열.
-- 만기별 최신 관측값과 수집 계보 테이블. 원천 식별자가 시계열이 아니라 파일 이름(`jgbcm` 또는 `jgbcm_all`)입니다.
-- 수집 실행별 정규화 행 수. 매달 초 며칠은 한 run이 파일을 둘 받아 점이 두 개 찍힙니다.
-
-`만기` 변수 목록도 손으로 적지 않고 `indicator_series`에서 읽습니다. 미국·국내 대시보드는 목록을 `CASE`나 custom 변수로 들고 있는데, 이쪽은 마스터가 이미 `label`을 갖고 있어 그럴 이유가 없습니다.
-
-### 영국 국채 대시보드
-
-[compose/local/grafana/dashboards/uk-treasury.json](../compose/local/grafana/dashboards/uk-treasury.json)은 같은 `indicator_observation` 테이블의 잉글랜드은행 gilt 금리를 그립니다. `boe_gilt_daily` DAG가 채웁니다. 패널 구성은 일본 대시보드와 같고 두 곳이 다릅니다.
-
-- 장단기 금리차가 **20년 - 5년**입니다. IADB에 2년물이 없어 다른 대시보드가 쓰는 10년-2년을 만들 수 없습니다.
-- 최신 수익률 곡선 막대의 점이 셋뿐이라 곡선이라기보다 세 점의 기울기입니다.
-
-수집 계보 표의 원천 식별자는 시계열이 아니라 조회 단위(`gilt_nominal_par_yields`)입니다. IADB가 세 시계열을 한 응답에 담아 주기 때문입니다.
-
-### 유로 지역 국채 대시보드
-
-[compose/local/grafana/dashboards/euro-area-treasury.json](../compose/local/grafana/dashboards/euro-area-treasury.json)은 같은 테이블의 ECB 유로 지역 곡선을 그립니다. `ecb_yield_curve_daily` DAG가 채웁니다.
-
-- 만기가 열하나라 최신 금리 stat이 두 줄로 반복됩니다. 12개월 미만은 개월, 그 이상은 연 단위로 이름을 만듭니다.
-- 수집 실행별 정규화 행 수에서 **0으로 찍힌 점은 그 구간이 전부 휴장이었다는 뜻**입니다. 조회했지만 값이 없는 구간과 아직 조회하지 않은 구간을 가르려고 0건도 남깁니다.
-
-값은 Svensson 모형이 추정한 스팟 금리라 만기 사이가 매끄럽게 이어집니다. 개별 국채의 실제 체결 수익률이 아닙니다.
-
-### 통합 국채 대시보드
-
-[compose/local/grafana/dashboards/global-treasury.json](../compose/local/grafana/dashboards/global-treasury.json)은 나라를 가리지 않고 국채 금리를 비교합니다. 국가·만기·기준국이 전부 변수이고, 그 목록을 `indicator_series` 마스터에서 읽습니다.
-
-- 국가별 같은 만기 비교 시계열. 만기는 `비교 만기` 변수로 고릅니다.
-- 최신 수익률 곡선 막대. 나라마다 마지막 고시값을 만기 순으로 세웁니다.
-- 기준국 대비 금리차 시계열. `금리차 기준국`을 미국으로 두면 다른 나라가 미국보다 얼마나 높은지 봅니다.
-- 선택 국가의 만기별 추이. 범례 이름은 `indicator_series.label`입니다.
-- 시계열별 최신 관측값과 수집 계보 표. 마스터에는 있는데 관측값이 없는 시계열은 여기서 빠지므로, 수집이 안 붙은 시계열을 찾는 데 씁니다.
-
-**이 대시보드에는 나라 이름도 시계열 ID도 하드코딩돼 있지 않습니다.** 나라를 추가하면 수집기와 마스터 시드만 늘리면 되고, 국가 변수 목록과 모든 패널이 저절로 따라옵니다. 일본·영국·유로 지역을 붙일 때 실제로 그랬습니다. 국채가 아닌 금리(CD 91일 등)는 `kind = 'government_bond'` 조건에서 빠집니다.
-
-### 문서 평가 대시보드
-
-[compose/local/grafana/dashboards/document-assessment.json](../compose/local/grafana/dashboards/document-assessment.json)은 `document_assessment_hourly`가 매긴 점수와 태그를 봅니다. 다른 대시보드가 값의 추이를 보는 것과 달리 **평가가 쓸 만한지**를 보는 화면입니다.
-
-- 수집 문서, 평가 대기, 평균 점수, 마지막 평가 이후 경과 stat.
-- 시간별 수집·평가 시계열. 두 선이 벌어지면 평가가 수집을 못 따라가는 것입니다.
-- 점수 분포 막대. **이 패널이 이 대시보드의 목적입니다.** 한 점수에 몰려 있으면 그 점수는 문서를 가르지 못하고 리포트가 상위 몇 건을 고를 수 없습니다. 0건인 점수도 칸을 남기려고 `generate_series(0, 8)`이 축을 만듭니다.
-- 점수 높은 문서 표. 리포트가 고르는 것과 같은 순서입니다.
-- 태그별·출처별 집계 표.
-
-`최소 점수` 변수는 **점수 높은 문서 표에만** 걸립니다. 집계 패널까지 걸면 화면이 "낮은 점수가 없다"고 말하게 되어 점수가 눌린 것을 못 잡습니다. 걸러진 문서도 삭제되지 않고 DB에 그대로 있습니다.
-
-시간 필터는 `published_at`이 아니라 `detected_at`에 겁니다. 피드가 발행 시각을 주지 않는 출처가 있어 `published_at`은 `NULL`일 수 있고 `detected_at`은 항상 있습니다.
-
-### 대시보드를 Git에 남기기
-
-대시보드는 UI에서 만들고, 완성되면 JSON으로 내보내 저장소에 커밋합니다.
-
-1. 대시보드 상단의 **Export** → **Export as JSON** → **Save to file**.
-2. 저장한 파일을 `compose/local/grafana/dashboards/` 아래에 둡니다.
-3. provider가 10초 간격으로 감시하므로 재시작 없이 반영됩니다.
-
-이 단계를 건너뛰면 대시보드는 `grafana` 볼륨에만 남고 볼륨 삭제 시 사라집니다.
-
-### 지수 테이블 설계
-
-Grafana 시계열 패널은 `time`, 값, 계열 이름 형태의 결과를 기대합니다. 지표마다 컬럼을 늘리는 대신 `(ts, symbol, value)` 형태로 세로로 쌓으면 지표를 추가할 때 migration이 필요 없고 쿼리도 단순해집니다.
-
-```sql
-SELECT ts AS time, value, symbol AS metric
-FROM index_quote
-WHERE $__timeFilter(ts)
-ORDER BY ts
-```
-
-캔들 차트는 Grafana 코어의 Candlestick 패널을 사용하며, `open`, `high`, `low`, `close`, `volume` 이름의 컬럼을 자동으로 매핑합니다.
-
-### finance datasource
-
-`finance` datasource는 Docker Compose가 실행하는 로컬 PostgreSQL의 `finance` DB를 바라봅니다. 모든 대시보드가 이 datasource 하나를 직접 사용합니다.
 
 ## 배포
 

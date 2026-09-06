@@ -37,6 +37,7 @@ from langgraph.prebuilt import ToolNode
 from langgraph.prebuilt.tool_node import ToolInvocationError
 from pydantic import BaseModel
 
+from modules import untrusted
 from modules.db import Connection
 from modules.kospi.domain import (
     DEFAULT_HISTORY_DAYS,
@@ -93,6 +94,10 @@ INDICATOR_PROVIDER = "ecos"
 
 # 공시 본문을 몇 자까지 싣나. 전문을 실으면 툴 하나가 문자 예산을 다 먹는다.
 DISCLOSURE_BODY_CHARS = 1_500
+
+# 기사 제목·평가 사유·사실 한 줄의 길이 상한. 폭주를 막는 값이지 내용을 자르려는 값이 아니다.
+NEWS_TITLE_CHARS = 300
+NEWS_TEXT_CHARS = 1000
 
 UNIT_NOTES: dict[FactorUnit, str] = {
     FactorUnit.PERCENT: "change는 값 차이, change_pct는 퍼센트다",
@@ -273,13 +278,15 @@ class KospiToolbox:
                 items=tuple(
                     NewsRow(
                         document_id=row[0],
-                        title=row[1],
+                        # 제목은 밖에서 온 글, 사유·사실은 앞선 모델이 그 글을 보고 쓴 글이다.
+                        # 의심 문구 검사는 평가가 이미 했다(점수 없이 닫혀 여기 안 온다).
+                        title=untrusted.clean(row[1], limit=NEWS_TITLE_CHARS),
                         source=row[2],
                         published_at=row[3],
                         value_score=row[4],
                         direction=row[5],
-                        reason=row[6],
-                        new_facts=list(row[7] or []),
+                        reason=untrusted.clean(row[6], limit=NEWS_TEXT_CHARS) or None,
+                        new_facts=[untrusted.clean(fact, limit=NEWS_TEXT_CHARS) for fact in row[7] or []],
                         tickers=tuple(row[8] or ()),
                     )
                     for row in rows
@@ -302,20 +309,28 @@ class KospiToolbox:
         # 두 회사 범위라 하루 창은 대개 빈다(09-03 실측 12회 전부 `[]`). 그때 `DISCLOSURE`가
         # 인용 가능해지면 안 본 공시를 근거로 쓸 수 있다.
         self._saw_disclosures = bool(rows)
-        return self._body(
-            [
+        items = []
+        for row in rows:
+            # 공시 본문은 평가를 안 거친 글이라 여기가 첫 검사 자리다. 걸린 공시는 모델에
+            # 안 간다. ponytail: 건수는 로그뿐이다. 원장 칸이 필요해지면 `kospi_llm_run`에 뺀다.
+            body = untrusted.clean(row[6], limit=DISCLOSURE_BODY_CHARS)
+            report_name = untrusted.clean(row[3], limit=NEWS_TITLE_CHARS)
+            labels = untrusted.suspicious(f"{report_name}\n{body}")
+            if labels:
+                logger.warning("disclosure %s blocked before the model: %s", row[0], labels)
+                continue
+            items.append(
                 DisclosureRow(
                     rcept_no=row[0],
                     stock_code=row[1],
                     company_name=row[2],
-                    report_name=row[3],
+                    report_name=report_name,
                     receipt_date=row[4],
                     detected_at=row[5],
-                    body=row[6] or "",
+                    body=body,
                 )
-                for row in rows
-            ]
-        )
+            )
+        return self._body(items)
 
     # --- 조회 -------------------------------------------------------------
 

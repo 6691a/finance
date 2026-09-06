@@ -40,9 +40,17 @@ from modules.shock.domain import CauseAnswer
 # **문장을 고쳤으면 판을 올리고 이 해시도 같이 바꾼다. 둘을 같은 커밋에서 만진다.**
 PROMPT_HASHES: dict[tuple[str, str], str] = {
     ("assessment", "3"): "98ca6e74ed7f241abeb7b4b459a86a3c22a459ff8189af6c063d92bc92ea8a79",
-    ("assessment", "4"): "81507817c7fedea52e29d30dd5f8f1046828f964025ef1c50d93f14b329b2a55",
+    # 판 4는 외부 글 읽기 규칙 조각(`$untrusted_text`)을 넣고 제목·요약을 `<외부자료>`로
+    # 감쌌다(2026-09-06, docs/convention/prompt-injection-defense.md). 판이 오르면 아카이브
+    # 전체가 재평가 대상이 된다 — 그것을 알고 올렸다.
+    ("assessment", "4"): "f4d4c26795895fb8c026b110f2fea86448d442aa8696899f86a056079a4392e3",
     ("expectation_extraction", "1"): "7108eab56e598ff642aeb7269f0f07ab9ef21707798202447db6a6b0a3b52a41",
-    ("expectation_extraction", "2"): "41bd8ec5b3cb2d8cdac77d689da7c2ac71b9587c74853c8307c3460dec1ea07a",
+    # 판 2는 같은 조각과 구분자를 넣었다(2026-09-06). 본문에 길이 상한(20,000자)이 처음 생겼다.
+    ("expectation_extraction", "2"): "28b977e7586f2bd96abfa6ba41c8ff310dd249cc7034a0651fb4eb7cd05f1699",
+    # 판 5(평가)·판 3(추출)은 출력 형식을 YAML에서 빼고 응답 모델의 description으로 옮긴 같은 날의
+    # 두 번째 판이다(2026-09-06). 이 판부터 해시가 YAML과 응답 스키마를 함께 잰다.
+    ("assessment", "5"): "3b832f6568db31e562fd47e12ef35b95a742b745304ff971ec26ced3002b9c40",
+    ("expectation_extraction", "3"): "84489961e5afeac66cdd47f6df1403d9d05bfe57609f417675171af752ae32be",
     # 코스피 일일 전망의 첫 판(2026-09-02). 옛 추론에서 **가져오지 않은 것**이 이 프롬프트를
     # 정의한다 — 3-클래스 확률과 `flat` 기준선 문장은 캘리브레이션 실패의 자리였다.
     ("kospi_forecast", "1"): "73dd161eb811c1a5bc80e8b0b9e61b27b0150abf3902dae01f849466ae16ae47",
@@ -68,8 +76,8 @@ PROMPT_HASHES: dict[tuple[str, str], str] = {
     # 같다** — 전망 문장은 안 바뀌고 장후 관찰이 바뀌었는데, 그 결과로 가중치와
     # `recent_signs`가 달라져 전망 모델이 보는 것이 바뀐다. 판 6과 같은 이유로 판만 올린다.
     ("kospi_forecast", "7"): "7a9f50fd46b08a4b7e754c46ce38c455c5688dcab2acdac8e18f7a2003f06149",
-    # 판 8은 출력 형식을 YAML에서 빼고 응답 모델의 description으로 옮겼다(2026-09-06). 이 판부터
-    # 해시가 YAML과 스키마를 함께 잰다. 아래 다른 흐름의 같은 날 판도 같은 변경이다.
+    # 판 8은 출력 형식을 YAML에서 빼고 응답 모델의 description으로 옮겼다(2026-09-06, 판 7과
+    # 같은 날 배포). 이 판부터 해시가 YAML과 스키마를 함께 잰다. 다른 흐름의 같은 날 판도 같다.
     ("kospi_forecast", "8"): "7f8e69b5bce171af2d968ea4e7aed3320c86cda36090f4b8f8eb5d83a91e1129",
     # 장후 관찰의 첫 판(2026-09-02). 관찰·새 메모·메모 판정 셋을 한 답에 낸다.
     ("kospi_review", "1"): "e7f0097f2e306984b759ec383d06c08630de98e8043ecb60c10f20f7d5e793f2",
@@ -82,7 +90,10 @@ PROMPT_HASHES: dict[tuple[str, str], str] = {
     # 물었을 때 두 모델이 갈렸고(gpt `unclear`, grok `confirmed`) 넣으니 둘 다 `unclear`로
     # 수렴했다. "수급은 경로이지 방아쇠가 아니다"가 그 한 줄이다.
     ("shock_cause", "1"): "38c44ee1eeb04cdd046bfa4e46d340a74724b188b205ffdcebb9f7ab68fa106f",
-    ("shock_cause", "2"): "6472e09486c18a1f0129a26b1c221c0b096986d6205959851dee0375d19b54e8",
+    # 판 2는 외부 글 읽기 규칙 조각을 넣고 문서·검색 결과를 `<외부자료>`로 감쌌다(2026-09-06).
+    # `cause_text`에 "링크를 넣지 마라"가 늘었고 코드가 링크 있는 문장을 버린다.
+    ("shock_cause", "2"): "fd907995c9a19e8d392dd5c21869494c028229cb24a6d9e4fa0c0d9ff2f8fd85",
+    ("shock_cause", "3"): "d989fc87fc47f8788ba747563497f2dfdc3ce2da6260c2c7c2b38a1dcc9eb59c",
 }
 
 # 그 흐름이 `response_format`으로 강제하는 응답 모델. 스키마가 해시에 들어간다.

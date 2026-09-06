@@ -16,6 +16,7 @@ from datetime import datetime
 from decimal import Decimal
 from typing import Any
 
+from modules import untrusted
 from modules.shock.domain import (
     PEER_SPECS,
     REGION_LABELS,
@@ -174,18 +175,39 @@ CAUSE_KIND_LABELS = {
 }
 
 
+# 모델에게 가는 외부 글의 길이 상한. 검색 발췌는 Tavily가 수백 자로 주고 평가 사유는
+# 두 문장이라 넉넉하다 — 상한은 폭주를 막는 것이지 내용을 자르려는 것이 아니다.
+MAX_TITLE_CHARS = 300
+MAX_TEXT_CHARS = 2000
+
+
+def document_text(row: DocumentRow) -> str:
+    """문서 한 건에서 밖에서 온 글 — 제목, 그리고 앞선 평가가 남긴 사유·사실.
+
+    사유·사실은 모델이 쓴 글이지만 그 모델이 본 것이 기사라 같은 편에 선다.
+    """
+    facts = " / ".join(untrusted.clean(fact, limit=MAX_TEXT_CHARS) for fact in row.new_facts) if row.new_facts else "-"
+    return (
+        f"제목: {untrusted.clean(row.title, limit=MAX_TITLE_CHARS)}\n"
+        f"평가: {untrusted.clean(row.reason, limit=MAX_TEXT_CHARS) or '-'}\n"
+        f"사실: {facts}"
+    )
+
+
+def search_text(row: SearchRow) -> str:
+    """검색 결과 한 건에서 밖에서 온 글 — 제목과 발췌. URL은 봉투 밖이다."""
+    return f"제목: {untrusted.clean(row.title, limit=MAX_TITLE_CHARS)}\n발췌: {untrusted.clean(row.snippet, limit=MAX_TEXT_CHARS)}"
+
+
 def _document_block(rows: tuple[DocumentRow, ...]) -> str:
     if not rows:
         return "(없다)"
     lines = []
     for row in rows:
-        facts = " / ".join(row.new_facts) if row.new_facts else "-"
         score = row.value_score if row.value_score is not None else "-"
         lines.append(
             f"[{row.id}] {_kst(row.published_at)} · {row.source_slug} · 점수 {score}\n"
-            f"  제목: {row.title}\n"
-            f"  평가: {row.reason or '-'}\n"
-            f"  사실: {facts}"
+            + untrusted.wrap("문서", row.id, document_text(row))
         )
     return "\n\n".join(lines)
 
@@ -197,10 +219,8 @@ def _search_block(rows: tuple[SearchRow, ...]) -> str:
     for row in rows:
         stamp = _kst(row.published_at) if row.published_at else "발행 시각 없음"
         lines.append(
-            f"({row.index}) {stamp} · {row.publisher}\n"
-            f"  제목: {row.title}\n"
-            f"  발췌: {row.snippet}\n"
-            f"  URL: {row.url}"
+            f"({row.index}) {stamp} · {row.publisher}\n  URL: {row.url}\n"
+            + untrusted.wrap("검색", row.index, search_text(row))
         )
     return "\n\n".join(lines)
 

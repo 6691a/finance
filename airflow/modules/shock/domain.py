@@ -204,7 +204,9 @@ class ShockEvent(_State):
 
 # 프롬프트 판. 문장을 고치면 이 값을 올리고 `tests/modules/test_prompt_versions.py`의
 # 해시도 같은 커밋에서 바꾼다. 안 올리면 서로 다른 프롬프트의 판정이 한 판으로 섞인다.
-CAUSE_PROMPT_VERSION = "2"
+# 판 2: 외부 글 읽기 규칙 조각과 `<외부자료>` 구분자(2026-09-06, prompt-injection-defense.md).
+# 판 3: 출력 형식을 YAML에서 빼고 `CauseAnswer`의 description으로 옮겼다(2026-09-06).
+CAUSE_PROMPT_VERSION = "3"
 
 # 프롬프트에 싣는 문서 수. 3영업일 창이면 후보가 수백 건이라 상한이 필요하다.
 MAX_DOCUMENTS = 40

@@ -32,7 +32,7 @@ from langchain_core.messages import BaseMessage, HumanMessage, SystemMessage
 from langgraph.graph import END, START, StateGraph
 from pydantic import ValidationError
 
-from modules import llm
+from modules import llm, untrusted
 from modules.briefing.disclosures import MAX_REASON_CHARS, Highlight, HighlightError, Highlights
 from modules.prompt import read_prompt
 from modules.schema import SchemaError, json_object, response_format
@@ -41,7 +41,12 @@ logger = logging.getLogger(__name__)
 
 PROMPTS = read_prompt("disclosure_picks")
 
-SYSTEM_PROMPT = PROMPTS.render("system", max_reason_chars=MAX_REASON_CHARS, number_style=llm.NUMBER_STYLE)
+SYSTEM_PROMPT = PROMPTS.render(
+    "system",
+    max_reason_chars=MAX_REASON_CHARS,
+    number_style=llm.NUMBER_STYLE,
+    untrusted_text=llm.UNTRUSTED_TEXT,
+)
 REPAIR_INSTRUCTION = PROMPTS.repair
 
 
@@ -99,6 +104,11 @@ class DisclosurePicker:
         dropped = len(parsed.highlights) - len(kept)
         if dropped:
             logger.warning("dropped %s highlights that were not in the candidate list", dropped)
+        # 이유는 문장이지 링크가 아니다. 링크가 있으면 외부 글이 베껴진 것이라 그 건만 버린다.
+        linked = [highlight for highlight in kept if untrusted.has_link(highlight.reason)]
+        if linked:
+            logger.warning("dropped %s highlights whose reason carried a link", len(linked))
+            kept = [highlight for highlight in kept if highlight not in linked]
 
         return tuple(_shorten(highlight) for highlight in kept)
 

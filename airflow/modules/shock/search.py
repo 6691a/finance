@@ -34,6 +34,7 @@ from urllib.request import Request, urlopen
 
 from pydantic import AwareDatetime, BaseModel, ConfigDict, SecretStr
 
+from modules import untrusted
 from modules.shock.domain import Direction, PeerMove, PeerRegion
 from modules.shock.render import moved_together
 from modules.utility import KST_TIMEZONE
@@ -51,6 +52,9 @@ MAX_RESULTS = 10
 # 아시아 시장 이만큼이 같은 방향이면 "아시아가 같이 움직였다"로 보고 세 번째 질의를
 # 만든다. 임계가 아니라 방향만 본다 — 크기 판정은 사람이 표를 보고 한다.
 MIN_MOVING_PEERS = 2
+
+# 의심 문구 검사에 넣는 제목+발췌의 길이 상한. 프롬프트 상한은 `shock.render`가 따로 둔다.
+MAX_HIT_CHARS = 3000
 
 
 class SearchError(RuntimeError):
@@ -196,6 +200,7 @@ def collect(
     """
     seen: dict[str, SearchHit] = {}
     dropped = 0
+    blocked = 0
     for query in queries:
         for hit in client.search(query):
             if hit.url in seen:
@@ -203,12 +208,20 @@ def collect(
             if hit.published_at is not None and hit.published_at < published_after:
                 dropped += 1
                 continue
+            # 검색 결과는 평가를 안 거친 유일한 문서 입력이라 여기가 첫 검사 자리다.
+            # 걸린 것은 모델에 안 가고 저장도 안 된다 — 저장은 이 함수의 반환값이 한다.
+            labels = untrusted.suspicious(untrusted.clean(f"{hit.title}\n{hit.snippet}", limit=MAX_HIT_CHARS))
+            if labels:
+                logger.warning("search hit %s blocked before the model: %s", hit.url, labels)
+                blocked += 1
+                continue
             seen[hit.url] = hit
     logger.info(
-        "search returned %s hit(s) over %s quer(ies); %s dropped as older than %s",
+        "search returned %s hit(s) over %s quer(ies); %s dropped as older than %s, %s blocked",
         len(seen),
         len(queries),
         dropped,
         published_after.isoformat(),
+        blocked,
     )
     return list(seen.values())

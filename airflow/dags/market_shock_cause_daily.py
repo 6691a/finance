@@ -83,6 +83,7 @@ from airflow.sdk import Param, dag, get_current_context, task
 from airflow.sdk.exceptions import AirflowFailException
 from pydantic import SecretStr
 
+from modules import untrusted
 from modules.llm import LlmError
 from modules.shock.domain import (
     CAUSE_BUSINESS_DAYS,
@@ -93,6 +94,7 @@ from modules.shock.domain import (
     CauseInput,
     SearchRow,
 )
+from modules.shock.render import document_text
 from modules.shock.search import SearchError, TavilySearch, build_queries, collect
 from modules.shock.store import ShockStore
 from modules.utility import CONNECTION_ID, KST_TIMEZONE, atomic
@@ -285,6 +287,14 @@ def _resolve_one(
         attempt, deadline = store.start_attempt(event.id, deadline=deadline)
 
     documents = store.documents_after(event_at=event.detected_at, as_of_at=now, limit=MAX_DOCUMENTS)
+    # 제목은 평가가 이미 봤지만 평가 사유·사실은 모델이 쓴 글이라 여기서 다시 본다 —
+    # 기사 안의 지시를 모델이 사유에 베껴 놨으면 그 문서는 안 싣는다.
+    blocked = [row for row in documents if untrusted.suspicious(document_text(row))]
+    if blocked:
+        logger.warning(
+            "event %s: %s document(s) blocked before the model: %s", event.id, len(blocked), [row.id for row in blocked]
+        )
+        documents = [row for row in documents if row not in blocked]
 
     hits = []
     if search_client is not None:

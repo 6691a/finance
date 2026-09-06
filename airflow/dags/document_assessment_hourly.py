@@ -174,8 +174,17 @@ def document_assessment_hourly():
 
         assessed = 0
         failures = 0
+        blocked = 0
         for result in results:
             document = by_id[result.document_id]
+            if result.blocked:
+                # 모델에게 안 보냈다. 점수 없이 닫아 다음 실행이 다시 집지 않게 한다.
+                with closing(_connection()) as connection, atomic(connection):
+                    AssessmentStore(connection, settings.prompt_revision).store_blocked(
+                        document, result.blocked, assessed_at
+                    )
+                blocked += 1
+                continue
             if result.assessment is None:
                 # 문서는 태그 없이 남는다. 다음 실행이 다시 집는다.
                 failures += 1
@@ -213,7 +222,13 @@ def document_assessment_hourly():
             reason = next((result.error for result in results if result.error), "unknown")
             raise AirflowFailException(f"Every assessment failed ({failures} documents): {reason}")
 
-        logger.info("Assessed %s documents with %s (%s failed)", assessed, settings.prompt_revision, failures)
+        logger.info(
+            "Assessed %s documents with %s (%s failed, %s blocked before the model)",
+            assessed,
+            settings.prompt_revision,
+            failures,
+            blocked,
+        )
         return assessed
 
     dedup() >> evaluate()

@@ -88,6 +88,52 @@ def test_evaluate_saves_successes_before_raising_provider_error(monkeypatch, ret
     assert sum(connection.commits for connection in connections) == 1
 
 
+def test_evaluate_closes_a_blocked_document_without_a_score(monkeypatch):
+    """모델에게 안 보낸 문서는 실패가 아니다. 점수 없이 닫혀 다음 실행이 다시 집지 않는다."""
+    connections: list[FakeConnection] = []
+    scored: list[int] = []
+    closed: list[tuple[int, tuple[str, ...]]] = []
+
+    class FakeBatch:
+        def __init__(self, *args) -> None:
+            pass
+
+        def run(self, documents, candidates):
+            return (AssessmentResult(document_id=DOCUMENT.id, blocked=("ignore_instructions",)),)
+
+    monkeypatch.setattr(module, "get_current_context", lambda: {"params": {}})
+    monkeypatch.setattr(module, "_connection", lambda: connections.append(FakeConnection()) or connections[-1])
+
+    class FakeStore:
+        def __init__(self, connection, prompt_revision) -> None:
+            pass
+
+        def candidates(self):
+            return CANDIDATES
+
+        def pending(self, limit):
+            return (DOCUMENT,)
+
+        def store(self, document, *args) -> None:
+            scored.append(document.id)
+
+        def store_blocked(self, document, blocked, assessed_at) -> None:
+            closed.append((document.id, tuple(blocked)))
+
+    monkeypatch.setattr(module, "AssessmentStore", FakeStore)
+    monkeypatch.setattr(module, "document_model", lambda: object())
+    monkeypatch.setattr(module, "DocumentAssessor", lambda model, settings: object())
+    monkeypatch.setattr(module, "AssessmentBatch", FakeBatch)
+    monkeypatch.setattr(module, "model_name", lambda model: "test-model")
+
+    task = module.document_assessment_hourly.task_dict["evaluate"]
+    assert task.python_callable() == 0
+
+    assert scored == []
+    assert closed == [(DOCUMENT.id, ("ignore_instructions",))]
+    assert sum(connection.commits for connection in connections) == 1
+
+
 def test_evaluate_uses_short_exponential_retries_for_transient_llm_errors():
     task = module.document_assessment_hourly.task_dict["evaluate"]
 

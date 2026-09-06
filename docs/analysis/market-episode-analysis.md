@@ -6,13 +6,15 @@
 > - 한계: 기사 아카이브가 2026년 8월부터라 일봉이 3년 있어도 설명 근거가 3년 있는 것은 아니다. 틱 기반 정확한 매물대, 매매 추천, 장중 급변 탐지는 만들지 않는다.
 
 - 날짜: 2026-08-27
-- 상태: **미구현. 이 문서는 구현 계약이다.**
+- 상태: **미구현. 이 문서는 구현 계약이다.** 단 아래 계약이 기대는 옛 시장 추론(`ThesisToolbox`,
+  `thesis_llm_run`·`thesis_tool_call`, `docs/analysis/market-thesis/`)은 `45d85a6`에서 지워졌다.
+  착수 전에 툴박스는 `modules/kospi/toolbox.py`의 `KospiToolbox`, 원장은 `kospi_llm_run`으로
+  다시 맞춘다. 본문의 `thesis` 이름은 계약을 쓴 2026-08-27 시점 그대로다.
 - 목표: 일봉 차트의 주요 가격 변화와 일봉 기반 추정 매물대, 시장·경제·수급 근거를 한 시점축에
   묶어 "무엇이 함께 일어났고 어떤 해석이 가능한가"를 설명한다.
 - 관련 원본:
   [기술지표](market-technical-indicators.md),
-  [시장 추론](market-thesis/README.md),
-  [LLM 실행 원장](market-thesis/13-llm-ledger.md),
+  [코스피 일일 전망](kospi-forecast.md) (옛 시장 추론과 그 원장 문서는 지워졌다),
   [경제 문서 아카이브](economic-document-archive-design.md)
 
 ## 0. 확정 결정
@@ -738,11 +740,9 @@ ALTER TABLE thesis_llm_run VALIDATE CONSTRAINT ck_thesis_llm_run_slot_shape;
 
 ### 범위 밖으로 둔 것
 
-- **LLM 프롬프트 인젝션 방어.** 근거 후보의 제목·요약은 RSS·크롤링 출처의 미신뢰 텍스트이고,
-  저장소에는 지금 그 방어 문장이 한 줄도 없다(`airflow/modules/assessment.py`가 `title`·`body`를
-  구분자 없이 메시지에 붙인다). **이 서비스를 본인만 쓰고 외부에 노출하지 않는다는 사용자
-  결정으로 이번 범위에서 뺐다**(2026-08-27). 외부 사용자가 생기거나 이 API를 공개하면
-  `prompts/fragments/`에 공용 조각 한 벌을 두고 이 흐름과 `assessment`·`expectation_extraction`이
-  함께 끼우는 것이 그때의 최소 작업이다. §7.2의 ref 화이트리스트·숫자 거절 검증이 그동안의
-  2차 방어로 남는다.
+- **LLM 프롬프트 인젝션 방어.** 2026-08-27에는 "본인만 쓴다"는 이유로 범위 밖에 뒀다.
+  **2026-09-06에 안으로 들였다** — [convention/prompt-injection-defense.md](../convention/prompt-injection-defense.md)가
+  그 설계이고 `modules/untrusted.py`·`fragments/shared.yaml`의 `untrusted_text`가 구현이다.
+  이 흐름이 구현될 때는 그 둘을 그대로 끼운다. §7.2의 ref 화이트리스트·숫자 거절 검증은
+  그 설계의 ③층(모델을 부른 뒤의 강제)에 해당한다.
 - **API 인증.** 조회 API는 지금도 인증이 없고 이 기능이 그 계약을 바꾸지 않는다.

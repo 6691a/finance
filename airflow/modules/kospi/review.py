@@ -145,6 +145,17 @@ def observe() -> dict[str, Any]:
             raise KospiError(f"{run_date} 앞의 확정 종가가 없어 등락률을 낼 수 없다")
         change = change_pct(previous[1], close)
 
+        # **무거운 것은 여기서 올린다.** LangChain은 첫 import에 몇 초를 쓰는데, DagBag은
+        # 모든 DAG 파일을 주기적으로 다시 파싱하면서 태스크는 돌리지 않는다. 모듈 수준에
+        # 두면 관찰을 하지도 않는 파싱이 매번 그 무게를 문다(2026-09-03 실측 202개 모듈).
+        from modules import llm
+        from modules.kospi.generation import ReviewBuilder
+        from modules.kospi.toolbox import KospiToolbox
+
+        # 관찰은 `factor_history`를 안 받는다. 요인 값은 아래 `factor_moves()`가 표로 싣고
+        # 모델은 줄마다 답한다 — 모델이 요인을 고르는 단계가 없어야 커버리지가 보장된다.
+        toolbox = KospiToolbox(connection, as_of_at=as_of_at, include_history=False)
+
         ensure_schema(graph)
         memories = read_memories(graph, as_of_date=run_date, as_of_at=as_of_at)
         observed = ReviewState(
@@ -157,17 +168,10 @@ def observe() -> dict[str, Any]:
             relations=common.relation_rows(graph, as_of_date=run_date, as_of_at=as_of_at),
             memories=common.memory_rows(graph, as_of_date=run_date, as_of_at=as_of_at),
             forecasts=_graded_forecasts(store, run_date),
+            factor_moves=toolbox.factor_moves(),
         )
 
-        # **무거운 것은 여기서 올린다.** LangChain은 첫 import에 몇 초를 쓰는데, DagBag은
-        # 모든 DAG 파일을 주기적으로 다시 파싱하면서 태스크는 돌리지 않는다. 모듈 수준에
-        # 두면 관찰을 하지도 않는 파싱이 매번 그 무게를 문다(2026-09-03 실측 202개 모듈).
-        from modules import llm
-        from modules.kospi.generation import ReviewBuilder
-        from modules.kospi.toolbox import KospiToolbox
-
         model = llm.kospi_model(common.conversation_id(run_date, "review"))
-        toolbox = KospiToolbox(connection, as_of_at=as_of_at)
         builder = ReviewBuilder(model, toolbox, observed=observed)
 
         llm_run_id = store.start_llm_run(
@@ -228,6 +232,8 @@ def observe() -> dict[str, Any]:
             truncated=draft.truncated,
             rejected=draft.rejected,
             observations=written.observations,
+            observations_unanswered=len(draft.unanswered),
+            unlisted_drivers=list(draft.unlisted_drivers),
             memories={
                 "written": written.memories_written,
                 "rejected": draft.memories_rejected + plan["rejected"],
@@ -245,16 +251,22 @@ def observe() -> dict[str, Any]:
 def _require_observations(draft: "ReviewDraft", *, change: Any) -> None:
     """**조용한 성공을 만들지 않는다.**
 
-    크게 움직인 날에 관찰이 0건이면 그것은 답이 아니다. 교정은 그래프가 이미 한 번 했으므로
-    여기까지 0건으로 오면 태스크를 죽인다. 작게 움직인 날의 0건은 정상이고 원장에 남는다.
+    크게 움직인 날에 이어진 관찰(`none` 제외)이 0건이면 그것은 답이 아니다. 교정은 그래프가
+    이미 한 번 했으므로 여기까지 0건으로 오면 태스크를 죽인다. 작게 움직인 날에 전부 `none`인
+    것은 정상이고 원장에 남는다.
+
+    표의 줄이 빠진 것은 여기서 죽이지 않는다. 되묻기를 한 번 했고 그래도 빠졌으면 그 줄은
+    기록하지 않고 원장에 `observations_unanswered`로 센다 — 0을 채우지 않는다.
     """
-    if draft.observations:
+    if draft.unanswered:
+        logger.warning("표의 요인 %s개에 답이 없어 기록하지 않는다: %s", len(draft.unanswered), draft.unanswered)
+    if draft.related:
         return
     if abs(change) >= OBSERVATION_REQUIRED_PCT:
         raise KospiError(
-            f"코스피가 {change}퍼센트 움직였는데 관찰이 0건이다(버린 것 {draft.rejected}건)"
+            f"코스피가 {change}퍼센트 움직였는데 이어진 관찰이 0건이다(버린 것 {draft.rejected}건)"
         )
-    logger.info("등락 %s퍼센트로 조용한 날이라 관찰 0건을 받아들인다", change)
+    logger.info("등락 %s퍼센트로 조용한 날이라 이어진 관찰 0건을 받아들인다", change)
 
 
 def plan_memories(
@@ -364,6 +376,8 @@ def _observe_result(
             }
             for item in draft.observations
         ],
+        "unanswered": [factor_label(item) for item in draft.unanswered],
+        "unlisted_drivers": list(draft.unlisted_drivers),
         "new_memories": [item.text for item in plan["new"]],
         "memories_written": written.memories_written,
         "memories_kept": written.memories_kept,

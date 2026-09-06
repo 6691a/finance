@@ -49,6 +49,7 @@ from modules.kospi.domain import (
     MAX_STRENGTH,
     MAX_TOOL_CALLS,
     MAX_TOOL_ROUNDS,
+    MAX_UNLISTED_DRIVERS,
     MIN_BAND_PCT,
     MIN_STRENGTH,
     OBSERVATION_REQUIRED_PCT,
@@ -58,6 +59,7 @@ from modules.kospi.domain import (
     MemoryVerdict,
     ObservationSign,
     RunSlot,
+    factor_label,
     normalize_text,
     quantize_change,
 )
@@ -116,13 +118,18 @@ class ForecastAnswer(BaseModel):
 
 
 class ObservationAnswer(BaseModel):
-    """오늘 그 요인이 코스피와 어떻게 움직였나."""
+    """오늘 그 요인이 코스피와 어떻게 움직였나.
+
+    `none`은 "값은 봤는데 무관"이고 그때 `strength`는 0이다. **느슨하게 받는다** — 여기서
+    조이면 줄 하나가 어긋난 순간 답 전체가 `ValidationError`가 되어 나머지 14줄까지 사라진다.
+    정합성은 `_verify_observations`가 줄마다 본다.
+    """
 
     model_config = ConfigDict(frozen=True)
 
     factor: str
-    sign: Literal["same", "inverse"]
-    strength: int = Field(ge=MIN_STRENGTH, le=MAX_STRENGTH)
+    sign: Literal["same", "inverse", "none"]
+    strength: int = Field(default=0, ge=0, le=MAX_STRENGTH)
     note: str = ""
 
 
@@ -158,6 +165,8 @@ class ReviewAnswer(BaseModel):
     observations: tuple[ObservationAnswer, ...] = ()
     memories: tuple[MemoryAnswer, ...] = ()
     memory_reviews: tuple[MemoryReviewAnswer, ...] = ()
+    # 요인 목록에 없는데 오늘 움직인 것. 자유 문장이고 가중치에 안 들어간다(설계 §8.10).
+    unlisted_drivers: tuple[str, ...] = ()
 
 
 # ---------------------------------------------------------------------------
@@ -239,8 +248,17 @@ class ReviewDraft(BaseModel):
     reviews: tuple[MemoryReview, ...] = ()
     rejected: int = 0
     memories_rejected: int = 0
+    # 표에 있는데 모델이 답하지 않은 요인. **0으로 채우지 않는다** — 확인하지 않은 것을
+    # 기록하지 않는다. 되묻기의 재료이고 원장에 수로 남는다.
+    unanswered: tuple[Factor, ...] = ()
+    unlisted_drivers: tuple[str, ...] = ()
     tool_rounds: int = 0
     truncated: bool = False
+
+    @property
+    def related(self) -> tuple[Observation, ...]:
+        """`none`을 뺀 관찰 — 오늘 실제로 코스피와 이어졌다고 본 것."""
+        return tuple(item for item in self.observations if item.sign is not ObservationSign.NONE)
 
 
 # ---------------------------------------------------------------------------
@@ -597,6 +615,8 @@ class ReviewBuilder(_Builder):
     def __init__(self, model: BaseChatModel, toolbox: KospiToolbox, *, observed: ReviewState) -> None:
         self._observed = observed
         self._memory_ids = frozenset(row.id for row in observed.memories)
+        # 표로 받은 요인. **이것이 있으면 툴 조회 없이도 관찰할 수 있고, 답하지 않으면 센다.**
+        self._tabled = tuple(row.factor for row in observed.factor_moves)
         super().__init__(model, toolbox)
 
     def build(self) -> ReviewDraft:
@@ -621,12 +641,19 @@ class ReviewBuilder(_Builder):
         return response_format(ReviewAnswer, "kospi_review")
 
     def _needs_repair(self, draft: ReviewDraft) -> str | None:
-        """크게 움직인 날 관찰이 0건이면 한 번 되묻는다. 조용한 날의 0건은 정상이다."""
-        if draft.observations or abs(self._observed.change_pct) < OBSERVATION_REQUIRED_PCT:
+        """표의 줄이 빠졌거나, 크게 움직인 날 이어진 관찰이 0건이면 한 번 되묻는다.
+
+        빠진 줄은 **이름을 실어** 되묻는다. 0으로 채우지 않는다 — 확인하지 않은 것을
+        기록하지 않는다(설계 §8.10). 조용한 날에 전부 `none`인 것은 정상이다.
+        """
+        if draft.unanswered:
+            names = ", ".join(f"{factor_label(item)}({item.value})" for item in draft.unanswered)
+            return f"표의 요인 {len(draft.unanswered)}개에 답이 없다: {names}. 표의 모든 줄에 same·inverse·none 중 하나를 적는다"
+        if draft.related or abs(self._observed.change_pct) < OBSERVATION_REQUIRED_PCT:
             return None
         return (
-            f"코스피가 {self._observed.change_pct}퍼센트 움직였는데 관찰이 0건이다"
-            f"(버린 것 {draft.rejected}건). 툴로 조회한 요인 중 오늘 움직임과 이어진 것을 적는다"
+            f"코스피가 {self._observed.change_pct}퍼센트 움직였는데 이어진 관찰이 0건이다"
+            f"(버린 것 {draft.rejected}건). 표의 요인과 조회한 뉴스·공시 중 오늘 움직임과 이어진 것을 적는다"
         )
 
     def parse(self, raw: str) -> ReviewDraft:
@@ -640,24 +667,30 @@ class ReviewBuilder(_Builder):
         observations, rejected = self._verify_observations(answer.observations)
         memories, memories_rejected = self._verify_memories(answer.memories)
         reviews = self._verify_reviews(answer.memory_reviews)
+        answered = {item.factor for item in observations}
         return ReviewDraft(
             observations=observations,
             memories=memories,
             reviews=reviews,
             rejected=rejected,
             memories_rejected=memories_rejected,
+            unanswered=tuple(factor for factor in self._tabled if factor not in answered),
+            unlisted_drivers=_unlisted_drivers(answer.unlisted_drivers),
         )
 
     def _verify_observations(self, answers: Sequence[ObservationAnswer]) -> tuple[tuple[Observation, ...], int]:
-        """**툴로 조회하지 않은 요인의 관찰은 버린다.**
+        """**값을 본 요인의 관찰만 남긴다.** 표로 받았거나 툴로 조회한 것이다.
 
-        관찰이 숫자를 봤다는 증거가 원장의 툴 호출 목록이다. 이것이 없으면 모델이 관계
-        가중치만 보고 어제 것을 오늘 것으로 다시 쓴다.
+        표(`factor_moves`)에 실린 요인은 모델이 값을 봤다. 뉴스·공시는 표에 없어 지금처럼
+        툴 호출이 증거다. 둘 다 아니면 모델이 관계 가중치만 보고 어제 것을 오늘 것으로 다시
+        쓴 것이라 버린다.
+
+        `none`은 세기가 0이다. 세기를 적어 왔어도 0으로 둔다 — 무관한데 세기가 있을 수 없다.
 
         같은 요인이 두 번 오면 **첫 것이 남는다** — 하루에 요인당 엣지 하나이고, 어느 쪽이
         진짜인지 우리가 고를 수 없다.
         """
-        seen = self._toolbox.queried_factors
+        seen = self._toolbox.queried_factors | frozenset(self._tabled)
         kept: dict[Factor, Observation] = {}
         dropped: list[str] = []
         for item in answers:
@@ -666,15 +699,17 @@ class ReviewBuilder(_Builder):
                 dropped.append(f"모르는 요인({item.factor})")
                 continue
             if factor not in seen:
-                dropped.append(f"조회하지 않은 요인({factor.value})")
+                dropped.append(f"값을 보지 않은 요인({factor.value})")
                 continue
             if factor in kept:
                 dropped.append(f"중복({factor.value})")
                 continue
+            sign = ObservationSign(item.sign)
+            strength = 0 if sign is ObservationSign.NONE else max(MIN_STRENGTH, min(MAX_STRENGTH, int(item.strength)))
             kept[factor] = Observation(
                 factor=factor,
-                sign=ObservationSign(item.sign),
-                strength=max(MIN_STRENGTH, min(MAX_STRENGTH, int(item.strength))),
+                sign=sign,
+                strength=strength,
                 note=normalize_text(item.note, MAX_NOTE_CHARS),
             )
         if dropped:
@@ -751,6 +786,16 @@ def _decimal(value: float, low: Decimal, high: Decimal) -> Decimal | None:
     except (InvalidOperation, ValueError):
         return None
     return number if low <= number <= high else None
+
+
+def _unlisted_drivers(items: Sequence[str]) -> tuple[str, ...]:
+    """빈 문장을 버리고 상한까지만 남긴다. 검증할 ref가 없는 자유 문장이라 이것이 전부다."""
+    kept: list[str] = []
+    for item in items:
+        text = normalize_text(item, MAX_MEMORY_CHARS)
+        if text and text not in kept:
+            kept.append(text)
+    return tuple(kept[:MAX_UNLISTED_DRIVERS])
 
 
 def _factor_or_none(value: str | None) -> Factor | None:

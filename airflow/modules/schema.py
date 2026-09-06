@@ -16,8 +16,15 @@ OpenAI 호환 `json_schema` strict 모드는 Pydantic이 그냥 뱉는 스키마
 ## 지원하지 않는 제공처가 있다
 
 제3자 OpenAI 호환 제공자가 `json_schema`를 모를 수 있다. 그때는 요청이 400으로 거절되므로
-**호출하는 쪽이 스키마 없이 한 번 더 시도한다**(`modules/llm.py`). 프롬프트에도 출력 형식을
-그대로 적어 두는 이유가 이것이다. 강제가 되면 좋고, 안 되면 검증이 받는다.
+`modules/llm.py`의 `invoke`가 **같은 스키마를 문장으로 바꿔 붙이고 스키마 없이 한 번 더
+부른다**(`format_instruction`). 강제가 되면 좋고, 안 되면 검증이 받는다.
+
+## 출력 형식의 원본은 Pydantic 모델이다
+
+프롬프트 YAML은 목적·규칙·주의만 갖고 **모양은 적지 않는다.** 필드가 무엇인지는
+`Field(description=...)`이 말하고 그것이 스키마에 실려 모델에게 간다. 같은 모양을 예시 JSON으로
+프롬프트에 한 번 더 적으면 필드를 더할 때 둘이 어긋난다. `tests/modules/test_prompt_versions.py`가
+YAML과 스키마를 함께 해시로 잠그므로 description을 고치는 것도 판을 올리는 일이다.
 
 ## `with_structured_output`을 쓰지 않는다
 
@@ -33,6 +40,7 @@ LangChain에는 같은 일을 하는 `with_structured_output()`이 있지만 그
 이름이 자유 문자열이면 나중에 그 값을 찾아 쓰는 쪽이 매번 추측해야 한다.
 """
 
+import json
 from typing import Any
 
 from pydantic import BaseModel
@@ -85,3 +93,9 @@ def json_object(raw: str) -> str:
     if start == -1 or end <= start:
         raise SchemaError("Model did not return a JSON object")
     return raw[start : end + 1]
+
+
+def format_instruction(schema_format: dict[str, Any]) -> str:
+    """스키마를 강제하지 못한 제공처에 붙이는 문장. `response_format`이 준 값을 그대로 받는다."""
+    schema = json.dumps(schema_format["json_schema"]["schema"], ensure_ascii=False, separators=(",", ":"))
+    return f"아래 JSON Schema를 따르는 JSON 객체 하나만 출력한다. 설명이나 코드 펜스를 붙이지 않는다.\n{schema}"

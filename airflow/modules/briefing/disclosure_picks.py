@@ -34,7 +34,6 @@ from pydantic import ValidationError
 
 from modules import llm
 from modules.briefing.disclosures import MAX_REASON_CHARS, Highlight, HighlightError, Highlights
-from modules.llm import UnsupportedResponseFormat
 from modules.prompt import read_prompt
 from modules.schema import SchemaError, json_object, response_format
 
@@ -133,11 +132,7 @@ class DisclosurePicker:
     def _call(self, state: HighlightState) -> dict[str, Any]:
         """스키마를 강제해 한 번 부른다. 제공처가 스키마를 안 받으면 그때만 한 번 더."""
         messages = state["messages"]
-        try:
-            reply = llm.invoke(self._model, messages, schema=self._schema)
-        except UnsupportedResponseFormat as error:
-            logger.warning("provider does not accept a response schema; falling back to validation: %s", error)
-            reply = llm.invoke(self._model, messages)
+        reply = llm.invoke(self._model, messages, schema=self._schema)
 
         try:
             highlights = self.parse(_text(reply), state["allowed_ids"])

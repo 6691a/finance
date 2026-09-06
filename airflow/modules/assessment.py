@@ -87,7 +87,6 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_valida
 
 from modules import llm
 from modules.db import Connection
-from modules.llm import UnsupportedResponseFormat
 from modules.prompt import read_prompt
 from modules.schema import SchemaError, json_object, response_format
 from modules.sql import read_sql
@@ -96,7 +95,7 @@ from modules.upsert import execute_upserts
 logger = logging.getLogger(__name__)
 
 # 프롬프트를 고치면 올린다. 이 값이 오른 문서는 재평가 대상이 된다.
-PROMPT_VERSION = "3"
+PROMPT_VERSION = "4"
 
 PROMPTS = read_prompt("assessment")
 
@@ -200,8 +199,8 @@ class Candidates(BaseModel):
 class IndicatorTag(BaseModel):
     model_config = ConfigDict(frozen=True)
 
-    provider: str
-    series_id: str
+    provider: str = Field(description="후보에 적힌 제공처 그대로")
+    series_id: str = Field(description="후보에 적힌 시계열 id 그대로")
 
 
 class Scores(BaseModel):
@@ -222,15 +221,17 @@ class Assessment(BaseModel):
 
     model_config = ConfigDict(frozen=True)
 
-    instruments: tuple[str, ...] = ()
-    indicators: tuple[IndicatorTag, ...] = ()
-    topics: tuple[str, ...] = ()
+    instruments: tuple[str, ...] = Field(default=(), description="관련 종목. 후보 목록의 티커만")
+    indicators: tuple[IndicatorTag, ...] = Field(default=(), description="관련 지표. 후보 목록의 값만")
+    topics: tuple[str, ...] = Field(default=(), description="주제 태그")
     # 검증기가 아니라 타입으로 막는다. Literal은 스키마에 enum으로 실려 모델이 애초에
     # 다른 값을 내지 못한다.
-    direction: Literal["positive", "negative", "neutral"] = "neutral"
-    scores: Scores
-    new_facts: tuple[str, ...] = ()
-    reason: str = ""
+    direction: Literal["positive", "negative", "neutral"] = Field(
+        default="neutral", description="태그한 종목·지표의 가격 관점에서 본 방향"
+    )
+    scores: Scores = Field(description="항목별 점수. 각 0·1·2")
+    new_facts: tuple[str, ...] = Field(default=(), description="이 문서가 새로 알려 준 사실. 짧은 문장")
+    reason: str = Field(default="", description="어떤 경로로 닿는지 두 문장 이내")
 
 
 # 사람이 읽는 지시. 후보 목록은 실행 시점에 마스터에서 채워 뒤에 이어 붙인다.
@@ -364,13 +365,9 @@ class DocumentAssessor:
         return graph.compile()
 
     def _call(self, state: AssessState) -> dict[str, Any]:
-        """스키마를 강제해 한 번 부른다. 제공처가 스키마를 안 받으면 그때만 한 번 더."""
+        """스키마를 강제해 한 번 부른다. 스키마 폴백은 `llm.invoke`가 한다."""
         messages = state["messages"]
-        try:
-            reply = llm.invoke(self._model, messages, schema=self._schema)
-        except UnsupportedResponseFormat as error:
-            logger.warning("provider does not accept a response schema; falling back to validation: %s", error)
-            reply = llm.invoke(self._model, messages)
+        reply = llm.invoke(self._model, messages, schema=self._schema)
 
         try:
             return {"messages": [*messages, reply], "assessment": self.parse(_text(reply)), "error": None}

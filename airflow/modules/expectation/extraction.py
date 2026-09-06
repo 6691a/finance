@@ -23,7 +23,7 @@ from typing import Any, Literal, TypedDict
 from langchain_core.language_models import BaseChatModel
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, SystemMessage
 from langgraph.graph import END, START, StateGraph
-from pydantic import BaseModel, ConfigDict, ValidationError
+from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from modules import llm
 from modules.expectation.domain import (
@@ -34,7 +34,6 @@ from modules.expectation.domain import (
     PendingExtractionDocument,
     normalize_amount,
 )
-from modules.llm import UnsupportedResponseFormat
 from modules.prompt import read_prompt
 from modules.schema import SchemaError, json_object, response_format
 
@@ -46,9 +45,9 @@ class ExtractedClaim(BaseModel):
 
     model_config = ConfigDict(frozen=True)
 
-    stock_code: str
-    event_type: Literal["shareholder_return", "earnings", "guidance"]
-    period_key: str
+    stock_code: str = Field(description="종목 코드. 후보에 있는 값만")
+    event_type: Literal["shareholder_return", "earnings", "guidance"] = Field(description="이벤트 종류")
+    period_key: str = Field(description="주장이 가리키는 기간 키")
     metric: Literal[
         "total_return_amount",
         "buyback_amount",
@@ -58,12 +57,12 @@ class ExtractedClaim(BaseModel):
         "operating_profit",
         "net_income",
     ]
-    kind: Literal["expectation", "actual"]
-    value: str
-    unit: str
-    value_low: str | None = None
-    value_high: str | None = None
-    broker: str | None = None
+    kind: Literal["expectation", "actual"] = Field(description="기대(전망·추정·컨센서스)인지 실제(발표·확정)인지")
+    value: str = Field(description="수치. 문서에 적힌 그대로")
+    unit: str = Field(description="수치의 단위")
+    value_low: str | None = Field(default=None, description="범위로 말했을 때의 하한")
+    value_high: str | None = Field(default=None, description="범위로 말했을 때의 상한")
+    broker: str | None = Field(default=None, description="추정을 낸 증권사. 회사 자신의 발표면 null")
 
 
 class ExtractionResponse(BaseModel):
@@ -163,11 +162,7 @@ class ExpectationExtractor:
 
     def _call(self, state: ExtractState) -> dict[str, Any]:
         messages = state["messages"]
-        try:
-            reply = llm.invoke(self._model, messages, schema=self._schema)
-        except UnsupportedResponseFormat as error:
-            logger.warning("provider does not accept a response schema; falling back to validation: %s", error)
-            reply = llm.invoke(self._model, messages)
+        reply = llm.invoke(self._model, messages, schema=self._schema)
 
         try:
             return {"messages": [*messages, reply], "extraction": self.parse(_text(reply)), "error": None}

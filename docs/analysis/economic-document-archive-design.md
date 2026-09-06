@@ -491,7 +491,8 @@ strict 모드가 요구하는 것이 둘 있다. 모든 객체에 `additionalPro
 - **후보 목록은 셋 중 어디에도 안 들어간다.** 프롬프트 문장이 아니라 런타임 데이터이고,
   `DocumentAssessor.build_messages`가 `instruction` 뒤에 이어 붙인다. `prompts/assessment.yaml`의
   `000660: SK하이닉스`는 표기 규칙 예시일 뿐이라 후보가 늘어도 고칠 필요가 없다.
-  (그 yaml은 **주석까지 해시 대상**이라 예시를 손대는 순간 `PROMPT_VERSION`이 오른다.)
+  (그 yaml은 **주석까지 해시 대상**이라 예시를 손대는 순간 `PROMPT_VERSION`이 오른다.
+  2026-09-06부터 응답 모델 `Assessment`의 `Field(description=...)`도 같은 해시에 들어간다.)
 
 그래서 프롬프트 문장을 건드리지 않으면 재평가 대상은 **0건**이다. 평가 완료 3,792건은
 손대지 않는다.

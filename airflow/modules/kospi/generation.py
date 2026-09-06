@@ -65,7 +65,6 @@ from modules.kospi.domain import (
 )
 from modules.kospi.state import ObservedState, ReviewState
 from modules.kospi.toolbox import KospiToolbox, tool_node
-from modules.llm import UnsupportedResponseFormat
 from modules.prompt import json_dump, read_prompt
 from modules.schema import SchemaError, json_object, response_format
 
@@ -99,11 +98,11 @@ class ReasonAnswer(BaseModel):
 
     model_config = ConfigDict(frozen=True)
 
-    factor: str | None = None
-    memory_id: int | None = None
-    slot_ref: str | None = None
-    direction: Literal["up", "down"]
-    statement: str = ""
+    factor: str | None = Field(default=None, description="근거 요인 코드. 이 실행에서 조회한 것만")
+    memory_id: int | None = Field(default=None, description="근거 활성 메모의 id. factor와 둘 중 하나는 채운다")
+    slot_ref: str | None = Field(default=None, description="이어받은 오늘 앞 슬롯. 근거가 아니라 덧붙이는 표시")
+    direction: Literal["up", "down"] = Field(description="이 이유가 미는 방향")
+    statement: str = Field(default="", description=f"이유 한 문장. {MAX_STATEMENT_CHARS}자 이내")
 
 
 class ForecastAnswer(BaseModel):
@@ -111,10 +110,12 @@ class ForecastAnswer(BaseModel):
 
     model_config = ConfigDict(frozen=True)
 
-    direction: Literal["up", "down"]
-    expected_change_pct: float = Field(json_schema_extra=CHANGE_BOUNDS)
-    band_pct: float = Field(json_schema_extra=BAND_BOUNDS)
-    reasons: tuple[ReasonAnswer, ...] = ()
+    direction: Literal["up", "down"] = Field(description="종가가 기준가 대비 움직일 방향")
+    expected_change_pct: float = Field(
+        description="기준가 대비 기대 등락률(퍼센트). 부호가 direction과 맞아야 한다", json_schema_extra=CHANGE_BOUNDS
+    )
+    band_pct: float = Field(description="기대 등락률 좌우의 폭(퍼센트포인트)", json_schema_extra=BAND_BOUNDS)
+    reasons: tuple[ReasonAnswer, ...] = Field(default=(), description="근거. 요인·메모·앞 슬롯만 인용한다")
 
 
 class ObservationAnswer(BaseModel):
@@ -127,10 +128,10 @@ class ObservationAnswer(BaseModel):
 
     model_config = ConfigDict(frozen=True)
 
-    factor: str
-    sign: Literal["same", "inverse", "none"]
-    strength: int = Field(default=0, ge=0, le=MAX_STRENGTH)
-    note: str = ""
+    factor: str = Field(description="요인 코드. 값 표의 줄마다 하나")
+    sign: Literal["same", "inverse", "none"] = Field(description="오늘 코스피와 같은 방향·반대·무관")
+    strength: int = Field(default=0, ge=0, le=MAX_STRENGTH, description="관계의 세기. none이면 0")
+    note: str = Field(default="", description=f"왜 그렇게 봤는지 한 문장. {MAX_NOTE_CHARS}자 이내")
 
 
 class MemoryAnswer(BaseModel):
@@ -138,9 +139,9 @@ class MemoryAnswer(BaseModel):
 
     model_config = ConfigDict(frozen=True)
 
-    text: str = ""
-    factor: str | None = None
-    reason: str = ""
+    text: str = Field(default="", description=f"며칠 안에 다시 봐야 할 것. {MAX_MEMORY_CHARS}자 이내")
+    factor: str | None = Field(default=None, description="관련 요인 코드. 없으면 비운다")
+    reason: str = Field(default="", description=f"왜 남기나. {MAX_REASON_CHARS}자 이내")
 
 
 class MemoryReviewAnswer(BaseModel):
@@ -148,9 +149,9 @@ class MemoryReviewAnswer(BaseModel):
 
     model_config = ConfigDict(frozen=True)
 
-    id: int
-    verdict: Literal["keep", "drop"]
-    reason: str = ""
+    id: int = Field(description="활성 메모의 id")
+    verdict: Literal["keep", "drop"] = Field(description="아직 유효하면 keep, 끝났거나 틀렸으면 drop")
+    reason: str = Field(default="", description=f"그렇게 본 근거 한 문장. {MAX_REASON_CHARS}자 이내")
 
 
 class ReviewAnswer(BaseModel):
@@ -166,7 +167,7 @@ class ReviewAnswer(BaseModel):
     memories: tuple[MemoryAnswer, ...] = ()
     memory_reviews: tuple[MemoryReviewAnswer, ...] = ()
     # 요인 목록에 없는데 오늘 움직인 것. 자유 문장이고 가중치에 안 들어간다(설계 §8.10).
-    unlisted_drivers: tuple[str, ...] = ()
+    unlisted_drivers: tuple[str, ...] = Field(default=(), description="요인 목록에 없는데 오늘 움직인 것. 자유 문장")
 
 
 # ---------------------------------------------------------------------------
@@ -377,11 +378,7 @@ class _Builder:
                 # 그 응답은 이미 상태에 있다. 다시 넣으면 대화가 한 번 더 늘어난다.
                 return self._accept(state, draft, messages=[])
 
-        try:
-            reply = llm.invoke(self._model, messages, schema=self._schema())
-        except UnsupportedResponseFormat as error:
-            logger.warning("provider does not accept a response schema; falling back to validation: %s", error)
-            reply = llm.invoke(self._model, messages)
+        reply = llm.invoke(self._model, messages, schema=self._schema())
 
         try:
             draft = self.parse(_text(reply))

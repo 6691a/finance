@@ -46,9 +46,6 @@ system: |-
 
   배열 순서가 채널에 그려지는 순서다. 가장 먼저 읽어야 할 것을 앞에 둔다.
 
-  출력 형식:
-  {"picks": [{"document_id": 0, "why": "", "watch": false}]}
-
 instruction: |-
   아래는 최근 $window_hours시간에 평가한 문서 목록이다.
   이 안에서 읽을 것과 주의할 것을 골라라.

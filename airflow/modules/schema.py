@@ -50,8 +50,28 @@ UNSUPPORTED_KEYWORDS = ("default", "title", "format", "examples", "$comment")
 
 
 def strict_json_schema(model: type[BaseModel]) -> dict[str, Any]:
-    """Pydantic 모델의 스키마를 strict 모드가 받는 모양으로 바꾼다."""
-    return _tighten(model.model_json_schema())
+    """Pydantic 모델의 스키마를 strict 모드가 받는 모양으로 바꾼다.
+
+    `$defs`를 제자리에 펼친다. 중첩 모델·Enum 필드에 `Field(description=...)`을 달면 Pydantic이
+    `{"$ref": ..., "description": ...}`을 내는데 strict 모드는 `$ref` 옆에 다른 키워드를 두지
+    못한다(2026-09-06 운영에서 400 — `$ref cannot have keywords {'description'}`). 펼치면
+    필드의 description이 정의의 docstring을 덮는다.
+    """
+    raw = model.model_json_schema()
+    defs = raw.pop("$defs", {})
+    return _tighten(_inline(raw, defs))
+
+
+def _inline(node: Any, defs: dict[str, Any]) -> Any:
+    if isinstance(node, list):
+        return [_inline(item, defs) for item in node]
+    if not isinstance(node, dict):
+        return node
+    if "$ref" in node:
+        name = node["$ref"].rsplit("/", 1)[-1]
+        merged = {**defs[name], **{key: value for key, value in node.items() if key != "$ref"}}
+        return _inline(merged, defs)
+    return {key: _inline(value, defs) for key, value in node.items()}
 
 
 def _tighten(node: Any) -> Any:

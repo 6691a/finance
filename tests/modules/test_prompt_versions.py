@@ -49,8 +49,11 @@ PROMPT_HASHES: dict[tuple[str, str], str] = {
     ("expectation_extraction", "2"): "28b977e7586f2bd96abfa6ba41c8ff310dd249cc7034a0651fb4eb7cd05f1699",
     # 판 5(평가)·판 3(추출)은 출력 형식을 YAML에서 빼고 응답 모델의 description으로 옮긴 같은 날의
     # 두 번째 판이다(2026-09-06). 이 판부터 해시가 YAML과 응답 스키마를 함께 잰다.
-    ("assessment", "5"): "3b832f6568db31e562fd47e12ef35b95a742b745304ff971ec26ced3002b9c40",
-    ("expectation_extraction", "3"): "84489961e5afeac66cdd47f6df1403d9d05bfe57609f417675171af752ae32be",
+    # 같은 날 밤 `$defs`를 제자리에 펼치는 수정(`schema.strict_json_schema`)으로 해시만 갱신했다 —
+    # 필드·설명은 한 글자도 안 바뀌고 `$ref`가 풀린 표현만 달라서 판은 그대로다. 이 갱신은
+    # 같은 날의 다섯 흐름 전부에 적용됐다.
+    ("assessment", "5"): "330bc0953e450e7f8119abbdda8666b0b4569ccefc98eb2abb09f3686544fc64",
+    ("expectation_extraction", "3"): "6c0877645e290512fd56af278db54b10ef5e0eef5c8c1fc309c37f1bdcd76bc0",
     # 코스피 일일 전망의 첫 판(2026-09-02). 옛 추론에서 **가져오지 않은 것**이 이 프롬프트를
     # 정의한다 — 3-클래스 확률과 `flat` 기준선 문장은 캘리브레이션 실패의 자리였다.
     ("kospi_forecast", "1"): "73dd161eb811c1a5bc80e8b0b9e61b27b0150abf3902dae01f849466ae16ae47",
@@ -78,14 +81,14 @@ PROMPT_HASHES: dict[tuple[str, str], str] = {
     ("kospi_forecast", "7"): "7a9f50fd46b08a4b7e754c46ce38c455c5688dcab2acdac8e18f7a2003f06149",
     # 판 8은 출력 형식을 YAML에서 빼고 응답 모델의 description으로 옮겼다(2026-09-06, 판 7과
     # 같은 날 배포). 이 판부터 해시가 YAML과 스키마를 함께 잰다. 다른 흐름의 같은 날 판도 같다.
-    ("kospi_forecast", "8"): "7f8e69b5bce171af2d968ea4e7aed3320c86cda36090f4b8f8eb5d83a91e1129",
+    ("kospi_forecast", "8"): "f4190010537eb36ca733e1d2fbe038a484ab983532bc2feca90eb2610d72b052",
     # 장후 관찰의 첫 판(2026-09-02). 관찰·새 메모·메모 판정 셋을 한 답에 낸다.
     ("kospi_review", "1"): "e7f0097f2e306984b759ec383d06c08630de98e8043ecb60c10f20f7d5e793f2",
     # 판 2는 모델이 요인을 고르지 않는다(2026-09-06, 설계 §8.10). 코드가 숫자 요인 15개 값을
     # 표로 주고 모델은 줄마다 `same`/`inverse`/`none`을 답한다. `factor_history`가 툴 목록에서
     # 빠지고 `unlisted_drivers`가 답에 늘었다.
     ("kospi_review", "2"): "2481d7fb62e70754805d431e6b510b1b57b2d850ef7df284835297314b11106e",
-    ("kospi_review", "3"): "b2b7bdd9f45b980b636d25540ad5c0d8c252723c7ee9a83063bad9fa96a16653",
+    ("kospi_review", "3"): "791b12fba9361ca7e67f6c9cc62d72dd667b147003d708c994e4975f37bc95be",
     # 급변 원인 분석의 첫 판(2026-09-04). `cause_kind` 앵커가 이 판의 핵심이다 — 앵커 없이
     # 물었을 때 두 모델이 갈렸고(gpt `unclear`, grok `confirmed`) 넣으니 둘 다 `unclear`로
     # 수렴했다. "수급은 경로이지 방아쇠가 아니다"가 그 한 줄이다.
@@ -93,7 +96,7 @@ PROMPT_HASHES: dict[tuple[str, str], str] = {
     # 판 2는 외부 글 읽기 규칙 조각을 넣고 문서·검색 결과를 `<외부자료>`로 감쌌다(2026-09-06).
     # `cause_text`에 "링크를 넣지 마라"가 늘었고 코드가 링크 있는 문장을 버린다.
     ("shock_cause", "2"): "fd907995c9a19e8d392dd5c21869494c028229cb24a6d9e4fa0c0d9ff2f8fd85",
-    ("shock_cause", "3"): "d989fc87fc47f8788ba747563497f2dfdc3ce2da6260c2c7c2b38a1dcc9eb59c",
+    ("shock_cause", "3"): "69ec2deee2b9911ed0d58ea6e833100a18624a1a6dac76ce578f8ac69e1365ef",
 }
 
 # 그 흐름이 `response_format`으로 강제하는 응답 모델. 스키마가 해시에 들어간다.

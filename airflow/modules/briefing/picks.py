@@ -48,10 +48,9 @@ from typing import Any, TypedDict
 from langchain_core.language_models import BaseChatModel
 from langchain_core.messages import BaseMessage, HumanMessage, SystemMessage
 from langgraph.graph import END, START, StateGraph
-from pydantic import BaseModel, ConfigDict, ValidationError
+from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from modules import llm
-from modules.llm import UnsupportedResponseFormat
 from modules.prompt import read_prompt
 from modules.schema import SchemaError, json_object, response_format
 
@@ -81,9 +80,9 @@ class Pick(BaseModel):
 
     model_config = ConfigDict(frozen=True)
 
-    document_id: int
-    why: str = ""
-    watch: bool = False
+    document_id: int = Field(description="후보 목록의 document_id")
+    why: str = Field(default="", description="왜 읽어야 하는지 한 줄")
+    watch: bool = Field(default=False, description="주의해서 볼 것이면 true")
 
 
 class Picks(BaseModel):
@@ -186,11 +185,7 @@ class DocumentPicker:
     def _call(self, state: PickState) -> dict[str, Any]:
         """스키마를 강제해 한 번 부른다. 제공처가 스키마를 안 받으면 그때만 한 번 더."""
         messages = state["messages"]
-        try:
-            reply = llm.invoke(self._model, messages, schema=self._schema)
-        except UnsupportedResponseFormat as error:
-            logger.warning("provider does not accept a response schema; falling back to validation: %s", error)
-            reply = llm.invoke(self._model, messages)
+        reply = llm.invoke(self._model, messages, schema=self._schema)
 
         try:
             picks = self.parse(_text(reply), state["allowed_ids"])

@@ -117,7 +117,12 @@ ToolNode(tools, handle_tool_errors=(ToolLimitExceeded,))
   그래프를 소유한 클래스가 갖고, 그래프는 생성자에서 한 번 `compile()`한다. 프롬프트 조립과
   파싱처럼 상태가 필요 없는 것은 같은 클래스의 `@staticmethod`다.
 - **응답 스키마는 Pydantic 모델에서 뽑아 `response_format`으로 강제하고**(`modules/schema.py`),
-  강제가 안 되는 제공처를 위해 **검증을 그대로 남긴다.**
+  강제가 안 되는 제공처를 위해 **검증을 그대로 남긴다.** 스키마를 거절하는 제공처에는
+  `llm.invoke`가 같은 스키마를 문장으로 붙여 한 번 더 부른다 — 흐름 코드가 그 폴백을 갖지 않는다.
+- **출력 모양은 프롬프트에 적지 않는다**(2026-09-06). YAML은 목적·규칙·주의만 갖고, 필드가
+  무엇인지는 응답 모델의 `Field(description=...)`이 말한다. 예시 JSON을 프롬프트에 두면 필드를
+  더할 때 둘이 어긋난다. `test_prompt_versions.py`가 YAML과 스키마를 **함께** 해시로 잠그므로
+  description을 고치는 것도 판을 올리는 일이다.
 - **모델에게 주는 시각은 표시 시간대로 준다.** 저장·조회는 UTC지만 프롬프트에 UTC ISO를
   그대로 실으면 모델이 "오늘"을 하루 어긋나게 읽는다(장전 기준 KST 08:35 = UTC 전날 23:35).
   `kospi.domain.kst_label`과 `briefing/documents.pick_input`의 `as_of_kst`가 그 자리다. 섞어서 줄
@@ -350,6 +355,8 @@ diff가 되고 리뷰하는 사람이 로직 변경과 표현 변경을 눈으�
   바뀌는데 해시는 각 흐름의 파일 내용이라 안 깨진다. **그 흐름들의 판을 손으로 함께 올린다.**
 
 ## 옮기지 않는 것 셋
+
+(응답 모델의 `Field(description=...)`도 같은 이유로 코드에 남는다 — 위 "그 밖"의 출력 모양 규칙.)
 
 1. **툴 인자 설명**(`Field(description=...)`) — 상한 값을 f-string으로 싣는 것이 위 규칙이고
    Pydantic 모델 선언과 한 몸이라, 떼면 스키마와 설명이 두 파일로 갈린다.

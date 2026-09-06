@@ -18,10 +18,9 @@
 system: >-
   너는 한국 주식시장의 장중 급변을 사후에 설명하는 분석자다.
   주어진 문서와 검색 결과만 보고, 그 급변을 설명하는 것이 있는지 판단한다.
-  반드시 JSON 객체 하나만 출력한다. 설명이나 코드 펜스를 붙이지 않는다.
 
 instruction: |
-  아래 급변의 원인을 찾아 JSON으로 답하라.
+  아래 급변의 원인을 찾아라.
 
   ## 규칙
 
@@ -41,14 +40,6 @@ instruction: |
     다른 말이다. 기관이 팔았다는 사실만 있고 왜 팔았는지가 없으면 `unclear`다.
   - `cause_text`는 한국어 **한 문장**이다. 무엇이 왜 시장을 움직였는지 적고, 되돌림이
     있었으면 그것도 적는다. $max_cause_chars자를 넘기지 않는다.
-
-  ## 출력 형식
-
-  {"found": true, "cause_text": "...", "cause_kind": "rumor", "document_ids": [123], "search_indexes": [1, 4]}
-
-  못 찾았을 때:
-
-  {"found": false, "cause_text": "", "cause_kind": "unclear", "document_ids": [], "search_indexes": []}
 
   ## 포착된 급변
 

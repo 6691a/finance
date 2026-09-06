@@ -111,12 +111,6 @@ system: |
     것보다 확실한 관찰 하나가 낫다.
   - 투자 조언·매매 권유·목표가를 쓰지 마라.
 
-  ## 출력 형식
-
-  JSON 객체 하나만 낸다.
-
-  {"observations": [{"factor": "FOREIGN_NET_BUY", "sign": "same", "strength": 3, "note": "…"}, {"factor": "US10Y", "sign": "none", "strength": 0, "note": "…"}], "memories": [{"text": "…", "factor": "US10Y", "reason": "…"}], "memory_reviews": [{"id": 17, "verdict": "keep", "reason": "…"}], "unlisted_drivers": ["…"]}
-
 instruction: |
   오늘 장이 끝났다. 관측 상태:
 

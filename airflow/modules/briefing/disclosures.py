@@ -90,7 +90,7 @@ class Highlight(BaseModel):
 
     model_config = ConfigDict(frozen=True)
 
-    rcept_no: str
+    rcept_no: str = Field(description="후보 목록의 접수번호")
     reason: str = Field(default="", description=f"왜 주목해야 하는지 한 줄. {MAX_REASON_CHARS}자 이내")
 
 

@@ -5,7 +5,10 @@
 바뀌면 ops 창의 채점·판정이 서로 다른 프롬프트의 결과를 한 판으로 섞는다. 같은 파일이던
 때는 눈에 띄었지만 파일이 갈리면 안 보인다.
 
-여기서 파일 내용의 SHA-256과 그 흐름의 현재 판을 함께 잠근다.
+여기서 파일 내용의 SHA-256과 그 흐름의 현재 판을 함께 잠근다. **응답 모델의 JSON Schema도
+같은 해시에 넣는다**(2026-09-06) — 출력 모양은 YAML이 아니라 Pydantic 모델의
+`Field(description=...)`이 말하고 그것이 `response_format`으로 모델에게 가므로, description을
+고치는 것도 문장을 고치는 것이다.
 
 - 문장만 고치면 해시가 어긋나 깨진다. **판을 올리고 표를 갱신하는 것이 통과 조건이다.**
 - 판만 올리면 표에서 키를 못 찾아 깨진다. 둘을 같은 커밋에서 만지게 된다.
@@ -16,15 +19,22 @@
 """
 
 import hashlib
+import json
 
 import pytest
+from pydantic import BaseModel
 
 from modules.assessment import PROMPT_VERSION as ASSESSMENT_PROMPT_VERSION
+from modules.assessment import Assessment
 from modules.expectation.domain import PROMPT_VERSION as EXPECTATION_PROMPT_VERSION
+from modules.expectation.extraction import ExtractionResponse
 from modules.kospi.domain import PROMPT_VERSION as KOSPI_PROMPT_VERSION
 from modules.kospi.domain import REVIEW_PROMPT_VERSION as KOSPI_REVIEW_PROMPT_VERSION
+from modules.kospi.generation import ForecastAnswer, ReviewAnswer
 from modules.prompt import PROMPT_ROOT
+from modules.schema import strict_json_schema
 from modules.shock.domain import CAUSE_PROMPT_VERSION as SHOCK_CAUSE_PROMPT_VERSION
+from modules.shock.domain import CauseAnswer
 
 # 판이 붙는 프롬프트 파일. 흐름의 현재 판을 키에 함께 적는다.
 # **문장을 고쳤으면 판을 올리고 이 해시도 같이 바꾼다. 둘을 같은 커밋에서 만진다.**
@@ -37,6 +47,10 @@ PROMPT_HASHES: dict[tuple[str, str], str] = {
     ("expectation_extraction", "1"): "7108eab56e598ff642aeb7269f0f07ab9ef21707798202447db6a6b0a3b52a41",
     # 판 2는 같은 조각과 구분자를 넣었다(2026-09-06). 본문에 길이 상한(20,000자)이 처음 생겼다.
     ("expectation_extraction", "2"): "28b977e7586f2bd96abfa6ba41c8ff310dd249cc7034a0651fb4eb7cd05f1699",
+    # 판 5(평가)·판 3(추출)은 출력 형식을 YAML에서 빼고 응답 모델의 description으로 옮긴 같은 날의
+    # 두 번째 판이다(2026-09-06). 이 판부터 해시가 YAML과 응답 스키마를 함께 잰다.
+    ("assessment", "5"): "3b832f6568db31e562fd47e12ef35b95a742b745304ff971ec26ced3002b9c40",
+    ("expectation_extraction", "3"): "84489961e5afeac66cdd47f6df1403d9d05bfe57609f417675171af752ae32be",
     # 코스피 일일 전망의 첫 판(2026-09-02). 옛 추론에서 **가져오지 않은 것**이 이 프롬프트를
     # 정의한다 — 3-클래스 확률과 `flat` 기준선 문장은 캘리브레이션 실패의 자리였다.
     ("kospi_forecast", "1"): "73dd161eb811c1a5bc80e8b0b9e61b27b0150abf3902dae01f849466ae16ae47",
@@ -62,12 +76,16 @@ PROMPT_HASHES: dict[tuple[str, str], str] = {
     # 같다** — 전망 문장은 안 바뀌고 장후 관찰이 바뀌었는데, 그 결과로 가중치와
     # `recent_signs`가 달라져 전망 모델이 보는 것이 바뀐다. 판 6과 같은 이유로 판만 올린다.
     ("kospi_forecast", "7"): "7a9f50fd46b08a4b7e754c46ce38c455c5688dcab2acdac8e18f7a2003f06149",
+    # 판 8은 출력 형식을 YAML에서 빼고 응답 모델의 description으로 옮겼다(2026-09-06, 판 7과
+    # 같은 날 배포). 이 판부터 해시가 YAML과 스키마를 함께 잰다. 다른 흐름의 같은 날 판도 같다.
+    ("kospi_forecast", "8"): "7f8e69b5bce171af2d968ea4e7aed3320c86cda36090f4b8f8eb5d83a91e1129",
     # 장후 관찰의 첫 판(2026-09-02). 관찰·새 메모·메모 판정 셋을 한 답에 낸다.
     ("kospi_review", "1"): "e7f0097f2e306984b759ec383d06c08630de98e8043ecb60c10f20f7d5e793f2",
     # 판 2는 모델이 요인을 고르지 않는다(2026-09-06, 설계 §8.10). 코드가 숫자 요인 15개 값을
     # 표로 주고 모델은 줄마다 `same`/`inverse`/`none`을 답한다. `factor_history`가 툴 목록에서
     # 빠지고 `unlisted_drivers`가 답에 늘었다.
     ("kospi_review", "2"): "2481d7fb62e70754805d431e6b510b1b57b2d850ef7df284835297314b11106e",
+    ("kospi_review", "3"): "b2b7bdd9f45b980b636d25540ad5c0d8c252723c7ee9a83063bad9fa96a16653",
     # 급변 원인 분석의 첫 판(2026-09-04). `cause_kind` 앵커가 이 판의 핵심이다 — 앵커 없이
     # 물었을 때 두 모델이 갈렸고(gpt `unclear`, grok `confirmed`) 넣으니 둘 다 `unclear`로
     # 수렴했다. "수급은 경로이지 방아쇠가 아니다"가 그 한 줄이다.
@@ -75,7 +93,23 @@ PROMPT_HASHES: dict[tuple[str, str], str] = {
     # 판 2는 외부 글 읽기 규칙 조각을 넣고 문서·검색 결과를 `<외부자료>`로 감쌌다(2026-09-06).
     # `cause_text`에 "링크를 넣지 마라"가 늘었고 코드가 링크 있는 문장을 버린다.
     ("shock_cause", "2"): "fd907995c9a19e8d392dd5c21869494c028229cb24a6d9e4fa0c0d9ff2f8fd85",
+    ("shock_cause", "3"): "d989fc87fc47f8788ba747563497f2dfdc3ce2da6260c2c7c2b38a1dcc9eb59c",
 }
+
+# 그 흐름이 `response_format`으로 강제하는 응답 모델. 스키마가 해시에 들어간다.
+RESPONSE_MODELS: dict[str, type[BaseModel]] = {
+    "assessment": Assessment,
+    "expectation_extraction": ExtractionResponse,
+    "kospi_forecast": ForecastAnswer,
+    "kospi_review": ReviewAnswer,
+    "shock_cause": CauseAnswer,
+}
+
+
+def prompt_hash(name: str) -> str:
+    """YAML 바이트 뒤에 응답 스키마의 압축 JSON을 이어 SHA-256을 낸다."""
+    schema = json.dumps(strict_json_schema(RESPONSE_MODELS[name]), ensure_ascii=False, separators=(",", ":"))
+    return hashlib.sha256((PROMPT_ROOT / f"{name}.yaml").read_bytes() + schema.encode()).hexdigest()
 
 # 현재 판을 어디서 읽는지. 표의 키와 대조하는 데만 쓴다.
 PROMPT_VERSIONS: dict[str, str] = {
@@ -98,7 +132,7 @@ def test_a_versioned_prompt_file_matches_the_hash_locked_to_its_version(name, ve
         "판을 올렸으면 해시도 같은 커밋에서 갱신한다."
     )
 
-    actual = hashlib.sha256((PROMPT_ROOT / f"{name}.yaml").read_bytes()).hexdigest()
+    actual = prompt_hash(name)
 
     assert actual == expected, (
         f"{name}.yaml이 판 {version}에 잠긴 내용과 다르다. "
@@ -116,3 +150,10 @@ def test_every_prompt_file_is_either_versioned_or_deliberately_not():
     )
     assert set(PROMPT_VERSIONS) - files == set()
     assert UNVERSIONED - files == set()
+    assert set(RESPONSE_MODELS) == set(PROMPT_VERSIONS)
+
+
+def test_prompt_files_leave_the_output_shape_to_the_response_model():
+    """출력 모양은 `Field(description=...)`이 말한다. YAML에 예시 JSON을 다시 적으면 둘이 어긋난다."""
+    for path in PROMPT_ROOT.glob("*.yaml"):
+        assert "출력 형식" not in path.read_text(encoding="utf-8"), f"{path.name}이 출력 형식을 적고 있다"

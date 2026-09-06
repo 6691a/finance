@@ -185,14 +185,33 @@ def test_strict_schema_marks_every_property_required():
     schema = strict_json_schema(Outer)
 
     assert schema["required"] == ["nested", "items"]
-    assert schema["$defs"]["Nested"]["required"] == ["kept"]
+    assert schema["properties"]["nested"]["required"] == ["kept"]
 
 
 def test_strict_schema_closes_every_object():
     schema = strict_json_schema(Outer)
 
     assert schema["additionalProperties"] is False
-    assert schema["$defs"]["Nested"]["additionalProperties"] is False
+    assert schema["properties"]["nested"]["additionalProperties"] is False
+
+
+class Described(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    nested: Nested = Field(description="필드 쪽 설명")
+    items: tuple[Nested, ...] = Field(default=(), description="배열 쪽 설명")
+
+
+def test_strict_schema_inlines_refs_so_a_described_nested_field_is_accepted():
+    """strict 모드는 `$ref` 옆에 키워드를 못 둔다. 2026-09-06 운영에서 `scores`가 400을 받았다."""
+    schema = strict_json_schema(Described)
+
+    assert "$ref" not in json.dumps(schema)
+    assert "$defs" not in schema
+    nested = schema["properties"]["nested"]
+    assert nested["description"] == "필드 쪽 설명"
+    assert nested["properties"]["kept"]["type"] == "string"
+    assert schema["properties"]["items"]["items"]["required"] == ["kept"]
 
 
 def test_strict_schema_drops_keywords_the_provider_rejects():

@@ -74,12 +74,13 @@ from typing import Any
 import openai
 from langchain_core.callbacks import UsageMetadataCallbackHandler
 from langchain_core.language_models import BaseChatModel
-from langchain_core.messages import AIMessage, BaseMessage
+from langchain_core.messages import AIMessage, BaseMessage, HumanMessage
 from langchain_core.tools import BaseTool
 from langchain_openai import ChatOpenAI
 from langchain_xai import ChatXAI
 
 from modules.prompt import read_fragments
+from modules.schema import format_instruction
 from modules.usage import TokenUsage
 
 logger = logging.getLogger(__name__)
@@ -258,6 +259,10 @@ def invoke(
     **툴과 스키마를 한 요청에 섞지 않는다.** 제공처마다 둘을 같이 줬을 때 동작이 다르고
     (스키마를 주면 툴 호출을 안 하거나 그 반대) 그 차이를 흡수할 방법이 없다. 모듈 docstring의
     "조사와 답변을 나눈다"가 원칙이고, 이 검사가 그것을 코드 계약으로 만든다.
+
+    **제공처가 스키마를 거절하면 그때만 한 번 더 부른다.** 프롬프트는 출력 모양을 적지
+    않으므로(`modules/schema.py`) 같은 스키마를 문장으로 바꿔 붙인다. 재시도가 아니라 폴백이다 —
+    같은 요청을 다시 보내는 것이 아니고 답은 한 번만 온다.
     """
     if tools and schema:
         raise ValueError("invoke() takes tools or schema, never both — investigate first, then answer")
@@ -267,9 +272,19 @@ def invoke(
     if schema:
         bound = bound.bind(response_format=schema)
     try:
-        return bound.invoke(list(messages))
+        return _invoke(bound, messages, had_schema=schema is not None)
+    except UnsupportedResponseFormat as error:
+        if schema is None:
+            raise
+        logger.warning("provider does not accept a response schema; falling back to validation: %s", error)
+        return _invoke(model, [*messages, HumanMessage(format_instruction(schema))], had_schema=False)
+
+
+def _invoke(model: BaseChatModel, messages: Sequence[BaseMessage], *, had_schema: bool) -> AIMessage:
+    try:
+        return model.invoke(list(messages))
     except openai.OpenAIError as error:
-        raise classify(error, had_schema=schema is not None) from error
+        raise classify(error, had_schema=had_schema) from error
 
 
 def classify(error: openai.OpenAIError, *, had_schema: bool = False) -> Exception:

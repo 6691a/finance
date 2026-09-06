@@ -57,7 +57,10 @@ from pydantic import BaseModel, ConfigDict
 # 판 7: 관계 표에 `none` 관측이 실린다(2026-09-06, 설계 §8.10). **전망 문장은 안 바뀌었다** —
 #       바뀐 것은 장후 관찰이고, 그 결과로 가중치와 `recent_signs`에 "봤는데 무관"이 들어와
 #       전망 모델이 보는 관계 표가 달라진다. 판 6과 같은 이유로 판만 올린다.
-PROMPT_VERSION = "7"
+# 판 8: 출력 형식(예시 JSON)을 YAML에서 빼고 `ForecastAnswer`의 `Field(description=...)`로
+#       옮겼다(2026-09-06, 판 7과 같은 날 배포). YAML은 목적·규칙·주의만 갖고 모양은 스키마가
+#       말한다. 문장의 뜻은 그대로이고 자리만 바뀌었다.
+PROMPT_VERSION = "8"
 
 # 장후 관찰 프롬프트의 판. 전망과 축이 다르다 — 저쪽은 "잘 맞혔나", 이쪽은 "관계를 잘
 # 읽었나"다. 따로 올린다.
@@ -67,7 +70,9 @@ PROMPT_VERSION = "7"
 #       그날 값을 표로 주고 모델은 줄마다 `same`/`inverse`/`none`으로 답한다. 안 조회한
 #       요인은 기록이 없어 옛 가중치가 얼어붙었고(가중 평균이라 나이가 사라진다), 모델이
 #       무거운 요인부터 조회해 가벼운 요인은 영영 관측이 안 쌓였다. 09-03 실측 15개 중 8개.
-REVIEW_PROMPT_VERSION = "2"
+# 판 3: 출력 형식을 YAML에서 빼고 `ReviewAnswer`의 description으로 옮겼다(2026-09-06). 전망 판 8과
+#       같은 변경이다.
+REVIEW_PROMPT_VERSION = "3"
 
 
 class KospiError(RuntimeError):

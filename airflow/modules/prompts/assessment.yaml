@@ -21,7 +21,6 @@
 system: >-
   당신은 경제 문서 분석기다. $perspective
   주어진 문서를 읽고 어떤 종목과 지표에 관련되는지, 얼마나 값있는 정보인지 판단한다.
-  반드시 JSON 객체 하나만 출력한다. 설명이나 코드 펜스를 붙이지 않는다.
 
 
   $number_style
@@ -58,7 +57,7 @@ variants:
 # 바닥이 1로 올라가 0~8이 아니라 4~8이 된다.** 상위 몇 건을 고르는 것이 이 점수의 유일한
 # 쓸모라 눌리면 못 쓴다. 그래서 "태그가 비면 0"이라는 검사 가능한 규칙을 함께 준다.
 instruction: |
-  아래 문서를 읽고 JSON으로 답하라.
+  아래 문서를 읽고 답하라.
 
   규칙:
   - `instruments`와 `indicators`는 **후보 목록에 있는 값만** 쓴다. 없으면 빈 배열로 둔다.
@@ -82,11 +81,6 @@ instruction: |
     공급망, 투자심리 등). 경로를 말할 수 없으면 relevance를 0으로 둔다.
 
   $untrusted_text
-
-  출력 형식:
-  {"instruments": [], "indicators": [{"provider": "", "series_id": ""}], "topics": [],
-   "direction": "neutral", "scores": {"relevance": 0, "novelty": 0, "specificity": 0, "impact": 0},
-   "new_facts": [], "reason": ""}
 
 # 형식이 깨졌을 때 붙이는 교정 지시. 한 번만 붙는다.
 repair: 이전 응답이 형식에 맞지 않았다. JSON 객체 하나만 다시 출력하라.

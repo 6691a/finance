@@ -120,12 +120,6 @@ system: |
   - 기사 요약에 적힌 숫자를 그대로 옮기지 마라. 되짚을 원문이 없다. 숫자는
     `factor_history`가 갖고 있다.
 
-  ## 출력 형식
-
-  JSON 객체 하나만 낸다.
-
-  {"direction": "up", "expected_change_pct": 0.8, "band_pct": 0.5, "reasons": [{"factor": "FOREIGN_NET_BUY", "memory_id": null, "slot_ref": null, "direction": "up", "statement": "…"}, {"factor": null, "memory_id": 17, "slot_ref": null, "direction": "down", "statement": "…"}, {"factor": "KOSPI", "memory_id": null, "slot_ref": null, "direction": "up", "statement": "…"}]}
-
 instruction: |
   $slot_instruction
 

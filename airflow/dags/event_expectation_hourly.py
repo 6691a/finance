@@ -63,6 +63,7 @@ from modules.expectation.domain import (
 from modules.expectation.extraction import (
     ExpectationExtractor,
     filter_claims,
+    screen,
 )
 from modules.expectation.judgment import (
     ExpectationStore,
@@ -132,10 +133,23 @@ def event_expectation_hourly():
         extracted_at = datetime.now(UTC)
 
         stored = 0
+        blocked_total = 0
         claim_total = 0
         format_failures: list[str] = []
         retryable_failures: list[str] = []
         for document in documents:
+            blocked = screen(document)
+            if blocked:
+                # 모델에게 안 보낸다. 주장 0건으로 원장에 올려 다음 실행이 다시 집지 않게 한다.
+                # ponytail: 원장에 차단 칸이 없어 `llm_model`에 사유를 적는다. 건수는
+                # `WHERE llm_model LIKE 'blocked:%'`로 센다. 칸이 필요해지면 컬럼으로 뺀다.
+                logger.warning("document %s blocked before the model: %s", document.id, blocked)
+                with closing(_connection()) as store_connection, atomic(store_connection):
+                    ExpectationStore(store_connection).store_extraction(
+                        document, (), "blocked:" + ",".join(blocked), extracted_at
+                    )
+                blocked_total += 1
+                continue
             try:
                 response = extractor.extract(document)
             except ExtractionError as error:
@@ -172,7 +186,11 @@ def event_expectation_hourly():
             )
 
         logger.info(
-            "Extracted %s claims from %s documents (%s format failures)", claim_total, stored, len(format_failures)
+            "Extracted %s claims from %s documents (%s format failures, %s blocked before the model)",
+            claim_total,
+            stored,
+            len(format_failures),
+            blocked_total,
         )
         return stored
 

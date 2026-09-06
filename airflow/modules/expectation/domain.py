@@ -25,7 +25,8 @@ logger = logging.getLogger(__name__)
 logger = logging.getLogger(__name__)
 
 # 프롬프트를 고치면 올린다. 이 값이 오른 문서는 재추출 대상이 된다.
-PROMPT_VERSION = "1"
+# 판 2: 외부 글 읽기 규칙 조각과 `<외부자료>` 구분자(2026-09-06, prompt-injection-defense.md).
+PROMPT_VERSION = "2"
 
 # 한 번 실행에서 추출할 문서 수. 대상이 종목 태그 문서뿐이라 보통 이보다 훨씬 적다.
 DEFAULT_BATCH_SIZE = 50

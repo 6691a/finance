@@ -30,7 +30,8 @@ from typing import Annotated, Any, TypedDict
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, SystemMessage
 from langgraph.graph import END, START, StateGraph
 
-from modules.llm import invoke, model_name, shock_model
+from modules import untrusted
+from modules.llm import UNTRUSTED_TEXT, invoke, model_name, shock_model
 from modules.prompt import read_prompt
 from modules.schema import json_object, response_format
 from modules.shock.domain import (
@@ -133,6 +134,7 @@ class ShockCauseBuilder:
             max_documents=MAX_DOCUMENTS,
             max_search_results=MAX_SEARCH_RESULTS,
             max_cause_chars=MAX_CAUSE_CHARS,
+            untrusted_text=UNTRUSTED_TEXT,
         )
 
     def _call(self, state: _State) -> dict[str, Any]:
@@ -190,6 +192,10 @@ class ShockCauseBuilder:
         text = answer.cause_text.strip()
         if not text:
             rejected.append("원인 문장이 비었다")
+            return CauseAnswer(found=False), rejected
+        if untrusted.has_link(text):
+            # 근거는 번호로만 받는다. 문장에 링크가 있으면 외부 글이 그대로 베껴진 것이다.
+            rejected.append("원인 문장에 링크가 있다")
             return CauseAnswer(found=False), rejected
         if len(text) > MAX_CAUSE_CHARS:
             rejected.append(f"원인 문장이 {MAX_CAUSE_CHARS}자를 넘어 잘랐다")

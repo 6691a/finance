@@ -809,4 +809,4 @@ def test_amounts_are_shown_in_units_people_read():
 
 
 def test_the_prompt_version_is_a_plain_string_that_can_be_raised():
-    assert PROMPT_VERSION == "1"
+    assert PROMPT_VERSION == "2"

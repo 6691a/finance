@@ -206,7 +206,11 @@ ADR              TSMC ADR / SK하이닉스 ADR
 - 미국 장중 KIS 폴링(1분봉 전체). 지금은 마감 뒤 102봉(14:40~16:41)만 쌓인다.
 - Sentry metrics 후보: run당 `bar_count`, `now - latest_bar_at` 지연.
 
-## 12. 추론 툴 `us_market_close()` (2026-08-22 추가)
+## 12. 추론 툴 `us_market_close()` (2026-08-22 추가 · 2026-09-03 삭제)
+
+> **이 절의 툴과 SQL(`select_thesis_us_close.sql`)은 옛 시장 추론과 함께 `45d85a6`에서 지워졌다.**
+> 마감 분봉 수집(`kis_overseas_index_close`)과 브리핑 표는 그대로 남아 있다. 코스피 전망이
+> 미국 마감 툴이 필요해지면 `KospiToolbox`에 새로 만든다. 아래는 그때의 설계 기록이다.
 
 장전 추론(`market_thesis_forecast`)이 밤사이 미국장 마감을 보게 한다. 기존 `macro_changes()`는
 분석 창 `[전 개장일 15:30, 08:35]`의 **첫 봉 대비 마지막 봉**이라 KIS 현물처럼 마감 전 두 시간만

@@ -13,7 +13,7 @@
   [collection/document-body-collection.md](../collection/document-body-collection.md)가 계약을
   갖는다**(2026-08-30 구현 완료, 배포 대기) — 그 문서 4절이 여기 `content_hash` 정의를 바꿨다.
   해시는 이제 제목과 요약만 본다.
-  3·4단계는 market-thesis가 사실상 같은 자리를
+  3·4단계는 코스피 전망(옛 시장 추론의 후속)이 사실상 같은 자리를
   채우고 있어 착수 전에 범위를 다시 잡는다 — 7·8절 머리에 그 표기가 있다
 - **6.6은 2026-08-31에 더한 확장이고 구현·적용까지 끝났다.** 태그 후보를 삼성전자·
   SK하이닉스 둘에서 KOSPI 업종 대표 18종목으로 넓혔다. 과거 문서는 재평가하지 않는다.
@@ -57,7 +57,7 @@
 | 3 | 일별 요약 테이블 | 없음 |
 | 4 | 리포트 생성 | 있음 |
 
-1단계와 3단계에는 LLM이 들어가지 않고, 그 자체로 Grafana에서 값을 한다. 4단계가 최종
+1단계와 3단계에는 LLM이 들어가지 않고, 그 자체로 SQL 조회로 값을 한다. 4단계가 최종
 목적이고 2단계가 그 입력을 만든다.
 
 ## 3. 제외 범위
@@ -69,8 +69,8 @@
 - 기사 번역, 자동 요약 서비스, 자연어 질의응답
 - Elasticsearch, OpenSearch, 별도 vector DB
 - ~~LangGraph, LLM 에이전트, LangSmith~~ — **2026-08-16에 셋 다 들어왔다.** 흐름 제어는
-  `StateGraph`이고(`modules/assessment.py`), 툴을 쥔 에이전트는 market-thesis가 만들었으며,
-  추적은 `LANGSMITH_*` 환경변수로 켠다. 이 줄은 2026-08-15 시점의 판단이었고 지금은 거짓이다.
+  `StateGraph`이고(`modules/assessment.py`), 툴을 쥔 에이전트는 옛 시장 추론이 만들었고 지금은 `modules/kospi/`가 잇는다. 추적은
+  `LANGSMITH_*` 환경변수로 켠다. 이 줄은 2026-08-15 시점의 판단이었고 지금은 거짓이다.
   호출 수 상한이 있는 고정 파이프라인이라는 원칙 자체는 살아 있다 — 상한이 `MAX_TOOL_CALLS`다
 - LLM이 직접 쓰는 SQL. 계산은 애플리케이션이 구현한 종류만 실행한다(§8.2)
 - 외부 공개 또는 상용 재배포
@@ -89,7 +89,7 @@
 설치하고 운영도 같은 파일을 쓴다. **이 설계를 위해 늘린 의존성은 없다.**
 
 - ~~LLM 호출은 `urllib.request`로 충분하다~~ — **2026-08-16에 폐기됐다.** 지금은 LangChain의
-  `BaseChatModel`을 쓴다(`modules/llm.py`의 `document_model()`·`thesis_model()`·
+  `BaseChatModel`을 쓴다(`modules/llm.py`의 `document_model()`·`kospi_model()`·
   `expectation_model()`). HTTP를 직접 치면 LangSmith 추적이 끊기고 툴 호출 왕복을 직접 짜야
   한다. **`base_url`을 환경변수로 빼 제공처를 갈아 끼우지도 않는다** — 어떤 모델을 쓸지는
   코드가 정하고 API 키만 환경에서 온다. 그것도 LangChain 클래스가 자기 이름
@@ -413,7 +413,7 @@ strict 모드가 요구하는 것이 둘 있다. 모든 객체에 `additionalPro
   추적 목록 밖이면 항목을 버리고, 그 필터가 `enrich`에 있어 **저장 자체가 안 된다.** 그래서
   종목코드가 없는 산업·시황 리포트는 161건 들어오는데 기업 리포트는 2건이다.
 
-결과로 시장 추론(`market_thesis_*`)의 근거 풀이 반도체로 기울어 있다. 추론 대상에 KOSPI
+결과로 코스피 전망(당시 시장 추론 `market_thesis_*`)의 근거 풀이 반도체로 기울어 있다. 추론 대상에 KOSPI
 지수가 있는데, 그 지수를 이루는 나머지 업종에 대해 우리가 가진 문서가 없다.
 
 #### `is_watched`가 두 가지를 겸하고 있다
@@ -427,12 +427,11 @@ strict 모드가 요구하는 것이 둘 있다. 모든 객체에 `additionalPro
 | `assessment.py` | 문서 태그 후보 | `select_watched.sql` |
 | `collectors/document/documents.py` → `naver_research.py` | 기업 리포트 통과 여부 | `select_watched.sql` |
 | `collectors/analyst/kis_opinion.py` | 투자의견 수집 대상 | `select_watched.sql` |
-| `thesis/store.py` | 추론 subject | `select_watched.sql` |
-| `causal/candidates.py` | 주간 인과 그래프 대상 | `causal/select_watched_stocks.sql` 인라인 |
+| ~~`thesis/store.py`~~ · ~~`causal/candidates.py`~~ | 옛 시장 추론·주간 인과 그래프. `45d85a6`에서 지워져 이제 안 읽는다 | — |
 | `technical/select_history.sql` | 기술지표 일봉 요청 목록 | 인라인(`include_watched`가 참일 때) |
 
-**앞의 둘은 값이 없어도 성립하고, 뒤의 넷은 시세가 있어야 성립한다.** 시세를 안 받는 종목이
-`is_watched`가 되면 뒤의 넷이 조용히 빈다.
+**앞의 둘은 값이 없어도 성립하고, 뒤의 둘(투자의견·기술지표)은 시세가 있어야 성립한다.** 시세를
+안 받는 종목이 `is_watched`가 되면 뒤의 둘이 조용히 빈다.
 
 - 기술지표 조회는 `JOIN requested`가 inner join이라 `quote_daily`·`stock_investor_trade_daily`에
   행이 없는 티커가 결과에서 통째로 사라진다.
@@ -474,7 +473,8 @@ strict 모드가 요구하는 것이 둘 있다. 모든 객체에 `additionalPro
    `DartCompany` 둘만 채우므로 새 종목 주장은 `actual is None`으로 조용히 빠지고,
    `stock_event_claim`에 아무도 안 읽는 행이 LLM 비용과 함께 쌓인다. 1층의 목적은 태그와
    리서치 근거 풀이지 expectation 확장이 아니다.
-5. `thesis/toolbox.py`에서 추적 종목 밖 코드 검사를 `self._charge()` **앞으로** 옮긴다.
+5. `kospi/toolbox.py`(`KospiToolbox`)에서 추적 종목 밖 코드 검사를 `self._charge()` **앞으로** 옮긴다
+   (원래 `thesis/toolbox.py`에 적었던 항목이고 그 파일은 지워졌다).
    모델이 `recent_documents` 응답의 태그에서 새 티커를 보고 툴을 부르면 지금은 예산을 먼저
    깎은 뒤 거절이 나고, 그 거절이 `handle_tool_errors`를 거쳐 `ToolMessage`로 성공처럼 끝난다.
 
@@ -1102,15 +1102,15 @@ DAG가 매일 만든다. **SQL만 쓰고 LLM은 들어가지 않는다.**
 원천 테이블이 뒤늦게 정정되면 요약도 갱신되는데, 그때 리포트가 참조한 값은 리포트 쪽에
 복사해 둔다(§8).
 
-이 테이블은 LLM과 무관하게 Grafana에서 바로 쓴다. 3단계는 4단계를 안 만들어도 값이 있다.
+이 테이블은 LLM과 무관하게 SQL로 바로 쓴다. 3단계는 4단계를 안 만들어도 값이 있다.
 
 ## 8. 4단계 — 리포트 생성
 
-> **재계획 중, 유예(2026-08-26).** 이 절의 설계 대부분을 market-thesis가 이미 채웠다 —
-> 등록된 툴만 부르고(`ThesisToolbox`), 행 상한과 호출 상한이 있으며(`MAX_TOOL_CALLS`),
+> **재계획 중, 유예(2026-08-26).** 이 절의 설계 대부분을 옛 시장 추론이 이미 채웠고 지금은
+> 코스피 전망이 잇는다 — 등록된 툴만 부르고(`KospiToolbox`), 행 상한과 호출 상한이 있으며(`MAX_TOOL_CALLS`),
 > 답변은 등록된 근거 `ref`만 인용한다. 남은 것은 **카테고리 분석가 분할**과 재현 가능한
 > 저장용 `market_report` 테이블 둘뿐이다. 브리핑 쪽은 Slack 메시지가 산출물의 전부라
-> 저장용 리포트를 미뤄 뒀다. 착수 전에 market-thesis가 이 자리를 대신 채우고 있는지부터
+> 저장용 리포트를 미뤄 뒀다. 착수 전에 코스피 전망이 이 자리를 대신 채우고 있는지부터
 > 판단한다.
 
 무엇을 볼지 사람이 미리 정하지 않는다. "환율과 기술주"는 예시일 뿐이고, **가진 데이터로
@@ -1224,7 +1224,7 @@ DAG가 매일 만든다. **SQL만 쓰고 LLM은 들어가지 않는다.**
 - 중복 판정에서 규칙으로 끝난 비율과 LLM까지 간 비율
 - 버려진 태그(마스터에 없는 종목·지표) 목록
 
-별도 모니터링을 붙이지 않고 Airflow 로그와 PostgreSQL 집계, 기존 Grafana로 시작한다.
+별도 모니터링을 붙이지 않고 Airflow 로그와 PostgreSQL 집계로 시작한다.
 
 ## 11. 검증
 

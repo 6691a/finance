@@ -35,8 +35,7 @@ orders and balances. For Korean stocks, distinguish `_krx`, `_nxt`, and
 `_total`. Realtime WebSocket examples are located in the corresponding asset
 folder.
 
-If filename search is insufficient, consult `MCP/data.csv` for the API index and
-`docs/convention.md` for naming conventions.
+If filename search is insufficient, consult `MCP/data.csv` for the API index.
 
 ## Extract before answering
 

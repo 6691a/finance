@@ -6,13 +6,15 @@
 > - 한계: 기사 아카이브가 2026년 8월부터라 일봉이 3년 있어도 설명 근거가 3년 있는 것은 아니다. 틱 기반 정확한 매물대, 매매 추천, 장중 급변 탐지는 만들지 않는다.
 
 - 날짜: 2026-08-27
-- 상태: **미구현. 이 문서는 구현 계약이다.**
+- 상태: **미구현. 이 문서는 구현 계약이다.** 단 아래 계약이 기대는 옛 시장 추론(`ThesisToolbox`,
+  `thesis_llm_run`·`thesis_tool_call`, `docs/analysis/market-thesis/`)은 `45d85a6`에서 지워졌다.
+  착수 전에 툴박스는 `modules/kospi/toolbox.py`의 `KospiToolbox`, 원장은 `kospi_llm_run`으로
+  다시 맞춘다. 본문의 `thesis` 이름은 계약을 쓴 2026-08-27 시점 그대로다.
 - 목표: 일봉 차트의 주요 가격 변화와 일봉 기반 추정 매물대, 시장·경제·수급 근거를 한 시점축에
   묶어 "무엇이 함께 일어났고 어떤 해석이 가능한가"를 설명한다.
 - 관련 원본:
   [기술지표](market-technical-indicators.md),
-  [시장 추론](market-thesis/README.md),
-  [LLM 실행 원장](market-thesis/13-llm-ledger.md),
+  [코스피 일일 전망](kospi-forecast.md) (옛 시장 추론과 그 원장 문서는 지워졌다),
   [경제 문서 아카이브](economic-document-archive-design.md)
 
 ## 0. 확정 결정

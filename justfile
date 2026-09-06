@@ -5,7 +5,7 @@ realtime_prod_compose := "compose/prod/docker-compose.yaml"
 api_compose := "compose/local/api/docker-compose.yaml"
 api_prod_compose := "compose/prod/api/docker-compose.yaml"
 
-# Application PostgreSQL, Redis and Grafana.
+# Application PostgreSQL, Redis and Neo4j.
 dev:
     docker compose -f {{dev_compose}} up -d
 

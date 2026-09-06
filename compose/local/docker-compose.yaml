@@ -38,27 +38,7 @@ services:
       timeout: 3s
       retries: 10
 
-  grafana:
-    image: grafana/grafana:13.0-slim
-    ports:
-      - "13000:3000"
-    environment:
-      # These credentials are only applied when the grafana volume is first
-      # created. Changing them later requires `grafana cli admin
-      # reset-admin-password` inside the container, or recreating the volume.
-      GF_SECURITY_ADMIN_USER: admin
-      GF_SECURITY_ADMIN_PASSWORD: pwd
-      GF_USERS_DEFAULT_THEME: dark
-    volumes:
-      - grafana:/var/lib/grafana
-      - ./grafana/provisioning:/etc/grafana/provisioning
-      - ./grafana/dashboards:/var/lib/grafana/dashboards
-    depends_on:
-      db:
-        condition: service_healthy
-
 volumes:
   psql:
   redis:
   neo4j:
-  grafana:

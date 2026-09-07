@@ -37,6 +37,11 @@ Codex용 규칙 원본은 [.codex/AGENTS.md](../.codex/AGENTS.md)이며 두 문�
 더하거나 슬롯 시각을 옮겼는데 README가 그대로면 다음 사람이 그것을 현재형으로 읽는다.
 숫자를 새로 적을 때는 세거나 조회한 실측값만 쓴다. 어림값을 적지 않는다.
 
+**설계 문서는 머리만 먼저 쓴다.** 제목 아래 "한눈에" 셋(왜·무엇·한계)과 상태 줄만 써서 승인받고,
+본문은 그 뒤에 쓴다. 미구현으로 남을 문서에 수백 줄을 먼저 쓰는 것을 막는다. 셋은
+[docs/README.md](../docs/README.md)에도 그대로 실리며 **둘은 같은 커밋에서 고친다.** 형식은 그
+문서의 "문서를 쓸 때"에 있다.
+
 ## 프로젝트 구조
 
 | 경로 | 역할 |
@@ -274,8 +279,8 @@ DAG가 쓰는 코드는 **위치는 Airflow를, 규칙은 백엔드를** 따른�
   늦게 올린다(`kospi/run.py`·`review.py`가 그 형태이고 `briefing/chart.py`가 matplotlib에
   같은 것을 쓴다). 타입에만 쓰는 이름은 `TYPE_CHECKING`으로 남긴다.
 - **최상위에 남는 것은 공용 잎이다.** `db`·`sql`·`upsert`·`utility`·`period`·`schema`·
-  `slack`·`llm`·`prompt`·`market_session`·`assessment`·`dedup`·`usage` **열셋**이다. 열은 300줄
-  미만이고 둘이 넘는다(`assessment` 637, `llm` 350 — 2026-09-01 실측).
+  `slack`·`llm`·`prompt`·`market_session`·`assessment`·`dedup`·`usage`·`untrusted` **열넷**이다.
+  열둘은 300줄 미만이고 둘이 넘는다(`assessment` 637, `llm` 350 — 2026-09-01 실측).
   **이것들을 `core/` 같은 폴더로 모으지 않는다** — 114개 파일 226줄을 고치고 얻는 것이 목록
   열 줄이다(2026-08-27 실측). 폴더는 파일이 많아서 만드는 것이지 정리해 보이려고 만드는
   것이 아니다. **줄 수는 폴더로 내리는 기준이 아니다** — 기준은 "한 도메인의 파일이 셋

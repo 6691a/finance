@@ -4,7 +4,7 @@ from typing import Any
 import httpx
 import openai
 import pytest
-from langchain_core.messages import AIMessage
+from langchain_core.messages import AIMessage, HumanMessage
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from modules.assessment import DEFAULT_PERSPECTIVE, Assessment, system_prompt
@@ -111,11 +111,21 @@ def test_invoke_refuses_tools_and_a_schema_in_one_request():
     assert scripted.calls == []
 
 
-def test_a_rejected_schema_becomes_its_own_error():
-    scripted = ScriptedModel(status_error(openai.BadRequestError, 400, '{"error":"response_format is not supported"}'))
+def test_a_rejected_schema_is_sent_again_as_an_instruction():
+    """프롬프트는 출력 모양을 안 적으므로, 스키마를 거절한 제공처에는 그 스키마를 문장으로 준다."""
+    rejection = status_error(openai.BadRequestError, 400, '{"error":"response_format is not supported"}')
+    scripted = ScriptedModel(rejection, AIMessage("{}"))
+    schema = response_format(Assessment, "assessment")
 
-    with pytest.raises(UnsupportedResponseFormat):
-        invoke(scripted, [], schema={"type": "json_schema"})
+    reply = invoke(scripted, [HumanMessage("문서")], schema=schema)
+
+    assert reply.content == "{}"
+    first, second = scripted.calls
+    assert first == [HumanMessage("문서")]
+    assert second[0] == HumanMessage("문서")
+    assert isinstance(second[-1], HumanMessage)
+    assert '"additionalProperties":false' in second[-1].content
+    assert "JSON 객체 하나만" in second[-1].content
 
 
 def test_other_http_errors_stay_separate():
@@ -175,14 +185,33 @@ def test_strict_schema_marks_every_property_required():
     schema = strict_json_schema(Outer)
 
     assert schema["required"] == ["nested", "items"]
-    assert schema["$defs"]["Nested"]["required"] == ["kept"]
+    assert schema["properties"]["nested"]["required"] == ["kept"]
 
 
 def test_strict_schema_closes_every_object():
     schema = strict_json_schema(Outer)
 
     assert schema["additionalProperties"] is False
-    assert schema["$defs"]["Nested"]["additionalProperties"] is False
+    assert schema["properties"]["nested"]["additionalProperties"] is False
+
+
+class Described(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    nested: Nested = Field(description="필드 쪽 설명")
+    items: tuple[Nested, ...] = Field(default=(), description="배열 쪽 설명")
+
+
+def test_strict_schema_inlines_refs_so_a_described_nested_field_is_accepted():
+    """strict 모드는 `$ref` 옆에 키워드를 못 둔다. 2026-09-06 운영에서 `scores`가 400을 받았다."""
+    schema = strict_json_schema(Described)
+
+    assert "$ref" not in json.dumps(schema)
+    assert "$defs" not in schema
+    nested = schema["properties"]["nested"]
+    assert nested["description"] == "필드 쪽 설명"
+    assert nested["properties"]["kept"]["type"] == "string"
+    assert schema["properties"]["items"]["items"]["required"] == ["kept"]
 
 
 def test_strict_schema_drops_keywords_the_provider_rejects():

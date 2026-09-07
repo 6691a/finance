@@ -11,6 +11,9 @@
 - **피드 응답 1회가 `source_record` 1건이다.** 응답 하나가 문서 수십 개를 담고 있어 문서마다
   계보를 만들면 레코드가 문서보다 많아진다. `source_type`은 `crawl`, `source`는 출처 slug,
   `source_key`는 `feed`다.
+- **무엇을 받을지는 DB가 정하고, 무엇이 문서가 아닌지는 코드가 안다.** 부고와 인사이동은
+  어느 출처에서 와도 시장 문서가 아니라 `TITLE_SKIP_PATTERNS`가 제목만 보고 버린다. 그
+  목록에 무엇을 넣을 수 있는지는 그 상수의 주석이 갖는다 — 실측이 기준이다.
 - **본문 해시의 안정성이 이 모듈의 계약이다.** 같은 기사를 두 번 받아 해시가 달라지면 매시간
   같은 문서가 갱신되고, 나중에 붙일 LLM 태깅이 그때마다 다시 돈다. 피드 요약에는 HTML 조각과
   상대시각이 섞여 오므로 `normalize_text`가 그걸 걷어낸 뒤에 해시한다.
@@ -59,7 +62,22 @@ ATOM = "{http://www.w3.org/2005/Atom}"
 # pubDate를 시간대 없이 주는 피드의 기준 시간대. NDsoft CMS(연합인포맥스)는
 # `2026-08-19 17:01:32` 형태의 naive KST를 준다. 제공처가 시간대 기준을 정하면 그
 # 기준을 따른다는 수집기 규칙 그대로다. 여기 없는 출처의 naive 시각은 계속 버린다.
-NAIVE_FEED_TIMEZONES: dict[str, ZoneInfo] = {"einfomax": ZoneInfo("Asia/Seoul")}
+#
+# **연합인포맥스는 섹션마다 행이 하나씩이라 여기에도 여덟이 다 있어야 한다**(2026-09-04,
+# `docs/collection/einfomax-section-split.md`). 접두 판정으로 바꾸지 않는다 — 어떤 출처가
+# naive 시각을 주는지가 이 표에 그대로 보이는 편이 낫고, 빠뜨리면 `published_at`이 조용히
+# NULL이 되는 자리라 시드 리비전과 이 표를 테스트가 대조한다.
+NAIVE_FEED_TIMEZONES: dict[str, ZoneInfo] = {
+    "einfomax": ZoneInfo("Asia/Seoul"),  # 전체기사. 섹션 분리로 꺼졌고 과거 문서 때문에 남긴다
+    "einfomax_stock": ZoneInfo("Asia/Seoul"),
+    "einfomax_ib": ZoneInfo("Asia/Seoul"),
+    "einfomax_column": ZoneInfo("Asia/Seoul"),
+    "einfomax_policy": ZoneInfo("Asia/Seoul"),
+    "einfomax_bond_fx": ZoneInfo("Asia/Seoul"),
+    "einfomax_realestate": ZoneInfo("Asia/Seoul"),
+    "einfomax_global_stock": ZoneInfo("Asia/Seoul"),
+    "einfomax_world": ZoneInfo("Asia/Seoul"),
+}
 
 # 날짜만 고시하는 출처가 그 날짜를 정한 시간대. `kst_midnight_utc`가 쓴다.
 KST = ZoneInfo("Asia/Seoul")
@@ -101,6 +119,28 @@ NOISE_PATTERNS: tuple[re.Pattern[str], ...] = (
 
 # 추적용 질의 문자열. 같은 문서가 캠페인마다 다른 URL로 와서 `external_id`가 갈린다.
 TRACKING_PARAMS = re.compile(r"[?&](?:utm_[^=]+|fbclid|gclid|igshid)=[^&]*")
+
+# 제목만으로 시장 문서가 아님이 확실한 것. 여기 걸린 항목은 저장하지 않는다.
+#
+# **채택 기준은 "실측에서 고득점을 하나도 안 버리는가"다**(2026-09-04. 표는
+# `docs/collection/einfomax-section-split.md` 5절). 아래 셋은 전 출처 90일 표본 4,831건에서
+# 걸린 44건 중 `value_score` 6점 이상이 0건이었다.
+#
+# **더 크게 잡는 패턴은 예외 없이 값어치 있는 문서를 함께 버렸다.** 연재 칼럼 `[X의 Y]`는
+# 54건 중 22건이, `…이모저모]`는 11건 중 3건이, `이시각 주요뉴스`는 28건 중 5건이 6점
+# 이상이었다. 채용(`공채|신입사원`)과 홍보(`개교|축제|군수|도지사`)는 6점 이상이 0건이었지만
+# 90일에 11건뿐인데 `도지사`가 대통령·시도지사 성장 회의를, `축제`가 기업 행사를 물었다 —
+# **얻는 것이 적고 무는 것이 넓으면 넣지 않는다.**
+#
+# 이 필터로 줄어드는 양은 90일에 44건이다. 비용 대책이 아니라 명백히 시장 문서가 아닌 것을
+# 아카이브에 안 넣는 위생 조치다. 영문 피드는 애초에 안 걸리므로 출처를 가리지 않는다.
+TITLE_SKIP_PATTERNS: tuple[re.Pattern[str], ...] = (
+    re.compile(r"^\[부고\]"),
+    re.compile(r"^\[인사\]"),
+    # 말머리 없이 오는 부고. 90일 실측에서 이 낱말이 잡은 것 중 부고가 아닌 것은
+    # "…대법원장 부친상 조문" 하나였고 그것도 시장 문서가 아니다.
+    re.compile(r"별세|빈소|발인|부친상|모친상|장인상|장모상"),
+)
 class DocumentHTTPError(RuntimeError):
     """피드가 2xx가 아닌 상태로 응답했다. 재시도 가능 여부는 호출자가 `status`로 판단한다."""
 
@@ -227,6 +267,11 @@ def normalize_text(raw: str | None) -> str | None:
     return text or None
 
 
+def skipped_by_title(title: str) -> bool:
+    """제목만으로 시장 문서가 아님이 확실한가. 판정 근거는 `TITLE_SKIP_PATTERNS`에 있다."""
+    return any(pattern.search(title) for pattern in TITLE_SKIP_PATTERNS)
+
+
 def canonical_url(raw: str) -> str:
     """추적 질의와 fragment를 뗀 URL. `external_id`가 캠페인마다 갈리지 않게 한다."""
     url = raw.strip().split("#", 1)[0]
@@ -311,6 +356,7 @@ def parse_feed(
     truncated = len(entries) > MAX_ITEMS_PER_FEED
     naive_timezone = NAIVE_FEED_TIMEZONES.get(source_slug) if source_slug else None
 
+    skipped = 0
     items: list[FeedItem] = []
     for entry in entries[:MAX_ITEMS_PER_FEED]:
         link = _text(entry.find("link"))
@@ -321,6 +367,9 @@ def parse_feed(
         title = normalize_text(_text(entry.find("title")) or _text(entry.find(f"{ATOM}title")))
         if not link or not title:
             # 링크나 제목이 없으면 문서로 가리킬 수도, 사람이 읽을 수도 없다.
+            continue
+        if skipped_by_title(title):
+            skipped += 1
             continue
 
         url = canonical_url(urljoin(base_url, link) if base_url else link)
@@ -352,6 +401,9 @@ def parse_feed(
             )
         )
 
+    if skipped:
+        # 버린 건수를 남긴다. 0건과 "다 걸러졌다"가 로그에서 같아 보이면 안 된다.
+        logger.info("%s: skipped %s items by title filter", source_slug or "feed", skipped)
     return tuple(items), truncated
 
 

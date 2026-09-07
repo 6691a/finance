@@ -1,6 +1,7 @@
 # 저장소 운영 안내
 
-- 상태: 지금 도는 코드의 설명이다. Grafana는 제거됐다(2026-08-26 결정) — 그 자리를
+- 상태: 지금 도는 코드의 설명이다. Grafana는 2026-08-26에 쓰지 않기로 했고 2026-09-06에
+  compose·대시보드 JSON·테스트를 지웠다 — 그 자리를
   [analysis/kospi-forecast-web.md](analysis/kospi-forecast-web.md)의 화면이 받는다.
 - 무엇: 설정·DB alias·마이그레이션·DAG 목록·배포·관측. **저장소를 돌리는 사람과 에이전트가 읽는다.**
   프로젝트가 무엇인지는 루트 [README.md](../README.md)가 갖는다.
@@ -269,6 +270,7 @@ DAG마다 절을 두지 않습니다. 상세는 각 DAG 파일의 `doc_md`에 �
 | --- | --- | --- | --- |
 | `fred_treasury_daily` | 화~토 07:30 | `indicator_observation` | FRED |
 | `fred_macro_daily` | 화~토 07:40 | `indicator_observation` | FRED |
+| `fred_signal_daily` | 화~토 07:50 | `indicator_observation`(실질금리·기대인플레·신용스프레드) | FRED |
 | `ecos_market_rate_daily` | 화~토 08:00 | `indicator_observation` | 한국은행 ECOS |
 | `ecos_sentiment_monthly` | 월요일 10:00 | `indicator_observation`(소비자심리·업황BSI·선행지수) | 한국은행 ECOS |
 | `bbk_bund_daily` | 화~토 08:10 | `indicator_observation` | 분데스방크 |
@@ -276,14 +278,22 @@ DAG마다 절을 두지 않습니다. 상세는 각 DAG 파일의 `doc_md`에 �
 | `boe_gilt_daily` | 화~토 08:40 | `indicator_observation` | 잉글랜드은행 |
 | `ecb_yield_curve_daily` | 화~토 08:50 | `indicator_observation` | ECB |
 | `ecb_convergence_monthly` | 수 08:30 | `indicator_observation` | ECB |
+| `policy_rate_weekly` | 월 09:00 | `indicator_observation`(중앙은행 다섯 정책금리) | ECOS·FRED·BoE |
+| `central_bank_assets_weekly` | 월 09:20 | `indicator_observation`(중앙은행 여섯 총자산) | FRED·ECOS·BBK·BoE |
+| `kcs_trade_daily` | 매일 09:30 | `indicator_observation`(10일 단위 수출입 42계열) | 관세청 |
 | `market_calendar_daily` | 매일 07:00 | `market_session` | KIS·NYSE |
 | `kis_quote_intraday` | 평일 08~16시 5분마다 | `quote_bar`, `market_movement_snapshot` | KIS |
 | `kis_investor_flow_intraday` | 평일 09~15시 5분마다 | `market_investor_flow_snapshot` | KIS |
 | `kis_investor_estimate_intraday` | 평일 09:35·10:05·11:25·13:25·14:35 | `stock_investor_estimate_snapshot` | KIS |
 | `kis_investor_trade_daily` | 평일 18:10 | `stock_investor_trade_daily` | KIS |
 | `kis_stock_minute_bars_daily` | 평일 20:40 | `stock_bar` | KIS |
+| `kis_equity_bar_reconcile` | 평일 08~19시 05·35분 | `stock_bar`(실시간 잠정 봉을 REST 확정값으로 조정) | KIS |
+| `kis_index_daily` | 평일 18:20 | `index_daily`(코스피·코스닥·코스피200) | KIS |
+| `kis_future_daily` | 평일 18:30 | `index_future_daily`(코스피200·코스닥150 선물 연결 시계열) | KIS |
+| `kis_analyst_opinion_daily` | 평일 08:20 | `stock_analyst_opinion` | KIS |
 | `kis_market_positioning_daily` | 화~토 08:10 | `krx_*` 6종(신용·공매도·대차·증시자금) | KIS |
 | `kis_overseas_index_close` | 화~토 07:30 | `index_bar`(S&P500·나스닥 종합 마감 분봉) | KIS |
+| `kis_overseas_index_daily` | 화~토 07:35 | `index_daily`(S&P500·나스닥 확정 일봉) | KIS |
 | `kis_asia_index_intraday` | 평일 09~17시 5분마다 | `index_bar`(니케이·상해·항셍·대만 1분봉, 15분 지연) | KIS |
 | `kis_asia_index_daily` | 평일 18:00 | `index_daily`(니케이·상해·항셍·대만 확정 일봉) | KIS |
 | `yahoo_quote_intraday` | 5분마다(시간 창 없음) | `quote_bar` | Yahoo |
@@ -303,6 +313,20 @@ DAG마다 절을 두지 않습니다. 상세는 각 DAG 파일의 `doc_md`에 �
 [DART 공시·실적](collection/dart-disclosure-earnings.md),
 [ECB 회원국 10년물 월평균](collection/ecb-convergence-monthly.md) 문서에 정리했습니다.
 
+### 분석 DAG 목록
+
+수집한 것으로 판단을 만드는 DAG들입니다. 설계는 `docs/analysis/`에 있습니다.
+
+| DAG | 스케줄(KST) | 채우는 테이블 | 무엇 |
+| --- | --- | --- | --- |
+| `technical_signal_daily` | 평일 18:40 | `technical_signal` | 확정 일봉에서 이평·MACD·RSI 교차 사건을 검출한다. LLM 없음 |
+| `event_expectation_hourly` | 매시 45분 | `stock_event_claim`, `stock_event_extraction`, `stock_event_outcome` | 문서에서 실적 기대치를 뽑고 실제값과 대조한다 (LLM) |
+| `kospi_forecast_daily` | 평일 08:35 | `kospi_forecast`, `kospi_llm_run` | 장전 코스피 전망 (LLM+툴) |
+| `kospi_intraday_daily` | 평일 11:35·14:35 | `kospi_forecast`, `kospi_llm_run` | 장중·마감전 코스피 전망. 슬롯은 Param → `logical_date` 순으로 정한다 |
+| `kospi_review_daily` | 평일 19:00 | Neo4j 관계·메모, `kospi_llm_run` | 오늘 무엇이 코스피를 움직였나를 관찰하고 전망을 채점한다 (LLM+툴) |
+
+`document_assessment_hourly`와 급변 포착 둘은 각각 위 수집 표와 아래 급변 표에 있습니다.
+
 ### Slack 브리핑 DAG 목록
 
 수집하지 않고 **읽어서 내보내기만 하는** DAG들입니다. 설계는 [docs/briefing/slack-report-design.md](briefing/slack-report-design.md)에 있습니다.
@@ -313,12 +337,39 @@ DAG마다 절을 두지 않습니다. 상세는 각 DAG 파일의 `doc_md`에 �
 | `slack_us_market_briefing` | 화~토 08:00 | `SLACK_CHANNEL_MARKET` | 밤사이 미국 지수·선물(현물 옆에 선물)·원자재·크립토·ADR, 주요국 10년 금리, 전일 국내 복기 |
 | `slack_document_briefing` | 매일 08:00·12:00·15:30·20:00 | `SLACK_CHANNEL_DOCUMENT` | 직전 발송 이후 평가 집계와 LLM 선별 문서 |
 | `slack_ops_briefing` | 매일 08:00 | `SLACK_CHANNEL_OPS` | 지난 24시간 수집 성공·실패·무소식·0건 |
+| `slack_disclosure_briefing` | 평일 07:00~20:50 10분마다 | `SLACK_CHANNEL_MARKET` | 새 공시 알림. 실적 공시면 숫자와 전년 대비를 붙인다 |
 
 표와 비교값은 SQL 집계가 만듭니다. 시장·운영 브리핑은 LLM을 쓰지 않고, 문서 브리핑만
 후보 선별에 사용합니다. 선별이 실패해도 점수순 대체 목록으로 리포트는 나갑니다.
 
 미국 정규장은 KST로 밤이라 장중 알림을 보내지 않습니다. 대신 다음 날 아침 리포트가 밤사이
 결과와 전일 한국장을 같은 메시지에 놓습니다.
+
+### 급변 포착 DAG
+
+| DAG | 스케줄(KST) | 채널 | 내용 |
+| --- | --- | --- | --- |
+| `market_shock_intraday` | 평일 09:00~15:55 매 5분 | `SLACK_CHANNEL_MARKET` | 코스피 30분 창에서 ±2% 움직이면 아시아 넷·코스닥의 같은 창 등락과 함께 알린다 |
+| `market_shock_cause_daily` | 평일 08:00 | `SLACK_CHANNEL_MARKET` | 포착된 급변의 원인을 문서와 외부 검색으로 찾는다. 최대 3영업일 |
+
+**포착에는 LLM이 없습니다.** 장중에는 사실만 냅니다 — 그 시각에 우리가 가진 문서로는
+원인이 안 나오고(기사 발행에서 평가까지 중앙값 58분), 물으면 모델이 관계없는 같은 날
+기사를 붙여 지어냅니다.
+
+**원인은 다음 영업일 아침부터 최대 3영업일 동안 찾습니다.** 문서 창의 하한이 포착 시각이라
+그 이전 기사는 아예 안 봅니다 — 재료는 대개 며칠 전부터 있고, 그것을 근거로 받으면
+"전부터 있던 것"이 그날 그 시각의 방아쇠로 둔갑합니다.
+
+**검색은 툴이 아니라 목록입니다.** 코드가 먼저 Tavily에 묻고 결과를 프롬프트에 실어,
+모델이 준 목록의 번호로만 인용하게 합니다. 받은 결과는 전부 `market_shock_search_hit`에
+남습니다 — 밖의 페이지는 바뀌고 사라지므로 우리가 본 스냅샷이 근거의 원본입니다.
+`TAVILY_API_KEY`가 없으면 우리 문서만 보고 계속합니다(실패가 아닙니다).
+
+**창의 끝이 실행 시각보다 25분 앞입니다.** 니케이가 KIS에서도 15~16분 지연이라 창을
+"지금"까지 잡으면 아시아 칸이 비고, 그러면 "한국만의 재료가 아닐 수 있다"는 판단을 못
+합니다. `kis_asia_index_intraday`가 돌고 있어야 그 칸이 찹니다.
+
+설계는 [analysis/market-shock-capture.md](analysis/market-shock-capture.md)에 있습니다.
 
 ### 미국 국채 수집 DAG
 

@@ -23,9 +23,9 @@ from typing import Any, Literal, TypedDict
 from langchain_core.language_models import BaseChatModel
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, SystemMessage
 from langgraph.graph import END, START, StateGraph
-from pydantic import BaseModel, ConfigDict, ValidationError
+from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
-from modules import llm
+from modules import llm, untrusted
 from modules.expectation.domain import (
     EVENT_METRICS,
     PERIOD_KEY_PATTERN,
@@ -34,7 +34,6 @@ from modules.expectation.domain import (
     PendingExtractionDocument,
     normalize_amount,
 )
-from modules.llm import UnsupportedResponseFormat
 from modules.prompt import read_prompt
 from modules.schema import SchemaError, json_object, response_format
 
@@ -46,9 +45,9 @@ class ExtractedClaim(BaseModel):
 
     model_config = ConfigDict(frozen=True)
 
-    stock_code: str
-    event_type: Literal["shareholder_return", "earnings", "guidance"]
-    period_key: str
+    stock_code: str = Field(description="종목 코드. 후보에 있는 값만")
+    event_type: Literal["shareholder_return", "earnings", "guidance"] = Field(description="이벤트 종류")
+    period_key: str = Field(description="주장이 가리키는 기간 키")
     metric: Literal[
         "total_return_amount",
         "buyback_amount",
@@ -58,12 +57,12 @@ class ExtractedClaim(BaseModel):
         "operating_profit",
         "net_income",
     ]
-    kind: Literal["expectation", "actual"]
-    value: str
-    unit: str
-    value_low: str | None = None
-    value_high: str | None = None
-    broker: str | None = None
+    kind: Literal["expectation", "actual"] = Field(description="기대(전망·추정·컨센서스)인지 실제(발표·확정)인지")
+    value: str = Field(description="수치. 문서에 적힌 그대로")
+    unit: str = Field(description="수치의 단위")
+    value_low: str | None = Field(default=None, description="범위로 말했을 때의 하한")
+    value_high: str | None = Field(default=None, description="범위로 말했을 때의 상한")
+    broker: str | None = Field(default=None, description="추정을 낸 증권사. 회사 자신의 발표면 null")
 
 
 class ExtractionResponse(BaseModel):
@@ -79,9 +78,31 @@ PROMPTS = read_prompt("expectation_extraction")
 SYSTEM_PROMPT = PROMPTS.system
 
 # 사람이 읽는 지시. 종목 후보는 문서의 태그로 실행 시점에 뒤에 이어 붙인다.
-INSTRUCTION = PROMPTS.instruction
+INSTRUCTION = PROMPTS.render("instruction", untrusted_text=llm.UNTRUSTED_TEXT)
 
 REPAIR_INSTRUCTION = PROMPTS.repair
+
+# 모델에게 가는 글의 길이 상한. 본문은 전에 상한이 없었다 — 수치 주장은 앞쪽에 있고
+# 긴 꼬리는 면책 문구라 잘라도 잃는 것이 적다.
+MAX_TITLE_CHARS = 300
+MAX_SUMMARY_CHARS = 3000
+MAX_BODY_CHARS = 20_000
+
+
+def screen(document: PendingExtractionDocument) -> tuple[str, ...]:
+    """모델을 부르기 전에 제목·요약·본문을 읽는다. 걸린 라벨이 비면 통과다.
+
+    평가(`assessment.screen`)는 본문을 안 보므로 여기가 본문을 보는 첫 자리다. 걸린 문서는
+    주장 0건으로 원장에 오른다 — DAG이 그 사실을 `llm_model` 칸에 적는다.
+    """
+    text = "\n".join(
+        (
+            untrusted.clean(document.title, limit=MAX_TITLE_CHARS),
+            untrusted.clean(document.summary, limit=MAX_SUMMARY_CHARS),
+            untrusted.clean(document.body, limit=MAX_BODY_CHARS),
+        )
+    )
+    return untrusted.suspicious(text)
 
 
 class ExtractState(TypedDict):
@@ -110,17 +131,19 @@ class ExpectationExtractor:
     def build_messages(document: PendingExtractionDocument) -> list[BaseMessage]:
         """모델에 보낼 메시지. 종목 후보는 그 문서의 태그다 — 전체 마스터가 아니다."""
         ticker_lines = "\n".join(f"- {ticker}" for ticker in document.tickers)
+        # 출처·발행은 우리 값이라 봉투 밖, 제목·요약·본문은 밖에서 온 글이라 봉투 안이다.
+        body = [f"제목: {untrusted.clean(document.title, limit=MAX_TITLE_CHARS)}"]
+        if document.summary:
+            body.append(f"요약: {untrusted.clean(document.summary, limit=MAX_SUMMARY_CHARS)}")
+        if document.body:
+            body.append(f"본문: {untrusted.clean(document.body, limit=MAX_BODY_CHARS)}")
         parts = [
             INSTRUCTION,
             f"\n## 종목 후보\n{ticker_lines or '(없음)'}",
             f"\n## 문서\n출처: {document.source_slug}",
             f"발행: {document.published_at.isoformat() if document.published_at else '알 수 없음'}",
-            f"제목: {document.title}",
+            untrusted.wrap("문서", document.id, "\n".join(body)),
         ]
-        if document.summary:
-            parts.append(f"요약: {document.summary}")
-        if document.body:
-            parts.append(f"본문: {document.body}")
         return [SystemMessage(SYSTEM_PROMPT), HumanMessage("\n".join(parts))]
 
     @staticmethod
@@ -163,11 +186,7 @@ class ExpectationExtractor:
 
     def _call(self, state: ExtractState) -> dict[str, Any]:
         messages = state["messages"]
-        try:
-            reply = llm.invoke(self._model, messages, schema=self._schema)
-        except UnsupportedResponseFormat as error:
-            logger.warning("provider does not accept a response schema; falling back to validation: %s", error)
-            reply = llm.invoke(self._model, messages)
+        reply = llm.invoke(self._model, messages, schema=self._schema)
 
         try:
             return {"messages": [*messages, reply], "extraction": self.parse(_text(reply)), "error": None}

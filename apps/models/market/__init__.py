@@ -58,6 +58,13 @@ from apps.models.market.sessions import (
     MarketSession,
     SessionVerifier,
 )
+from apps.models.market.shock import (
+    MarketShockEvent,
+    MarketShockSearchHit,
+    ShockCauseKind,
+    ShockCauseStatus,
+    ShockDirection,
+)
 
 __all__ = [
     "AmountBasis",
@@ -92,9 +99,14 @@ __all__ = [
     "MarketInvestorFlowSnapshot",
     "MarketMovementSnapshot",
     "MarketSession",
+    "MarketShockEvent",
+    "MarketShockSearchHit",
     "RateBar",
     "RateDaily",
     "SessionVerifier",
+    "ShockCauseKind",
+    "ShockCauseStatus",
+    "ShockDirection",
     "StatementScope",
     "StockAnalystOpinion",
     "StockBar",

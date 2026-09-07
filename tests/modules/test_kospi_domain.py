@@ -116,6 +116,41 @@ def test_inverse_observations_give_a_negative_weight():
     assert weight.weight == -1.0
 
 
+def test_none_observations_pull_a_frozen_weight_toward_zero():
+    """**"봤는데 무관"이 0으로 평균에 들어간다.** 이것이 없으면 관찰이 끊긴 요인의 옛 가중치가
+    가중 평균의 정규화 때문에 나이와 무관하게 얼어붙는다(설계 §8.10)."""
+    frozen = relation_weight(
+        Factor.SOX,
+        [observation("2026-06-10", ObservationSign.SAME, 3), observation("2026-06-09", ObservationSign.SAME, 3)],
+        as_of_date=date(2026, 9, 1),
+    )
+    # 석 달 전 관측 둘만 있으면 여전히 +1.0이다 — 그 자체는 의도(옛 관측을 지우지 않는다)지만
+    # 그 뒤 매일 `none`이 들어오면 내려가야 한다.
+    assert frozen.weight == 1.0
+
+    thawed = relation_weight(
+        Factor.SOX,
+        [
+            observation("2026-06-10", ObservationSign.SAME, 3),
+            observation("2026-06-09", ObservationSign.SAME, 3),
+            observation("2026-09-01", ObservationSign.NONE, 0),
+            observation("2026-08-31", ObservationSign.NONE, 0),
+        ],
+        as_of_date=date(2026, 9, 1),
+    )
+    assert 0.0 <= thawed.weight < 0.01
+    assert thawed.n_obs == 4
+    assert thawed.recent_signs[0] is ObservationSign.NONE
+
+
+def test_signed_strength_maps_the_three_signs():
+    from modules.kospi.domain import signed_strength
+
+    assert signed_strength(ObservationSign.SAME, 2) == 2
+    assert signed_strength(ObservationSign.INVERSE, 2) == -2
+    assert signed_strength(ObservationSign.NONE, 2) == 0
+
+
 def test_recent_observations_outweigh_older_ones():
     """**감쇠가 이 기능의 핵심이다.** 옛 관측을 남기되 최신이 무겁다."""
     flipping = relation_weight(
@@ -222,3 +257,14 @@ def test_an_empty_baseline_reports_none_not_zero():
     assert empty.abs_p50 is None
     assert empty.up_median is None
     assert empty.up_day_ratio is None
+
+
+def test_the_two_document_score_floors_stay_the_same():
+    """`shock`과 `kospi`가 같은 하한을 쓴다. 서로를 import하지 않아 값이 두 벌이다.
+
+    어긋나면 한 흐름만 부고·인사 기사를 근거로 보게 된다.
+    """
+    from modules.kospi.domain import NEWS_MIN_VALUE_SCORE
+    from modules.shock.domain import MIN_DOCUMENT_SCORE
+
+    assert MIN_DOCUMENT_SCORE == NEWS_MIN_VALUE_SCORE

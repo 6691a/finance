@@ -76,8 +76,11 @@ FACTOR_LABELS: dict[str, str] = {
 # `domain.RELATION_FACTORS`가 원본이고 테스트가 둘을 대조한다.
 INDEX_SELF = "KOSPI"
 
-# 관측이 같은 방향이었음을 뜻하는 값. 아니면 반대로 친다.
+# 관측의 부호. **`none`은 "봤는데 무관"이고 관측 없음(`n_obs=0`)과 다르다** —
+# 가중치 분자에 0으로 들어가 안 먹히는 요인을 반감기대로 0에 내린다. 이것이 없으면
+# 관찰이 끊긴 요인의 옛 가중치가 얼어붙는다(설계 §8.10, 2026-09-07).
 SAME = "same"
+NONE = "none"
 
 INDEX_NODE_ID = "index:KOSPI"
 INDEX_LABEL = "코스피"
@@ -105,6 +108,16 @@ def decay_weight(
     return 0.5 ** (age / half_life_days)
 
 
+def signed_strength(sign: str, strength: int) -> int:
+    """관측 하나가 가중치 분자에 넣는 값. `same` +세기, `inverse` −세기, `none` 0.
+
+    원본은 `airflow/modules/kospi/domain.signed_strength`다.
+    """
+    if sign == NONE:
+        return 0
+    return strength if sign == SAME else -strength
+
+
 def fold(
     factor: str,
     observations: Sequence[ObservationRow],
@@ -130,7 +143,9 @@ def fold(
     denominator = 0.0
     for row in recent:
         weight = decay_weight(row.observed_on, as_of_date, half_life_days=half_life_days)
-        signed = row.strength if row.sign == SAME else -row.strength
+        # `none`은 0이다. **분모에는 들어가고 분자에는 안 들어간다** — 안 먹히는 요인을
+        # 끌어내리는 것이 그 값의 목적이다.
+        signed = signed_strength(row.sign, row.strength)
         numerator += weight * signed
         denominator += weight * MAX_STRENGTH
     return RelationItem(

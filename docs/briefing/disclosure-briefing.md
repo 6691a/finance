@@ -1,5 +1,10 @@
 # 공시 알림 — `slack_disclosure_briefing`
 
+> **한눈에**
+> - 왜: 삼성전자·SK하이닉스의 새 공시를 2분마다 모으는데 사람이 보는 출구가 없었다. 실적 발표처럼 주가를 바로 움직이는 소식을 알고도 아무에게도 알리지 않았다.
+> - 무엇: 평일 07시~20시 50분, 10분마다 새 공시가 있으면 Slack으로 알린다. 전부 싣고 AI는 어느 것이 중요한지 별표와 한 줄 이유만 붙인다. 실적 공시면 매출·영업이익·순이익과 전년 대비를 함께 적는다.
+> - 한계: 두 종목만 다룬다. "이미 보냈나"를 기록하지 않아 재시도 때 같은 알림이 두 번 갈 수 있다. 운영 AI 키가 무효인 상태라 강조는 키가 살아나야 켜진다.
+
 - 상위: [slack-report-design.md](slack-report-design.md)
 - 날짜: 2026-08-27
 - 상태: **구현 완료**(2026-08-27). **마이그레이션이 없어 코드 배포만으로 뜬다.** 검증은
@@ -121,8 +126,8 @@ SCHEDULE = "*/10 7-20 * * 1-5"   # KST 평일 07:00~20:50, 10분마다 = UTC 전
 - **`detected_at`은 "최초 감지"로 표시한다.** 공시 시각이 아니다 — DART가 분 단위 접수
   시각을 주지 않아 우리가 처음 본 시각이 상한이다. 표시 시간대는 KST다.
 - 접수번호에 DART 뷰어 링크를 건다.
-  `thesis.domain.DART_VIEWER_URL`을 그대로 import한다. 상수를 두 벌 두지 않는다 —
-  `thesis.domain`은 LangChain을 import하지 않아 브리핑이 끌고 와도 무겁지 않다.
+  `DART_VIEWER_URL`은 `briefing/disclosures.py`에 있다(원래 `thesis.domain`에서 import했고
+  그 모듈은 옛 시장 추론과 함께 지워졌다). 상수를 두 벌 두지 않는다.
 
 ## 5. 선별 — `DisclosurePicker`
 
@@ -216,7 +221,7 @@ DAG이 태스크 안에서 늦게 읽는다. `tests/modules/test_import_weight.p
 - 조회 SQL이 기준을 하나로 좁히지 않는다.
 - 네 자리 전년 대비에 천 단위 쉼표가 찍힌다.
 - 금액 표기 — 조·억 단위와 천 단위 쉼표.
-- `DART_VIEWER_URL`이 `thesis.domain`의 값과 같다.
+- `DART_VIEWER_URL` 형식이 DART 뷰어 주소와 맞는다.
 
 `tests/dags/test_slack_disclosure_briefing.py`
 
@@ -275,7 +280,7 @@ account_nm         매출액 / 영업이익 / 반기순이익
 ## 10. 남은 확인 (spike)
 
 - **`briefing_model()`은 `ChatXAI`(grok-4.6)이고 운영 `XAI_API_KEY`가 무효다**(2026-08-20 실측,
-  [market-thesis/README.md](../analysis/market-thesis/README.md) 5절). **이 DAG는 그래도 죽지
+  당시 시장 추론 문서에 기록. 그 문서는 지워졌다). **이 DAG는 그래도 죽지
   않는다** — 6절의 폴백이 강조 없는 목록을 보낸다. 키가 살아나면 강조가 붙기 시작한다.
   키 문제 자체는 이 문서의 범위 밖이다.
 

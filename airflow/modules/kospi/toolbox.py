@@ -37,6 +37,7 @@ from langgraph.prebuilt import ToolNode
 from langgraph.prebuilt.tool_node import ToolInvocationError
 from pydantic import BaseModel
 
+from modules import untrusted
 from modules.db import Connection
 from modules.kospi.domain import (
     DEFAULT_HISTORY_DAYS,
@@ -52,12 +53,15 @@ from modules.kospi.domain import (
     MAX_WINDOW_HOURS,
     MIN_HISTORY_DAYS,
     MIN_WINDOW_HOURS,
+    NEWS_MIN_VALUE_SCORE,
     Factor,
     FactorSource,
+    FactorSpec,
     FactorUnit,
     ToolCallRecord,
     ToolLimitExceeded,
 )
+from modules.kospi.state import FactorMove
 from modules.kospi.tool_args import (
     TOOL_DESCRIPTIONS,
     FactorHistoryArgs,
@@ -91,6 +95,10 @@ INDICATOR_PROVIDER = "ecos"
 # 공시 본문을 몇 자까지 싣나. 전문을 실으면 툴 하나가 문자 예산을 다 먹는다.
 DISCLOSURE_BODY_CHARS = 1_500
 
+# 기사 제목·평가 사유·사실 한 줄의 길이 상한. 폭주를 막는 값이지 내용을 자르려는 값이 아니다.
+NEWS_TITLE_CHARS = 300
+NEWS_TEXT_CHARS = 1000
+
 UNIT_NOTES: dict[FactorUnit, str] = {
     FactorUnit.PERCENT: "change는 값 차이, change_pct는 퍼센트다",
     FactorUnit.BASIS_POINT: "change는 bp 차이다. 퍼센트로 읽지 마라",
@@ -118,9 +126,12 @@ class KospiToolbox:
     생성자가 받는다. 요인·창처럼 호출마다 바뀌는 것은 메서드 인자다.
     """
 
-    def __init__(self, connection: Connection, *, as_of_at: datetime) -> None:
+    def __init__(self, connection: Connection, *, as_of_at: datetime, include_history: bool = True) -> None:
         self._connection = connection
         self._as_of_at = as_of_at
+        # 장후 관찰은 `factor_history`를 안 받는다 — 요인 값은 코드가 `factor_moves()`로 표에
+        # 싣고, 모델이 요인을 고르는 단계가 없어야 커버리지가 보장된다(설계 §8.10).
+        self._include_history = include_history
         self._calls = 0
         self._chars = 0
         # **이 대화가 실제로 값을 본 요인.** 답변 검증이 이것을 읽는다.
@@ -143,13 +154,15 @@ class KospiToolbox:
         함수는 **바인드된 메서드**다. 툴이 연결·기준 시각·예산 같은 이 객체의 상태를 봐야
         해서 모듈 수준 `@tool`을 쓸 수 없다.
         """
-        return [
+        history = [
             StructuredTool.from_function(
                 func=self._ledger.record("factor_history", self._tool_factor_history),
                 name="factor_history",
                 description=TOOL_DESCRIPTIONS["factor_history"],
                 args_schema=FactorHistoryArgs,
             ),
+        ]
+        return (history if self._include_history else []) + [
             StructuredTool.from_function(
                 func=self._ledger.record("recent_news", self._tool_recent_news),
                 name="recent_news",
@@ -208,6 +221,23 @@ class KospiToolbox:
     def close_open_records(self) -> None:
         self._ledger.close_open_records()
 
+    # --- 툴이 아닌 조회 ----------------------------------------------------
+
+    def factor_moves(self) -> tuple[FactorMove, ...]:
+        """숫자 요인 전부의 그날 값. **툴이 아니다** — 예산을 안 쓰고 원장에도 안 남는다.
+
+        장후 관찰이 이것을 표로 받아 줄마다 판정한다. `factor_history`와 같은 SQL을 요인마다
+        한 번씩 돈다(창 2 — 직전 대비 변화를 내는 데 필요한 최소). 값이 없는 요인은 칸이
+        `None`인 채로 실린다. 빠지지 않는다 — 빠지면 모델이 그 줄을 답하지 않아도 되고,
+        그러면 "안 봤다"가 다시 생긴다.
+        """
+        moves: list[FactorMove] = []
+        for code in HISTORY_FACTORS:
+            spec = FACTOR_SPECS[code]
+            rows = self._factor_rows(spec.source, spec.key, MIN_HISTORY_DAYS)
+            moves.append(_latest_move(spec, rows))
+        return tuple(moves)
+
     # --- 툴 본체 ----------------------------------------------------------
 
     def _tool_factor_history(self, factor: str, days: int = DEFAULT_HISTORY_DAYS) -> str:
@@ -234,6 +264,7 @@ class KospiToolbox:
             {
                 "window_start": self._as_of_at - timedelta(hours=span),
                 "as_of_at": self._as_of_at,
+                "min_value_score": NEWS_MIN_VALUE_SCORE,
                 "limit": MAX_TOOL_RESULTS,
             },
         )
@@ -247,13 +278,15 @@ class KospiToolbox:
                 items=tuple(
                     NewsRow(
                         document_id=row[0],
-                        title=row[1],
+                        # 제목은 밖에서 온 글, 사유·사실은 앞선 모델이 그 글을 보고 쓴 글이다.
+                        # 의심 문구 검사는 평가가 이미 했다(점수 없이 닫혀 여기 안 온다).
+                        title=untrusted.clean(row[1], limit=NEWS_TITLE_CHARS),
                         source=row[2],
                         published_at=row[3],
                         value_score=row[4],
                         direction=row[5],
-                        reason=row[6],
-                        new_facts=list(row[7] or []),
+                        reason=untrusted.clean(row[6], limit=NEWS_TEXT_CHARS) or None,
+                        new_facts=[untrusted.clean(fact, limit=NEWS_TEXT_CHARS) for fact in row[7] or []],
                         tickers=tuple(row[8] or ()),
                     )
                     for row in rows
@@ -276,20 +309,28 @@ class KospiToolbox:
         # 두 회사 범위라 하루 창은 대개 빈다(09-03 실측 12회 전부 `[]`). 그때 `DISCLOSURE`가
         # 인용 가능해지면 안 본 공시를 근거로 쓸 수 있다.
         self._saw_disclosures = bool(rows)
-        return self._body(
-            [
+        items = []
+        for row in rows:
+            # 공시 본문은 평가를 안 거친 글이라 여기가 첫 검사 자리다. 걸린 공시는 모델에
+            # 안 간다. ponytail: 건수는 로그뿐이다. 원장 칸이 필요해지면 `kospi_llm_run`에 뺀다.
+            body = untrusted.clean(row[6], limit=DISCLOSURE_BODY_CHARS)
+            report_name = untrusted.clean(row[3], limit=NEWS_TITLE_CHARS)
+            labels = untrusted.suspicious(f"{report_name}\n{body}")
+            if labels:
+                logger.warning("disclosure %s blocked before the model: %s", row[0], labels)
+                continue
+            items.append(
                 DisclosureRow(
                     rcept_no=row[0],
                     stock_code=row[1],
                     company_name=row[2],
-                    report_name=row[3],
+                    report_name=report_name,
                     receipt_date=row[4],
                     detected_at=row[5],
-                    body=row[6] or "",
+                    body=body,
                 )
-                for row in rows
-            ]
-        )
+            )
+        return self._body(items)
 
     # --- 조회 -------------------------------------------------------------
 
@@ -423,6 +464,24 @@ class KospiToolbox:
             self.finish_round([reply])
             return message_text(reply)
         return str(reply)
+
+
+def _latest_move(spec: FactorSpec, rows: dict[str, Any]) -> FactorMove:
+    """`_factor_rows`의 payload 칸에서 마지막 행 하나를 `FactorMove`로 접는다.
+
+    수급은 그날 누적 수량이 값이고 변화가 없다 — 어제 누적과 오늘 누적의 차이는 뜻이 없다.
+    """
+    base = {"factor": spec.code, "label": spec.label, "unit": spec.unit}
+    if rows.get("points"):
+        point = rows["points"][-1]
+        return FactorMove(**base, business_date=point.date, value=point.value, change=point.change, change_pct=point.change_pct)
+    if rows.get("flows"):
+        flow = rows["flows"][-1]
+        return FactorMove(**base, business_date=flow.date, value=flow.net_buy_qty)
+    if rows.get("stocks"):
+        stock = rows["stocks"][-1]
+        return FactorMove(**base, business_date=stock.date, value=stock.close, change_pct=stock.change_pct)
+    return FactorMove(**base)
 
 
 def _clamp(value: Any, low: int, high: int, fallback: int) -> int:

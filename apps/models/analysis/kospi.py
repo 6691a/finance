@@ -278,6 +278,10 @@ class KospiLlmRun(EntityBase):
             "observations_written IS NULL OR observations_written >= 0",
             name="ck_kospi_llm_run_observations_written",
         ),
+        CheckConstraint(
+            "observations_unanswered IS NULL OR observations_unanswered >= 0",
+            name="ck_kospi_llm_run_observations_unanswered",
+        ),
         table_options(
             comment="코스피 전망·관찰의 모델 호출 원장. 실패한 대화도 남는다",
             database="default",
@@ -358,6 +362,16 @@ class KospiLlmRun(EntityBase):
         Integer,
         nullable=True,
         comment="이 관찰이 그래프에 쓴 요인 엣지 수. `rejected`의 분모다. 전망 대화는 NULL",
+    )
+    observations_unanswered: Mapped[int | None] = mapped_column(
+        Integer,
+        nullable=True,
+        comment="요인 값 표에 있는데 모델이 답하지 않은 요인 수. 0으로 채우지 않고 센다 — 0이어야 정상. 전망 대화는 NULL",
+    )
+    unlisted_drivers: Mapped[list | None] = mapped_column(
+        JSONB,
+        nullable=True,
+        comment="요인 목록에 없는데 오늘 움직였다고 모델이 적은 자유 문장 목록. 가중치에 안 들어간다. 요인 승격 후보를 세는 자리다",
     )
     memories_written: Mapped[int | None] = mapped_column(
         Integer, nullable=True, comment="이 관찰이 새로 쓴 메모 수. 전망 대화는 NULL"

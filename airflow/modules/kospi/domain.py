@@ -43,11 +43,36 @@ from pydantic import BaseModel, ConfigDict
 #       완벽히 맞혀도 필요한 폭이 2.5~2.9%p인데 기대 크기가 약 2.0이라, 이 시장에서는 폭이
 #       중심을 넘어야 정상이다. 백테스트 닷새에서 폭이 1.4~1.8로 눌려 방향이 틀린 날마다
 #       폭도 틀렸다(폭 2/5 = 방향 2/5). 튜닝이 아니라 잘못 쓴 문장을 바로잡은 것이다.
-PROMPT_VERSION = "4"
+# 판 5: 장중 지시문에 "가격이 움직였다고 재료가 끝난 것은 아니다"를 넣었다(2026-09-04).
+#       판 4는 "이미 일어난 것을 다시 세지 마라"와 "개장 뒤 재료가 새것이다"만 말해, 모델이
+#       장전 상방 재료 여섯(SP500·NASDAQ·US10Y·VIX·DXY·USDKRW)을 "갭에 소진"으로 접고
+#       말없이 뺐다(09-04 midday 실측 — 장전 14건이 장중 8건, 그중 이어받은 것 1건).
+#       "얼마나 반영됐나"와 "아직 작용하나"를 갈라 요인마다 판단하게 하고, 소진 판단도
+#       이유로 남기게 했다. 앞 슬롯 이유에 요인 코드(`EarlierReason.factor`)를 함께 싣는
+#       것이 이 판의 손잡이다 — 관측 상태의 모양이 바뀌어 같은 판에 묶는다.
+# 판 6: `recent_news`에 가치 점수 하한을 뒀다(2026-09-04, `NEWS_MIN_VALUE_SCORE`).
+#       **프롬프트 문장은 한 글자도 안 바뀌었다** — 바뀐 것은 모델이 보는 증거다. 창이 좁은
+#       실행에서 부고·임원 인사·행사 공지가 근거 목록에 섞여 있었다. 같은 문장이라도 다른
+#       기사 묶음을 본 실행이라 채점을 한 판으로 셀 수 없어 판을 올린다.
+# 판 7: 관계 표에 `none` 관측이 실린다(2026-09-06, 설계 §8.10). **전망 문장은 안 바뀌었다** —
+#       바뀐 것은 장후 관찰이고, 그 결과로 가중치와 `recent_signs`에 "봤는데 무관"이 들어와
+#       전망 모델이 보는 관계 표가 달라진다. 판 6과 같은 이유로 판만 올린다.
+# 판 8: 출력 형식(예시 JSON)을 YAML에서 빼고 `ForecastAnswer`의 `Field(description=...)`로
+#       옮겼다(2026-09-06, 판 7과 같은 날 배포). YAML은 목적·규칙·주의만 갖고 모양은 스키마가
+#       말한다. 문장의 뜻은 그대로이고 자리만 바뀌었다.
+PROMPT_VERSION = "8"
 
 # 장후 관찰 프롬프트의 판. 전망과 축이 다르다 — 저쪽은 "잘 맞혔나", 이쪽은 "관계를 잘
 # 읽었나"다. 따로 올린다.
-REVIEW_PROMPT_VERSION = "1"
+#
+# 판 1: 첫 판(2026-09-02). 모델이 `factor_history`로 요인을 골라 조회하고 조회한 것만 관찰.
+# 판 2: **모델이 요인을 고르지 않는다**(2026-09-06, 설계 §8.10). 코드가 숫자 요인 15개의
+#       그날 값을 표로 주고 모델은 줄마다 `same`/`inverse`/`none`으로 답한다. 안 조회한
+#       요인은 기록이 없어 옛 가중치가 얼어붙었고(가중 평균이라 나이가 사라진다), 모델이
+#       무거운 요인부터 조회해 가벼운 요인은 영영 관측이 안 쌓였다. 09-03 실측 15개 중 8개.
+# 판 3: 출력 형식을 YAML에서 빼고 `ReviewAnswer`의 description으로 옮겼다(2026-09-06). 전망 판 8과
+#       같은 변경이다.
+REVIEW_PROMPT_VERSION = "3"
 
 
 class KospiError(RuntimeError):
@@ -341,10 +366,16 @@ def factor_label(code: Factor) -> str:
 
 
 class ObservationSign(StrEnum):
-    """오늘 그 요인이 코스피와 같은 방향이었나."""
+    """오늘 그 요인이 코스피와 같은 방향이었나.
+
+    **`NONE`은 "봤는데 무관"이다.** "안 봤다"(관측 없음, `n_obs=0`)와 다르다. 가중치 셈에
+    0으로 들어가 안 먹히는 요인을 반감기대로 0에 내린다 — 이것이 없으면 관찰이 끊긴 요인의
+    옛 가중치가 얼어붙는다(설계 §8.10).
+    """
 
     SAME = "same"
     INVERSE = "inverse"
+    NONE = "none"
 
 
 class Direction(StrEnum):
@@ -462,6 +493,16 @@ MIN_WINDOW_HOURS = 1
 MAX_WINDOW_HOURS = 48
 DEFAULT_WINDOW_HOURS = 24
 
+# `recent_news`가 받는 가치 점수 하한(`document.value_score`, 0~8 정수).
+#
+# **모델이 고르는 인자가 아니라 코드 상수다.** 2026-09-03에 인자를 없앤 이유가 "24시간 창은
+# 후보가 300건이라 `LIMIT` 30이 알아서 상위만 남긴다"였는데, 그 근거는 창이 넓을 때만 참이다.
+# 좁은 창은 후보가 30건 밑이라 `LIMIT`이 아무것도 안 자르고 창 안 전부가 모델에 간다 —
+# 5일 실측에서 08:35 6시간 창의 후보가 14~27건이었고 0~2점(부고·포럼 개최·임원 인사)이
+# 그대로 들어갔다. 4는 0~8 눈금의 절반이고, 같은 실측에서 1시간 창도 3건 이상 남겼다.
+# `document.value_score`의 눈금이 0~1로 바뀌면 이 값도 함께 옮긴다.
+NEWS_MIN_VALUE_SCORE = 4
+
 
 # 답의 범위. **폭주만 막는 값이다** — 정합성은 프롬프트와 저장 전 검증이 본다.
 MAX_EXPECTED_CHANGE_PCT = Decimal(10)
@@ -470,6 +511,10 @@ MAX_BAND_PCT = Decimal(5)
 
 # 저장 자릿수. 모델이 소수점 넷을 내도 두 자리로 접는다.
 CHANGE_QUANTUM = Decimal("0.01")
+
+# 장후 답의 `unlisted_drivers` 상한. 요인 목록 밖인데 오늘 움직인 것의 자유 문장이다.
+# 가중치에 안 들어가고 원장에만 남는다 — 20영업일마다 세어 요인 승격 후보를 고른다.
+MAX_UNLISTED_DRIVERS = 5
 
 # 문장 상한.
 MAX_STATEMENT_CHARS = 200
@@ -581,6 +626,13 @@ class RelationWeight(BaseModel):
     recent_signs: tuple[ObservationSign, ...] = ()
 
 
+def signed_strength(sign: ObservationSign, strength: int) -> int:
+    """관측 하나가 가중치 분자에 넣는 값. `same` +세기, `inverse` −세기, `none` 0."""
+    if sign is ObservationSign.NONE:
+        return 0
+    return strength if sign is ObservationSign.SAME else -strength
+
+
 def relation_weight(
     factor: Factor,
     observations: list[Observation],
@@ -606,7 +658,8 @@ def relation_weight(
     denominator = 0.0
     for item in recent:
         weight = decay_weight(item.observed_on, as_of_date, half_life_days=half_life_days)
-        signed = item.strength if item.sign is ObservationSign.SAME else -item.strength
+        # `none`은 0이다. 분모에는 들어가고 분자에는 안 들어가 안 먹히는 요인을 끌어내린다.
+        signed = signed_strength(item.sign, item.strength)
         numerator += weight * signed
         denominator += weight * MAX_STRENGTH
     return RelationWeight(

@@ -91,6 +91,21 @@ class InstrumentRow(ApiModel):
             "**상장폐지 같은 생애주기 상태가 아니다** — 그건 생기면 별도 칸이 된다."
         )
     )
+    filing_entity_id: str | None = Field(
+        default=None,
+        description=(
+            "**공시·실적을 받는 대상인가.** 세 번째 축이다(2026-09-04) — 값이 있으면 규제 공시 "
+            "수집 대상이고 NULL이면 아니다. 발급 기관은 `market`이 정한다(kospi·kosdaq은 DART "
+            "고유번호 8자리, nyse·nasdaq은 SEC EDGAR CIK)."
+        ),
+    )
+    sector: str | None = Field(
+        default=None,
+        description=(
+            "이 종목이 대표하는 산업(반도체·자동차 등). 거시 지표를 회사가 아니라 산업 단위로 "
+            "묶는 축이라 대표 기업이 바뀌어도 이름은 그대로다."
+        ),
+    )
 
 
 InstrumentList = Page[InstrumentRow]

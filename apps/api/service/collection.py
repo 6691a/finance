@@ -93,6 +93,8 @@ def instrument_of(row: Any) -> InstrumentRow:
         currency=row.currency,
         source_symbol=row.source_symbol,
         is_watched=row.is_watched,
+        filing_entity_id=row.filing_entity_id,
+        sector=row.sector,
     )
 
 

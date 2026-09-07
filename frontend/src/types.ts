@@ -782,7 +782,12 @@ export interface InstrumentRow {
   kind: string;
   currency: string;
   source_symbol: string | null;
+  /** 시세를 받는가. 행이 있다는 것과 다른 뜻이다. */
   is_watched: boolean;
+  /** 공시·실적을 받는가. **세 번째 축이다** — 값이 있으면 대상이고 null이면 아니다. */
+  filing_entity_id: string | null;
+  /** 이 종목이 대표하는 산업. 거시 지표를 산업 단위로 묶는 축이다. */
+  sector: string | null;
 }
 
 export interface MarketSessionRow {

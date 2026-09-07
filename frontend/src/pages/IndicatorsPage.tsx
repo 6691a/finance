@@ -24,6 +24,9 @@ const KINDS = [
   { id: "credit_spread", label: "신용스프레드" },
   { id: "price_index", label: "물가지수" },
   { id: "activity", label: "실물활동" },
+  // **설문이 만드는 값이라 실물활동과 가른다**(2026-09-04). 소비자심리·기업경기실사가
+  // 여기이고 선행종합지수는 실물 합성이라 `activity`다.
+  { id: "sentiment", label: "심리지수" },
   // 잔액은 가격이 아니라 수량이라 통화별 단위(백만 달러·억엔)로 저장한다.
   { id: "balance_sheet", label: "중앙은행 총자산" },
   { id: "balance_sheet_item", label: "중앙은행 항목" },

@@ -7,7 +7,7 @@
 from decimal import Decimal
 
 # DART 뷰어 주소. **접수번호만 있으면 사람이 원문을 열 수 있다.**
-# `modules.thesis.domain.DART_VIEWER_URL`과 같은 값이고 두 트리가 서로를 import하지 않아
+# `modules.briefing.disclosures.DART_VIEWER_URL`과 같은 값이고 두 트리가 서로를 import하지 않아
 # 중복을 허용한다 — `tests/api/test_dart_links.py`가 둘을 대조한다.
 DART_VIEWER = "https://dart.fss.or.kr/dsaf001/main.do?rcpNo={rcept_no}"
 

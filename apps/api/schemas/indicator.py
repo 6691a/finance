@@ -26,7 +26,8 @@ class IndicatorSeriesItem(ApiModel):
     )
     kind: str = Field(
         description=(
-            "시계열의 종류(government_bond·money_market·price_index·activity). "
+            "시계열의 종류(government_bond·money_market·policy_rate·tips_rate·credit_spread·"
+            "price_index·activity·balance_sheet·balance_sheet_item·sentiment). "
             "**조회하는 쪽은 이것을 반드시 건다** — 단위가 다른 값이 한 축에 섞이면 안 된다."
         )
     )

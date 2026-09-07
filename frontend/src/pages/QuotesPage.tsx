@@ -35,12 +35,19 @@ export function kindName(kind: string): string {
   return KIND_NAMES[kind] ?? kind;
 }
 
-/** 상세로 가는 경로. 종목은 거래소가 필요하므로 있으면 첫 번째를 미리 얹는다. */
+/**
+ * 상세로 가는 경로.
+ *
+ * 종목은 거래소가 필요하므로 있으면 첫 번째를 미리 얹는다. **제공처도 늘 얹는다** —
+ * 자연키가 `(provider, symbol)`이라 아시아 지수는 Yahoo와 KIS가 같은 심볼을 갖고
+ * (2026-09-04), 안 얹으면 상세가 "제공처를 고르세요"에서 멈춘다. 목록의 그 줄이 어느
+ * 제공처였는지는 여기서만 알 수 있다.
+ */
 export function detailPath(item: QuoteSymbolItem): string {
+  const search = new URLSearchParams({ provider: item.provider });
   const exchange = item.exchanges[0];
-  return exchange === undefined
-    ? `/quotes/${item.kind}/${item.symbol}`
-    : `/quotes/${item.kind}/${item.symbol}?exchange=${exchange}`;
+  if (exchange !== undefined) search.set("exchange", exchange);
+  return `/quotes/${item.kind}/${item.symbol}?${search}`;
 }
 
 export default function QuotesPage() {
@@ -128,7 +135,8 @@ export default function QuotesPage() {
               </thead>
               <tbody>
                 {items.map((item) => (
-                  <tr key={`${item.kind}:${item.symbol}`}>
+                  // **키에 제공처가 들어간다.** 같은 심볼을 둘이 주면 React가 중복 키로 경고한다.
+                  <tr key={`${item.kind}:${item.provider}:${item.symbol}`}>
                     <td>{kindName(item.kind)}</td>
                     <td>
                       <Link to={detailPath(item)}>{item.symbol}</Link>

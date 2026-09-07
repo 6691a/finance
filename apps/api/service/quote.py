@@ -50,6 +50,22 @@ class ExchangeRequired(Exception):
     """
 
 
+class ProviderRequired(Exception):
+    """제공처가 둘 이상인 심볼인데 안 골랐다.
+
+    **거래소와 같은 판단이다.** 자연키가 `(provider, symbol)`이라 아시아 지수는 Yahoo와
+    KIS가 같은 심볼을 갖는다(2026-09-04) — 안 고르면 두 제공처의 봉이 한 버킷에서 섞여
+    어느 쪽 값도 아니게 된다.
+
+    예외 문자열에 고를 수 있는 값을 싣는다. 화면이 목록을 다시 부르지 않아도 되게 한다.
+    """
+
+    def __init__(self, symbol: str, providers: Sequence[str]) -> None:
+        super().__init__(symbol)
+        self.symbol = symbol
+        self.providers = tuple(providers)
+
+
 def symbol_item(
     symbol: QuoteSymbol,
     bars: tuple[int, datetime, datetime] | None,
@@ -78,12 +94,14 @@ def build_symbols(rows: SymbolRows, *, limit: int, offset: int) -> QuoteSymbolLi
         limit=limit,
         offset=offset,
         has_more=rows.has_more,
+        # **키에 제공처가 들어간다.** 자연키가 `(provider, symbol)`이라 같은 심볼을 둘이
+        # 줄 수 있다 — 빼면 두 줄이 똑같은 합계를 보인다(2026-09-04, KIS 아시아 지수).
         items=tuple(
             symbol_item(
                 symbol,
-                rows.bars.get((symbol.kind.value, symbol.symbol)),
-                rows.daily.get((symbol.kind.value, symbol.symbol)),
-                rows.exchanges.get((symbol.kind.value, symbol.symbol), ()),
+                rows.bars.get((symbol.kind.value, symbol.provider, symbol.symbol)),
+                rows.daily.get((symbol.kind.value, symbol.provider, symbol.symbol)),
+                rows.exchanges.get((symbol.kind.value, symbol.provider, symbol.symbol), ()),
             )
             for symbol in rows.symbols
         )
@@ -175,10 +193,17 @@ class QuoteReadService:
         start: datetime,
         end: datetime,
         exchange: str | None = None,
+        provider: str | None = None,
     ) -> BarSeries:
-        master = await self._guard(kind, symbol, exchange)
+        master = await self._guard(kind, symbol, exchange, provider)
         rows = await self._repository.bar_rows(
-            kind=kind, symbol=symbol, interval=interval, start=start, end=end, exchange=exchange
+            kind=kind,
+            symbol=symbol,
+            interval=interval,
+            start=start,
+            end=end,
+            exchange=exchange,
+            provider=provider,
         )
         if len(rows) > MAX_POINTS:
             raise TooManyPoints(MAX_POINTS, wider(interval))
@@ -199,10 +224,16 @@ class QuoteReadService:
         start: date,
         end: date,
         exchange: str | None = None,
+        provider: str | None = None,
     ) -> DailySeries:
-        master = await self._guard(kind, symbol, exchange)
+        master = await self._guard(kind, symbol, exchange, provider)
         rows = await self._repository.daily_rows(
-            kind=kind, symbol=symbol, start=start, end=end, exchange=exchange
+            kind=kind,
+            symbol=symbol,
+            start=start,
+            end=end,
+            exchange=exchange,
+            provider=provider,
         )
         if len(rows) > MAX_POINTS:
             raise TooManyPoints(MAX_POINTS, "1d")
@@ -211,19 +242,28 @@ class QuoteReadService:
         )
 
     async def _guard(
-        self, kind: QuoteSymbolKind, symbol: str, exchange: str | None
+        self,
+        kind: QuoteSymbolKind,
+        symbol: str,
+        exchange: str | None,
+        provider: str | None = None,
     ) -> QuoteSymbol:
-        """마스터에 있는 심볼인지, 종목이면 거래소를 골랐는지."""
-        master = await self._repository.symbol(kind, symbol)
+        """마스터에 있는 심볼인지, 종목이면 거래소를, 제공처가 둘이면 제공처를 골랐는지."""
+        master = await self._repository.symbol(kind, symbol, provider)
         if master is None:
             raise UnknownSymbol(f"{kind.value}:{symbol}")
         if kind is QuoteSymbolKind.EQUITY and not exchange:
             raise ExchangeRequired(symbol)
+        if not provider:
+            providers = await self._repository.providers_of(kind, symbol)
+            if len(providers) > 1:
+                raise ProviderRequired(symbol, providers)
         return master
 
 
 __all__ = [
     "ExchangeRequired",
+    "ProviderRequired",
     "QuoteReadService",
     "TooManyPoints",
     "UnknownSymbol",

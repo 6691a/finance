@@ -126,7 +126,7 @@ const DATASETS: Dataset[] = [
   {
     id: "instruments",
     label: "추적 종목",
-    note: "우리가 이름을 아는 종목. **행이 있다는 것과 시세를 받는 것은 다르다** — 행이 있으면 문서에서 그 종목을 알아보고 리서치를 받고, `시세 수집`이 참이어야 봉까지 받는다(2026-08-31 기준 20종목 중 2종목).",
+    note: "우리가 이름을 아는 종목. **축이 셋이고 서로 다른 뜻이다** — 행이 있으면 문서에서 그 종목을 알아보고 리서치를 받고, `시세 수집`이 참이어야 봉까지 받으며, `공시 대상`에 값이 있어야 규제 공시·실적을 받는다. 셋을 한 플래그로 묶으면 DART 대상을 늘릴 때 분봉·수급·실시간 구독이 함께 끌려온다.",
     filters: [],
     path: () => "/api/collection/instruments",
     tables: (data: Items<InstrumentRow>) => [
@@ -141,7 +141,11 @@ const DATASETS: Dataset[] = [
           text<InstrumentRow>("k", "종류", (row) => row.kind),
           text<InstrumentRow>("c", "통화", (row) => row.currency),
           text<InstrumentRow>("s", "소스 심볼", (row) => row.source_symbol),
+          text<InstrumentRow>("sec", "산업", (row) => row.sector),
           flag<InstrumentRow>("w", "시세 수집", (row) => row.is_watched),
+          // **플래그가 아니라 값이다.** 발급 기관이 시장마다 달라(DART 고유번호 / SEC CIK)
+          // 참·거짓으로 접으면 그 번호를 다시 찾을 길이 없다.
+          text<InstrumentRow>("f", "공시 대상", (row) => row.filing_entity_id),
         ] as Column<never>[],
       },
     ],

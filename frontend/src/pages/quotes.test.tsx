@@ -129,13 +129,15 @@ it("수집이 안 도는 심볼은 0과 —로 보인다", async () => {
   expect(row.textContent).toContain("—");
 });
 
-it("종목 링크는 거래소를 미리 얹는다", async () => {
+it("종목 링크는 거래소와 제공처를 미리 얹는다", async () => {
   stubFetch({ "/api/quotes/symbols": SYMBOLS });
   renderAt("/quotes", "/quotes", <QuotesPage />);
 
   await screen.findByRole("table");
   const link = screen.getByRole("link", { name: "005930" });
-  expect(link.getAttribute("href")).toBe("/quotes/equity/005930?exchange=KRX");
+  // **제공처가 늘 붙는다.** 같은 심볼을 둘이 주면(아시아 지수) 상세가 그것 없이는
+  // "제공처를 고르세요"에서 멈추고, 어느 제공처의 줄이었는지는 목록만 안다.
+  expect(link.getAttribute("href")).toBe("/quotes/equity/005930?provider=kis&exchange=KRX");
 });
 
 it("kind 필터는 URL에서 온다", async () => {

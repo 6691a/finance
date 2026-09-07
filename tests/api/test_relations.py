@@ -162,7 +162,8 @@ async def test_every_factor_gets_a_row_even_with_nothing_observed():
         payload = (await http.get("/api/relations", params={"limit": 200})).json()
 
     codes = [item["factor"] for item in payload["items"]]
-    assert set(codes) == set(service.FACTOR_LABELS)
+    # **코스피 자체는 관계 표에 없다** — 지수가 자기와 같은 방향인 것은 언제나 참이다.
+    assert set(codes) == set(service.FACTOR_LABELS) - {service.INDEX_SELF}
     assert payload["items"][0]["factor"] == "FOREIGN_NET_BUY"
     assert payload["items"][0]["n_obs"] == 1
     assert payload["items"][-1]["n_obs"] == 0
@@ -184,7 +185,8 @@ async def test_a_factor_outside_the_vocabulary_is_carried_not_hidden():
 async def test_the_observation_list_is_scoped_to_one_factor_and_carries_its_weight():
     rows = [observation(), observation(factor="VIX", observed_on=date(2026, 8, 29))]
     async with client(observations=rows) as http:
-        payload = (await http.get("/api/relations/VIX")).json()
+        # **기준일을 준다.** 안 주면 오늘이라 무게가 벽시계를 따라 매일 달라진다.
+        payload = (await http.get("/api/relations/VIX", params={"as_of": AS_OF.isoformat()})).json()
 
     assert len(payload["items"]) == 1
     assert payload["items"][0]["weight"] == 0.5

@@ -6,6 +6,7 @@ Cypher가 한 벌씩 있고, 라벨·속성 이름이 어긋나면 화면이 조
 """
 
 import pathlib
+from datetime import date
 
 import pytest
 
@@ -106,3 +107,32 @@ def test_the_screen_labels_cover_the_stored_values():
         }
         assert stored, enum
         assert stored <= drawn, (enum, stored - drawn)
+
+
+def test_the_factor_vocabulary_matches_the_airflow_one():
+    """**어휘가 갈리면 화면이 영문 코드를 보인다.**
+
+    `labelOf`처럼 서비스도 모르는 코드를 그대로 흘려서 죽지 않는다 — 그래서 테스트가
+    아니면 안 드러난다. 2026-09-04에 `KOSPI`(코스피 자체)가 늘었다.
+    """
+    from apps.api.service.relation import FACTOR_LABELS
+
+    source = DOMAIN.read_text(encoding="utf-8")
+    body = source[source.index("class Factor(StrEnum):") :].split("\n\n\n")[0]
+    stored = {line.split('"')[1] for line in body.splitlines() if " = \"" in line}
+
+    assert stored == set(FACTOR_LABELS)
+
+
+def test_the_index_itself_is_not_a_relation_node():
+    """지수가 자기와 같은 방향인 것은 언제나 참이라 엣지를 쌓으면 뜻 없는 값이 하나 박힌다."""
+    from apps.api.service.relation import INDEX_SELF, build_relations
+
+    source = DOMAIN.read_text(encoding="utf-8")
+
+    # 원본도 같은 판단을 한다 — `RELATION_FACTORS`가 `INDEX_SELF` 요인을 뺀다.
+    assert "RELATION_FACTORS" in source
+    assert "FactorSource.INDEX_SELF" in source
+    at = date(2026, 9, 4)
+
+    assert INDEX_SELF not in {item.factor for item in build_relations((), as_of_date=at)}

@@ -70,6 +70,8 @@ export default function QuoteDetailPage() {
   // 종목은 코드가 제목이 되면 읽히지 않는다. 매크로 심볼(KOSPI 등)은 그 자체가 이름이다.
   const names = useStockNames();
   const exchange = params.get("exchange") ?? "";
+  // **제공처는 URL이 갖는다.** 목록이 얹어 주고, 직접 들어온 주소면 비어 있을 수 있다.
+  const provider = params.get("provider") ?? "";
   const mode = params.get("mode") === "daily" ? "daily" : "bar";
   const preset = params.get("range") ?? "1d";
   const interval = params.get("interval") ?? "5m";
@@ -84,11 +86,12 @@ export default function QuoteDetailPage() {
   const path = needsExchange
     ? null
     : mode === "daily"
-      ? `/api/quotes/daily${query({ kind, symbol, exchange, from: daysAgo(days.days) })}`
+      ? `/api/quotes/daily${query({ kind, symbol, exchange, provider, from: daysAgo(days.days) })}`
       : `/api/quotes/bars${query({
           kind,
           symbol,
           exchange,
+          provider,
           interval: step.id,
           from: isoMinutesAgo(range.minutes),
         })}`;

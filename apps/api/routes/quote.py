@@ -18,7 +18,12 @@ from apps.api.container import ApiContainer
 from apps.api.repository import DEFAULT_LIMIT, INTERVALS, MAX_LIMIT
 from apps.api.schemas import BarSeries, DailySeries, QuoteSymbolList
 from apps.api.service import QuoteReadService
-from apps.api.service.quote import ExchangeRequired, TooManyPoints, UnknownSymbol
+from apps.api.service.quote import (
+    ExchangeRequired,
+    ProviderRequired,
+    TooManyPoints,
+    UnknownSymbol,
+)
 from apps.core.utility import kst_day_bounds, kst_today
 from apps.models.reference import QuoteSymbolKind
 
@@ -67,6 +72,10 @@ async def read_bars(
         str | None,
         Query(description="KRX·NXT·NYSE·NASDAQ. **equity에는 필수다** — 기본값을 두지 않는다"),
     ] = None,
+    provider: Annotated[
+        str | None,
+        Query(description="제공처. **같은 심볼을 둘이 주면 필수다**(아시아 지수가 그렇다)"),
+    ] = None,
     interval: Annotated[str, Query(description="1m·5m·15m·1h")] = "1m",
     start: Annotated[datetime | None, Query(alias="from", description="시작 시각(UTC, 포함)")] = None,
     end: Annotated[datetime | None, Query(alias="to", description="종료 시각(UTC, 제외)")] = None,
@@ -86,6 +95,7 @@ async def read_bars(
             start=start,
             end=end,
             exchange=exchange,
+            provider=provider,
         )
     except UnknownSymbol as error:
         raise HTTPException(status_code=404, detail=str(error)) from error
@@ -93,6 +103,14 @@ async def read_bars(
         raise HTTPException(
             status_code=422,
             detail=f"종목 {error}는 거래소를 골라야 한다(KRX·NXT·NYSE·NASDAQ). 통합 시세는 없다.",
+        ) from error
+    except ProviderRequired as error:
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                f"{error.symbol}은 제공처를 골라야 한다({' · '.join(error.providers)}). "
+                "둘을 합친 시계열은 어느 쪽 값도 아니다."
+            ),
         ) from error
     except TooManyPoints as error:
         raise HTTPException(status_code=400, detail=str(error)) from error
@@ -105,6 +123,10 @@ async def read_daily(
     kind: Annotated[str, Query(description="QuoteSymbolKind 값")],
     symbol: Annotated[str, Query(description="심볼")],
     exchange: Annotated[str | None, Query(description="equity에 필수")] = None,
+    provider: Annotated[
+        str | None,
+        Query(description="제공처. **같은 심볼을 둘이 주면 필수다**(아시아 지수가 그렇다)"),
+    ] = None,
     start: Annotated[date | None, Query(alias="from", description="시작 거래일(포함)")] = None,
     end: Annotated[date | None, Query(alias="to", description="종료 거래일(포함)")] = None,
 ) -> DailySeries:
@@ -117,7 +139,12 @@ async def read_daily(
     from_day = start or to_day - timedelta(days=DEFAULT_DAILY_DAYS)
     try:
         return await service.daily(
-            kind=_resolve(kind), symbol=symbol, start=from_day, end=to_day, exchange=exchange
+            kind=_resolve(kind),
+            symbol=symbol,
+            start=from_day,
+            end=to_day,
+            exchange=exchange,
+            provider=provider,
         )
     except UnknownSymbol as error:
         raise HTTPException(status_code=404, detail=str(error)) from error
@@ -125,6 +152,14 @@ async def read_daily(
         raise HTTPException(
             status_code=422,
             detail=f"종목 {error}는 거래소를 골라야 한다(KRX·NXT·NYSE·NASDAQ). 통합 시세는 없다.",
+        ) from error
+    except ProviderRequired as error:
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                f"{error.symbol}은 제공처를 골라야 한다({' · '.join(error.providers)}). "
+                "둘을 합친 시계열은 어느 쪽 값도 아니다."
+            ),
         ) from error
     except TooManyPoints as error:
         raise HTTPException(status_code=400, detail=str(error)) from error

@@ -63,14 +63,29 @@ class FakeRepository:
             exchanges=self.rows.get("exchanges", {}),
         )
 
-    async def symbol(self, kind: QuoteSymbolKind, symbol: str) -> QuoteSymbol | None:
+    async def symbol(
+        self, kind: QuoteSymbolKind, symbol: str, provider: str | None = None
+    ) -> QuoteSymbol | None:
         return next(
             (
                 row
                 for row in self.rows.get("symbols", [])
-                if row.kind is kind and row.symbol == symbol
+                if row.kind is kind
+                and row.symbol == symbol
+                and (not provider or row.provider == provider)
             ),
             None,
+        )
+
+    async def providers_of(self, kind: QuoteSymbolKind, symbol: str) -> tuple[str, ...]:
+        return tuple(
+            sorted(
+                {
+                    row.provider
+                    for row in self.rows.get("symbols", [])
+                    if row.kind is kind and row.symbol == symbol
+                }
+            )
         )
 
     async def bar_rows(self, **kwargs: Any) -> tuple[tuple[Any, ...], ...]:
@@ -89,7 +104,12 @@ def app_with(fake: FakeRepository):
 
 
 def client(**rows: Any) -> httpx.AsyncClient:
-    app = app_with(FakeRepository(**rows))
+    return client_with(FakeRepository(**rows))
+
+
+def client_with(fake: "FakeRepository") -> httpx.AsyncClient:
+    """가짜를 밖에서 들고 있어야 그 호출 인자를 볼 수 있다."""
+    app = app_with(fake)
     return httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test")
 
 
@@ -98,8 +118,8 @@ async def test_the_symbol_list_carries_what_actually_landed():
     """마스터에만 있고 0건인 심볼이 실제로 있다(`rate`가 그렇다). 화면이 그것을 알아야 한다."""
     rows = {
         "symbols": [symbol_row()],
-        "bars": {("index", "KOSPI"): (3120, BAR_AT, BAR_AT)},
-        "daily": {("index", "KOSPI"): (2500, date(2016, 8, 15), date(2026, 8, 26))},
+        "bars": {("index", "kis", "KOSPI"): (3120, BAR_AT, BAR_AT)},
+        "daily": {("index", "kis", "KOSPI"): (2500, date(2016, 8, 15), date(2026, 8, 26))},
     }
     async with client(**rows) as http:
         item = (await http.get("/api/quotes/symbols")).json()["items"][0]
@@ -123,7 +143,7 @@ async def test_the_equity_symbol_lists_its_exchanges():
     """같은 종목이 KRX와 NXT에서 따로 체결된다. 화면이 하나를 골라야 한다."""
     rows = {
         "symbols": [symbol_row(QuoteSymbolKind.EQUITY, "005930")],
-        "exchanges": {("equity", "005930"): ("KRX", "NXT")},
+        "exchanges": {("equity", "kis", "005930"): ("KRX", "NXT")},
     }
     async with client(**rows) as http:
         item = (await http.get("/api/quotes/symbols")).json()["items"][0]
@@ -380,3 +400,86 @@ def test_the_domestic_daily_comes_from_the_investor_trade_table():
     assert "stock_investor_trade_daily" in krx
     assert "stock_daily" in adr
     assert "stock_investor_trade_daily" not in adr
+
+
+@pytest.mark.asyncio
+async def test_the_same_symbol_from_two_providers_does_not_share_one_count():
+    """**자연키가 `(provider, symbol)`이다.**
+
+    2026-09-04에 KIS가 아시아 지수 넷을 더하면서 Yahoo와 심볼이 겹쳤다. 집계를 심볼로만
+    묶고 있어서 두 줄이 똑같은 합계를 보였다 — "Yahoo 716건 · KIS 716건"인데 실제로는
+    합쳐서 716이었다. 어느 제공처가 무엇을 주고 있는지가 이 화면의 질문이라 치명적이다.
+    """
+    rows = {
+        "symbols": [
+            symbol_row(QuoteSymbolKind.INDEX, "HSI", provider="yahoo"),
+            symbol_row(QuoteSymbolKind.INDEX, "HSI", provider="kis"),
+        ],
+        "bars": {
+            ("index", "yahoo", "HSI"): (700, BAR_AT, BAR_AT),
+            ("index", "kis", "HSI"): (16, BAR_AT, BAR_AT),
+        },
+    }
+    async with client(**rows) as http:
+        items = (await http.get("/api/quotes/symbols")).json()["items"]
+
+    counts = {item["provider"]: item["bar_rows"] for item in items}
+    assert counts == {"yahoo": 700, "kis": 16}
+
+
+def test_the_coverage_queries_group_by_provider_too():
+    """조회문에서 빠지면 위 테스트가 가짜로 통과한다 — 가짜 리포지토리가 키를 그냥 준다."""
+    from sqlalchemy.dialects import postgresql
+
+    for statement in (
+        QuoteReadRepository.bar_coverage_statement(),
+        QuoteReadRepository.daily_coverage_statement(),
+    ):
+        sql = str(statement.compile(dialect=postgresql.dialect()))
+        assert "GROUP BY" in sql
+        assert sql.count("provider") >= 2
+
+
+@pytest.mark.asyncio
+async def test_a_symbol_two_providers_share_must_pick_one():
+    """**거래소와 같은 규칙이다.** 말없이 한쪽을 고르면 화면이 어느 제공처 값인지 밝히지
+    못한 채 선을 그리고, 안 고르면 두 시계열이 한 버킷에서 섞인다."""
+    rows = {
+        "symbols": [
+            symbol_row(QuoteSymbolKind.INDEX, "HSI", provider="yahoo"),
+            symbol_row(QuoteSymbolKind.INDEX, "HSI", provider="kis"),
+        ]
+    }
+    async with client(**rows) as http:
+        refused = await http.get("/api/quotes/bars", params={"kind": "index", "symbol": "HSI"})
+
+    assert refused.status_code == 422
+    # 고를 수 있는 값을 응답이 싣는다 — 화면이 목록을 다시 안 불러도 된다.
+    assert "kis" in refused.json()["detail"] and "yahoo" in refused.json()["detail"]
+
+
+@pytest.mark.asyncio
+async def test_the_chosen_provider_reaches_the_query():
+    rows = {
+        "symbols": [
+            symbol_row(QuoteSymbolKind.INDEX, "HSI", provider="yahoo"),
+            symbol_row(QuoteSymbolKind.INDEX, "HSI", provider="kis"),
+        ]
+    }
+    fake = FakeRepository(**rows)
+    async with client_with(fake) as http:
+        reply = await http.get(
+            "/api/quotes/bars", params={"kind": "index", "symbol": "HSI", "provider": "kis"}
+        )
+
+    assert reply.status_code == 200
+    assert fake.calls[-1]["provider"] == "kis"
+
+
+@pytest.mark.asyncio
+async def test_a_symbol_only_one_provider_gives_needs_no_choice():
+    """제공처가 하나면 고를 것이 없다. 없는 선택을 강요하지 않는다."""
+    async with client(symbols=[symbol_row()]) as http:
+        reply = await http.get("/api/quotes/bars", params={"kind": "index", "symbol": "KOSPI"})
+
+    assert reply.status_code == 200

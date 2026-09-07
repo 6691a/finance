@@ -3,7 +3,7 @@
 접수번호(`rcept_no`)만 보여 주면 사람이 DART에서 그 번호를 다시 찾아야 한다. **그 번호가
 곧 주소다** — 그래서 컬럼을 더하지 않고 응답에서 만든다.
 
-주소 틀이 이 저장소에 둘이다(브리핑의 `modules.thesis.domain`과 조회 API). 두 트리는
+주소 틀이 이 저장소에 둘이다(브리핑의 `modules.briefing.disclosures`와 조회 API). 두 트리는
 서로를 import하지 않으므로 **중복을 허용하고 여기서 대조한다** — 저장소 규칙의
 `*_match_the_airflow_collector`와 같은 자리다.
 """
@@ -14,7 +14,7 @@ from types import SimpleNamespace
 
 from apps.api.service.common import DART_VIEWER, dart_url
 from apps.api.service.document import disclosure_of, earnings_of
-from modules.thesis.domain import DART_VIEWER_URL
+from modules.briefing.disclosures import DART_VIEWER_URL
 
 RCEPT = "20260827000123"
 

@@ -66,7 +66,15 @@ FACTOR_LABELS: dict[str, str] = {
     "SK_HYNIX": "SK하이닉스",
     "NEWS": "뉴스",
     "DISCLOSURE": "공시",
+    # **관계 표에는 안 나온다**(`RELATION_FACTORS`에서 빠진다). 전망의 이유가 코스피 자기
+    # 값(봉·기준가)을 근거로 들 때 쓰는 코드라, 이름이 없으면 그 이유가 영문 코드로 보인다.
+    "KOSPI": "코스피 자체",
 }
+
+# 관계 그래프의 노드가 되는 요인. **코스피 자체는 빠진다** — 지수가 자기와 같은 방향인
+# 것은 언제나 참이라 엣지를 쌓으면 가중치 표에 뜻 없는 +1이 하나 박힌다.
+# `domain.RELATION_FACTORS`가 원본이고 테스트가 둘을 대조한다.
+INDEX_SELF = "KOSPI"
 
 # 관측이 같은 방향이었음을 뜻하는 값. 아니면 반대로 친다.
 SAME = "same"
@@ -156,7 +164,9 @@ def build_relations(
     """
     grouped = group_by_factor(observations)
     # 어휘에 없는 요인이 그래프에 있으면 함께 싣는다 — 조용히 숨기면 어휘가 갈린 것을 못 본다.
-    codes = list(FACTOR_LABELS) + [code for code in grouped if code not in FACTOR_LABELS]
+    # **코스피 자체는 뺀다**(위 주석). 그래프에 엣지가 있으면 그건 결함이라 그때는 보인다.
+    codes = [code for code in FACTOR_LABELS if code != INDEX_SELF or code in grouped]
+    codes += [code for code in grouped if code not in FACTOR_LABELS]
     items = [fold(code, grouped.get(code, ()), as_of_date=as_of_date) for code in codes]
     return tuple(sorted(items, key=lambda item: (item.n_obs == 0, -abs(item.weight), item.factor)))
 

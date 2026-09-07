@@ -96,11 +96,14 @@ BIN_ORIGIN = datetime(2000, 1, 3, 0, 0, 0, tzinfo=UTC)
 class SymbolRows(RowBundle):
     symbols: tuple[QuoteSymbol, ...] = ()
     has_more: bool = False
-    # (kind, symbol) → (행 수, 처음, 마지막)
-    bars: dict[tuple[str, str], tuple[int, datetime, datetime]] = Field(default_factory=dict)
-    daily: dict[tuple[str, str], tuple[int, date, date]] = Field(default_factory=dict)
-    # (kind, symbol) → 봉이 실제로 쌓인 거래소들
-    exchanges: dict[tuple[str, str], tuple[str, ...]] = Field(default_factory=dict)
+    # (kind, provider, symbol) → (행 수, 처음, 마지막)
+    #
+    # **제공처가 키에 있다.** 자연키가 `(provider, symbol)`이라 같은 심볼을 둘이 줄 수 있고
+    # (2026-09-04, KIS 아시아 지수), 빼면 두 줄이 똑같은 합계를 보인다.
+    bars: dict[tuple[str, str, str], tuple[int, datetime, datetime]] = Field(default_factory=dict)
+    daily: dict[tuple[str, str, str], tuple[int, date, date]] = Field(default_factory=dict)
+    # (kind, provider, symbol) → 봉이 실제로 쌓인 거래소들
+    exchanges: dict[tuple[str, str, str], tuple[str, ...]] = Field(default_factory=dict)
 
 
 class QuoteReadRepository:
@@ -120,6 +123,7 @@ class QuoteReadRepository:
         start: datetime,
         end: datetime,
         exchange: str | None = None,
+        provider: str | None = None,
         limit: int = MAX_POINTS,
     ) -> Select[Any]:
         """분봉 재집계 조회문. **끝 경계가 열려 있다**(`< end`).
@@ -155,7 +159,12 @@ class QuoteReadRepository:
             # **거래소가 필수다.** 빼면 KRX와 NXT 체결이 한 봉에 섞여 어느 쪽 값도 아니게 된다.
             statement = statement.where(StockBar.stock_code == symbol, StockBar.exchange == exchange)
         else:
+            # **제공처도 같은 이유로 건다.** 자연키가 `(provider, symbol)`이라 아시아 지수는
+            # Yahoo와 KIS가 같은 심볼을 갖는다(2026-09-04) — 안 걸면 두 제공처의 봉이 한
+            # 버킷에서 섞여 어느 쪽 값도 아니게 된다.
             statement = statement.where(table.symbol == symbol)
+            if provider:
+                statement = statement.where(table.provider == provider)
 
         return statement.group_by(bucket).order_by(bucket).limit(limit + 1)
 
@@ -167,6 +176,7 @@ class QuoteReadRepository:
         start: date,
         end: date,
         exchange: str | None = None,
+        provider: str | None = None,
         limit: int = MAX_POINTS,
     ) -> Select[Any]:
         """일봉 조회문. 양끝 포함이다.
@@ -182,12 +192,13 @@ class QuoteReadRepository:
             # 넣으면 조회가 죽는다. 부르는 쪽은 배열이 비었는지로 구분한다.
             if kind is QuoteSymbolKind.INDEX_FUTURE:
                 columns.append(IndexFutureDaily.contract_code)
-            return (
-                select(*columns)
-                .where(table.symbol == symbol, table.business_date >= start, table.business_date <= end)
-                .order_by(table.business_date)
-                .limit(limit + 1)
+            statement = select(*columns).where(
+                table.symbol == symbol, table.business_date >= start, table.business_date <= end
             )
+            # 분봉과 같은 이유다 — 같은 심볼을 제공처 둘이 주면 두 시계열이 한 선이 된다.
+            if provider:
+                statement = statement.where(table.provider == provider)
+            return statement.order_by(table.business_date).limit(limit + 1)
         if exchange == "KRX":
             row = StockInvestorTradeDaily
             return (
@@ -227,27 +238,33 @@ class QuoteReadRepository:
         """kind별 분봉의 행 수와 구간. **여덟 테이블을 UNION ALL로 한 왕복에 묶는다.**
 
         뷰(`quote_bar`)를 쓰지 않는 이유는 그것이 종목의 NXT를 빼기 때문이다.
+
+        **`provider`로도 묶는다.** 자연키가 `(provider, symbol)`이라 같은 심볼을 둘이 줄 수
+        있다 — 2026-09-04에 KIS가 아시아 지수 넷을 더하면서 Yahoo와 겹쳤고, 그때 두 줄이
+        똑같은 합계를 보였다("Yahoo 716건 · KIS 716건"인데 실제는 합쳐서 716이었다).
         """
         parts = [
             select(
                 literal(kind.value).label("kind"),
+                table.provider.label("provider"),
                 table.symbol.label("symbol"),
                 cast(null(), Text).label("exchange"),
                 func.count().label("rows"),
                 func.min(table.bar_at).label("oldest"),
                 func.max(table.bar_at).label("newest"),
-            ).group_by(table.symbol)
+            ).group_by(table.provider, table.symbol)
             for kind, table in BAR_TABLES.items()
         ]
         parts.append(
             select(
                 literal(QuoteSymbolKind.EQUITY.value).label("kind"),
+                StockBar.provider.label("provider"),
                 StockBar.stock_code.label("symbol"),
                 cast(StockBar.exchange, Text).label("exchange"),
                 func.count().label("rows"),
                 func.min(StockBar.bar_at).label("oldest"),
                 func.max(StockBar.bar_at).label("newest"),
-            ).group_by(StockBar.stock_code, StockBar.exchange)
+            ).group_by(StockBar.provider, StockBar.stock_code, StockBar.exchange)
         )
         return select(union_all(*parts).subquery())
 
@@ -257,30 +274,33 @@ class QuoteReadRepository:
         parts = [
             select(
                 literal(kind.value).label("kind"),
+                table.provider.label("provider"),
                 table.symbol.label("symbol"),
                 func.count().label("rows"),
                 func.min(table.business_date).label("oldest"),
                 func.max(table.business_date).label("newest"),
-            ).group_by(table.symbol)
+            ).group_by(table.provider, table.symbol)
             for kind, table in DAILY_TABLES.items()
         ]
         parts.append(
             select(
                 literal(QuoteSymbolKind.EQUITY.value).label("kind"),
+                StockDaily.provider.label("provider"),
                 StockDaily.stock_code.label("symbol"),
                 func.count().label("rows"),
                 func.min(StockDaily.business_date).label("oldest"),
                 func.max(StockDaily.business_date).label("newest"),
-            ).group_by(StockDaily.stock_code)
+            ).group_by(StockDaily.provider, StockDaily.stock_code)
         )
         parts.append(
             select(
                 literal(QuoteSymbolKind.EQUITY.value).label("kind"),
+                StockInvestorTradeDaily.provider.label("provider"),
                 StockInvestorTradeDaily.stock_code.label("symbol"),
                 func.count().label("rows"),
                 func.min(StockInvestorTradeDaily.business_date).label("oldest"),
                 func.max(StockInvestorTradeDaily.business_date).label("newest"),
-            ).group_by(StockInvestorTradeDaily.stock_code)
+            ).group_by(StockInvestorTradeDaily.provider, StockInvestorTradeDaily.stock_code)
         )
         return select(union_all(*parts).subquery())
 
@@ -300,10 +320,12 @@ class QuoteReadRepository:
                 ).scalars()
             )
             symbols, has_more = page_slice(found, limit)
-            bars: dict[tuple[str, str], tuple[int, datetime, datetime]] = {}
-            exchanges: dict[tuple[str, str], list[str]] = {}
+            # **키가 `(kind, provider, symbol)`이다.** 자연키가 `(provider, symbol)`이라
+            # 같은 심볼을 제공처 둘이 줄 수 있다(2026-09-04, KIS 아시아 지수).
+            bars: dict[tuple[str, str, str], tuple[int, datetime, datetime]] = {}
+            exchanges: dict[tuple[str, str, str], list[str]] = {}
             for row in await session.execute(self.bar_coverage_statement()):
-                key = (row.kind, row.symbol)
+                key = (row.kind, row.provider, row.symbol)
                 found = bars.get(key)
                 bars[key] = (
                     (found[0] if found else 0) + row.rows,
@@ -313,9 +335,9 @@ class QuoteReadRepository:
                 if row.exchange is not None:
                     exchanges.setdefault(key, []).append(row.exchange)
 
-            daily: dict[tuple[str, str], tuple[int, date, date]] = {}
+            daily: dict[tuple[str, str, str], tuple[int, date, date]] = {}
             for row in await session.execute(self.daily_coverage_statement()):
-                key = (row.kind, row.symbol)
+                key = (row.kind, row.provider, row.symbol)
                 found = daily.get(key)
                 daily[key] = (
                     (found[0] if found else 0) + row.rows,
@@ -330,14 +352,38 @@ class QuoteReadRepository:
             exchanges={key: tuple(sorted(value)) for key, value in exchanges.items()},
         )
 
-    async def symbol(self, kind: QuoteSymbolKind, symbol: str) -> QuoteSymbol | None:
-        """심볼 하나의 마스터 행. 제공처와 라벨이 여기서 온다."""
+    async def symbol(
+        self, kind: QuoteSymbolKind, symbol: str, provider: str | None = None
+    ) -> QuoteSymbol | None:
+        """심볼 하나의 마스터 행. 제공처와 라벨이 여기서 온다.
+
+        **`(kind, symbol)`이 하나라는 보장이 없다.** 자연키가 `(provider, symbol)`이라
+        아시아 지수는 Yahoo와 KIS가 같은 심볼을 갖는다 — `scalar_one_or_none()`이면
+        그 심볼에서 `MultipleResultsFound`로 죽는다. 제공처를 안 주면 첫 줄을 준다.
+        """
+        statement = select(QuoteSymbol).where(
+            QuoteSymbol.kind == kind, QuoteSymbol.symbol == symbol
+        )
+        if provider:
+            statement = statement.where(QuoteSymbol.provider == provider)
         async with self._session_factory() as session:
             return (
-                await session.execute(
-                    select(QuoteSymbol).where(QuoteSymbol.kind == kind, QuoteSymbol.symbol == symbol)
-                )
+                await session.execute(statement.order_by(QuoteSymbol.provider).limit(1))
             ).scalar_one_or_none()
+
+    async def providers_of(self, kind: QuoteSymbolKind, symbol: str) -> tuple[str, ...]:
+        """그 심볼을 주는 제공처들. **둘 이상이면 부르는 쪽이 골라야 한다.**
+
+        거래소와 같은 판단이다 — 말없이 한쪽을 고르면 화면이 어느 제공처 값인지 밝히지
+        못한 채 선을 그린다.
+        """
+        async with self._session_factory() as session:
+            rows = await session.execute(
+                select(QuoteSymbol.provider)
+                .where(QuoteSymbol.kind == kind, QuoteSymbol.symbol == symbol)
+                .order_by(QuoteSymbol.provider)
+            )
+            return tuple(row[0] for row in rows)
 
     async def bar_rows(
         self,
@@ -348,6 +394,7 @@ class QuoteReadRepository:
         start: datetime,
         end: datetime,
         exchange: str | None = None,
+        provider: str | None = None,
     ) -> tuple[tuple[Any, ...], ...]:
         """재집계된 분봉. **상한 판정은 부르는 쪽이 한다** — 여기는 `limit + 1`을 준다."""
         async with self._session_factory() as session:
@@ -359,6 +406,7 @@ class QuoteReadRepository:
                     start=start,
                     end=end,
                     exchange=exchange,
+                    provider=provider,
                 )
             )
             return tuple(tuple(row) for row in rows)
@@ -371,10 +419,18 @@ class QuoteReadRepository:
         start: date,
         end: date,
         exchange: str | None = None,
+        provider: str | None = None,
     ) -> tuple[tuple[Any, ...], ...]:
         async with self._session_factory() as session:
             rows = await session.execute(
-                self.daily_statement(kind=kind, symbol=symbol, start=start, end=end, exchange=exchange)
+                self.daily_statement(
+                    kind=kind,
+                    symbol=symbol,
+                    start=start,
+                    end=end,
+                    exchange=exchange,
+                    provider=provider,
+                )
             )
             return tuple(tuple(row) for row in rows)
 

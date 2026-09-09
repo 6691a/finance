@@ -137,24 +137,50 @@ def _review_blocks(built: dict[str, Any]) -> list[dict[str, Any]]:
     return blocks
 
 
+# 슬롯이 곧 분모다(`RunSlot` docstring). 숫자 옆에 이 말이 없으면 장전의 +1.2%와 장중의
+# -0.9%가 서로 뒤집힌 전망으로 읽힌다 — 실제로는 같은 마감가를 가리키고 있었다(2026-09-09).
+BASIS_LABELS: dict[RunSlot, str] = {
+    RunSlot.PRE_OPEN: "전일 종가",
+    RunSlot.MIDDAY: "현재가",
+    RunSlot.PRE_CLOSE: "현재가",
+}
+
+
 def _headline(built: dict[str, Any]) -> str:
-    """방향·크기·폭과 **기준가**. 기준가가 없으면 숫자가 무엇 대비인지 알 수 없다."""
+    """방향·크기·폭과 **무엇 대비인지**, 그리고 그것이 뜻하는 마감 예상가.
+
+    첫 줄이 "어디서 어디까지"를 말로 적고, 둘째 줄이 기준가와 마감 예상가를 준다. 장중은
+    전일 종가 대비로 환산한 셋째 줄을 더한다 — 장전 전망과 같은 눈금으로 견줄 수 있게.
+    """
+    slot = _slot_or_none(built.get("slot"))
+    basis_label = BASIS_LABELS.get(slot, "기준가")
     direction = _direction_or_none(built.get("direction"))
     expected = _decimal(built.get("expected_change_pct"))
     band = _decimal(built.get("band_pct"))
     arrow = ARROWS.get(direction, "―") if direction else "―"
-    base = _price(_decimal(built.get("base_price")))
+    base = _decimal(built.get("base_price"))
     base_at = built.get("base_at_kst") or ""
-    note = built.get("base_note") or ""
     so_far = _decimal(built.get("so_far_pct"))
 
-    head = f"*{arrow} {_signed(expected)}% ± {_plain(band)}%p*"
-    basis = f"기준 {base} ({base_at})"
-    if note:
-        basis = f"{basis} · {note}"
-    if so_far is not None:
-        basis = f"{basis} · 지금까지 {_signed(so_far)}%"
-    return f"{head}\n{basis}"
+    span = "오늘 마감까지" if slot is RunSlot.PRE_OPEN else "지금부터 마감까지"
+    lines = [f"*{arrow} {_signed(expected)}% ± {_plain(band)}%p* {span} ({basis_label} 대비)"]
+
+    basis = f"기준 {basis_label} {_price(base)} ({base_at})"
+    if base is not None and expected is not None and band is not None:
+        target = _implied(base, expected)
+        low, high = _implied(base, expected - band), _implied(base, expected + band)
+        basis = f"{basis} · 마감 예상 {_price(target)} ({_price(low)}~{_price(high)})"
+    lines.append(basis)
+
+    if so_far is not None and expected is not None:
+        # 전일 종가 대비 마감 예상 = (1 + 지금까지) × (1 + 남은 변동) − 1
+        total = ((1 + so_far / 100) * (1 + expected / 100) - 1) * 100
+        lines.append(f"전일 종가 대비: 지금까지 {_signed(so_far)}% → 마감 예상 {_signed(total)}%")
+    return "\n".join(lines)
+
+
+def _implied(base: Decimal, pct: Decimal) -> Decimal:
+    return base * (1 + pct / 100)
 
 
 def _reason_line(item: dict[str, Any]) -> str:
@@ -173,11 +199,13 @@ def _grade_line(item: dict[str, Any]) -> str:
     expected = _decimal(item.get("expected_change_pct"))
     band = _decimal(item.get("band_pct"))
     actual = _decimal(item.get("actual_change_pct"))
+    basis = BASIS_LABELS.get(_slot_or_none(item.get("slot")), "기준가")
+    head = f"• {slot}({basis} 대비) {arrow} {_signed(expected)}% ± {_plain(band)}%p"
     if actual is None:
-        return f"• {slot} {arrow} {_signed(expected)}% ± {_plain(band)}%p — _채점 대기_"
+        return f"{head} — _채점 대기_"
     hit = "○" if item.get("hit") else "✕"
     within = "○" if item.get("within_band") else "✕"
-    return f"• {slot} {arrow} {_signed(expected)}% ± {_plain(band)}%p → 실제 {_signed(actual)}% · 방향 {hit} 폭 {within}"
+    return f"{head} → 실제 {_signed(actual)}% · 방향 {hit} 폭 {within}"
 
 
 def _coverage_footer(built: dict[str, Any], *, unrelated: int) -> str:

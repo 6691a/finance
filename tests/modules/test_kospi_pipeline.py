@@ -1194,3 +1194,87 @@ def test_the_index_itself_cannot_become_a_relation_edge():
 
     assert not draft.observations
     assert draft.rejected == 1
+
+
+# --- Slack 머리글의 말 ----------------------------------------------------------
+
+
+def test_the_slack_headline_names_the_basis_and_the_implied_close():
+    """장전 +1.2%와 장중 -0.9%가 같은 마감가를 가리키는데 반대로 읽혔다(2026-09-09).
+
+    분모(전일 종가·현재가)를 말로 적고 마감 예상가를 함께 준다. 장중은 전일 종가 대비로
+    환산한 줄을 더해 장전과 같은 눈금으로 견줄 수 있게 한다.
+    """
+    from modules.kospi.render import render_blocks
+
+    common = {"kind": "forecast", "run_date": "2026-09-09", "band_pct": "1.90", "reasons": []}
+    pre_open = json.dumps(
+        render_blocks(
+            {
+                **common,
+                "slot": "pre_open",
+                "direction": "up",
+                "expected_change_pct": "1.20",
+                "base_price": "6954.52",
+                "base_at_kst": "2026-09-08 15:30 KST",
+                "so_far_pct": None,
+            }
+        ),
+        ensure_ascii=False,
+    )
+    assert "+1.20% ± 1.90%p* 오늘 마감까지 (전일 종가 대비)" in pre_open
+    assert "기준 전일 종가 6,954.52 (2026-09-08 15:30 KST)" in pre_open
+    assert "마감 예상 7,037.97 (6,905.84~7,170.11)" in pre_open
+    assert "지금까지" not in pre_open
+
+    midday = json.dumps(
+        render_blocks(
+            {
+                **common,
+                "slot": "midday",
+                "direction": "down",
+                "expected_change_pct": "-0.90",
+                "base_price": "7093.86",
+                "base_at_kst": "2026-09-09 11:34 KST",
+                "so_far_pct": "2.00",
+            }
+        ),
+        ensure_ascii=False,
+    )
+    assert "-0.90% ± 1.90%p* 지금부터 마감까지 (현재가 대비)" in midday
+    assert "기준 현재가 7,093.86 (2026-09-09 11:34 KST)" in midday
+    assert "마감 예상 7,030.02" in midday
+    assert "전일 종가 대비: 지금까지 +2.00% → 마감 예상 +1.08%" in midday
+
+
+def test_the_slack_grade_line_names_the_basis():
+    from modules.kospi.render import render_blocks
+
+    built = {
+        "kind": "review",
+        "run_date": "2026-09-09",
+        "change_pct": "1.10",
+        "close": "7031.02",
+        "grades": [
+            {
+                "slot": "pre_open",
+                "direction": "up",
+                "expected_change_pct": "1.20",
+                "band_pct": "1.90",
+                "actual_change_pct": "1.10",
+                "hit": True,
+                "within_band": True,
+            },
+            {
+                "slot": "midday",
+                "direction": "down",
+                "expected_change_pct": "-0.90",
+                "band_pct": "1.55",
+                "actual_change_pct": None,
+            },
+        ],
+        "observations": [],
+    }
+    text = json.dumps(render_blocks(built), ensure_ascii=False)
+    assert "장전(전일 종가 대비) ▲ +1.20%" in text
+    assert "장중(현재가 대비) ▼ -0.90% ± 1.55%p — _채점 대기_" in text

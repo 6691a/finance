@@ -20,9 +20,11 @@
 전부 여기 순수 함수가 정한다. 그래야 틀렸을 때 "모델이 틀렸나 집계가 틀렸나"를 가를 수 있다.
 """
 
+from collections.abc import Mapping, Sequence
 from datetime import date, datetime, time, timedelta
 from decimal import ROUND_HALF_UP, Decimal
 from enum import StrEnum
+from typing import Protocol
 
 from pydantic import BaseModel, ConfigDict
 
@@ -608,6 +610,9 @@ class Observation(BaseModel):
     sign: ObservationSign
     strength: int
     note: str = ""
+    # 그 관찰이 본 요인 값의 거래일. 다음 관찰이 같은 날짜의 값을 다시 보면 "볼 것이 없다"다
+    # (설계 §8.11). 옛 엣지에는 없어 `None`이다.
+    value_date: date | None = None
 
 
 class RelationWeight(BaseModel):
@@ -624,6 +629,9 @@ class RelationWeight(BaseModel):
     last_note: str = ""
     # 감쇠 없이 그대로 보이는 최근 부호들. 가중치와 어긋나면 관계가 바뀌는 중이다.
     recent_signs: tuple[ObservationSign, ...] = ()
+    # 마지막 관찰이 본 요인 값의 거래일. 프롬프트에는 안 실린다 — 장후 관찰이 "값이 안
+    # 바뀌었나"를 가르는 기준이다(§8.11).
+    last_value_date: date | None = None
 
 
 def signed_strength(sign: ObservationSign, strength: int) -> int:
@@ -670,7 +678,42 @@ def relation_weight(
         last_date=recent[0].observed_on,
         last_note=recent[0].note,
         recent_signs=tuple(item.sign for item in recent[:RECENT_SIGN_COUNT]),
+        last_value_date=recent[0].value_date,
     )
+
+
+def stale_factor_moves(
+    moves: Sequence["FactorMoveLike"], last_value_dates: Mapping[Factor, date | None]
+) -> tuple[list["FactorMoveLike"], list["FactorMoveLike"]]:
+    """요인 값 표를 **신선한 줄과 안 바뀐 줄**로 가른다. 앞이 모델에게 가고 뒤는 원장에만 남는다.
+
+    안 바뀐 줄은 둘이다 — 값이 없는 줄, 그리고 값의 거래일이 지난 관찰이 본 것과 같은 줄.
+    미국 휴장 다음 날의 SOX가 후자다(2026-09-08 실측). 그 줄을 모델이 `none`으로 답하면
+    "봤는데 무관"과 같은 0이 가중치에 들어가 휴장마다 먹히는 요인이 내려갔다(설계 §8.11).
+
+    지난 관찰에 `value_date`가 없으면(옛 엣지, 관측 0) 신선으로 본다 — 모른다고 빼면
+    처음부터 아무 것도 안 본다.
+    """
+    fresh: list[FactorMoveLike] = []
+    stale: list[FactorMoveLike] = []
+    for move in moves:
+        last = last_value_dates.get(move.factor)
+        if move.business_date is None or (last is not None and move.business_date == last):
+            stale.append(move)
+        else:
+            fresh.append(move)
+    return fresh, stale
+
+
+class FactorMoveLike(Protocol):
+    """`stale_factor_moves`가 보는 두 칸. `state.FactorMove`가 이 모양이다 — 이 모듈이
+    `state`를 import하면 순환이라 프로토콜로 둔다."""
+
+    @property
+    def factor(self) -> Factor: ...
+
+    @property
+    def business_date(self) -> date | None: ...
 
 
 def memory_expired(created_on: date, as_of_date: date, *, max_age_days: int = MEMORY_MAX_AGE_DAYS) -> bool:

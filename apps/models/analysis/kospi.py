@@ -282,6 +282,10 @@ class KospiLlmRun(EntityBase):
             "observations_unanswered IS NULL OR observations_unanswered >= 0",
             name="ck_kospi_llm_run_observations_unanswered",
         ),
+        CheckConstraint(
+            "observations_stale IS NULL OR observations_stale >= 0",
+            name="ck_kospi_llm_run_observations_stale",
+        ),
         table_options(
             comment="코스피 전망·관찰의 모델 호출 원장. 실패한 대화도 남는다",
             database="default",
@@ -367,6 +371,11 @@ class KospiLlmRun(EntityBase):
         Integer,
         nullable=True,
         comment="요인 값 표에 있는데 모델이 답하지 않은 요인 수. 0으로 채우지 않고 센다 — 0이어야 정상. 전망 대화는 NULL",
+    )
+    observations_stale: Mapped[int | None] = mapped_column(
+        Integer,
+        nullable=True,
+        comment="값이 안 바뀌어 표에서 뺀 요인 수. 지난 관찰이 본 것과 같은 거래일의 값이거나 값이 없는 줄이다. 모델은 이 줄을 못 본다. 전망 대화는 NULL",
     )
     unlisted_drivers: Mapped[list | None] = mapped_column(
         JSONB,

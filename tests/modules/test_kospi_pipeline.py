@@ -1106,9 +1106,88 @@ def test_the_review_records_how_many_observations_it_wrote():
     # 답 없는 줄과 목록 밖 원인도 원장으로 간다. 없으면 커버리지를 아무도 못 읽는다.
     assert "observations_unanswered=len(draft.unanswered)" in source
     assert "unlisted_drivers=list(draft.unlisted_drivers)" in source
-    # 관찰이 요인 값 표를 받고, 표는 툴 없는 툴박스에서 온다.
-    assert "factor_moves=toolbox.factor_moves()" in source
+    # 관찰이 요인 값 표를 받고, 표는 툴 없는 툴박스에서 온다. **안 바뀐 줄은 표에 안 싣고
+    # 원장에 센다**(§8.11) — 모델이 그 줄을 `none`으로 답하면 휴장마다 가중치가 내려간다.
+    assert "stale_factor_moves(" in source
+    assert "factor_moves=tuple(fresh_moves)" in source
+    assert "observations_stale=len(stale_moves)" in source
+    assert "value_date=value_dates.get(item.factor)" in source
     assert "include_history=False" in source
+
+
+def test_the_observed_edge_carries_the_value_date_it_saw():
+    """다음 관찰이 "값이 안 바뀌었나"를 이 칸과 견준다. 안 쓰면 매일 신선으로 보여 §8.11이 죽은 코드다."""
+    from modules.kospi.graph import READ_OBSERVATIONS, WRITE_OBSERVATIONS
+
+    assert "o.value_date = r.value_date" in WRITE_OBSERVATIONS
+    assert "o.value_date AS value_date" in READ_OBSERVATIONS
+
+
+def test_the_slack_review_names_stale_factors():
+    """모델이 안 본 요인은 이름이 보여야 한다 — "무관"과 섞이면 휴장 다음 날이 조용한 날로 읽힌다."""
+    from modules.kospi.render import render_blocks
+
+    built = {
+        "kind": "review",
+        "run_date": "2026-09-08",
+        "change_pct": "-0.58",
+        "close": "6954.52",
+        "observations": [],
+        "unanswered": [],
+        "stale": ["필라델피아 반도체", "S&P 500"],
+    }
+    text = json.dumps(render_blocks(built), ensure_ascii=False)
+    assert "값 안 바뀜 2: 필라델피아 반도체, S&P 500" in text
+
+
+def test_opening_a_ledger_row_closes_an_orphaned_running_one_first():
+    """프로세스가 밖에서 죽으면 `finally`가 못 돌아 `running`이 영영 남는다(2026-08-24, id 5).
+    새 시도가 그것을 닫는 자리다. 관찰은 `slot`이 NULL이라 `=`로는 못 찾는다."""
+    from modules.kospi.store import CLOSE_ORPHAN_LLM_RUNS, KospiStore
+
+    assert "status = 'running'" in CLOSE_ORPHAN_LLM_RUNS
+    assert "slot IS NOT DISTINCT FROM %(slot)s" in CLOSE_ORPHAN_LLM_RUNS
+
+    executed: list[str] = []
+
+    class Cursor:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_: object) -> bool:
+            return False
+
+        def execute(self, sql: str, params: dict) -> None:
+            executed.append(sql)
+            if "orphaned" not in str(params.get("error", "")):
+                assert "orphan" not in sql
+
+        def fetchone(self):
+            return (7,)
+
+    class Connection:
+        def cursor(self):
+            return Cursor()
+
+        def commit(self) -> None:
+            pass
+
+        def rollback(self) -> None:
+            pass
+
+    run_id = KospiStore(Connection()).start_llm_run(
+        kind="review",
+        run_date=date(2026, 8, 24),
+        slot=None,
+        as_of_at=datetime(2026, 8, 24, 10, 0, tzinfo=UTC),
+        llm_model="m",
+        prompt_version="3",
+        dag_run_id="obs_2026-08-24",
+        try_number=2,
+    )
+    assert run_id == 7
+    assert executed[0] == CLOSE_ORPHAN_LLM_RUNS
+    assert "INSERT INTO kospi_llm_run" in executed[1]
 
 
 def test_the_slack_review_hides_none_rows_and_names_unanswered_factors():

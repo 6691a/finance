@@ -10,6 +10,7 @@
 import logging
 import os
 import re
+from collections.abc import Sequence
 from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 from typing import Any
@@ -31,6 +32,7 @@ from modules.kospi.domain import (
     Direction,
     Factor,
     KospiNotReady,
+    RelationWeight,
     RunSlot,
     kst_label,
 )
@@ -169,6 +171,12 @@ def relation_rows(
 
     **컷오프는 `as_of_at`이다.** 날짜로 자르면 그날 저녁의 관찰이 그날 아침 전망에 보인다.
     """
+    return relation_rows_from(read_relations(graph_driver_handle, as_of_date=as_of_date, as_of_at=as_of_at))
+
+
+def relation_rows_from(weights: Sequence[RelationWeight]) -> tuple[RelationRow, ...]:
+    """가중치를 프롬프트 표의 행으로. **`last_value_date`는 안 싣는다** — 모델이 볼 것이 아니라
+    장후 관찰이 "값이 안 바뀌었나"를 가르는 기준이다(§8.11)."""
     return tuple(
         RelationRow(
             factor=item.factor,
@@ -179,7 +187,7 @@ def relation_rows(
             last_note=item.last_note,
             recent_signs=item.recent_signs,
         )
-        for item in read_relations(graph_driver_handle, as_of_date=as_of_date, as_of_at=as_of_at)
+        for item in weights
     )
 
 

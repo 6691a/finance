@@ -268,3 +268,43 @@ def test_the_two_document_score_floors_stay_the_same():
     from modules.shock.domain import MIN_DOCUMENT_SCORE
 
     assert MIN_DOCUMENT_SCORE == NEWS_MIN_VALUE_SCORE
+
+
+# --- 안 바뀐 값 (설계 §8.11) ------------------------------------------------
+
+
+def test_a_move_whose_value_date_matches_the_last_observation_is_stale():
+    """**미국 휴장 다음 날의 SOX.** 지난 관찰이 9/4 종가를 봤는데 오늘도 9/4 종가면 볼 것이 없다.
+    모델이 그 줄을 `none`으로 답하면 "봤는데 무관"과 같은 0이 가중치에 들어간다."""
+    from modules.kospi.domain import stale_factor_moves
+    from modules.kospi.state import FactorMove, FactorUnit
+
+    sox = FactorMove(factor=Factor.SOX, label="SOX", unit=FactorUnit.PERCENT, business_date=date(2026, 9, 4))
+    krw = FactorMove(factor=Factor.USDKRW, label="원달러", unit=FactorUnit.PERCENT, business_date=date(2026, 9, 7))
+    fresh, stale = stale_factor_moves(
+        [sox, krw], {Factor.SOX: date(2026, 9, 4), Factor.USDKRW: date(2026, 9, 4)}
+    )
+    assert [item.factor for item in stale] == [Factor.SOX]
+    assert [item.factor for item in fresh] == [Factor.USDKRW]
+
+
+def test_a_move_with_no_value_is_stale_and_a_first_observation_is_fresh():
+    """값이 없는 줄은 판정할 수 없다. 지난 관찰이 없거나(옛 엣지) 날짜가 없으면 신선이다 —
+    모른다고 빼면 처음부터 아무 것도 안 본다."""
+    from modules.kospi.domain import stale_factor_moves
+    from modules.kospi.state import FactorMove, FactorUnit
+
+    empty = FactorMove(factor=Factor.KRBASE, label="기준금리", unit=FactorUnit.BASIS_POINT)
+    first = FactorMove(factor=Factor.SOX, label="SOX", unit=FactorUnit.PERCENT, business_date=date(2026, 9, 4))
+    fresh, stale = stale_factor_moves([empty, first], {Factor.SOX: None})
+    assert [item.factor for item in stale] == [Factor.KRBASE]
+    assert [item.factor for item in fresh] == [Factor.SOX]
+
+
+def test_the_relation_weight_carries_the_last_observations_value_date():
+    """장후 관찰이 "값이 안 바뀌었나"를 이것과 견준다. 최신 관측의 것이어야 한다."""
+    old = Observation(observed_on=date(2026, 9, 4), sign=ObservationSign.SAME, strength=2, value_date=date(2026, 9, 3))
+    new = Observation(observed_on=date(2026, 9, 7), sign=ObservationSign.SAME, strength=3, value_date=date(2026, 9, 4))
+    weight = relation_weight(Factor.SOX, [old, new], as_of_date=date(2026, 9, 8))
+    assert weight.last_value_date == date(2026, 9, 4)
+    assert relation_weight(Factor.SOX, [], as_of_date=date(2026, 9, 8)).last_value_date is None

@@ -126,3 +126,6 @@ def test_the_llm_run_ledger_counts_unanswered_rows_and_keeps_unlisted_drivers(ca
     assert "observations_unanswered" in sql
     assert "ck_kospi_llm_run_observations_unanswered" in sql
     assert "unlisted_drivers" in sql
+    # §8.11 — 값이 안 바뀌어 표에서 뺀 줄도 센다. 안 세면 휴장 다음 날이 "다 답했다"로 보인다.
+    assert "observations_stale" in sql
+    assert "ck_kospi_llm_run_observations_stale" in sql

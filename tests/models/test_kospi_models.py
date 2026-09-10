@@ -126,9 +126,10 @@ def test_the_ledger_insert_names_only_real_columns():
 def test_the_ledger_update_names_only_real_columns():
     from modules.sql import read_sql
 
-    assigned = _assigned_columns(read_sql("postgres", "kospi_llm_run", "finish.sql"))
-    assert assigned
-    assert assigned <= set(KospiLlmRun.__table__.columns.keys())
+    for name in ("finish.sql", "close_orphans.sql"):
+        assigned = _assigned_columns(read_sql("postgres", "kospi_llm_run", name))
+        assert assigned, name
+        assert assigned <= set(KospiLlmRun.__table__.columns.keys()), name
 
 
 def test_the_grade_update_names_only_real_columns():

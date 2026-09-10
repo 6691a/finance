@@ -354,6 +354,9 @@ def test_material_report_classification():
     assert is_material("연결재무제표기준영업(잠정)실적(공정공시)")
     assert is_material("영업(잠정)실적(공정공시)")
     assert is_material("[기재정정]연결재무제표기준영업(잠정)실적(공정공시)")
+    # 2026-09-01~09 운영에서 본문 없이 들어와 코스피 전망이 못 본 둘(kospi-forecast.md §8.11).
+    assert is_material("풍문또는보도에대한해명(미확정)")
+    assert is_material("단일판매ㆍ공급계약체결")
 
     # 소음. 전체의 95퍼센트가 이 하나다.
     assert not is_material("임원ㆍ주요주주특정증권등소유상황보고서")

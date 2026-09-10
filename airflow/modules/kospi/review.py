@@ -37,6 +37,7 @@ from modules.kospi.domain import (
     MAX_UNREVIEWED,
     OBSERVATION_REQUIRED_PCT,
     REVIEW_PROMPT_VERSION,
+    Factor,
     KospiError,
     MemoryVerdict,
     RetireReason,
@@ -45,6 +46,7 @@ from modules.kospi.domain import (
     grade_forecast,
     memory_expired,
     memory_key,
+    stale_factor_moves,
 )
 from modules.kospi.graph import (
     GraphWriteResult,
@@ -54,6 +56,7 @@ from modules.kospi.graph import (
     StoredMemory,
     ensure_schema,
     read_memories,
+    read_relations,
     write_review,
 )
 from modules.kospi.state import GradedForecast, ReviewState
@@ -158,6 +161,14 @@ def observe() -> dict[str, Any]:
 
         ensure_schema(graph)
         memories = read_memories(graph, as_of_date=run_date, as_of_at=as_of_at)
+        weights = read_relations(graph, as_of_date=run_date, as_of_at=as_of_at)
+        # **안 바뀐 값은 모델에게 안 간다**(설계 §8.11). 지난 관찰이 본 것과 같은 거래일의
+        # 값(미국 휴장 다음 날의 SOX)과 값 없는 줄은 표에서 빼고 원장에 `stale`로만 센다.
+        # 모델이 그 줄을 `none`으로 답하면 "봤는데 무관"과 같은 0이 가중치에 들어간다.
+        fresh_moves, stale_moves = stale_factor_moves(
+            toolbox.factor_moves(), {item.factor: item.last_value_date for item in weights}
+        )
+        value_dates = {item.factor: item.business_date for item in fresh_moves}
         observed = ReviewState(
             run_date=run_date,
             as_of_kst=common.label(as_of_at),
@@ -165,10 +176,10 @@ def observe() -> dict[str, Any]:
             previous_close=previous[1],
             change_pct=change,
             bars=store.bars(as_of_at=as_of_at, before_date=_next_day(run_date)),
-            relations=common.relation_rows(graph, as_of_date=run_date, as_of_at=as_of_at),
+            relations=common.relation_rows_from(weights),
             memories=common.memory_rows(graph, as_of_date=run_date, as_of_at=as_of_at),
             forecasts=_graded_forecasts(store, run_date),
-            factor_moves=toolbox.factor_moves(),
+            factor_moves=tuple(fresh_moves),
         )
 
         model = llm.kospi_model(common.conversation_id(run_date, "review"))
@@ -194,7 +205,11 @@ def observe() -> dict[str, Any]:
                 run_date=run_date,
                 observations=[
                     ObservationWrite(
-                        factor=item.factor, sign=item.sign, strength=item.strength, note=item.note
+                        factor=item.factor,
+                        sign=item.sign,
+                        strength=item.strength,
+                        note=item.note,
+                        value_date=value_dates.get(item.factor),
                     )
                     for item in draft.observations
                 ],
@@ -233,6 +248,7 @@ def observe() -> dict[str, Any]:
             rejected=draft.rejected,
             observations=written.observations,
             observations_unanswered=len(draft.unanswered),
+            observations_stale=len(stale_moves),
             unlisted_drivers=list(draft.unlisted_drivers),
             memories={
                 "written": written.memories_written,
@@ -245,7 +261,15 @@ def observe() -> dict[str, Any]:
             usage=builder.usage,
         )
 
-    return _observe_result(run_date, change=change, close=close, draft=draft, plan=plan, written=written)
+    return _observe_result(
+        run_date,
+        change=change,
+        close=close,
+        draft=draft,
+        plan=plan,
+        written=written,
+        stale=tuple(item.factor for item in stale_moves),
+    )
 
 
 def _require_observations(draft: "ReviewDraft", *, change: Any) -> None:
@@ -355,6 +379,7 @@ def _observe_result(
     draft: "ReviewDraft",
     plan: dict[str, Any],
     written: GraphWriteResult,
+    stale: tuple[Factor, ...] = (),
 ) -> dict[str, Any]:
     """XCom을 지나는 값. Slack이 이것과 DB의 채점 줄을 합쳐 메시지를 만든다.
 
@@ -377,6 +402,7 @@ def _observe_result(
             for item in draft.observations
         ],
         "unanswered": [factor_label(item) for item in draft.unanswered],
+        "stale": [factor_label(item) for item in stale],
         "unlisted_drivers": list(draft.unlisted_drivers),
         "new_memories": [item.text for item in plan["new"]],
         "memories_written": written.memories_written,

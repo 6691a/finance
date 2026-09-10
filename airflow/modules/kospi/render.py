@@ -209,10 +209,16 @@ def _grade_line(item: dict[str, Any]) -> str:
 
 
 def _coverage_footer(built: dict[str, Any], *, unrelated: int) -> str:
-    """무관 판정 수와 답이 빠진 요인. **빠진 요인은 이름을 보인다** — 0이어야 정상이다."""
+    """무관 판정 수, 값이 안 바뀐 요인, 답이 빠진 요인. **빠진 요인은 이름을 보인다** — 0이어야 정상이다.
+
+    값이 안 바뀐 요인은 모델이 보지 않았다(§8.11). 미국 휴장 다음 날 지수 셋이 여기 온다.
+    """
     parts: list[str] = []
     if unrelated:
         parts.append(f"무관 {unrelated}")
+    stale = list(built.get("stale") or ())
+    if stale:
+        parts.append(f"값 안 바뀜 {len(stale)}: {', '.join(str(item) for item in stale)}")
     unanswered = list(built.get("unanswered") or ())
     if unanswered:
         parts.append(f"⚠ 답 없음 {len(unanswered)}: {', '.join(str(item) for item in unanswered)}")

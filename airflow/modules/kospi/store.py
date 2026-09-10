@@ -48,6 +48,7 @@ SELECT_BY_DATE = read_sql("postgres", "kospi_forecast", "select_by_date.sql")
 UPDATE_GRADE = read_sql("postgres", "kospi_forecast", "update_grade.sql")
 SELECT_PENDING_GRADES = read_sql("postgres", "kospi_forecast", "select_pending_grades.sql")
 INSERT_LLM_RUN = read_sql("postgres", "kospi_llm_run", "insert.sql")
+CLOSE_ORPHAN_LLM_RUNS = read_sql("postgres", "kospi_llm_run", "close_orphans.sql")
 FINISH_LLM_RUN = read_sql("postgres", "kospi_llm_run", "finish.sql")
 INSERT_TOOL_CALL = read_sql("postgres", "kospi_llm_run", "insert_tool_call.sql")
 
@@ -394,8 +395,22 @@ class KospiStore:
 
         전망 저장과 **다른 트랜잭션이다.** 원장이 못 써졌다고 전망을 버리면 안 되고, 전망
         저장이 실패해도 "무엇을 봤나"는 남아야 한다.
+
+        **같은 대화가 `running`으로 열려 있으면 먼저 닫는다.** 프로세스가 밖에서 죽으면
+        `finally`가 못 돌아 그 행이 영영 열려 있다(2026-08-24 백필 1차 시도, id 5). 다음
+        시도가 여는 자리가 "돌다 죽었다"를 아는 유일한 자리다.
         """
         with atomic(self._connection) as transaction, transaction.cursor() as cursor:
+            cursor.execute(
+                CLOSE_ORPHAN_LLM_RUNS,
+                {
+                    "kind": kind,
+                    "run_date": run_date,
+                    "slot": slot.value if slot else None,
+                    "finished_at": datetime.now(UTC),
+                    "error": f"orphaned: try {try_number} opened a new run",
+                },
+            )
             cursor.execute(
                 INSERT_LLM_RUN,
                 {
@@ -426,6 +441,7 @@ class KospiStore:
         rejected: int,
         observations: int | None = None,
         observations_unanswered: int | None = None,
+        observations_stale: int | None = None,
         unlisted_drivers: list[str] | None = None,
         memories: dict[str, int] | None = None,
         usage: TokenUsage | None = None,
@@ -453,6 +469,7 @@ class KospiStore:
                     "rejected": rejected,
                     "observations_written": observations,
                     "observations_unanswered": observations_unanswered,
+                    "observations_stale": observations_stale,
                     "unlisted_drivers": None if unlisted_drivers is None else json.dumps(unlisted_drivers, ensure_ascii=False),
                     "memories_written": counts.get("written"),
                     "memories_rejected": counts.get("rejected"),

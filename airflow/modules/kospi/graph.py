@@ -6,7 +6,7 @@
 ## 그래프 모양
 
 ```
-(:Factor {code, label})-[:OBSERVED {date, sign, strength, note, llm_run_id}]->(:Index {code:'KOSPI'})
+(:Factor {code, label})-[:OBSERVED {date, sign, strength, note, value_date, llm_run_id}]->(:Index {code:'KOSPI'})
 (:Memory {id, created_on, text, verify_count, unreviewed_count, last_verified_on,
           retired_on, retire_reason, llm_run_id})-[:ABOUT]->(:Factor)
 ```
@@ -84,7 +84,7 @@ READ_OBSERVATIONS = """
 MATCH (f:Factor)-[o:OBSERVED]->(:Index {code: $index})
 WHERE o.created_at <= $as_of_at AND o.date >= $window_start
 RETURN f.code AS code, o.date AS date, o.sign AS sign, o.strength AS strength,
-       coalesce(o.note, '') AS note
+       coalesce(o.note, '') AS note, o.value_date AS value_date
 ORDER BY code, date DESC
 """
 
@@ -114,6 +114,7 @@ MERGE (f:Factor {code: r.code})
   ON CREATE SET f.label = r.label
 MERGE (f)-[o:OBSERVED {date: $observed_on}]->(i)
   ON CREATE SET o.sign = r.sign, o.strength = r.strength, o.note = r.note,
+                o.value_date = r.value_date,
                 o.llm_run_id = $llm_run_id, o.created_at = $created_at
 RETURN count(o) AS touched
 """
@@ -222,6 +223,9 @@ class ObservationWrite(BaseModel):
     sign: ObservationSign
     strength: int
     note: str = ""
+    # 이 관찰이 본 요인 값의 거래일. 다음 관찰이 "값이 안 바뀌었나"를 이것과 견준다(§8.11).
+    # 뉴스·공시처럼 값 표에 없는 요인은 `None`이다.
+    value_date: date | None = None
 
 
 class GraphWriteResult(BaseModel):
@@ -295,6 +299,7 @@ def read_relations(graph: Driver, *, as_of_date: date, as_of_at: datetime) -> tu
                 sign=sign,
                 strength=int(row["strength"]),
                 note=str(row["note"] or ""),
+                value_date=None if row.get("value_date") is None else _as_date(row["value_date"]),
             )
         )
     return tuple(
@@ -385,6 +390,7 @@ def write_review(
                         "sign": item.sign.value,
                         "strength": item.strength,
                         "note": item.note,
+                        "value_date": None if item.value_date is None else _plain_date(item.value_date),
                     }
                     for item in observations
                 ]

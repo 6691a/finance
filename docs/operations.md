@@ -15,9 +15,9 @@ Copy-Item config.yaml.sample config.yaml
 
 `config.yaml`에 실제 API 키와 비밀번호를 입력하세요. 이 파일은 Git에서 제외되며, 모든 설정 항목의 예시는 [config.yaml.sample](../config.yaml.sample)에 있습니다.
 
-## 데이터베이스와 Redis
+## 데이터베이스
 
-여러 데이터베이스와 Redis를 alias별로 YAML에 직접 등록합니다. `default` alias는 각각 반드시 있어야 하며, `DATABASE_URL`, `REDIS_URL` 같은 단일 URL은 자동 변환하지 않습니다.
+여러 데이터베이스를 alias별로 YAML에 직접 등록합니다. `default` alias는 반드시 있어야 하며, `DATABASE_URL` 같은 단일 URL은 자동 변환하지 않습니다.
 
 ```yaml
 databases:
@@ -40,12 +40,6 @@ databases:
       model_modules:
         - apps.models
 
-redises:
-  default:
-    url: redis://localhost:16379/0
-  stream:
-    url: redis://localhost:16379/1
-    decode_responses: false
 ```
 
 - `runtime_enabled: false`인 alias는 애플리케이션 런타임에서 제외되고 migration 명령에서만 사용할 수 있습니다.
@@ -217,7 +211,7 @@ autogenerate 결과는 **반드시 열어서 확인합니다.**
 | --- | --- | --- |
 | `airflow/dags/` | `/opt/airflow/dags` | 스케줄과 오케스트레이션만 |
 | `airflow/modules/` | `/opt/airflow/modules` | DAG가 import하는 실행 코드 |
-| `airflow/utility/` | `/opt/airflow/utility` | 알림 등 공용 유틸리티 |
+| `airflow/utility/` | `/opt/airflow/utility` | 비어 있습니다(`.gitkeep`만). 운영 마운트와 짝을 맞추려고 남겨 둔 자리입니다 |
 | `airflow/sql/` | `/opt/airflow/sql` | 쿼리 파일 |
 | `airflow/plugins/` | `/opt/airflow/plugins` | Airflow 플러그인 |
 | `airflow/config/` | `/opt/airflow/config` | Airflow 설정 |
@@ -225,7 +219,7 @@ autogenerate 결과는 **반드시 열어서 확인합니다.**
 
 Airflow는 `apps/`, `apps/core/`, `migrations/`를 **보지 못합니다.** DAG가 실행 시점에 import하는 코드는 전부 `airflow/` 아래 있어야 합니다.
 
-import 뿌리는 `airflow/`입니다. DAG는 배포와 같은 이름으로 `from modules.collectors import ...`, `from utility.alert import ...`처럼 씁니다. 로컬 도구도 같은 뿌리를 쓰도록 [pyproject.toml](../pyproject.toml)에 맞춰 뒀습니다.
+import 뿌리는 `airflow/`입니다. DAG는 배포와 같은 이름으로 `from modules.collectors import ...`처럼 씁니다. 로컬 도구도 같은 뿌리를 쓰도록 [pyproject.toml](../pyproject.toml)에 맞춰 뒀습니다.
 
 - `[tool.pytest.ini_options] pythonpath = [".", "airflow"]`
 - `[tool.pyrefly] search-path = [".", "airflow"]`
@@ -240,7 +234,7 @@ import 뿌리는 `airflow/`입니다. DAG는 배포와 같은 이름으로 `from
 - **`airflow/` 아래에는 DAG가 실제로 실행하는 코드만 둡니다.** DAG가 쓰는 수집 코드는 `airflow/modules` 아래 한 벌만 둡니다. 배포에서 보이지 않는 경로에 실행 코드를 두면 DAG가 죽습니다. 반대로 Airflow가 실행하지 않는 상주 서비스(`apps/realtime/` — KIS 실시간 WebSocket 수집)는 `apps/` 아래에 백엔드 규칙(ORM, `config.yaml`)으로 두고 별도 컨테이너(`compose/prod/`)로 배포합니다. 두 트리가 겹치는 도메인 상수는 중복을 허용하되 테스트로 대조합니다.
 - **규칙은 백엔드를 따릅니다.** 외부 입력은 Pydantic으로 검증하고, 시각은 timezone-aware UTC이며, 주석은 한국어로 씁니다.
 - **`dags/`에는 오케스트레이션만 둡니다.** 스케줄, 재시도, 태스크 매핑, Hook 사용, 실패 분류가 여기에 해당합니다. 파싱·검증·저장 규칙은 `modules/`에 둡니다.
-- **의존성은 Airflow 환경에 있는 것만 씁니다.** 표준 라이브러리, Pydantic, PEP 249 연결이 기본이고, 여기에 HTML 수집용 `scrapling[fetchers]`와 LLM 호출용 `langchain-xai`·`langgraph`가 더해집니다. 목록은 [compose/local/airflow/requirements.txt](../compose/local/airflow/requirements.txt)에 있고, 새로 쓰려면 운영 Airflow 이미지에 먼저 들어가야 합니다. SQLAlchemy 모델과 `core.config`는 import하지 않습니다.
+- **의존성은 Airflow 환경에 있는 것만 씁니다.** 표준 라이브러리, Pydantic, PEP 249 연결이 기본이고, 여기에 HTML 수집용 `scrapling[fetchers]`, PDF 파싱용 `pymupdf`, LLM 호출용 `langchain-xai`·`langgraph`·`openai`·`langsmith`, Slack 발송용 `slack-sdk`, 차트용 `matplotlib`, 관계 그래프용 `neo4j`, Airflow의 Sentry 통합이 쓰는 `sentry-sdk`가 더해집니다. 목록은 [compose/local/airflow/requirements.txt](../compose/local/airflow/requirements.txt)에 있고, 새로 쓰려면 운영 Airflow 이미지에 먼저 들어가야 합니다. SQLAlchemy 모델과 `core.config`는 import하지 않습니다.
 - **테이블 정의의 원본은 백엔드입니다.** 수집기는 ORM 없이 문자열 SQL을 쓰므로 컬럼 이름이 어긋나면 실행 시점에야 드러납니다. [tests/collectors/test_fred.py](../tests/collectors/test_fred.py)와 [tests/collectors/test_ecos.py](../tests/collectors/test_ecos.py)가 INSERT 컬럼 목록과 `ON CONFLICT` 키를 `apps/models`의 metadata와 대조합니다. 모델을 고치면 이 테스트가 먼저 깨집니다.
 
 ### 수집기 작성 규칙
@@ -285,7 +279,7 @@ DAG마다 절을 두지 않습니다. 상세는 각 DAG 파일의 `doc_md`에 �
 | `kis_investor_flow_intraday` | 평일 09~15시 5분마다 | `market_investor_flow_snapshot` | KIS |
 | `kis_investor_estimate_intraday` | 평일 09:35·10:05·11:25·13:25·14:35 | `stock_investor_estimate_snapshot` | KIS |
 | `kis_investor_trade_daily` | 평일 18:10 | `stock_investor_trade_daily` | KIS |
-| `kis_stock_minute_bars_daily` | 평일 20:40 | `stock_bar` | KIS |
+| `kis_stock_minute_bars_daily` | 평일 20:05 | `stock_bar` | KIS |
 | `kis_equity_bar_reconcile` | 평일 08~19시 05·35분 | `stock_bar`(실시간 잠정 봉을 REST 확정값으로 조정) | KIS |
 | `kis_index_daily` | 평일 18:20 | `index_daily`(코스피·코스닥·코스피200) | KIS |
 | `kis_future_daily` | 평일 18:30 | `index_future_daily`(코스피200·코스닥150 선물 연결 시계열) | KIS |
@@ -332,7 +326,7 @@ DAG마다 절을 두지 않습니다. 상세는 각 DAG 파일의 `doc_md`에 �
 
 | DAG | 스케줄(KST) | 채널 | 내용 |
 | --- | --- | --- | --- |
-| `slack_kr_market_briefing` | 평일 08:10·09:00·10~19시 매시·15:30·20:15 | `SLACK_CHANNEL_MARKET` | NXT·KRX 시세, 수급, 전일 비교, 당일·일봉 기술 차트 |
+| `slack_kr_market_briefing` | 평일 08:10·09:00·10~19시 매시·15:35·20:15 | `SLACK_CHANNEL_MARKET` | NXT·KRX 시세, 수급, 전일 비교, 당일·일봉 기술 차트 |
 | `slack_us_market_briefing` | 화~토 08:00 | `SLACK_CHANNEL_MARKET` | 밤사이 미국 지수·선물(현물 옆에 선물)·원자재·크립토·ADR, 주요국 10년 금리, 전일 국내 복기 |
 | `slack_document_briefing` | 매일 08:00·12:00·15:30·20:00 | `SLACK_CHANNEL_DOCUMENT` | 직전 발송 이후 평가 집계와 LLM 선별 문서 |
 | `slack_ops_briefing` | 매일 08:00 | `SLACK_CHANNEL_OPS` | 지난 24시간 수집 성공·실패·무소식·0건 |
@@ -461,7 +455,7 @@ airflow dags trigger mof_jgb_daily --conf '{\"source_file\": \"all\", \"observat
 - **흐름 제어는 LangGraph입니다.** 재시도, 교정 재요청, 문서별 팬아웃(`Send`)을 `StateGraph`의 노드와 엣지로 표현합니다. 노드 이름이 그대로 트레이스에 남아 어디서 몇 번 불렀는지 보이는 것이 이 규칙의 목적입니다.
 - **데이터 모양은 Pydantic입니다.** 설정, 모델 응답, 노드가 주고받는 결과를 `BaseModel`로 선언하고, 응답 스키마는 그 모델에서 뽑아 `response_format`으로 강제합니다. 강제를 지원하지 않는 제공처를 위해 스키마 없이 한 번 더 부르는 경로와 검증을 그대로 남겨 둡니다.
 
-**어떤 모델을 쓸지는 코드가 정합니다.** `llm.py`의 `document_model()`·`kospi_model()`·`expectation_model()`이 LangChain 문법 그대로 모델을 만들고, 바꿀 때 그 함수를 고칩니다. 지금 문서 평가와 이벤트 추출은 `ChatOpenAI`로 `gpt-5.6-luna`를, 코스피 전망·관찰은 `ChatXAI`로 `grok-4.6`을 부릅니다. `base_url`과 모델명을 환경변수로 빼서 제공처를 갈아 끼우지 않습니다. LangChain은 제공처마다 클래스와 인자가 달라 문자열 설정 몇 개로 흉내 내면 어느 쪽도 제대로 못 씁니다. **환경에서 오는 것은 API 키뿐이고 그것도 우리가 읽지 않습니다.** LangChain 클래스가 자기 이름(`OPENAI_API_KEY`·`XAI_API_KEY`)으로 스스로 읽습니다. 키를 우리 설정 객체에 담으면 로그와 예외에 실릴 자리만 늘어납니다.
+**어떤 모델을 쓸지는 코드가 정합니다.** `llm.py`의 `openai_model()`·`briefing_model(conv_id)`·`kospi_model(conv_id)`가 LangChain 문법 그대로 모델을 만들고, 바꿀 때 그 함수를 고칩니다. 지금 문서 평가·이벤트 추출·급변 원인 분석은 `ChatOpenAI`로 `gpt-5.6-luna`를, 코스피 전망·관찰과 브리핑 선별은 `ChatXAI`로 `grok-4.6`을 부릅니다. `base_url`과 모델명을 환경변수로 빼서 제공처를 갈아 끼우지 않습니다. LangChain은 제공처마다 클래스와 인자가 달라 문자열 설정 몇 개로 흉내 내면 어느 쪽도 제대로 못 씁니다. **환경에서 오는 것은 API 키뿐이고 그것도 우리가 읽지 않습니다.** LangChain 클래스가 자기 이름(`OPENAI_API_KEY`·`XAI_API_KEY`)으로 스스로 읽습니다. 키를 우리 설정 객체에 담으면 로그와 예외에 실릴 자리만 늘어납니다.
 
 **재시도는 Airflow가 합니다.** 모델 클라이언트는 `max_retries=0`으로 만듭니다. SDK가 먼저 재시도하면 태스크 타임아웃 안에서 몇 번을 불렀는지 로그와 트레이스가 어긋납니다. 체크포인터도 붙이지 않습니다. 재실행 단위는 Airflow 태스크입니다.
 
@@ -473,8 +467,8 @@ airflow dags trigger mof_jgb_daily --conf '{\"source_file\": \"all\", \"observat
 
 ## 배포
 
-운영은 Synology NAS 한 대이고 저장소 clone 하나(`/volume1/docker/finance`)에서 두 compose
-스택을 실행합니다. 두 스택 모두 코드를 이미지에 굽지 않고 clone 안의 트리를 bind-mount
+운영은 Synology NAS 한 대이고 저장소 clone 하나(`/volume1/docker/finance`)에서 세 compose
+스택을 실행합니다. 세 스택 모두 코드를 이미지에 굽지 않고 clone 안의 트리를 bind-mount
 하므로, 배포는 clone을 `git pull` 하는 것이 전부입니다.
 
 | 스택 | compose | 마운트하는 트리 |
@@ -487,15 +481,16 @@ airflow dags trigger mof_jgb_daily --conf '{\"source_file\": \"all\", \"observat
 
 ```bash
 git pull
-just deploy            # 두 스택 전부
+just deploy            # 세 스택 전부
 just deploy-airflow    # airflow만
 just deploy-realtime   # realtime만
 just deploy-api        # 조회 API만
 just build-airflow     # Dockerfile·requirements 변경 시에만, 이어서 deploy
 just build-realtime
+just build-api
 ```
 
-`deploy`는 두 스택을 `up -d` 하고 realtime을 재시작합니다. 이미지 빌드는 분리돼
+`deploy`는 세 스택을 `up -d` 하고 realtime과 api를 재시작합니다(`apps/`가 bind-mount라 `up`이 코드 변경을 감지하지 못합니다). 이미지 빌드는 분리돼
 있습니다 — NAS buildkit이 느리고 코드가 bind-mount라 매 배포에 빌드할 이유가
 없습니다. 빌드가 `DeadlineExceeded`로 죽으면 `DOCKER_BUILDKIT=0`을 앞에 붙입니다.
 just가 없으면 레시피 안의 docker compose 명령을 그대로 실행합니다. 변경 종류별

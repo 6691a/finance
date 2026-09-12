@@ -6,7 +6,6 @@ from pydantic_settings import (
 )
 
 from apps.core.database import DatabaseConfig
-from apps.core.redis import RedisConfig
 
 
 class Settings(BaseSettings):
@@ -17,16 +16,11 @@ class Settings(BaseSettings):
     )
 
     databases: dict[str, DatabaseConfig]
-    redises: dict[str, RedisConfig]
 
     kis_app_key: str
     kis_app_secret: str
     kis_rest_domain: str
     kis_websocket_domain: str
-
-    fred_api_key: str
-
-    ecos_api_key: str
 
     sentry_dsn: str
     sentry_environment: str
@@ -56,13 +50,6 @@ class Settings(BaseSettings):
         if not databases["default"].runtime_enabled:
             raise ValueError("DATABASES 'default' must be runtime-enabled")
         return databases
-
-    @field_validator("redises")
-    @classmethod
-    def require_default_redis(cls, redises: dict[str, RedisConfig]) -> dict[str, RedisConfig]:
-        if "default" not in redises:
-            raise ValueError("REDISES must include a 'default' redis")
-        return redises
 
 
 settings = Settings()

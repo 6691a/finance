@@ -68,17 +68,15 @@ airflow dags trigger kis_index_daily \
 """
 
 import logging
-import os
 from contextlib import closing
 from datetime import UTC, date, datetime, timedelta
 from typing import Any
 
 import pendulum
-from airflow.providers.postgres.hooks.postgres import PostgresHook
 from airflow.sdk import Param, Variable, dag, get_current_context, task
-from airflow.sdk.exceptions import AirflowFailException, AirflowSkipException
-from pydantic import SecretStr
+from airflow.sdk.exceptions import AirflowFailException
 
+from modules import dag_common
 from modules.collectors.kis import (
     DomesticIndex,
     KisHTTPError,
@@ -88,43 +86,15 @@ from modules.collectors.kis import (
     access_token,
 )
 from modules.collectors.market.kis_index_daily import KisIndexDailyCollector
-from modules.market_session import krx_open_day
 from modules.period import (
     END_DATE_PARAM,
     SPAN_CALENDAR_DAYS,
     START_DATE_PARAM,
-    PeriodError,
-    calendar_day,
     fetch_windows,
-    span_start,
 )
-from modules.utility import CONNECTION_ID, KIS_UNRECOVERABLE_STATUSES, KST_TIMEZONE, atomic
+from modules.utility import KIS_UNRECOVERABLE_STATUSES, KST_TIMEZONE, atomic
 
 logger = logging.getLogger(__name__)
-
-
-def _credentials() -> tuple[SecretStr, SecretStr]:
-    app_key = os.environ.get("KIS_APP_KEY")
-    app_secret = os.environ.get("KIS_APP_SECRET")
-    if not app_key or not app_secret:
-        raise AirflowFailException("KIS_APP_KEY and KIS_APP_SECRET are required")
-    return SecretStr(app_key), SecretStr(app_secret)
-
-
-def _connection() -> Any:
-    return PostgresHook(postgres_conn_id=CONNECTION_ID).get_conn()
-
-
-def _calendar_day(given: Any, name: str) -> date:
-    """`YYYY-MM-DD` 하나를 읽는다. 규칙은 `modules/period.py`에 한 벌 있다.
-
-    여기 남는 것은 그 실패를 어떤 Airflow 예외로 올릴지뿐이다. 파라미터가 틀린 것은
-    되돌릴 수 없어 재시도해도 같은 답이다.
-    """
-    try:
-        return calendar_day(given, name)
-    except PeriodError as error:
-        raise AirflowFailException(str(error)) from None
 
 
 def requested_end_date(now_kst: datetime, params: dict[str, Any]) -> date:
@@ -132,23 +102,7 @@ def requested_end_date(now_kst: datetime, params: dict[str, Any]) -> date:
     given = params.get(END_DATE_PARAM)
     if not given:
         return now_kst.date()
-    return _calendar_day(given, END_DATE_PARAM)
-
-
-def requested_start_date(end_date: date, params: dict[str, Any]) -> date:
-    """이 run이 구간의 시작으로 쓸 날짜. 비우면 200달력일 앞이다.
-
-    끝보다 뒤인 시작은 조용히 빈 구간이 되므로 막는다.
-    """
-    given = params.get(START_DATE_PARAM)
-    if not given:
-        return span_start(end_date)
-    start_date = _calendar_day(given, START_DATE_PARAM)
-    if start_date > end_date:
-        raise AirflowFailException(f"{START_DATE_PARAM} {start_date} must not be after {END_DATE_PARAM} {end_date}")
-    return start_date
-
-
+    return dag_common.calendar_day_or_fail(given, END_DATE_PARAM)
 
 
 @dag(
@@ -188,26 +142,21 @@ def kis_index_daily():
 
         now_kst = datetime.now(UTC).astimezone(KST_TIMEZONE)
         end_date = requested_end_date(now_kst, params)
-        start_date = requested_start_date(end_date, params)
+        start_date = dag_common.requested_start_date(end_date, params)
         windows = fetch_windows(start_date, end_date)
 
         # 자동 실행만 휴장일을 건너뛴다. 백필은 끝 날짜가 휴장일이어도 구간 안의 거래일이
         # 목적이므로 막을 이유가 없다.
         if not params.get(END_DATE_PARAM) and not params.get(START_DATE_PARAM):
-            connection = _connection()
-            try:
-                closed = krx_open_day(connection, end_date) is False
-            finally:
-                connection.close()
-            if closed:
-                raise AirflowSkipException(f"KRX is closed on {end_date}")
+            with closing(dag_common.connection()) as connection:
+                dag_common.skip_unless_krx_open(connection, end_date)
 
-        app_key, app_secret = _credentials()
+        app_key, app_secret = dag_common.kis_credentials()
         collector = KisIndexDailyCollector(access_token(Variable, app_key, app_secret), app_key, app_secret)
 
         stored = 0
         failures: list[str] = []
-        with closing(_connection()) as connection:
+        with closing(dag_common.connection()) as connection:
             # 수집 대상은 `DomesticIndex` 전체다. 부분집합을 따로 두지 않는다 — 전에는 시장
             # 등락 분포용 `MOVEMENT_INDEXES`를 재사용해서 KOSPI200이 조용히 빠져 있었다.
             for index in DomesticIndex:

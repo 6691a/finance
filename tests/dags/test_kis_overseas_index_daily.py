@@ -5,7 +5,7 @@
 `modules/period.py`이고 `tests/modules/test_period.py`가 덮는다.
 """
 
-from datetime import UTC, date, datetime, timedelta
+from datetime import UTC, date, datetime
 
 import pendulum
 import pytest
@@ -88,22 +88,6 @@ def test_an_unreadable_end_date_fails_before_any_call(given):
     """되돌릴 수 없는 설정 오류다. `ValueError`가 아니라 즉시 죽는 예외로 올린다."""
     with pytest.raises(AirflowFailException, match="must be YYYY-MM-DD"):
         kis_overseas_index_daily.requested_end_date(SESSION_DATE, {"end_date": given})
-
-
-def test_an_empty_start_date_keeps_the_fixed_span():
-    start_date = kis_overseas_index_daily.requested_start_date(SESSION_DATE, {})
-
-    assert start_date == SESSION_DATE - timedelta(days=kis_overseas_index_daily.SPAN_CALENDAR_DAYS)
-
-
-def test_a_start_date_after_the_end_fails_before_any_call():
-    with pytest.raises(AirflowFailException, match="must not be after"):
-        kis_overseas_index_daily.requested_start_date(SESSION_DATE, {"start_date": "2026-08-22"})
-
-
-def test_an_iso_week_start_date_is_rejected():
-    with pytest.raises(AirflowFailException, match="must be YYYY-MM-DD"):
-        kis_overseas_index_daily.requested_start_date(SESSION_DATE, {"start_date": "2026-W34"})
 
 
 def test_the_backfill_span_is_cut_by_the_shared_rule():

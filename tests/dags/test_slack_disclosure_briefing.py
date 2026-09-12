@@ -14,6 +14,7 @@ import pytest
 from airflow.sdk.exceptions import AirflowFailException
 
 from dags import slack_disclosure_briefing
+from modules import dag_common
 from modules.briefing.disclosures import DisclosureBatch, Highlight, HighlightError, NewDisclosure
 from modules.slack import SlackError
 
@@ -64,7 +65,7 @@ def send(monkeypatch):
     FakeSlack.instances = []
     monkeypatch.setenv("SLACK_BOT_TOKEN", "xoxb-secret")
     monkeypatch.setenv("SLACK_CHANNEL_DOCUMENT", "C-document")
-    monkeypatch.setattr(slack_disclosure_briefing, "_connection", FakeConnection)
+    monkeypatch.setattr(dag_common, "connection", FakeConnection)
     monkeypatch.setattr(slack_disclosure_briefing, "SlackClient", FakeSlack)
     monkeypatch.setattr(
         slack_disclosure_briefing,
@@ -109,14 +110,14 @@ def test_missing_slack_settings_fail_without_retry(monkeypatch):
     monkeypatch.delenv("SLACK_CHANNEL_DOCUMENT", raising=False)
 
     with pytest.raises(AirflowFailException):
-        slack_disclosure_briefing._slack_settings()
+        dag_common.slack_settings(slack_disclosure_briefing.SLACK_CHANNEL_ENV)
 
 
 def test_the_token_is_wrapped_so_logs_cannot_print_it(monkeypatch):
     monkeypatch.setenv("SLACK_BOT_TOKEN", "xoxb-secret")
     monkeypatch.setenv("SLACK_CHANNEL_DOCUMENT", "C-document")
 
-    token, channel = slack_disclosure_briefing._slack_settings()
+    token, channel = dag_common.slack_settings(slack_disclosure_briefing.SLACK_CHANNEL_ENV)
 
     assert "xoxb-secret" not in str(token)
     assert channel == "C-document"
@@ -222,7 +223,7 @@ def test_the_connection_is_closed_even_when_the_query_fails(send, monkeypatch):
         connections.append(connection)
         return connection
 
-    monkeypatch.setattr(slack_disclosure_briefing, "_connection", make)
+    monkeypatch.setattr(dag_common, "connection", make)
 
     def explode(*args: Any, **kwargs: Any):
         raise RuntimeError("db is down")

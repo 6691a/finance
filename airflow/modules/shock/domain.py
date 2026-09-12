@@ -13,6 +13,8 @@ from enum import StrEnum
 
 from pydantic import AwareDatetime, BaseModel, ConfigDict, Field
 
+from modules.kospi.state import FrozenModel
+
 # 트리거 대상. `index_bar.symbol`과 같은 값이다.
 TRIGGER_SYMBOL = "KOSPI"
 BAR_PROVIDER = "kis"
@@ -149,16 +151,7 @@ class Direction(StrEnum):
     SURGE = "surge"
 
 
-class _State(BaseModel):
-    """이 모듈의 데이터 모양이 공유하는 설정.
-
-    **재시도 경로에서 값이 바뀌면 원본과 저장값이 어긋난다**(저장소 규칙).
-    """
-
-    model_config = ConfigDict(frozen=True)
-
-
-class Bar(_State):
+class Bar(FrozenModel):
     """1분봉 하나. `index_bar`의 한 행에서 판정에 쓰는 칸만 뽑았다."""
 
     bar_at: AwareDatetime
@@ -168,7 +161,7 @@ class Bar(_State):
     close: Decimal
 
 
-class PeerMove(_State):
+class PeerMove(FrozenModel):
     """같은 창의 다른 시장 하나.
 
     **`available=False`면 `change_pct`가 `None`이다.** 0으로 채우지 않는다 — 빈 칸은
@@ -183,7 +176,7 @@ class PeerMove(_State):
     available: bool = False
 
 
-class ShockEvent(_State):
+class ShockEvent(FrozenModel):
     """포착한 급변 하나. 저장 전의 모양이라 `peers`는 아직 없다."""
 
     symbol: str
@@ -238,14 +231,6 @@ CAUSE_BUSINESS_DAYS = 3
 MAX_EVENTS_PER_RUN = 20
 
 
-class CauseStatus(StrEnum):
-    """원인 분석의 상태. `apps/models/market/shock.py`의 `ShockCauseStatus`와 값이 같다."""
-
-    PENDING = "pending"
-    RESOLVED = "resolved"
-    UNKNOWN = "unknown"
-
-
 class CauseKind(StrEnum):
     """무엇이 방아쇠였나. **수급은 경로이지 방아쇠가 아니다.**
 
@@ -258,7 +243,7 @@ class CauseKind(StrEnum):
     UNCLEAR = "unclear"
 
 
-class DocumentRow(_State):
+class DocumentRow(FrozenModel):
     """프롬프트에 실리는 문서 하나. `shock_documents/select_after_event.sql`의 한 행이다."""
 
     id: int
@@ -270,7 +255,7 @@ class DocumentRow(_State):
     new_facts: tuple[str, ...] = ()
 
 
-class SearchRow(_State):
+class SearchRow(FrozenModel):
     """프롬프트에 실리는 검색 결과 하나. **번호는 그 시도 안에서만 뜻이 있다.**
 
     모델은 이 번호로 답하고 코드가 그것을 URL로 되돌려 `market_shock_search_hit.cited`를
@@ -285,7 +270,7 @@ class SearchRow(_State):
     published_at: AwareDatetime | None = None
 
 
-class CauseInput(_State):
+class CauseInput(FrozenModel):
     """원인 분석 한 번의 입력 전부. 프롬프트 조립이 이 모델만 본다."""
 
     shock_event_id: int

@@ -63,7 +63,7 @@
 
 ## 필요한 환경
 
-- `OPENAI_API_KEY` — 어떤 모델을 부를지는 `modules/llm.py`의 `shock_model()`이 코드로
+- `OPENAI_API_KEY` — 어떤 모델을 부를지는 `modules/llm.py`의 `openai_model()`이 코드로
   정하고 키는 그 LangChain 클래스가 자기 이름으로 읽는다.
 - `TAVILY_API_KEY` — 없으면 검색 없이 우리 문서만 본다(경고 뒤 계속).
 - `SLACK_BOT_TOKEN`, `SLACK_CHANNEL_MARKET`.
@@ -78,12 +78,11 @@ from datetime import UTC, datetime, timedelta
 from urllib.error import URLError
 
 import pendulum
-from airflow.providers.postgres.hooks.postgres import PostgresHook
 from airflow.sdk import Param, dag, get_current_context, task
 from airflow.sdk.exceptions import AirflowFailException
 from pydantic import SecretStr
 
-from modules import untrusted
+from modules import dag_common, untrusted
 from modules.llm import LlmError
 from modules.shock.domain import (
     CAUSE_BUSINESS_DAYS,
@@ -97,21 +96,15 @@ from modules.shock.domain import (
 from modules.shock.render import document_text
 from modules.shock.search import SearchError, TavilySearch, build_queries, collect
 from modules.shock.store import ShockStore
-from modules.utility import CONNECTION_ID, KST_TIMEZONE, atomic
+from modules.utility import KST_TIMEZONE, atomic
 
 logger = logging.getLogger(__name__)
+
+SLACK_CHANNEL_ENV = "SLACK_CHANNEL_MARKET"
 
 MAX_EVENTS_PARAM = "max_events"
 SEARCH_PARAM = "search"
 NOTIFY_PARAM = "notify"
-
-
-def _slack_settings() -> tuple[SecretStr, str]:
-    token = os.environ.get("SLACK_BOT_TOKEN")
-    channel = os.environ.get("SLACK_CHANNEL_MARKET")
-    if not token or not channel:
-        raise AirflowFailException("SLACK_BOT_TOKEN and SLACK_CHANNEL_MARKET are required")
-    return SecretStr(token), channel
 
 
 def _search_client(enabled: bool) -> TavilySearch | None:
@@ -180,7 +173,7 @@ def market_shock_cause_daily():
         resolved = 0
         failures: list[str] = []
 
-        with closing(PostgresHook(postgres_conn_id=CONNECTION_ID).get_conn()) as connection:
+        with closing(dag_common.connection()) as connection:
             store = ShockStore(connection)
             pending = store.pending_causes(today=today_kst, limit=max_events)
             if not pending:
@@ -233,7 +226,7 @@ def market_shock_cause_daily():
         now = datetime.now(UTC)
         today_kst = now.astimezone(KST_TIMEZONE).date()
 
-        with closing(PostgresHook(postgres_conn_id=CONNECTION_ID).get_conn()) as connection:
+        with closing(dag_common.connection()) as connection:
             store = ShockStore(connection)
             with atomic(connection):
                 closed = store.close_expired_causes(today=today_kst, resolved_at=now)
@@ -243,7 +236,7 @@ def market_shock_cause_daily():
 
         logger.info("Closed %s expired cause(s) as unknown", len(closed))
         if notify:
-            token, channel = _slack_settings()
+            token, channel = dag_common.slack_settings(SLACK_CHANNEL_ENV)
             client = SlackClient(token)
             for event in closed:
                 client.post_message(
@@ -374,7 +367,7 @@ def _resolve_one(
         return False
 
     if notify:
-        token, channel = _slack_settings()
+        token, channel = dag_common.slack_settings(SLACK_CHANNEL_ENV)
         slack(token).post_message(
             channel,
             text=render_text(payload, answer),

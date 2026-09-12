@@ -514,3 +514,19 @@ class KospiStore:
         with self._connection.cursor() as cursor:
             cursor.execute(statement, parameters)
             return list(cursor.fetchall())
+
+
+# ---------------------------------------------------------------------------
+# 원장 행에 적는 Airflow 실행 식별자. `start_llm_run`의 `dag_run_id`·`try_number`가 이 값이다.
+# 수동 실행이나 테스트의 빈 context에서도 죽지 않게 기본값을 둔다.
+# ---------------------------------------------------------------------------
+
+
+def dag_run_id_of(context: dict[str, Any]) -> str:
+    run = context.get("dag_run")
+    return str(getattr(run, "run_id", "") or "unknown")
+
+
+def try_number_of(context: dict[str, Any]) -> int:
+    instance = context.get("task_instance") or context.get("ti")
+    return int(getattr(instance, "try_number", 1) or 1)

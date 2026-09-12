@@ -635,8 +635,9 @@ stock_investor_trade_daily            2018-12-10 ~ 08-26  (1,892행)
 | `stock_bar`를 읽는 곳 | 무엇을 보나 |
 | --- | --- |
 | `briefing/market_data.py` | 오늘 브리핑의 최신 봉과 당일 분봉 차트 |
-| `thesis/intraday.py` | 기준 시각 **직전** 봉 하나 (당일) |
-| `thesis/nxt_review.py` | 그날 NXT 애프터마켓 구간 |
+
+옛 추론(`thesis/intraday.py`·`thesis/nxt_review.py`)도 당일 봉을 읽었으나 2026-09-03에
+지웠고, 후속인 `kospi/`는 `index_bar`만 읽는다.
 
 종목 채점의 호라이즌 등락률(`stock_investor_trade_daily/select_horizon_return.sql` 등)은
 **일봉**에서 온다. 기술적 신호와 기저율도 일봉이다. **다만 지수 채점은 다르다** —

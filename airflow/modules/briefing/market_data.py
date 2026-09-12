@@ -26,6 +26,9 @@ from typing import Any
 from pendulum import timezone
 from pydantic import AwareDatetime, BaseModel, ConfigDict
 
+# 미국 세션 날짜는 해외지수 수집기의 것을 그대로 쓴다. 브리핑(`market.py`)이 여기서 가져가므로
+# 별칭으로 재수출한다 — 별칭이 없으면 ruff가 안 쓰는 import로 지운다.
+from modules.collectors.market.kis_overseas_index import us_session_date as us_session_date  # noqa: PLC0414
 from modules.db import Connection
 from modules.sql import read_sql
 from modules.technical import indicators
@@ -833,12 +836,3 @@ def session_state(now: datetime) -> str:
     if minutes < SESSION_OPEN_HOUR_KST * 60:
         return "개장 전"
     return "장중" if minutes <= SESSION_CLOSE_MINUTE_KST else "마감 후"
-
-
-def us_session_date(now: datetime) -> date:
-    """이 시각에 막 끝난 미국 세션의 날짜.
-
-    **KST 날짜로 물으면 안 된다.** 미국 정규장은 KST로 전날 22:30에 시작해 당일 05:00에
-    끝나므로, 뉴욕 시계로 봐야 세션 하나가 한 날짜에 담긴다.
-    """
-    return now.astimezone(US_EASTERN).date()

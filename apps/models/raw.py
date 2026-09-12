@@ -9,11 +9,10 @@ from sqlalchemy import (
     Text,
     text,
 )
-from sqlalchemy import Enum as SqlEnum
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 
-from apps.core.database import EntityBase, table_options
+from apps.core.database import EntityBase, enum_column, table_options
 
 
 class SourceType(StrEnum):
@@ -48,12 +47,7 @@ class SourceRecord(EntityBase):
     )
 
     source_type: Mapped[SourceType] = mapped_column(
-        SqlEnum(
-            SourceType,
-            native_enum=False,
-            length=20,
-            values_callable=lambda enum: [member.value for member in enum],
-        ),
+        enum_column(SourceType),
         nullable=False,
         comment="수집 방식(api, crawl 또는 websocket)",
     )
@@ -78,12 +72,7 @@ class SourceRecord(EntityBase):
         comment="수집 완료 시각(UTC); 진행 중이면 NULL",
     )
     status: Mapped[SourceStatus] = mapped_column(
-        SqlEnum(
-            SourceStatus,
-            native_enum=False,
-            length=20,
-            values_callable=lambda enum: [member.value for member in enum],
-        ),
+        enum_column(SourceStatus),
         nullable=False,
         comment="수집 상태(예: running, succeeded, failed 또는 quarantined)",
     )

@@ -352,8 +352,6 @@ def _verify_row_counts() -> None:
             )
 
 
-BAR_VIEW_COLUMNS = "provider, symbol, bar_at, open, high, low, close, volume, previous_close, contract_code, source_record_id, created_at, updated_at"
-
 # 운영 DB에 마이그레이션 밖에서 손으로 만들어 둔 뷰. quote_daily에 의존해서 DROP을 막는다
 # (실측 2026-08-18: DependentObjectsStillExistError). 정의를 그대로 캡처해 두고, 원본
 # quote_daily를 지우기 전에 내렸다가 같은 이름의 호환 뷰가 생긴 뒤 똑같이 되살린다.

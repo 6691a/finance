@@ -4,7 +4,7 @@
 이 DAG는 **실시간 알림**을 위한 수집이다. 미국 반도체 선물이 빠지면 한국 반도체 종목도
 곧 빠질 수 있다는 신호를 한국 장중을 포함해 하루 종일 받는 것이 목적이다.
 
-수집 대상은 `modules.collectors.yahoo.QuoteSymbol`이 정한다(현재 S&P500 선물, 나스닥100
+수집 대상은 `modules.collectors.market.yahoo.QuoteSymbol`이 정한다(현재 S&P500 선물, 나스닥100
 선물, VIX, 필라델피아 반도체, 코스피). 심볼을 늘려도 이 파일은 바뀌지 않는다.
 
 ## 왜 24시간 도는가
@@ -54,7 +54,7 @@ Yahoo chart는 요청 한 번에 하루치 1분봉을 통째로 돌려준다. �
 
 **Yahoo는 1분봉을 약 30일만 보관한다.** 그보다 과거는 데이터가 존재하지 않아서 요청해도
 `1m data not available`이 온다. 실측으로 2026-08-08 기준 2026-07-10까지만 조회됐다.
-보관 기간을 넘긴 요청은 태스크가 시작할 때 막는다(`modules.collectors.yahoo.BAR_RETENTION_DAYS`).
+보관 기간을 넘긴 요청은 태스크가 시작할 때 막는다(`modules.collectors.market.yahoo.BAR_RETENTION_DAYS`).
 
 요청 한 번은 8일까지만 담을 수 있어서 구간을 그만큼씩 쪼개 여러 번 부른다. 심볼 5개 ×
 창 개수만큼 요청이 나가고, 창마다 `source_record`가 1건씩 생긴다. 3주치면 창 3개, 요청
@@ -77,7 +77,7 @@ Yahoo chart는 요청 한 번에 하루치 1분봉을 통째로 돌려준다. �
 - `CONNECTION_ID`가 가리키는 Airflow 연결. 접속 정보는 `AIRFLOW_CONN_FINANCE`가 갖는다.
 
 봉은 `quote_bar`에, 수집 계보는 `source_record`에 저장한다. 폴링 1회가 `source_record`
-1건이다. 테이블 정의의 원본은 백엔드의 `apps/models/market.py`이고, 이 DAG가 쓰는 SQL은
+1건이다. 테이블 정의의 원본은 백엔드의 `apps/models/market/series.py`이고, 이 DAG가 쓰는 SQL은
 `airflow/sql/postgres/` 아래에 있다.
 """
 
@@ -88,10 +88,10 @@ from typing import Any
 from zoneinfo import ZoneInfo
 
 import pendulum
-from airflow.providers.postgres.hooks.postgres import PostgresHook
 from airflow.sdk import Param, dag, get_current_context, task
 from airflow.sdk.exceptions import AirflowFailException
 
+from modules import dag_common
 from modules.collectors.market.yahoo import (
     BACKFILL_END_PARAM,
     BACKFILL_START_PARAM,
@@ -105,7 +105,7 @@ from modules.collectors.market.yahoo import (
     store_bars,
 )
 from modules.market_session import us_equity_open_day
-from modules.utility import CONNECTION_ID, KST_TIMEZONE, UNRECOVERABLE_STATUSES, atomic
+from modules.utility import KST_TIMEZONE, UNRECOVERABLE_STATUSES, atomic
 
 logger = logging.getLogger(__name__)
 
@@ -129,7 +129,7 @@ def polling_symbols() -> tuple[QuoteSymbol, ...]:
     전부 받는다. 백필은 과거 구간 자체가 대상이라 이 필터를 타지 않는다.
     """
     session_date = datetime.now(UTC).astimezone(NEW_YORK_TIMEZONE).date()
-    connection: Any = PostgresHook(postgres_conn_id=CONNECTION_ID).get_conn()
+    connection: Any = dag_common.connection()
     try:
         open_day = us_equity_open_day(connection, session_date)
     finally:
@@ -143,7 +143,7 @@ def polling_symbols() -> tuple[QuoteSymbol, ...]:
 
 
 def backfill_period(params: dict[str, Any]) -> tuple[datetime, datetime] | None:
-    """`modules.collectors.yahoo.resolve_backfill_period`의 실패를 재시도 불가로 분류한다.
+    """`modules.collectors.market.yahoo.resolve_backfill_period`의 실패를 재시도 불가로 분류한다.
 
     잘못된 백필 파라미터는 다시 돌려도 같은 값이라 즉시 실패시킨다.
     """
@@ -277,7 +277,7 @@ def collect_window(
         # 하나도 못 받았으면 Yahoo 쪽 문제이거나 네트워크 문제다. 재시도할 값어치가 있다.
         raise ConnectionError("Every Yahoo request failed")
 
-    with closing(PostgresHook(postgres_conn_id=CONNECTION_ID).get_conn()) as connection, atomic(connection):
+    with closing(dag_common.connection()) as connection, atomic(connection):
         bar_count, outcomes = store_bars(connection, responses, since, until, failures)
 
     succeeded = [outcome for outcome in outcomes if outcome.error is None]

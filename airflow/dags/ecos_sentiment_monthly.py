@@ -75,11 +75,11 @@ from contextlib import closing
 from datetime import date, timedelta
 
 import pendulum
-from airflow.providers.postgres.hooks.postgres import PostgresHook
-from airflow.sdk import Param, dag, get_current_context, task
+from airflow.sdk import dag, get_current_context, task
 from airflow.sdk.exceptions import AirflowFailException
 from pydantic import SecretStr
 
+from modules import dag_common
 from modules.collectors.indicator.ecos import (
     SENTIMENT_SERIES,
     EcosCollector,
@@ -88,14 +88,7 @@ from modules.collectors.indicator.ecos import (
     EcosRequest,
     EcosResultError,
 )
-from modules.period import (
-    LOOKBACK_DAYS_PARAM,
-    OBSERVATION_END_PARAM,
-    OBSERVATION_START_PARAM,
-    PeriodError,
-    resolve_observation_period,
-)
-from modules.utility import CONNECTION_ID, KST_TIMEZONE, UNRECOVERABLE_STATUSES, atomic
+from modules.utility import KST_TIMEZONE, UNRECOVERABLE_STATUSES, atomic
 
 logger = logging.getLogger(__name__)
 
@@ -103,25 +96,11 @@ logger = logging.getLogger(__name__)
 # BSI가 2026-08이다. 창이 좁으면 발표가 한 달 밀린 것이 조용한 0건이 된다.
 LOOKBACK_DAYS_SENTIMENT = 120
 
-# 인증키가 유효하지 않다는 응답. 키를 고치기 전에는 재시도해도 같다.
-INVALID_KEY_CODE = "INFO-100"
-
-# 요청 인자를 고쳐야 하는 오류 대역. `ecos_market_rate_daily`와 같은 판단이다.
-UNRECOVERABLE_RESULT_PREFIXES = ("ERROR-1", "ERROR-2", "ERROR-3", "ERROR-4")
-
-
-def is_unrecoverable_result(code: str) -> bool:
-    """이 `RESULT.CODE`가 재시도로 풀리지 않는 오류인지."""
-    return code == INVALID_KEY_CODE or code.startswith(UNRECOVERABLE_RESULT_PREFIXES)
-
 
 def resolve_period() -> tuple[date, date]:
     """이 run이 저장할 관측 구간. 파라미터 문제는 재시도해도 같으므로 즉시 실패시킨다."""
     context = get_current_context()
-    try:
-        return resolve_observation_period(context, LOOKBACK_DAYS_SENTIMENT)
-    except PeriodError as error:
-        raise AirflowFailException(str(error)) from error
+    return dag_common.resolve_period_or_fail(context, LOOKBACK_DAYS_SENTIMENT)
 
 
 @dag(
@@ -134,29 +113,9 @@ def resolve_period() -> tuple[date, date]:
     max_active_runs=1,
     default_args={"retries": 2, "retry_delay": timedelta(hours=1)},
     params={
-        OBSERVATION_START_PARAM: Param(
-            None,
-            type=["null", "string"],
-            format="date",
-            title="조회 시작 관측일",
-            description="비우면 observation_end에서 lookback_days만큼 뺀 날. 주면 lookback_days를 무시한다.",
-        ),
-        OBSERVATION_END_PARAM: Param(
-            None,
-            type=["null", "string"],
-            format="date",
-            title="조회 종료 관측일",
-            description="비우면 이 run 시각의 KST 날짜. 과거 구간을 한 번에 넣을 때 직접 넘긴다.",
-        ),
-        LOOKBACK_DAYS_PARAM: Param(
-            LOOKBACK_DAYS_SENTIMENT,
-            type="integer",
-            minimum=1,
-            title="되돌아볼 일수",
-            description=(
-                "구간을 지정하지 않을 때만 쓴다. 월간 통계라 발표가 한두 달 밀린다 — "
-                "좁게 잡으면 아직 안 나온 달만 물어보게 되어 조용한 0건이 된다."
-            ),
+        **dag_common.observation_period_params(
+            lookback_default=LOOKBACK_DAYS_SENTIMENT,
+            lookback_hint="구간을 지정하지 않을 때만 쓴다. 월간 통계라 발표가 한두 달 밀린다 — 좁게 잡으면 아직 안 나온 달만 물어보게 되어 조용한 0건이 된다.",
         ),
     },
     doc_md=__doc__,
@@ -190,12 +149,12 @@ def ecos_sentiment_monthly():
                 failures.append(f"{series}({error})")
                 continue
 
-            with closing(PostgresHook(postgres_conn_id=CONNECTION_ID).get_conn()) as connection:
+            with closing(dag_common.connection()) as connection:
                 try:
                     with atomic(connection):
                         stored += collector.store_observations(connection, response)
                 except EcosResultError as error:
-                    if is_unrecoverable_result(error.code):
+                    if dag_common.is_unrecoverable_result(error.code):
                         raise AirflowFailException(str(error)) from error
                     failures.append(f"{series}({error})")
                 except EcosPayloadError as error:

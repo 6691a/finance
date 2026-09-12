@@ -82,7 +82,7 @@ def test_the_old_tables_become_compatibility_views(capsys):
 
 def test_nasdaq_joins_the_exchange_axis(capsys):
     # SK하이닉스 ADR(SKHY)은 나스닥 상장이다. CHECK와 호환 뷰가 NASDAQ을 태워야
-    # 봉이 저장되고 브리핑·Grafana 조회(뷰)에 보인다.
+    # 봉이 저장되고 브리핑 조회(뷰)에 보인다.
     sql = head_sql(capsys)
 
     assert "exchange IN ('KRX', 'NXT', 'NYSE', 'NASDAQ')" in sql

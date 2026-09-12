@@ -21,8 +21,8 @@ import logging
 from typing import Any, Literal, TypedDict
 
 from langchain_core.language_models import BaseChatModel
-from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, SystemMessage
-from langgraph.graph import END, START, StateGraph
+from langchain_core.messages import BaseMessage, HumanMessage, SystemMessage
+from langgraph.graph import END
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from modules import llm, untrusted
@@ -176,20 +176,14 @@ class ExpectationExtractor:
         return extraction
 
     def _build_graph(self):
-        graph = StateGraph(ExtractState)
-        graph.add_node("call", self._call)
-        graph.add_node("repair", self._repair)
-        graph.add_edge(START, "call")
-        graph.add_conditional_edges("call", self._next, {"repair": "repair", END: END})
-        graph.add_edge("repair", "call")
-        return graph.compile()
+        return llm.call_repair_graph(ExtractState, call=self._call, repair=self._repair, next_node=self._next)
 
     def _call(self, state: ExtractState) -> dict[str, Any]:
         messages = state["messages"]
         reply = llm.invoke(self._model, messages, schema=self._schema)
 
         try:
-            return {"messages": [*messages, reply], "extraction": self.parse(_text(reply)), "error": None}
+            return {"messages": [*messages, reply], "extraction": self.parse(llm.reply_text(reply)), "error": None}
         except ExtractionError as error:
             return {"messages": [*messages, reply], "extraction": None, "error": str(error)}
 
@@ -205,14 +199,6 @@ class ExpectationExtractor:
         if state["extraction"] is not None:
             return END
         return "repair" if state["attempts"] == 0 else END
-
-
-def _text(message: AIMessage) -> str:
-    """응답 본문을 문자열로. 제공처가 블록 배열로 답해도 같은 자리에서 흡수한다."""
-    content = message.content
-    if isinstance(content, str):
-        return content
-    return "".join(part.get("text", "") for part in content if isinstance(part, dict))
 
 
 def filter_claims(

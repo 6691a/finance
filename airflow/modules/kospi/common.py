@@ -16,11 +16,12 @@ from decimal import Decimal
 from typing import Any
 
 from airflow.exceptions import AirflowFailException
-from airflow.providers.postgres.hooks.postgres import PostgresHook
 from airflow.sdk import Param
 from pendulum import instance as pendulum_instance
-from pydantic import SecretStr
 
+# 연결과 Slack 설정은 DAG 공용 도우미 한 벌을 그대로 쓴다. 이 이름으로 다시 내보내는 것은
+# 세 DAG와 테스트가 `common.connection`·`common.slack_settings`로 부르기 때문이다.
+from modules.dag_common import connection, slack_settings
 from modules.kospi.domain import (
     BARS_WINDOW,
     CLOSE_TIME,
@@ -40,7 +41,7 @@ from modules.kospi.graph import driver as graph_driver
 from modules.kospi.graph import read_memories, read_relations
 from modules.kospi.state import EarlierReason, EarlierSlot, MemoryRow, ObservedState, RelationRow
 from modules.kospi.store import KospiStore
-from modules.utility import CONNECTION_ID, KST_TIMEZONE
+from modules.utility import KST_TIMEZONE
 
 logger = logging.getLogger(__name__)
 
@@ -92,11 +93,6 @@ def notify_enabled(context: Any) -> bool:
     return True if given is None else bool(given)
 
 
-def connection() -> Any:
-    """반환 타입은 provider 버전에 따라 갈린다. 어느 쪽이든 PEP 249 연결이다."""
-    return PostgresHook(postgres_conn_id=CONNECTION_ID).get_conn()
-
-
 def graph() -> Any:
     """Neo4j 드라이버. **설정이 없으면 죽인다.**
 
@@ -110,15 +106,6 @@ def graph() -> Any:
     if not uri or not user or not password:
         raise AirflowFailException("NEO4J_URI, NEO4J_USER, NEO4J_PASSWORD are required")
     return graph_driver(uri, (user, password))
-
-
-def slack_settings() -> tuple[SecretStr, str]:
-    token = os.environ.get("SLACK_BOT_TOKEN")
-    channel = os.environ.get("SLACK_CHANNEL_MARKET")
-    if not token or not channel:
-        # 설정 누락이라 재시도해도 같다. 값 자체는 메시지에 넣지 않는다.
-        raise AirflowFailException("SLACK_BOT_TOKEN and SLACK_CHANNEL_MARKET are required")
-    return SecretStr(token), channel
 
 
 def resolve_run_date(context: Any) -> date:

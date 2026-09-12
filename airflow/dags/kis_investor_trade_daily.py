@@ -65,7 +65,7 @@ KIS는 수정주가를 준다. 액면분할·병합·증자가 있으면 **과�
 우리가 믿는 대로 굴러가지 않은 것이라 태스크를 죽인다.
 
 봉이 바뀌었으므로 `technical_signal_daily`를 `scan_bars`를 넓혀 다시 돌려야 한다.
-설계는 docs/analysis/market-thesis/10-base-rate.md 3절이다.
+설계 문서는 옛 추론과 함께 지웠다(2026-09-01).
 
 ## 실패와 재시도
 
@@ -83,7 +83,6 @@ KIS는 수정주가를 준다. 액면분할·병합·증자가 있으면 **과�
 """
 
 import logging
-import os
 import re
 from contextlib import closing
 from datetime import UTC, date, datetime, timedelta
@@ -91,11 +90,11 @@ from time import sleep as wait_seconds
 from typing import Any
 
 import pendulum
-from airflow.providers.postgres.hooks.postgres import PostgresHook
 from airflow.sdk import Param, Variable, dag, get_current_context, task
-from airflow.sdk.exceptions import AirflowFailException, AirflowSkipException
-from pydantic import BaseModel, ConfigDict, SecretStr
+from airflow.sdk.exceptions import AirflowFailException
+from pydantic import BaseModel, ConfigDict
 
+from modules import dag_common
 from modules.collectors.kis import (
     KisHTTPError,
     KisPayloadError,
@@ -111,8 +110,7 @@ from modules.collectors.market.kis_investor_flow import (
     missing_open_days,
 )
 from modules.db import Connection
-from modules.market_session import krx_open_day
-from modules.utility import CONNECTION_ID, KIS_UNRECOVERABLE_STATUSES, KST_TIMEZONE, atomic
+from modules.utility import KIS_UNRECOVERABLE_STATUSES, KST_TIMEZONE, atomic
 
 logger = logging.getLogger(__name__)
 
@@ -141,18 +139,6 @@ RECOVERY_MAX_PAGES = 200
 # `EGW00201 초당 거래건수를 초과하였습니다`로 HTTP 500). 일상 실행은 종목당 한 장이라
 # 이 대기를 타지 않는다. 값은 다른 KIS 수집기의 페이지 대기와 같다.
 PAGE_DELAY_SECONDS = 0.5
-
-
-def _credentials() -> tuple[SecretStr, SecretStr]:
-    app_key = os.environ.get("KIS_APP_KEY")
-    app_secret = os.environ.get("KIS_APP_SECRET")
-    if not app_key or not app_secret:
-        raise AirflowFailException("KIS_APP_KEY and KIS_APP_SECRET are required")
-    return SecretStr(app_key), SecretStr(app_secret)
-
-
-def _connection() -> Any:
-    return PostgresHook(postgres_conn_id=CONNECTION_ID).get_conn()
 
 
 def requested_end_date(now_kst: datetime, params: dict[str, Any]) -> date:
@@ -320,21 +306,16 @@ def kis_investor_trade_daily():
         # 자동 실행만 휴장일을 건너뛴다. 백필은 끝 날짜가 휴장일이어도 그 앞 거래일들이
         # 응답에 담겨 오므로 막을 이유가 없다.
         if not params.get(END_DATE_PARAM):
-            connection = _connection()
-            try:
-                closed = krx_open_day(connection, end_date) is False
-            finally:
-                connection.close()
-            if closed:
-                raise AirflowSkipException(f"KRX is closed on {end_date}")
+            with closing(dag_common.connection()) as connection:
+                dag_common.skip_unless_krx_open(connection, end_date)
 
-        app_key, app_secret = _credentials()
+        app_key, app_secret = dag_common.kis_credentials()
         collector = KisInvestorFlowCollector(access_token(Variable, app_key, app_secret), app_key, app_secret)
 
         stored = 0
         failures: list[str] = []
         gaps: list[str] = []
-        with closing(_connection()) as connection:
+        with closing(dag_common.connection()) as connection:
             for stock in InvestorFlowStock:
                 walk = walk_back(collector, connection, stock, end_date, pages=pages)
 

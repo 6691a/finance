@@ -86,10 +86,6 @@ def normalize_title(title: str) -> str:
     return re.sub(r"\s+", " ", text).strip().casefold()
 
 
-def title_similarity(a: str, b: str) -> float:
-    return SequenceMatcher(None, normalize_title(a), normalize_title(b)).ratio()
-
-
 def titles_duplicate(a: str, b: str) -> bool:
     """두 제목이 같은 기사인가. 유사도 임계에 운영 실측(2026-08-19) 오판 가드 셋을 더한다.
 

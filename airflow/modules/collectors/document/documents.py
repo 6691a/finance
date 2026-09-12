@@ -45,6 +45,7 @@ from scrapling.fetchers import Fetcher
 from modules.db import Connection
 from modules.sql import read_sql
 from modules.upsert import execute_upserts
+from modules.utility import KST, normalize_to_utc
 
 logger = logging.getLogger(__name__)
 
@@ -78,9 +79,6 @@ NAIVE_FEED_TIMEZONES: dict[str, ZoneInfo] = {
     "einfomax_global_stock": ZoneInfo("Asia/Seoul"),
     "einfomax_world": ZoneInfo("Asia/Seoul"),
 }
-
-# 날짜만 고시하는 출처가 그 날짜를 정한 시간대. `kst_midnight_utc`가 쓴다.
-KST = ZoneInfo("Asia/Seoul")
 
 # guid가 발표 한 건이 아니라 시계열을 가리키는 피드. Census 경제지표 브리핑룸은 매달 같은
 # guid(`housing_starts`)로 새 발표를 싣는다. 그대로 두면 `(source_slug, external_id)` 자연키가
@@ -206,7 +204,7 @@ class FeedItem(BaseModel):
     @field_validator("published_at")
     @classmethod
     def normalize_to_utc(cls, moment: datetime | None) -> datetime | None:
-        return moment.astimezone(UTC) if moment is not None else None
+        return normalize_to_utc(moment) if moment is not None else None
 
 
 class FeedResponse(BaseModel):
@@ -224,7 +222,7 @@ class FeedResponse(BaseModel):
     @field_validator("started_at", "completed_at")
     @classmethod
     def normalize_to_utc(cls, moment: datetime) -> datetime:
-        return moment.astimezone(UTC)
+        return normalize_to_utc(moment)
 
     @model_validator(mode="after")
     def require_ordered_span(self) -> Self:

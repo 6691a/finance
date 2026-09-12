@@ -39,7 +39,7 @@
 
 부르는 쪽(DAG)이 `PickError`를 잡아 점수 정렬 상위 몇 건으로 떨어진다. 발송이 태스크의
 마지막 단계라 여기서 태스크를 죽이면 재시도가 같은 표를 한 번 더 채널에 보낸다.
-`comment.py`의 판단과 같은 이유다.
+시장 리포트의 LLM 요약(옛 `comment.py`, 2026-08-19에 뺐다)도 같은 판단이었다.
 """
 
 import logging
@@ -47,7 +47,7 @@ from typing import Any, TypedDict
 
 from langchain_core.language_models import BaseChatModel
 from langchain_core.messages import BaseMessage, HumanMessage, SystemMessage
-from langgraph.graph import END, START, StateGraph
+from langgraph.graph import END
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from modules import llm, untrusted
@@ -183,13 +183,7 @@ class DocumentPicker:
         return picks
 
     def _build_graph(self):
-        graph = StateGraph(PickState)
-        graph.add_node("call", self._call)
-        graph.add_node("repair", self._repair)
-        graph.add_edge(START, "call")
-        graph.add_conditional_edges("call", self._next, {"repair": "repair", END: END})
-        graph.add_edge("repair", "call")
-        return graph.compile()
+        return llm.call_repair_graph(PickState, call=self._call, repair=self._repair, next_node=self._next)
 
     def _call(self, state: PickState) -> dict[str, Any]:
         """스키마를 강제해 한 번 부른다. 제공처가 스키마를 안 받으면 그때만 한 번 더."""
@@ -197,7 +191,7 @@ class DocumentPicker:
         reply = llm.invoke(self._model, messages, schema=self._schema)
 
         try:
-            picks = self.parse(_text(reply), state["allowed_ids"])
+            picks = self.parse(llm.reply_text(reply), state["allowed_ids"])
         except PickError as error:
             return {"messages": [*messages, reply], "picks": None, "error": str(error)}
         return {"messages": [*messages, reply], "picks": picks, "error": None}
@@ -229,11 +223,3 @@ def _limit(picks: list[Pick]) -> tuple[Pick, ...]:
     reads = [pick for pick in picks if not pick.watch]
     watches = [pick for pick in picks if pick.watch]
     return (*reads[:MAX_READS], *watches[:MAX_WATCHES])
-
-
-def _text(reply: Any) -> str:
-    """응답 본문. 제공처에 따라 문자열이 아니라 조각 리스트로 온다."""
-    content = reply.content
-    if isinstance(content, str):
-        return content
-    return "".join(part if isinstance(part, str) else part.get("text", "") for part in content)

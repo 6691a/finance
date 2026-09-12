@@ -18,10 +18,9 @@ from sqlalchemy import (
     Text,
     UniqueConstraint,
 )
-from sqlalchemy import Enum as SqlEnum
 from sqlalchemy.orm import Mapped, mapped_column
 
-from apps.core.database import EntityBase, table_options
+from apps.core.database import EntityBase, enum_column, table_options
 
 
 class DisclosureEvent(EntityBase):
@@ -217,12 +216,7 @@ class EarningsFact(EntityBase):
         comment="숫자의 출처가 된 공시의 DART 접수번호. disclosure_event와 같은 값이지만 외래키는 걸지 않는다",
     )
     release_type: Mapped[EarningsReleaseType] = mapped_column(
-        SqlEnum(
-            EarningsReleaseType,
-            native_enum=False,
-            length=20,
-            values_callable=lambda enum: [member.value for member in enum],
-        ),
+        enum_column(EarningsReleaseType),
         nullable=False,
         comment="숫자의 출처 종류(provisional=잠정실적 공시 원문, periodic=정기보고서 재무제표 API)",
     )
@@ -231,32 +225,17 @@ class EarningsFact(EntityBase):
         comment="실적 대상 기간의 종료일(예: 2026-06-30). 기준 시간대는 한국이다",
     )
     statement_scope: Mapped[StatementScope] = mapped_column(
-        SqlEnum(
-            StatementScope,
-            native_enum=False,
-            length=20,
-            values_callable=lambda enum: [member.value for member in enum],
-        ),
+        enum_column(StatementScope),
         nullable=False,
         comment="재무제표 범위(CFS=연결, OFS=별도). 연결을 우선하고 없을 때만 별도를 저장한다",
     )
     amount_basis: Mapped[AmountBasis] = mapped_column(
-        SqlEnum(
-            AmountBasis,
-            native_enum=False,
-            length=20,
-            values_callable=lambda enum: [member.value for member in enum],
-        ),
+        enum_column(AmountBasis),
         nullable=False,
         comment="금액의 기간 기준(period=해당 분기·반기, cumulative=사업연도 누계)",
     )
     metric: Mapped[EarningsMetric] = mapped_column(
-        SqlEnum(
-            EarningsMetric,
-            native_enum=False,
-            length=20,
-            values_callable=lambda enum: [member.value for member in enum],
-        ),
+        enum_column(EarningsMetric),
         nullable=False,
         comment="지표(revenue=매출액, operating_profit=영업이익, net_income=당기순이익)",
     )
@@ -297,7 +276,7 @@ class StockAnalystOpinion(EntityBase):
     """증권사 애널리스트의 종목별 투자의견·목표주가(KIS `invest-opinion`).
 
     발표일·증권사마다 한 행이다. 리포트 본문은 여기 없다 — 글은 `document`가 네이버 리서치
-    출처로 갖고, 이 테이블은 숫자만 갖는다(`docs/analysis/market-thesis/6-analyst.md`).
+    출처로 갖고, 이 테이블은 숫자만 갖는다.
 
     괴리 값은 **발표 전일 종가 대비**만 둔다. KIS가 함께 주는 조회 시점 현재가 대비 괴리
     (`stft_esdg`·`dprt`)는 매일 바뀌는 값이라 발표일 행에 섞지 않는다.

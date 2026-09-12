@@ -6,7 +6,7 @@
 upsert, 그리고 수집기 클래스.
 
 저장 대상은 `market/yahoo.py`와 같은 봉 테이블이고 `provider`로 갈린다. 정의의 원본은
-백엔드의 `apps/models/market.py`이며 여기 SQL의 컬럼 이름은 `tests/collectors/test_kis.py`가
+백엔드의 `apps/models/market/series.py`(봉)·`positioning.py`(등락 스냅숏)이며 여기 SQL의 컬럼 이름은 `tests/collectors/test_kis.py`가
 그 모델 metadata와 대조한다.
 
 ## Yahoo 수집기와 다른 점
@@ -87,8 +87,7 @@ STOCK_CHART_PATH = "/uapi/domestic-stock/v1/quotations/inquire-time-dailychartpr
 STOCK_CHART_TR_ID = "FHKST03010230"
 STOCK_BARS_SOURCE_KEY = "stock_minute_bars"
 
-# 한 번에 오는 봉 수(실측). 정규장 381봉을 덮으려면 네 번이면 된다.
-STOCK_BARS_PER_CALL = 120
+# 한 번에 오는 봉 수는 120이다(실측). 정규장 381봉을 덮으려면 네 번이면 된다.
 
 # 업종 현재가. 상승·보합·하락 종목 수가 여기 들어 있어 전 종목을 순회할 필요가 없다.
 INDEX_PRICE_PATH = "/uapi/domestic-stock/v1/quotations/inquire-index-price"

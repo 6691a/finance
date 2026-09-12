@@ -3,13 +3,15 @@
 뉴스는 "무슨 일이 있었다"까지고, 그 사건이 종목 가치에 어떤 뜻인지는 애널리스트가 쓴다.
 이 모듈은 그 판단 중 **숫자**(투자의견, 목표주가, 괴리율)만 받는다. 리포트 본문은 KIS에
 없다. 글은 `collectors/document/naver_research.py`가 문서로 흡수하고, 추론 툴이 둘을
-발표일·증권사로 이어 읽는다. 설계는 `docs/analysis/market-thesis/6-analyst.md`다.
+발표일·증권사로 이어 읽는다. 설계 문서(`docs/analysis/market-thesis/6-analyst.md`)는 옛 추론과
+함께 지웠다(2026-09-01). 수집 대상 종목의 기준은
+`docs/analysis/economic-document-archive-design.md` 6.6절에 있다.
 
 토큰 발급과 HTTP는 `collectors/kis.py`가 갖고 있어 그대로 쓴다. 모듈을 나눈 것은 스케줄과
 실패 성격이 다르기 때문이다 — 포지션 지표는 전 영업일 확정치라 화~토 아침에 받지만,
 투자의견은 **당일 아침 사건**이라 월~금 장전에 받아야 한다.
 
-저장 대상은 `stock_analyst_opinion`이다. 정의의 원본은 백엔드의 `apps/models/market.py`이며
+저장 대상은 `stock_analyst_opinion`이다. 정의의 원본은 백엔드의 `apps/models/market/fundamentals.py`이며
 여기 SQL의 컬럼 이름은 `tests/collectors/test_kis_analyst_opinion.py`가 그 모델 metadata와
 대조한다.
 
@@ -47,12 +49,12 @@
 
 ## 종목 목록은 Enum이 아니라 DB다
 
-`kis_positioning.PositioningStock`과 달리 `instrument.is_watched`를 읽는다. 추론 대상
-(`thesis.subjects`)과 같은 SQL이라 추적 종목이 늘 때 이 모듈을 고치지 않는다.
+`kis_positioning.PositioningStock`과 달리 `instrument.is_watched`를 읽는다
+(`airflow/sql/postgres/instrument/select_watched.sql`). 추적 종목이 늘 때 이 모듈을 고치지 않는다.
 
 **주의:** 그 SQL은 `market`을 거르지 않는다. 해외 상장 종목이 `is_watched`가 되는 날 KIS
-국내 API가 `rt_cd != 0`으로 답해 DAG가 실패한다. 지금 추적 종목은 둘 다 코스피라 그대로
-두고, 그날이 오면 `select_watched_krx.sql` 하나로 `thesis.subjects`와 함께 고친다.
+국내 API가 `rt_cd != 0`으로 답해 DAG가 실패한다. 그날이 오면 `select_watched.sql`에
+`market` 조건을 더한다.
 """
 
 import json
@@ -67,7 +69,8 @@ from pydantic import BaseModel, ConfigDict, SecretStr, ValidationError
 from modules.collectors.kis import (
     SOURCE,
     KisPayloadError,
-    result_error,
+    decode_payload,
+    output_rows,
     send_get,
 )
 from modules.db import Connection
@@ -228,7 +231,7 @@ class KisAnalystOpinionCollector:
             },
         )
         try:
-            rows = tuple(OpinionRow.from_payload(row) for row in self._rows(payload, "output"))
+            rows = tuple(OpinionRow.from_payload(row) for row in output_rows(payload, "output"))
         except (KeyError, ValidationError) as error:
             raise KisPayloadError(f"KIS invest opinion row is malformed: {error}") from None
 
@@ -279,30 +282,11 @@ class KisAnalystOpinionCollector:
 
     def _call(self, path: str, tr_id: str, query: dict[str, str]) -> dict[str, Any]:
         body, _, headers = send_get(self._token, self._app_key, self._app_secret, path, tr_id, query)
-        try:
-            payload = json.loads(body)
-        except json.JSONDecodeError as error:
-            raise KisPayloadError(f"KIS returned a non-JSON body: {error}") from None
-        if not isinstance(payload, dict):
-            raise KisPayloadError("KIS returned a JSON body that is not an object")
-
-        code = str(payload.get("rt_cd", ""))
-        if code != "0":
-            raise result_error(code, str(payload.get("msg1", "")).strip())
-
+        payload = decode_payload(body)
         # 잘린 응답은 실패다. 백필은 구간을 줄여 돌린다.
         if str(headers.get("tr_cont", "")).strip() in CONTINUATION_MARKERS:
             raise KisPayloadError("KIS invest opinion response is truncated (tr_cont); narrow the window")
         return payload
-
-    @staticmethod
-    def _rows(payload: dict[str, Any], key: str) -> list[dict[str, Any]]:
-        output = payload.get(key) or []
-        if isinstance(output, dict):
-            return [output]
-        if not isinstance(output, list):
-            raise KisPayloadError(f"KIS returned a {key} that is neither a list nor an object")
-        return output
 
     @staticmethod
     def _reject_capped_rows(rows: Sequence[OpinionRow], start: date, end: date) -> None:

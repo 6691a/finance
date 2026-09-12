@@ -4,7 +4,7 @@
 -- **detected_at은 갱신하지 않는다.** 최초로 그 접수번호를 본 시각이라 재수집이 덮으면
 -- 의미가 사라진다. 2분 폴링이라 이 값이 공시 시각의 상한 노릇을 한다.
 --
--- 정의의 원본은 `apps/models/market.py`의 `DisclosureEvent`이고
+-- 정의의 원본은 `apps/models/market/fundamentals.py`의 `DisclosureEvent`이고
 -- `tests/collectors/test_dart.py`가 여기 컬럼을 그 모델 metadata와 대조한다.
 INSERT INTO disclosure_event (
     provider,

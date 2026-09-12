@@ -48,43 +48,26 @@ data interval이 없으면 `dag_run.run_after`를 쓴다.
 """
 
 import logging
-import os
 from contextlib import closing
 from datetime import date, timedelta
-from typing import Any
 
 import pendulum
-from airflow.providers.postgres.hooks.postgres import PostgresHook
 from airflow.sdk import Variable, dag, get_current_context, task
-from airflow.sdk.exceptions import AirflowFailException, AirflowSkipException
-from pydantic import SecretStr
+from airflow.sdk.exceptions import AirflowFailException
 
-from modules.collectors.kis import KisHTTPError, KisPayloadError, KisResultError, access_token
+from modules import dag_common
+from modules.collectors.kis import KisPayloadError, KisResultError, access_token
 from modules.collectors.market.kis_overseas_index import (
     KisOverseasIndexCollector,
     OverseasIndex,
     OverseasIndexFetch,
     us_session_date,
 )
-from modules.market_session import us_equity_open_day
-from modules.utility import CONNECTION_ID, KIS_UNRECOVERABLE_STATUSES, KST_TIMEZONE, atomic
+from modules.utility import KST_TIMEZONE, atomic
 
 logger = logging.getLogger(__name__)
 
 SCHEDULE = "30 7 * * 2-6"  # KST 화~토 07:30 = UTC 월~금 22:30
-
-
-def _credentials() -> tuple[SecretStr, SecretStr]:
-    app_key = os.environ.get("KIS_APP_KEY")
-    app_secret = os.environ.get("KIS_APP_SECRET")
-    if not app_key or not app_secret:
-        raise AirflowFailException("KIS_APP_KEY and KIS_APP_SECRET are required")
-    return SecretStr(app_key), SecretStr(app_secret)
-
-
-def _cached_token(app_key: SecretStr, app_secret: SecretStr, force: bool = False) -> SecretStr:
-    """`kis_quote_intraday`와 같은 캐시를 쓴다. 저장소를 고르는 일만 여기 있다."""
-    return access_token(Variable, app_key, app_secret, force=force)
 
 
 def _session_date() -> date:
@@ -98,42 +81,6 @@ def _session_date() -> date:
     context = get_current_context()
     reference = context.get("data_interval_end") or context["dag_run"].run_after
     return us_session_date(reference)
-
-
-def _connection() -> Any:
-    return PostgresHook(postgres_conn_id=CONNECTION_ID).get_conn()
-
-
-def _skip_when_closed(session_date: date) -> None:
-    """미국 확정 휴장일이면 건너뛴다. 캘린더가 없으면(`None`) 진행한다 — 묵은 날짜 검사가 잡는다."""
-    with closing(_connection()) as connection:
-        closed = us_equity_open_day(connection, session_date) is False
-    if closed:
-        raise AirflowSkipException(f"US equity market was closed on {session_date}")
-
-
-def _fetch_with_retry(
-    collector: KisOverseasIndexCollector,
-    index: OverseasIndex,
-    session_date: date,
-    app_key: SecretStr,
-    app_secret: SecretStr,
-) -> OverseasIndexFetch:
-    """401이면 토큰을 한 번만 재발급하고 다시 시도한다. 되돌릴 수 없는 HTTP 오류는 즉시 실패다.
-
-    토큰은 수집기 객체가 사는 동안 안 변하므로 재발급은 객체를 다시 만드는 것이다.
-    자격 증명이 여기 남는 이유는 재발급이 DAG의 일이기 때문이다.
-    """
-    try:
-        return collector.fetch(index, session_date)
-    except KisHTTPError as error:
-        if error.status in KIS_UNRECOVERABLE_STATUSES:
-            raise AirflowFailException(f"{index.value}: {error}") from error
-        if error.status != 401:
-            raise
-        logger.warning("KIS returned 401; reissuing the token once")
-        reissued = KisOverseasIndexCollector(_cached_token(app_key, app_secret, force=True), app_key, app_secret)
-        return reissued.fetch(index, session_date)
 
 
 @dag(
@@ -152,20 +99,32 @@ def kis_overseas_index_close():
     @task(task_display_name="미국 지수 마감 1분봉")
     def collect() -> int:
         session_date = _session_date()
-        _skip_when_closed(session_date)
+        # 캘린더가 없으면(`None`) 진행한다 — 묵은 날짜 검사가 잡는다.
+        with closing(dag_common.connection()) as connection:
+            dag_common.skip_unless_us_open(connection, session_date)
 
-        app_key, app_secret = _credentials()
-        collector = KisOverseasIndexCollector(_cached_token(app_key, app_secret), app_key, app_secret)
+        app_key, app_secret = dag_common.kis_credentials()
+        collector = KisOverseasIndexCollector(access_token(Variable, app_key, app_secret), app_key, app_secret)
 
         # 둘 다 먼저 받는다. 하나라도 실패하면 저장 없이 태스크가 죽는다.
         fetches: list[OverseasIndexFetch] = []
         for index in OverseasIndex:
             try:
-                fetches.append(_fetch_with_retry(collector, index, session_date, app_key, app_secret))
+                fetches.append(
+                    dag_common.call_with_token_reissue(
+                        collector,
+                        KisOverseasIndexCollector.fetch,
+                        index,
+                        session_date,
+                        app_key=app_key,
+                        app_secret=app_secret,
+                        label=index.value,
+                    )
+                )
             except (KisPayloadError, KisResultError) as error:
                 raise AirflowFailException(f"{index.value}: {error}") from error
 
-        with closing(_connection()) as connection, atomic(connection):
+        with closing(dag_common.connection()) as connection, atomic(connection):
             stored = [collector.store(connection, fetch) for fetch in fetches]
 
         for fetch, count in zip(fetches, stored, strict=True):

@@ -43,14 +43,13 @@ from datetime import UTC, datetime, timedelta
 from typing import Any
 
 import pendulum
-from airflow.providers.postgres.hooks.postgres import PostgresHook
 from airflow.sdk import Param, dag, get_current_context, task
-from airflow.sdk.exceptions import AirflowFailException, AirflowSkipException
+from airflow.sdk.exceptions import AirflowFailException
 
-from modules.market_session import krx_open_day
+from modules import dag_common
 from modules.technical.indicators import SIGNAL_SCAN_BARS_MAX, TECHNICAL_LOOKBACK_BARS
 from modules.technical.signals import TechnicalSignalError, detect_and_store
-from modules.utility import CONNECTION_ID, KST_TIMEZONE, atomic
+from modules.utility import KST_TIMEZONE, atomic
 
 logger = logging.getLogger(__name__)
 
@@ -58,10 +57,6 @@ SCAN_BARS_PARAM = "scan_bars"
 
 # 앞단이 하루 늦게 복구돼도 사건이 빠지지 않을 만큼만 되돌아본다. upsert라 재검출은 무해하다.
 DEFAULT_SCAN_BARS = 5
-
-
-def _connection() -> Any:
-    return PostgresHook(postgres_conn_id=CONNECTION_ID).get_conn()
 
 
 def requested_scan_bars(params: dict[str, Any]) -> int:
@@ -112,15 +107,10 @@ def technical_signal_daily():
         now_kst = datetime.now(UTC).astimezone(KST_TIMEZONE)
         # 자동 실행만 휴장일을 건너뛴다. 수동 실행은 백필이라 막을 이유가 없다.
         if context.get("dag_run") is None or getattr(context["dag_run"], "run_type", "") != "manual":
-            connection = _connection()
-            try:
-                closed = krx_open_day(connection, now_kst.date()) is False
-            finally:
-                connection.close()
-            if closed:
-                raise AirflowSkipException(f"KRX is closed on {now_kst.date()}")
+            with closing(dag_common.connection()) as connection:
+                dag_common.skip_unless_krx_open(connection, now_kst.date())
 
-        with closing(_connection()) as connection:
+        with closing(dag_common.connection()) as connection:
             try:
                 with atomic(connection):
                     result = detect_and_store(

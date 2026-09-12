@@ -73,14 +73,13 @@ import logging
 import os
 from contextlib import closing
 from datetime import UTC, datetime, timedelta
-from typing import Any
 
 import pendulum
-from airflow.providers.postgres.hooks.postgres import PostgresHook
 from airflow.sdk import Param, dag, get_current_context, task
 from airflow.sdk.exceptions import AirflowFailException
 from pydantic import SecretStr
 
+from modules import dag_common
 from modules.collectors.document.dart import (
     MULTI_ACCOUNT_PERIODS,
     STATUS_RATE_LIMIT,
@@ -91,7 +90,7 @@ from modules.collectors.document.dart import (
     filing_entities,
     recent_report_periods,
 )
-from modules.utility import CONNECTION_ID, KST_TIMEZONE, atomic
+from modules.utility import KST_TIMEZONE, atomic
 
 logger = logging.getLogger(__name__)
 
@@ -106,10 +105,6 @@ def _collector() -> DartCollector:
     if not key:
         raise AirflowFailException("DART_API_KEY is required")
     return DartCollector(SecretStr(key))
-
-
-def _connection() -> Any:
-    return PostgresHook(postgres_conn_id=CONNECTION_ID).get_conn()
 
 
 def _report_periods() -> int:
@@ -167,7 +162,7 @@ def dart_multi_earnings_quarterly():
 
         stored = 0
         failures: list[str] = []
-        with closing(_connection()) as connection:
+        with closing(dag_common.connection()) as connection:
             entities = filing_entities(connection)
             if not entities:
                 raise AirflowFailException("instrument has no filing entity; nothing to collect")

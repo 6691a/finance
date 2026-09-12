@@ -11,6 +11,8 @@ import pytest
 from airflow.sdk.exceptions import AirflowFailException
 
 from dags import kis_index_daily
+from modules import dag_common
+from modules.period import span_start
 from modules.utility import KST_TIMEZONE
 
 NOW_KST = datetime(2026, 8, 24, 18, 20, tzinfo=KST_TIMEZONE)
@@ -69,7 +71,7 @@ def test_an_unreadable_end_date_fails_before_any_call(given):
 def test_the_span_is_a_fixed_calendar_window():
     # 200달력일은 연휴가 끼어도 SMA60·EMA 안정화 120거래일을 확보하는 고정 창이다(4.4절).
     end = date(2026, 8, 24)
-    assert kis_index_daily.span_start(end) == end - timedelta(days=kis_index_daily.SPAN_CALENDAR_DAYS)
+    assert span_start(end) == end - timedelta(days=kis_index_daily.SPAN_CALENDAR_DAYS)
     assert kis_index_daily.SPAN_CALENDAR_DAYS == 200
 
 
@@ -82,7 +84,7 @@ def test_an_empty_start_date_keeps_the_fixed_span():
     """일상 실행의 동작이 바뀌면 안 된다. 창 하나가 정확히 200달력일이다."""
     end_date = date(2026, 8, 25)
 
-    start_date = kis_index_daily.requested_start_date(end_date, {})
+    start_date = dag_common.requested_start_date(end_date, {})
 
     assert start_date == end_date - timedelta(days=kis_index_daily.SPAN_CALENDAR_DAYS)
     assert kis_index_daily.fetch_windows(start_date, end_date) == [(start_date, end_date)]
@@ -108,13 +110,3 @@ def test_a_backfill_span_is_cut_into_page_sized_windows():
         assert later[0] == earlier[1] + timedelta(days=1)
 
 
-def test_a_start_date_after_the_end_fails_before_any_call():
-    """조용히 빈 구간이 되면 0건 저장을 정상으로 읽는다."""
-    with pytest.raises(AirflowFailException, match="must not be after"):
-        kis_index_daily.requested_start_date(date(2026, 8, 25), {"start_date": "2026-08-26"})
-
-
-def test_an_iso_week_start_date_is_rejected():
-    """`date.fromisoformat`은 `2026-W34`도 받아 그 주의 월요일로 바꾼다."""
-    with pytest.raises(AirflowFailException, match="must be YYYY-MM-DD"):
-        kis_index_daily.requested_start_date(date(2026, 8, 25), {"start_date": "2026-W34"})

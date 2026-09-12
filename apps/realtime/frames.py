@@ -8,6 +8,7 @@ TR ID별 46필드 표와 파이프·캐럿 프레임 파싱, 그리고 계약 �
 import json
 from datetime import UTC, datetime
 from decimal import Decimal, InvalidOperation
+from itertools import batched
 from zoneinfo import ZoneInfo
 
 from pydantic import AwareDatetime, BaseModel, ConfigDict, field_validator
@@ -18,7 +19,6 @@ KST = ZoneInfo("Asia/Seoul")
 
 KRX_TR_ID = "H0STCNT0"
 NXT_TR_ID = "H0NXCNT0"
-RECORD_FIELD_COUNT = 46
 
 
 class FrameContractError(ValueError):
@@ -194,8 +194,8 @@ def parse_data_frame(raw: str, subscribed_codes: frozenset[str]) -> tuple[Tick, 
     volume_index = spec.index("CNTG_VOL")
 
     ticks = []
-    for start in range(0, len(fields), spec.field_count):
-        record = fields[start : start + spec.field_count]
+    # 위에서 개수를 검증했으므로 짧은 꼬리는 없다. strict는 그 불변을 한 번 더 못박는다.
+    for record in batched(fields, spec.field_count, strict=True):
         stock_code = record[code_index]
         if stock_code not in subscribed_codes:
             raise FrameContractError(f"unsubscribed stock code {stock_code!r} in {tr_id}")

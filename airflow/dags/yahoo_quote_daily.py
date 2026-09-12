@@ -48,10 +48,10 @@ from datetime import timedelta
 from typing import Any
 
 import pendulum
-from airflow.providers.postgres.hooks.postgres import PostgresHook
 from airflow.sdk import Param, dag, get_current_context, task
 from airflow.sdk.exceptions import AirflowFailException
 
+from modules import dag_common
 from modules.collectors.market.yahoo import (
     DAILY_RANGE,
     DAILY_RANGES,
@@ -61,7 +61,7 @@ from modules.collectors.market.yahoo import (
     fetch_daily_bars,
     store_daily_bars,
 )
-from modules.utility import CONNECTION_ID, KST_TIMEZONE, UNRECOVERABLE_STATUSES, atomic
+from modules.utility import KST_TIMEZONE, UNRECOVERABLE_STATUSES, atomic
 
 logger = logging.getLogger(__name__)
 
@@ -150,7 +150,7 @@ def yahoo_quote_daily():
             # 하나도 못 받았으면 Yahoo 쪽 문제이거나 네트워크 문제다. 재시도할 값어치가 있다.
             raise ConnectionError("Every Yahoo request failed")
 
-        with closing(PostgresHook(postgres_conn_id=CONNECTION_ID).get_conn()) as connection, atomic(connection):
+        with closing(dag_common.connection()) as connection, atomic(connection):
             bar_count, outcomes = store_daily_bars(connection, responses, range_, failures)
 
         succeeded = [outcome for outcome in outcomes if outcome.error is None]

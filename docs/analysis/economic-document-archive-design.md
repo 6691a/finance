@@ -89,8 +89,7 @@
 설치하고 운영도 같은 파일을 쓴다. **이 설계를 위해 늘린 의존성은 없다.**
 
 - ~~LLM 호출은 `urllib.request`로 충분하다~~ — **2026-08-16에 폐기됐다.** 지금은 LangChain의
-  `BaseChatModel`을 쓴다(`modules/llm.py`의 `document_model()`·`kospi_model()`·
-  `expectation_model()`). HTTP를 직접 치면 LangSmith 추적이 끊기고 툴 호출 왕복을 직접 짜야
+  `BaseChatModel`을 쓴다(`modules/llm.py`의 `openai_model()`·`kospi_model()`). HTTP를 직접 치면 LangSmith 추적이 끊기고 툴 호출 왕복을 직접 짜야
   한다. **`base_url`을 환경변수로 빼 제공처를 갈아 끼우지도 않는다** — 어떤 모델을 쓸지는
   코드가 정하고 API 키만 환경에서 온다. 그것도 LangChain 클래스가 자기 이름
   (`XAI_API_KEY`·`OPENAI_API_KEY`)으로 읽는다.
@@ -300,7 +299,7 @@ LLM에 보냈는데, 그러면 비용이 문서 수가 아니라 후보 쌍 수�
 
 ### 6.5 LLM 출력
 
-모델 호출은 LangChain이 하고(`modules/llm.py`의 `document_model()`), 흐름 제어는
+모델 호출은 LangChain이 하고(`modules/llm.py`의 `openai_model()`), 흐름 제어는
 LangGraph가 한다(`modules/assessment.py`의 `AssessmentBatch`·`DocumentAssessor`). 저장은
 기존 코드 그대로다.
 
@@ -1009,9 +1008,8 @@ AND document.value_score <= 1    -- 0~1 눈금으로 매긴 문서만
 **임시가 아니라 영구 술어다.** 옛 값이 최대 8이고 새 값이 최대 1이라, 없으면
 `ORDER BY value_score DESC`에서 **옛 문서가 새 문서 위로 영원히 올라간다.** 판이 5·6으로
 올라가도 눈금은 계속 0~1이라 이 술어는 안 바뀐다 — `prompt_version = '4/global'`로 걸면
-판을 올릴 때마다 고쳐야 하므로 그쪽을 쓰지 않는다. 넣는 자리는 문서를 점수로 고르는 셋이다:
-`kospi_tools/select_news.sql`, `document/select_briefing_candidates.sql`,
-`document/select_recent_top.sql`.
+판을 올릴 때마다 고쳐야 하므로 그쪽을 쓰지 않는다. 넣는 자리는 문서를 점수로 고르는 둘이다:
+`kospi_tools/select_news.sql`, `document/select_briefing_candidates.sql`.
 
 - **0~1로 정한 것이 여기서 이득이 됐다.** 0~10이었다면 옛 값(0~8)과 구간이 겹쳐 섞여도
   아무도 몰랐다. 겹치지 않으니 술어 하나로 정확히 갈린다.

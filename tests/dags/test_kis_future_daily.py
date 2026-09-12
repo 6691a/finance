@@ -6,7 +6,7 @@
 파라미터가 틀렸을 때 어떤 Airflow 예외로 죽는지다.
 """
 
-from datetime import UTC, date, datetime, timedelta
+from datetime import UTC, date, datetime
 
 import pytest
 from airflow.sdk.exceptions import AirflowFailException
@@ -57,25 +57,6 @@ def test_an_unreadable_end_date_fails_before_any_call(given):
     """되돌릴 수 없는 설정 오류다. `ValueError`가 아니라 즉시 죽는 예외로 올린다."""
     with pytest.raises(AirflowFailException, match="must be YYYY-MM-DD"):
         kis_future_daily.requested_end_date(NOW_KST, {"end_date": given})
-
-
-def test_an_empty_start_date_keeps_the_fixed_span():
-    end_date = date(2026, 8, 25)
-
-    start_date = kis_future_daily.requested_start_date(end_date, {})
-
-    assert start_date == end_date - timedelta(days=kis_future_daily.SPAN_CALENDAR_DAYS)
-
-
-def test_a_start_date_after_the_end_fails_before_any_call():
-    """조용히 빈 구간이 되면 0건 저장을 정상으로 읽는다."""
-    with pytest.raises(AirflowFailException, match="must not be after"):
-        kis_future_daily.requested_start_date(date(2026, 8, 25), {"start_date": "2026-08-26"})
-
-
-def test_an_iso_week_start_date_is_rejected():
-    with pytest.raises(AirflowFailException, match="must be YYYY-MM-DD"):
-        kis_future_daily.requested_start_date(date(2026, 8, 25), {"start_date": "2026-W34"})
 
 
 def test_the_backfill_span_is_cut_by_the_shared_rule():

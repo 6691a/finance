@@ -1,39 +1,7 @@
-# 프로젝트 시간대 규칙
+# news 프로젝트 가이드
 
-## Airflow 배치 시간 규칙
-
-- 배치 트리거 시간대는 한국 시간(`Asia/Seoul`)이다. `AIRFLOW__CORE__DEFAULT_TIMEZONE=Asia/Seoul`.
-- Airflow cron과 `start_date`는 KST로 작성한다. `start_date`는 `pendulum.datetime(..., tz=KST_TIMEZONE)`로 두고 naive datetime은 쓰지 않는다. `KST_TIMEZONE`은 `modules/utility.py`에 있다.
-- 스케줄 코드에는 같은 줄 주석으로 UTC를 반드시 병기한다.
-- 예: `schedule="30 7 * * 2-6"  # KST 화~토 07:30 = UTC 월~금 22:30`
-- 배치 조회 기간과 날짜 경계는 KST 기준으로 계산한다. `data_interval_end`를 `astimezone(KST_TIMEZONE)`으로 변환한 뒤 날짜를 뽑는다.
-- 시간대는 트리거 시점과 날짜 경계 계산에만 쓴다. DB에 저장하는 시각과 로그, 컨테이너 시계는 UTC다.
-- 외부 데이터의 원본 시각과 시간대는 보존하되, 비교·저장용 시각은 UTC로 정규화한다.
-- 제공처가 날짜의 기준 시간대를 정하는 값(ECOS 고시 기준일은 KST, FRED 관측일은 미국 영업일)은 그 제공처 기준을 따르고 주석에 남긴다.
-
-## 백엔드 시간 처리 규칙
-
-- 애플리케이션, 데이터베이스 세션, 로그와 내부 이벤트의 기본 시간대는 `UTC`로 통일한다.
-- 모든 내부 시각은 timezone-aware UTC로 생성·전달·저장한다. timezone 정보가 없는 naive datetime은 사용하지 않는다.
-- 요청 시각은 ISO 8601 offset 또는 `Z`를 필수로 받고 UTC로 변환한 뒤 조회·저장한다.
-- 일반 API 응답은 변환하지 않은 UTC ISO 8601 값과 `Z`를 반환한다. 예: `2026-08-04T22:30:00Z`.
-- 웹 화면의 시간대 변환과 표시는 프론트엔드가 담당한다.
-- 프론트엔드 시간대 우선순위는 사용자 계정의 IANA 시간대, 브라우저 시간대, UTC fallback 순서다.
-- 국가 정보만으로 시간대를 추정하지 않는다. 한 국가에 여러 시간대가 있을 수 있다.
-- Slack·이메일·CSV·PDF처럼 프론트엔드가 없는 출력, 현지 날짜 기준 집계와 업무상 현지 시간 경계가 필요한 경우에만 백엔드가 변환한다.
-- 백엔드 변환에는 사용자 설정 또는 요청에 명시된 IANA 시간대만 사용한다.
-- DST와 과거 시간대 변경은 고정 offset 계산이 아니라 IANA timezone 데이터로 처리한다.
-- 시간대 변환은 응답 표현 또는 집계 경계 계산 단계에서만 수행하며 DB의 UTC 원본을 변경하지 않는다.
-- 시간대 값은 표시와 날짜 경계 계산에만 사용하고 인증, 권한 또는 데이터 접근 범위 판단에는 사용하지 않는다.
-
-## Slack 테스트 발송 규칙
-
-- **테스트 메시지를 운영 채널(`SLACK_CHANNEL_MARKET/DOCUMENT/OPS`)로 보내지 않는다.**
-  운영 채널 구독자 전체에게 노출되고 되돌릴 수 없다.
-- 테스트 채널은 `config.yaml`의 `slack_channel_test`다. 값이 없으면 발송 전에 사용자에게 물어본다.
-- 테스트 메시지에는 테스트임을 밝히는 머리표(예: `🧪 테스트 발송`)를 붙인다.
-
-# 개발 규칙
+Claude Code가 이 저장소에서 작업할 때 따르는 규칙과 구조 요약이다.
+Claude Code용 규칙 원본은 [.claude/CLAUDE.md](../.claude/CLAUDE.md)이며 두 문서는 함께 갱신한다.
 
 ## 규칙을 스킬로 나눴다
 
@@ -50,7 +18,7 @@
 | Alembic 리비전을 만들거나 모델에 `table_options`를 쓸 때 | `writing-migrations` |
 | `source_record`·`indicator_observation`·`indicator_series`·봉 테이블·`instrument`·`document`·`stock_event_*`에 읽거나 쓸 때 | `table-conventions` |
 
-파일은 `.claude/skills/<이름>/SKILL.md`이고 `.agents/skills/<이름>/`에 Codex용 사본이 있다.
+파일은 `.agents/skills/<이름>/SKILL.md`이고 `.claude/skills/<이름>/`에 Claude Code용 사본이 있다.
 **둘은 같은 내용이어야 한다** — 한쪽만 고치면 두 도구가 다른 규칙을 본다.
 
 ## 이 프로젝트가 무엇인가
@@ -78,25 +46,22 @@
 
 | 경로 | 역할 |
 | --- | --- |
-| `apps/core/config.py` | `config.yaml`을 읽는 Pydantic 설정. `settings` 싱글턴 제공 |
-| `apps/core/database.py` | `Base`, `EntityBase`, 다중 DB 별칭을 관리하는 `Database` |
-| `apps/core/redis.py` | Redis 연결 관리 |
-| `apps/core/container.py` | dependency-injector 컨테이너(상주 서비스는 안 쓴다 — 아래 규칙) |
-| `apps/core/utility.py` | 상태 없는 공통 변환(`utc_text`·`kst_today`). `airflow/modules/utility.py`의 대칭 |
+| `../apps/core/config.py` | `config.yaml`을 읽는 Pydantic 설정. `settings` 싱글턴 제공 |
+| `../apps/core/database.py` | `Base`, `EntityBase`, 다중 DB 별칭을 관리하는 `Database` |
 | `apps/models/` | SQLAlchemy 모델. 파일은 도메인 단위로만 나눈다(스키마와 무관) |
 | `apps/realtime/` | KIS 실시간 WebSocket 수집 서비스. `python -m apps.realtime.main`, `compose/prod/` 배포 |
 | `apps/api/` | 읽기 전용 조회 API(FastAPI). 리소스는 늘어난다 — 지금은 시장 추론. `python -m apps.api.main`, `compose/prod/api/` 배포 |
 | `migrations/` | Alembic. 리비전 파일은 `migrations/versions` 하나를 모든 별칭이 공유한다 |
 | `migrations/routing.py` | 어떤 테이블이 어떤 DB 별칭에 속하는지 판단하는 순수 함수 |
-| `airflow/dags/` | Airflow DAG |
-| `airflow/modules/` | DAG이 쓰는 공유 코드. 도메인 폴더(`collectors/`·`briefing/`·`expectation/`·`technical/`·`kospi/`)로 나누고 최상위에는 공용 잎만 둔다. 하위 패키지 `__init__.py`는 비운다 — 재수출하면 가벼운 모듈 하나를 import해도 LangChain이 딸려 온다. (아래 규칙) |
-| `airflow/modules/collectors/` | 수집기. 도메인 폴더(`market/`·`document/`·`indicator/`·`calendar/`·`analyst/`)로 나눈다. 전환 진행 상황은 [docs/convention/collectors-class-migration.md](../docs/convention/collectors-class-migration.md) |
+| `../airflow/dags/` | Airflow DAG. 폴더로 나누지 않는다 — 스케줄·재시도·실패 판정만 갖는 얇은 파일이다 (아래 규칙) |
+| `../airflow/modules/` | DAG이 쓰는 공유 코드. 도메인 폴더(`collectors/`·`briefing/`·`expectation/`·`technical/`·`kospi/`·`shock/`)로 나누고 최상위에는 공용 잎만 둔다. 하위 패키지 `__init__.py`는 비운다 — 재수출하면 가벼운 모듈 하나를 import해도 LangChain이 딸려 온다. (아래 규칙) |
+| `../airflow/modules/collectors/` | 수집기. 도메인 폴더(`market/`·`document/`·`indicator/`·`calendar/`·`analyst/`)로 나눈다. 전환 진행 상황은 [docs/convention/collectors-class-migration.md](../docs/convention/collectors-class-migration.md) |
 | `tests/` | pytest |
 | `notebooks/` | 손으로 돌려 보는 Jupyter 노트북. 파서·수집기가 실제 데이터에서 무엇을 하는지 눈으로 확인하는 자리다. **`.gitignore`에 있어 커밋되지 않는다** — 실행하면 앱키와 시세 응답이 출력에 남는다. **DAG도 서비스도 여기를 import하지 않는다**: 코드의 원본은 언제나 `airflow/`와 `apps/`이고 노트북은 그것을 부르기만 한다 |
 
 `apps/models/`의 모듈은 도메인 단위로 나눈다(`raw.py`, `reference.py`, `content.py`).
 한 도메인이 커지면 그 안에서 다시 패키지로 나눈다(2026-08-25) — `market/`이
-`sessions.py`·`series.py`·`fundamentals.py`·`positioning.py`·`investor_flow.py`,
+`sessions.py`·`series.py`·`fundamentals.py`·`positioning.py`·`investor_flow.py`·`shock.py`,
 `analysis/`가 `kospi.py`·`events.py`·`technical.py`다.
 테이블은 스키마를 지정하지 않고 연결의 `search_path`(PostgreSQL 기본 `public`)를 그대로 따르므로
 파일 이름이 PostgreSQL 스키마와 대응하지 않는다.
@@ -144,8 +109,9 @@ Airflow가 실행하지 않는 상주 서비스는 `apps/` 아래 **패키지 �
 테스트와 도구가 설정 파일 없이 그 모듈을 import할 수 있어야 한다.
 
 같은 이유로 **컨테이너도 설정을 스스로 읽지 않는다.** `providers.Dependency()`로 선언하고
-`main.py`가 채운다. `apps/core/container.py`가 그 규칙 밖에 있는데(본문에서 settings를
-읽는다), 그래서 상주 서비스가 그것을 쓰지 않는다.
+`main.py`가 채운다. 공유 컨테이너(`apps/core/container.py`)는 본문에서 settings를 읽어
+그 규칙 밖에 있었고 쓰는 곳도 없어 지웠다(2026-09-10) — 상주 서비스마다 자기
+`container.py`를 갖는다.
 
 ### 의존성은 생성자로 주입한다
 
@@ -186,23 +152,25 @@ provider 수명은 뜻을 갖는다 — 엔진 풀처럼 프로세스에 한 벌
   모듈을 하나씩 적으면 새 리소스를 더할 때 `container.py`도 함께 고쳐야 하고, 빠뜨리면
   `Provide` 객체가 그대로 주입되어 조용히 틀린다.
 
-### 상태 없는 변환은 `apps/core/utility.py`에 한 벌
-
-시각 표기(`utc_text`), 날짜 경계(`kst_today`)처럼 **여러 서비스가 같은 답을 내야 하는 변환**은
-거기 둔다. 같은 로직을 두 모듈이 각자 갖고 있으면 한쪽만 고친 날 한 응답 안에서 표기가
-갈린다. 이 모듈은 `config`·`database`·`redis`를 import하지 않아 어디서 불러도 `config.yaml`을
-요구하지 않는다.
-
-`airflow/modules/utility.py`가 Airflow 쪽의 같은 자리다. 두 트리는 서로를 import하지 않으므로
-같은 규칙이 양쪽에 한 벌씩 있고, 어긋나면 테스트가 잡는다.
-
 ## 명령어
 
 ```bash
 just dev
+```
+
+```bash
 just makemigrations "create instrument table"
+```
+
+```bash
 just migrate upgrade head
+```
+
+```bash
 uv run pytest tests -q
+```
+
+```bash
 uv run ruff check apps airflow migrations tests
 ```
 
@@ -212,39 +180,191 @@ uv run ruff check apps airflow migrations tests
 
 ## Airflow와 공유하는 코드
 
-- 저장소의 `airflow/`가 컨테이너의 `/opt/airflow`다. 운영 Airflow가 마운트하는 경로와 1:1로 맞춘다: `dags`, `modules`, `utility`, `sql`, `plugins`, `config`.
-- Airflow는 `apps/`, `../apps/core/`, `migrations/`를 보지 못한다. DAG가 실행 시점에 import하는 코드는 전부 `airflow/` 아래 둔다.
-- import 뿌리는 `airflow/`다. DAG는 배포와 같은 이름으로 `from modules.collectors import ...`처럼 쓴다. pytest `pythonpath`, pyrefly `search-path`, ruff isort `known-first-party`가 `pyproject.toml`에서 같은 뿌리를 가리킨다.
-- 쿼리는 Python 문자열이 아니라 `airflow/sql/<엔진>/<테이블>/<동작>.sql`에 둔다. `modules/sql.py`의 `read_sql`이 `AIRFLOW_HOME` 유무와 관계없이 같은 파일을 읽는다.
-- 로컬 Compose와 Dockerfile은 운영 Airflow에 맞춰 둔 상태다. **코드 배치 문제로는 건드리지 않는다.** 실행 코드를 이미지에 굽거나 `apps/`를 볼륨으로 붙이지 않는다.
-- **데이터 볼륨은 예외이고, 그때는 로컬과 운영 compose를 함께 고친다.** `airflow/files/`가 그 예다(2026-08-30, `document_body_hourly`의 첨부 파일). 한쪽만 고치면 로컬에서 도는 DAG이 운영에서 마운트 없음으로 죽는다. `.gitignore`에 내용물을 막고 `.gitkeep`을 커밋하는 것까지가 한 벌이다 — 디렉터리가 없으면 바인드 마운트가 root 소유 빈 폴더를 만들어 Airflow가 못 쓴다.
-- `airflow/` 아래에는 DAG가 실제로 import·실행하는 코드만 둔다. Airflow가 실행하지 않는 상주 서비스·API는 `apps/` 아래에 백엔드 규칙(ORM, `config.yaml`, async)으로 두고 FastAPI와 공유하며 배포만 컨테이너로 가른다(`apps/realtime/`가 그 예). 두 트리가 같은 도메인 상수를 쓰면 중복을 허용하되 테스트로 대조한다. 한쪽 트리가 다른 쪽을 import하지 않는 것이 우선이다.
-- DAG가 쓰는 코드는 위치는 Airflow를, 규칙은 백엔드를 따른다. DAG가 쓰는 공유 코드는 `airflow/modules` 아래 한 벌만 둔다.
+저장소의 `airflow/`가 컨테이너의 `/opt/airflow`다. 운영 Airflow의 마운트 경로와 1:1로 맞춘다.
+
+| 저장소 | 컨테이너 |
+| --- | --- |
+| `airflow/dags/` | `/opt/airflow/dags` |
+| `airflow/modules/` | `/opt/airflow/modules` |
+| `airflow/utility/` | `/opt/airflow/utility` |
+| `airflow/sql/` | `/opt/airflow/sql` |
+| `airflow/plugins/` | `/opt/airflow/plugins` |
+| `airflow/config/` | `/opt/airflow/config` |
+| `airflow/files/` | `/opt/airflow/files` — **코드가 아니라 데이터**(첨부 파일) |
+
+Airflow는 `apps/`, `../apps/core/`, `migrations/`를 보지 못한다. DAG가 실행 시점에 import하는 코드는
+전부 `airflow/` 아래 있어야 한다.
+
+import 뿌리는 `airflow/`다. DAG는 배포와 같은 이름으로 `from modules.collectors import ...`처럼
+쓴다. 로컬 도구도 같은 뿌리를 쓴다: pytest `pythonpath`, pyrefly `search-path`,
+ruff isort `known-first-party`가 `pyproject.toml`에 맞춰져 있다.
+
+쿼리는 Python 문자열이 아니라 `airflow/sql/<엔진>/<테이블>/<동작>.sql`에 둔다.
+`modules/sql.py`의 `read_sql`이 `AIRFLOW_HOME`이 있으면 그 아래를, 없으면 저장소의
+`airflow/sql`을 읽는다. 컨테이너와 로컬 pytest가 같은 파일을 쓴다.
+
+로컬 Compose와 Dockerfile은 운영 Airflow에 맞춰 둔 상태다. **코드 배치 문제로는 건드리지
+않는다.** 실행 코드를 이미지에 굽거나 `apps/`를 볼륨으로 붙이지 않는다.
+
+**데이터 볼륨은 예외이고, 그때는 로컬과 운영 compose를 함께 고친다.** `airflow/files/`가
+그 예다(2026-08-30, `document_body_hourly`의 첨부 파일). 한쪽만 고치면 로컬에서 도는 DAG이
+운영에서 마운트 없음으로 죽는다. `.gitignore`에 내용물을 막고 `.gitkeep`을 커밋하는 것까지가
+한 벌이다 — 디렉터리가 없으면 바인드 마운트가 root 소유 빈 폴더를 만들어 Airflow가 못 쓴다.
+
+**`airflow/` 아래에는 DAG가 실제로 import·실행하는 코드만 둔다.** Airflow가 실행하지
+않는 상주 서비스·API는 `apps/` 아래에 백엔드 규칙(ORM, `config.yaml`, async)으로 두고
+(앞으로 올) FastAPI와 코드를 공유한다. 배포만 컨테이너로 가른다. `apps/realtime/`(KIS
+실시간 WebSocket 수집, `python -m apps.realtime.main`, `compose/prod/` 배포)가 그 예다.
+두 트리가 같은 도메인 상수(종목 코드, 세션 창)를 쓰면 **중복을 허용하되 테스트로
+대조한다**(`tests/realtime/test_kis_realtime.py`의 `*_match_the_airflow_collector`).
+한쪽 트리가 다른 쪽을 import하지 않는 것이 우선이다.
+
+DAG가 쓰는 코드는 **위치는 Airflow를, 규칙은 백엔드를** 따른다.
+
+- DAG가 쓰는 공유 코드는 `airflow/modules` 아래 한 벌만 둔다.
 - 외부 입력은 Pydantic으로 검증하고, 시각은 timezone-aware UTC이며, 주석은 한국어로 쓴다.
-- `dags/`에는 스케줄, 재시도, 태스크 매핑, Hook 사용, 실패 분류만 둔다. 파싱·검증·저장 규칙은 `modules/`에 둔다.
-- **모든 DAG는 화면용 메타데이터를 채운다.** `dag_display_name`(이모지 + 한글 이름 + 제공처. 예: `📈 국내 지수·선물 1분봉 (KIS)`), 한 문장 `description`, `doc_md=__doc__`(모듈 docstring에 설계 배경)이 필수다. `Param`에도 `title`과 `description`을 단다. 빈 문자열로 두지 않는다.
-- 의존성은 Airflow 환경에 있는 것만 쓴다. 표준 라이브러리, Pydantic, PEP 249 연결, HTML 수집용 `scrapling[fetchers]`, 브리핑 차트용 matplotlib(+한글 폰트 `fonts-nanum`)이다. SQLAlchemy 모델과 `core.config`는 import하지 않는다. matplotlib은 없어도 브리핑이 죽지 않도록 함수 안에서 import한다(`modules/briefing/chart.py`).
-- 테이블 정의의 원본은 백엔드의 `apps/models`다. 수집기는 문자열 SQL을 쓰므로 `tests/collectors/test_fred.py`, `test_ecos.py`, `test_mof.py`, `test_boe.py`, `test_ecb.py`가 INSERT 컬럼과 `ON CONFLICT` 키를 모델 metadata와 대조한다.
+- `dags/`에는 스케줄, 재시도, 태스크 매핑, Hook 사용, 실패 분류만 둔다.
+  파싱·검증·저장 규칙은 `modules/`에 둔다.
+- **모든 DAG는 화면용 메타데이터를 채운다.** `dag_display_name`(이모지 + 한글 이름 +
+  제공처. 예: `📈 국내 지수·선물 1분봉 (KIS)`), 한 문장 `description`,
+  `doc_md=__doc__`(모듈 docstring에 설계 배경)이 필수다. `Param`에도 `title`과
+  `description`을 단다. 빈 문자열로 두지 않는다.
+- 의존성은 Airflow 환경에 있는 것만 쓴다. 베이스 이미지의 표준 라이브러리·Pydantic·
+  PEP 249 연결(`PostgresHook`)에 더해 `compose/local/airflow/requirements.txt`가 이미지에
+  굽는 것 — HTML 수집용 `scrapling[fetchers]`, PDF 파싱 `pymupdf`, LLM 호출
+  `langchain-xai`·`langgraph`·`openai`·`langsmith`, Slack `slack-sdk`, `sentry-sdk`,
+  브리핑 차트용 matplotlib(+한글 폰트 `fonts-nanum`), Neo4j 드라이버 `neo4j` — 이다. 목록의 원본은 그 파일이고 줄마다 어느 모듈이 왜 쓰는지가
+  적혀 있다. SQLAlchemy 모델과 `core.config`는 import하지 않는다.
+  여기에 더 넣으려면 운영 Airflow 이미지에 먼저 들어가야 한다. matplotlib은 없어도
+  브리핑이 죽지 않도록 함수 안에서 import한다(`modules/briefing/chart.py`).
+- 테이블 정의의 원본은 백엔드의 `apps/models`다. 수집기는 문자열 SQL을 쓰므로
+  `tests/collectors/`의 `test_fred.py`, `test_ecos.py`, `test_mof.py`, `test_boe.py`,
+  `test_ecb.py`가 INSERT 컬럼과 `ON CONFLICT` 키를 모델 metadata와 대조한다.
 
 ## `airflow/modules/`의 폴더
 
-- **한 도메인의 파일이 셋 이상이면 폴더로 내리고 접두어를 뗀다.** `collectors/`·`briefing/`·`expectation/`·`technical/`·`kospi/`가 그 형태다(2026-08-27에 셋을 내렸다). `modules.kospi.kospi_domain`이 아니라 `modules.kospi.domain`이다 — `collectors/`가 파일 이름에 남긴 접두어는 **제공처**라 뜻이 있고, 도메인 접두어는 **폴더가 될 것**이 이름에 붙어 있던 것이다.
-- **하위 패키지 `__init__.py`는 빈 파일이다.** 재수출하면 `modules.kospi.domain` 하나를 import해도 LangChain이 딸려 와 DagBag이 그 무게를 문다. `tests/modules/test_import_weight.py`가 그 경계를 재고 있어 재수출은 그 테스트를 즉시 깬다. **사슬은 둘로 온다**(2026-09-03에 둘 다 생겼다). ① 가벼운 모듈이 무거운 모듈에서 타입 하나를 가져오는 것 — `from X import Y`가 `X`를 통째로 실행하므로 이름 하나가 202개를 끌고 온다. 그 값을 무거운 의존성 없는 잎으로 뺀다(`modules/usage.py`). ② 흐름 클래스를 모듈 수준에서 올리는 것 — 부르는 쪽이 함수 안에서 늦게 올린다(`kospi/run.py`·`review.py`, `briefing/chart.py`가 matplotlib에 같은 형태). 타입에만 쓰는 이름은 `TYPE_CHECKING`으로 남긴다.
-- **최상위에 남는 것은 공용 잎 열넷이다**(`db`·`sql`·`upsert`·`utility`·`period`·`schema`·`slack`·`llm`·`prompt`·`market_session`·`assessment`·`dedup`·`usage`·`untrusted`). 열둘은 300줄 미만이고 둘이 넘는다(`assessment` 637, `llm` 350 — 2026-09-01 실측). `graph/`는 둘(`projection`·`query`)인데 사용자 결정으로 내렸다(2026-09-01) — "셋 이상" 기준의 예외이고 이동은 따로 커밋했다. **`core/` 같은 폴더로 모으지 않는다** — 114개 파일 226줄을 고치고 얻는 것이 목록 열 줄이다(2026-08-27 실측). **줄 수는 폴더로 내리는 기준이 아니다** — 기준은 "한 도메인의 파일이 셋 이상인가"이고, 잎 하나가 길어진 것은 그 파일을 나눌 문제다.
-- **접두어를 떼면 바인딩 이름이 짧아져 지역 변수와 겹칠 수 있다**(`from modules import technical` → `from modules.technical import indicators`). `ruff`의 `F823`이 그것을 잡는 유일한 장치이므로 기계적 치환 직후에 `ruff`를 먼저 돌린다. 2026-08-27 이동에서 셋이 걸렸다.
-- **이동과 파일 분리를 같은 커밋에 두지 않는다.** 어느 쪽이 회귀를 만들었는지 못 가른다. 옛 추론의 툴박스는 2026-09-01에 셋을 떼어 1,556→920줄이 됐다 — 인자 스키마(`tool_args.py`), 행 변환(`tool_rows.py`), 툴 호출 원장(`tool_ledger.py`)이고 `kospi/`가 그 배치를 이어받았다. 원장은 상태를 쥐므로 파일이 아니라 클래스(`ToolCallLedger`)로 갈랐고 툴박스가 그것을 소유한다.
-- **`dags/`는 폴더로 나누지 않는다.** DagBag은 하위 폴더를 재귀로 훑지만 `dag_id`가 경로와 무관해 UI에 그룹이 생기지 않는다(그 일은 `tags`가 한다). DAG은 파일당 얇고 접두어가 이미 정렬을 해 준다.
+**한 도메인의 파일이 셋 이상이면 폴더로 내리고 접두어를 뗀다.** `collectors/`·`briefing/`·
+`expectation/`·`technical/`·`kospi/`·`shock/`가 그 형태다(2026-08-27에 셋을 내렸다 — 최상위 `.py`가
+31개에서 12개로 줄었다). `modules.kospi.kospi_domain`은 말을 더듬으므로
+`modules.kospi.domain`이다. `collectors/`가 파일 이름에 제공처를 남긴 것
+(`market/kis_positioning.py`)과 다른 판단인데, 저기는 접두어가 **제공처**라 뜻이 있고
+도메인 접두어는 **폴더가 될 것**이 이름에 붙어 있던 것이다.
+
+- **하위 패키지 `__init__.py`는 빈 파일이다.** 재수출하면 `modules.kospi.domain` 하나를
+  import해도 LangChain이 딸려 와 DagBag이 그 무게를 문다. `tests/modules/test_import_weight.py`가
+  그 경계를 재고 있어 재수출은 그 테스트를 즉시 깬다. 한 수집기의 의존성이 없는 환경에서
+  관계없는 DAG이 import 오류로 죽는 것도 같은 이유다.
+  **사슬은 둘로 온다**(2026-09-03에 둘 다 실제로 생겼다). ① 가벼운 모듈이 무거운 모듈에서
+  **타입 하나**를 가져오는 것 — `from X import Y`가 `X`를 통째로 실행하므로 이름 하나가
+  202개를 끌고 온다. 그때는 그 값을 무거운 의존성 없는 잎으로 뺀다(`modules/usage.py`가
+  그것이다). ② 흐름 클래스를 **모듈 수준에서** 올리는 것. 그때는 부르는 쪽이 함수 안에서
+  늦게 올린다(`kospi/run.py`·`review.py`가 그 형태이고 `briefing/chart.py`가 matplotlib에
+  같은 것을 쓴다). 타입에만 쓰는 이름은 `TYPE_CHECKING`으로 남긴다.
+- **최상위에 남는 것은 공용 잎이다.** `db`·`sql`·`upsert`·`utility`·`period`·`schema`·
+  `slack`·`llm`·`prompt`·`market_session`·`assessment`·`dedup`·`usage`·`untrusted`·
+  `dag_common` **열다섯**이다. 열셋은 300줄 미만이고 둘이 넘는다(`assessment` 688, `llm` 312 —
+  2026-09-12 실측). `dag_common`만 Airflow를 import한다 — DAG 파일 스물여섯이 똑같이 복사해
+  갖고 있던 Hook 연결·자격 증명·관측창 `Param`·토큰 재발급·휴장 스킵을 한 벌로 모은 것이라
+  (2026-09-12) DAG 파일과 `kospi/common.py`만 import한다. `modules/`의 다른 코드가 이것을
+  import하면 `test_import_weight`가 깬다.
+  **이것들을 `core/` 같은 폴더로 모으지 않는다** — 114개 파일 226줄을 고치고 얻는 것이 목록
+  열 줄이다(2026-08-27 실측). 폴더는 파일이 많아서 만드는 것이지 정리해 보이려고 만드는
+  것이 아니다. **줄 수는 폴더로 내리는 기준이 아니다** — 기준은 "한 도메인의 파일이 셋
+  이상인가"이고, 잎 하나가 길어진 것은 그 파일을 나눌 문제이지 폴더를 만들 문제가 아니다.
+- **접두어를 떼면 바인딩 이름이 짧아져 지역 변수와 겹칠 수 있다.**
+  `from modules import technical`이 `from modules.technical import indicators`가 되는 식이다.
+  `ruff`의 `F823`(할당 전 참조)이 그것을 잡는 유일한 장치이므로 **기계적 치환 직후에 `ruff`를
+  먼저 돌린다.** 2026-08-27 이동에서 셋이 걸렸다(`briefing/chart.py`의 `indicators`, 테스트
+  둘의 `forecast`·`review`).
+- **이동과 파일 분리를 같은 커밋에 두지 않는다.** 어느 쪽이 회귀를 만들었는지 못 가른다.
+  옛 추론의 툴박스는 2026-09-01에 셋을 떼어 1,556→920줄이 됐다 — 인자 스키마
+  (`tool_args.py`), 행 변환(`tool_rows.py`), 툴 호출 원장(`tool_ledger.py`)이다. `kospi/`는
+  그중 `tool_args.py`·`tool_ledger.py`를 이어받았고 행 변환 파일은 없다 — 툴이 Pydantic
+  모델(`kospi/tools.py`)을 돌려주고 `toolbox.py`의 `_body`가 그것을 JSON으로 편다.
+  **원장은 상태를 쥐므로 파일이 아니라 클래스(`ToolCallLedger`)로 갈랐고** 툴박스가
+  그것을 소유한다. 기준은
+  [collectors-class-migration.md](../docs/convention/collectors-class-migration.md)의
+  "파일을 나누는 기준"에 있다.
+
+**`dags/`는 폴더로 나누지 않는다.** Airflow의 DagBag은 하위 폴더를 재귀로 훑으므로
+기술적으로는 되지만, `dag_id`가 파일 경로와 무관해 **UI에는 그룹이 생기지 않는다**(그 일은
+`tags`가 한다). 얻는 것이 파일 탐색기에서뿐이고, DAG은 파일당 얇은 데다 접두어
+(`kis_`·`fred_`·`slack_`·`kospi_`)가 이미 정렬을 해 준다.
 
 ## 클래스와 함수를 가르는 기준
 
-**상태를 쥔 동작은 클래스로 묶고, 상태 없는 변환은 함수로 둔다.** 저장소 전체 규칙이다.
+**상태를 쥔 동작은 클래스로 묶고, 상태 없는 변환은 함수로 둔다.** 이 저장소 전체에 같은
+규칙이 적용된다 — LLM 흐름만의 규칙이 아니다.
 
-- 클래스로 묶는 것: 자격 증명·토큰·DB 연결·기준 시각·출처 행처럼 여러 호출에 걸쳐 안 변하는 값을 들고 도는 동작. 그 값이 함수마다 인자로 다시 들어가고 있으면 그게 신호다. 기준 구현은 `collectors/analyst/kis_opinion.py`의 `KisAnalystOpinionCollector`, `collectors/document/naver_research.py`의 `NaverResearchCollector`, `assessment.py`의 `DocumentAssessor`, `kospi/toolbox.py`의 `KospiToolbox`, `kospi/generation.py`의 `ForecastBuilder`·`ReviewBuilder`. 연결과 기준 시각을 쥐는 코드는 `kospi/store.py`의 `KospiStore`가 기준이다.
-- 생성자는 그 실행 동안 안 변하는 것만 받는다. 종목·구간처럼 호출마다 바뀌는 것은 메서드 인자다.
-- 함수로 두는 것: 파싱·정규화·계산처럼 감쌀 상태가 없는 것, 그 클래스의 관심사가 아닌 조회(`watched_stocks`). 클래스 안이 읽기 좋으면 `@staticmethod`.
-- 데이터 모양은 언제나 Pydantic 모델이다. 수집기 클래스 안에 중첩하지 않는다.
-- **감쌀 상태가 없는 것을 클래스로 만들지 않는다.** 메서드가 전부 `@staticmethod`면 그건 모듈이다.
-- 자격 증명을 쥐는 수집기 10모듈(2026-08-23)과 연결·기준 시각을 쥐는 흐름 코드 9곳(2026-08-25)은 클래스로 옮겼고, 수집기는 도메인 폴더로 내려갔다(2026-08-25). `connection`을 첫 인자로 받는 모듈 함수는 진입점이 하나뿐인 곳(`dedup.py`·`market_session.py`·`technical/signals.py`)에만 남아 있다. 남은 단계는 없다. 폴더 구조(도메인별 `market/`·`document/`·`indicator/`·`calendar/`·`analyst/`)와 단계별 순서, 함수로 두는 것이 맞다고 판정한 모듈과 그 이유는 `docs/convention/collectors-class-migration.md`에 있다. **새 수집기는 처음부터 그 형태로 쓴다.**
+- **클래스로 묶는다**: 자격 증명·토큰·DB 연결·기준 시각·출처 행처럼 **여러 호출에 걸쳐
+  안 변하는 값**을 들고 도는 것. 그 값이 인자로 함수마다 다시 들어가고 있으면 그게 신호다.
+  기준 구현은 `modules/collectors/analyst/kis_opinion.py`의 `KisAnalystOpinionCollector`,
+  `modules/collectors/document/naver_research.py`의 `NaverResearchCollector`,
+  `modules/assessment.py`의 `DocumentAssessor`, `modules/kospi/toolbox.py`의 `KospiToolbox`,
+  `modules/kospi/generation.py`의 `ForecastBuilder`·`ReviewBuilder`다. 연결과 기준 시각을
+  쥐는 코드는 `modules/kospi/store.py`의 `KospiStore`가 기준이다.
+- **생성자는 그 실행 동안 안 변하는 것만 받는다.** 종목·구간처럼 호출마다 바뀌는 것은
+  메서드 인자다.
+- **함수로 둔다**: 파싱·정규화·계산처럼 감쌀 상태가 없는 것, 그리고 그 클래스의 관심사가
+  아닌 조회(`watched_stocks`는 KIS와 무관하게 마스터만 본다). 클래스 안에 두는 편이 읽기
+  좋으면 `@staticmethod`로 둔다.
+- **데이터 모양은 언제나 Pydantic 모델이다.** 응답 행·설정·결과를 `dataclass`나 맨 dict로
+  두지 않는다. 수집기 클래스 안에 중첩하지 않는다 — 테스트와 다른 모듈이 import한다.
+- **감쌀 상태가 없는 것을 클래스로 만들지 않는다.** 메서드가 전부 `@staticmethod`면 그건
+  모듈이다.
+
+자격 증명을 쥐는 수집기 10모듈(2026-08-23)과 연결·기준 시각을 쥐는 흐름 코드
+9곳(2026-08-25)은 클래스로 옮겼고, 수집기는 도메인 폴더로 내려갔다(2026-08-25).
+**`connection`을 첫 인자로 받는 모듈 함수는 이제 `modules/dedup.py`·`market_session.py`·
+`technical/signals.py`처럼 진입점이 하나뿐인 곳, 그리고 DAG 파일이 부르는 두 줄짜리 휴장
+가드(`dag_common.skip_unless_*`)에만 남아 있다** — 새로 만들 때 그 형태를 따라가지 않는다.
+남은 단계는 없다.
+[docs/convention/collectors-class-migration.md](../docs/convention/collectors-class-migration.md)가 폴더
+구조(도메인별 `market/`·`document/`·`indicator/`·`calendar/`·`analyst/`)와 어디서
+갈랐는지, 그리고 **함수로 두는 것이 맞다고 판정한 모듈과 그 이유**를 갖는다.
+**새 수집기는 처음부터 그 형태로 쓴다.**
+
+## 시간대 규칙
+
+### Airflow 배치
+
+- 배치 트리거 시간대는 한국 시간(`Asia/Seoul`)이다. `AIRFLOW__CORE__DEFAULT_TIMEZONE=Asia/Seoul`.
+- Airflow cron과 `start_date`는 KST로 작성한다. `start_date`는 반드시 timezone-aware로 두고
+  `pendulum.datetime(..., tz=KST_TIMEZONE)`을 쓴다. naive datetime은 쓰지 않는다.
+  `KST_TIMEZONE`은 `modules/utility.py`에 있다.
+- 스케줄 코드에는 같은 줄 주석으로 UTC를 반드시 병기한다.
+  예: `schedule="30 7 * * 2-6"  # KST 화~토 07:30 = UTC 월~금 22:30`
+- 배치 조회 기간과 날짜 경계는 KST 기준으로 계산한다. `data_interval_end`는 aware 값이므로
+  `astimezone(KST_TIMEZONE)`으로 변환한 뒤 날짜를 뽑는다.
+- 시간대는 트리거 시점과 날짜 경계 계산에만 쓴다. **DB에 저장하는 시각과 로그는 UTC다.**
+  컨테이너 시계도 UTC로 둔다.
+- 외부 데이터의 원본 시각과 시간대는 보존하되, 비교·저장용 시각은 UTC로 정규화한다.
+- 제공처가 날짜의 기준 시간대를 정하는 값(ECOS 고시 기준일은 KST,
+  FRED 관측일은 미국 영업일, 재무성은 일본 영업일, BoE는 영국 영업일, ECB는 유로 지역
+  영업일)은 그 제공처 기준을 따르고 코드 주석에 어느 기준인지 남긴다.
+
+### 백엔드
+
+- 애플리케이션, DB 세션, 로그와 내부 이벤트의 기본 시간대는 `UTC`로 통일한다.
+- 모든 내부 시각은 timezone-aware UTC로 생성·전달·저장한다. naive datetime은 쓰지 않는다.
+- 요청 시각은 ISO 8601 offset 또는 `Z`를 필수로 받고 UTC로 변환한 뒤 조회·저장한다.
+- 일반 API 응답은 변환하지 않은 UTC ISO 8601 값과 `Z`를 반환한다. 예: `2026-08-04T22:30:00Z`.
+- 웹 화면의 시간대 변환과 표시는 프론트엔드가 담당한다.
+- 프론트엔드 시간대 우선순위는 사용자 계정의 IANA 시간대, 브라우저 시간대, UTC fallback 순서다.
+- 국가 정보만으로 시간대를 추정하지 않는다. 한 국가에 여러 시간대가 있을 수 있다.
+- Slack·이메일·CSV·PDF처럼 프론트엔드가 없는 출력, 현지 날짜 기준 집계와 업무상 현지 시간 경계가
+  필요한 경우에만 백엔드가 변환한다.
+- 백엔드 변환에는 사용자 설정 또는 요청에 명시된 IANA 시간대만 사용한다.
+- DST와 과거 시간대 변경은 고정 offset 계산이 아니라 IANA timezone 데이터로 처리한다.
+- 시간대 변환은 응답 표현 또는 집계 경계 계산 단계에서만 수행하며 DB의 UTC 원본을 변경하지 않는다.
+- 시간대 값은 표시와 날짜 경계 계산에만 사용하고 인증, 권한 또는 데이터 접근 범위 판단에는 쓰지 않는다.
+
+## Slack 테스트 발송
+
+- **테스트 메시지를 운영 채널(`SLACK_CHANNEL_MARKET/DOCUMENT/OPS`)로 보내지 않는다.**
+  운영 채널 구독자 전체에게 노출되고 되돌릴 수 없다.
+- 테스트 채널은 `config.yaml`의 `slack_channel_test`다. 값이 없으면 발송 전에 사용자에게 물어본다.
+- 테스트 메시지에는 테스트임을 밝히는 머리표(예: `🧪 테스트 발송`)를 붙인다.
 
 ## 차트와 표 표기
 
@@ -271,37 +391,63 @@ uv run ruff check apps airflow migrations tests
 ## 데이터베이스 테이블 주석
 
 - 모든 SQLAlchemy 테이블은 `__table_args__`의 `comment`에 테이블 목적을 한국어로 작성한다.
-- 모든 컬럼은 `mapped_column(comment="...")`에 값의 의미를 작성한다. 시간대, 단위, 허용 상태가 있으면 함께 명시한다.
+- 모든 컬럼은 `mapped_column(comment="...")`에 값의 의미를 작성한다.
+  시간대, 단위, 허용 상태가 있으면 함께 명시한다.
 - `id`, `created_at`, `updated_at` 같은 공통 필드 주석은 `EntityBase`에서 한 번만 정의한다.
-- Alembic 마이그레이션에도 모델과 동일한 테이블·컬럼 주석을 넣어 실제 데이터베이스 스키마에 반영한다.
+- Alembic 마이그레이션에도 모델과 동일한 테이블·컬럼 주석을 넣어 실제 DB 스키마에 반영한다.
 - 모델과 마이그레이션의 주석은 함께 변경하고 테스트로 생성 여부를 확인한다.
 
-## 타입 모델링 규칙
+## 타입 모델링
 
 ### 함수가 돌려주는 데이터 모양은 Pydantic 모델이다
 
-**`dict[str, Any]`·`list[dict]`·`Mapping[str, Any]`를 반환 타입으로 쓰지 않는다.** 모듈 경계를 넘는 값은 모델로 선언한다. 이유는 셋이다. 키 오타가 런타임까지 살아 있고(프롬프트나 JSONB로 나가는 값이면 아무도 못 잡는다), 부르는 쪽이 무슨 키를 기대해도 되는지 코드에 안 남고, pyrefly가 대신 볼 수 있는 것을 사람이 보게 된다.
+**`dict[str, Any]`·`list[dict]`·`Mapping[str, Any]`를 반환 타입으로 쓰지 않는다.** 모듈
+경계를 넘는 값은 모델로 선언한다. 이유는 셋이다.
 
-기준 구현은 `airflow/modules/kospi/state.py`(`ObservedState`·`ReviewState`·`RelationRow`·`MemoryRow`)와 `airflow/modules/technical/indicators.py`(`DailyBar`·`TechnicalSnapshot`·`SignalEvent`)다.
+- **키 오타가 런타임까지 산다.** 맨 dict는 `state["technial"]`을 KeyError로 알려 주는 자리가
+  실행 시점뿐이다. 프롬프트나 JSONB로 나가는 값이면 아무도 못 잡는다.
+- **부르는 쪽이 무슨 키를 기대해도 되는지 코드에 안 남는다.** 나중에 그 값을 읽는 SQL이나
+  화면이 생기면 문서와 실제가 갈린다.
+- **pyrefly가 대신 볼 수 있는 것을 사람이 본다.** 모델이면 필드 이름 오타가 정적 검사에서 죽는다.
 
-- 모델은 `ConfigDict(frozen=True)`다. 재시도 경로에서 값이 바뀌면 원본과 저장값이 어긋난다.
-- **JSON으로 바꾸는 것은 경계에서 한 번뿐이다.** `model_dump(mode="json")`을 프롬프트 조립과 DB 저장 자리에서만 부른다. 중간 층은 모델을 그대로 들고 간다. `json.dumps(..., default=str)`로 때우지 않는다 — `date`가 조용히 문자열이 되는 자리가 늘어난다.
-- **`dict[str, 모델]`은 괜찮다.** 키가 심볼·종목코드처럼 열린 값이면 매핑이 맞는 모양이다. 금지하는 것은 값이 `Any`인 매핑이다.
-- **키와 값이 층을 섞으면 한 단 내린다.** `{"as_of_date": ..., "KOSPI": {...}}`는 모델로 표현할 수 없다. `{"as_of_date": ..., "subjects": {"KOSPI": {...}}}`로 만든다.
-- **모델을 두는 곳은 그 값을 만드는 모듈이다.** 단 그 모듈이 LangChain·Airflow를 import하는데 다른 모듈도 같은 모델을 봐야 하면 무거운 의존성이 없는 모듈로 따로 뺀다(`kospi/state.py`가 그 예다). 소비자가 하나뿐이어도 그 모듈이 이미 크면 따로 뺀다(`kospi/tools.py`).
-- 테스트도 모델로 넘긴다. 픽스처가 맨 dict면 프롬프트에 실릴 키가 테스트에서만 존재할 수 있다.
+기준 구현은 `airflow/modules/kospi/state.py`(`ObservedState`·`ReviewState`·`RelationRow`·
+`MemoryRow`)와 `airflow/modules/technical/indicators.py`(`DailyBar`·`TechnicalSnapshot`·
+`SignalEvent`)다.
 
-**wire 조립 경계는 예외다.** Slack 블록, LangGraph 노드 반환, JSON Schema, 검증 전 외부 응답 파싱, 그리고 모델을 JSON으로 펴는 자리(`kospi/tool_rows.py`)는 dict로 둔다. 그 dict는 제공처 규격이거나 모델을 JSON으로 바꾸는 경계 그 자체라 모델로 감싸면 같은 검증이 두 번이 된다. 그 밖의 도메인 값은 **처음부터 모델로 쓴다.**
+- **모델은 `ConfigDict(frozen=True)`다.** 재시도 경로에서 값이 바뀌면 원본과 저장값이 어긋난다.
+- **JSON으로 바꾸는 것은 경계에서 한 번뿐이다.** `model_dump(mode="json")`을 프롬프트 조립과
+  DB 저장 자리에서만 부른다. 중간 층은 모델을 그대로 들고 간다. `json.dumps(..., default=str)`로
+  때우지 않는다 — `date`가 조용히 문자열이 되는 자리가 늘어난다.
+- **`dict[str, 모델]`은 괜찮다.** 키가 심볼·종목코드처럼 열린 값이면 매핑이 맞는 모양이고,
+  값이 모델이면 검증은 그대로 된다. 금지하는 것은 **값이 `Any`인** 매핑이다.
+- **키와 값이 층을 섞으면 한 단 내린다.** `{"as_of_date": ..., "KOSPI": {...}}`는 모델로
+  표현할 수 없다. `{"as_of_date": ..., "subjects": {"KOSPI": {...}}}`로 만든다.
+- **모델을 두는 곳은 그 값을 만드는 모듈이다.** 단 그 모듈이 LangChain·Airflow를 import하는데
+  다른 모듈도 같은 모델을 봐야 하면, 무거운 의존성이 없는 모듈로 따로 뺀다
+  (`kospi/state.py`가 그 예다 — `kospi/generation.py`는 LangChain, `kospi/common.py`는 Airflow를
+  import해서 서로를 모듈 수준에서 import할 수 없다). 소비자가 하나뿐이어도 그 모듈이 이미
+  크면 따로 뺀다(`kospi/tools.py`의 툴 응답 모델이 그 예다).
+- **테스트도 모델로 넘긴다.** 픽스처가 맨 dict면 프롬프트에 실릴 키가 테스트에서만 존재할 수 있다.
+
+**wire 조립 경계는 예외다.** Slack 블록, LangGraph 노드 반환, JSON Schema, 검증 전
+외부 응답 파싱, 그리고 모델을 JSON으로 펴는 자리(`kospi/toolbox.py`의 `_body`)는 dict로 둔다.
+그 dict는 제공처 규격이거나 모델을 JSON으로 바꾸는 경계 그 자체라 모델로 감싸면 같은 검증이
+두 번이 된다. 그 밖의 도메인 값은 **처음부터 모델로 쓴다.**
 
 ### 그 밖의 타입 규칙
 
-- PEP 249 연결·커서 타입은 `airflow/modules/db.py`의 `Cursor`·`Connection`을 쓴다. 모듈마다 `class Cursor(Protocol)`을 다시 쓰지 않는다(2026-08-25 스무 개 통합). 스스로 커밋하는 코드만 `TransactionalConnection`이다.
-- 값의 종류가 정해진 상태·분류 필드는 일반 `str` 대신 Python `StrEnum`과 SQLAlchemy `Enum`을 사용한다.
-- SQLAlchemy `Enum`은 `native_enum=False, length=20, values_callable=...` 형태로 선언한다. PostgreSQL native enum은 값 추가·삭제 마이그레이션 비용이 커서 쓰지 않는다.
-- Enum 컬럼에는 허용 값을 제한하는 데이터베이스 `CHECK` 제약을 함께 둔다.
-- API 요청·응답, 설정, 외부 입력 검증에는 Pydantic 모델과 `Field`, validator를 사용한다.
+- **PEP 249 연결·커서 타입은 `airflow/modules/db.py`의 `Cursor`·`Connection`을 쓴다.**
+  모듈마다 `class Cursor(Protocol)`을 다시 쓰지 않는다 — 전에 스무 개가 조금씩 다른 채로
+  복사돼 있었다(2026-08-25 통합). 스스로 커밋하는 코드만 `TransactionalConnection`이다.
+
+- 값의 종류가 정해진 상태·분류 필드는 일반 `str` 대신 Python `StrEnum`과 SQLAlchemy `Enum`을 쓴다.
+- SQLAlchemy `Enum`은 `native_enum=False, length=20, values_callable=...` 형태로 선언한다.
+  PostgreSQL native enum은 값 추가·삭제 마이그레이션 비용이 커서 쓰지 않는다.
+- Enum 컬럼에는 허용 값을 제한하는 DB `CHECK` 제약을 함께 둔다.
+- API 요청·응답, 설정, 외부 입력 검증에는 Pydantic 모델과 `Field`, validator를 쓴다.
 - 제공처 이름, URL, 종목 코드, 외부 식별자처럼 값이 열려 있는 필드는 `str` 또는 `Text`로 유지한다.
-- 단순 문자열을 의미 없이 Pydantic 모델이나 Enum으로 감싸지 않고, 유효성 규칙이나 제한된 값 집합이 있을 때 사용한다.
+- 단순 문자열을 의미 없이 Pydantic 모델이나 Enum으로 감싸지 않고,
+  유효성 규칙이나 제한된 값 집합이 있을 때만 사용한다.
 
 ## 점수와 정규화 기준
 
@@ -359,18 +505,35 @@ LLM에게 매기게 하는 점수도 같은 눈금으로 받는다.
 규칙을 지킨다 — 모델이 내는 원값까지 0~1로 바꾸는 것은 프롬프트 판이 올라가는 일이라
 20영업일 동결 뒤에 판단한다.
 
-## 오류 처리 규칙
+## 오류 처리
 
-**해결하지 못하는 문제는 터뜨린다.** 삼키고 계속 가는 코드는 문제가 없는 것처럼 보이게 만들 뿐이고, 그 사이 잘못된 값이 쌓이거나 아무 것도 쌓이지 않는다. 실패를 나중에 알수록 되짚을 구간이 길어진다. 지금 멈춰서 눈에 띄는 편이 항상 낫다.
+**해결하지 못하는 문제는 터뜨린다.** 삼키고 계속 가는 코드는 문제가 없는 것처럼 보이게
+만들 뿐이고, 그 사이 잘못된 값이 쌓이거나 아무 것도 쌓이지 않는다. 실패를 나중에 알수록
+되짚을 구간이 길어진다. 지금 멈춰서 눈에 띄는 편이 항상 낫다.
 
-- **자체 예외 타입을 만드는 것은 좋다.** 원인을 좁혀 부르는 쪽이 판단할 수 있게 하는 것이 목적이다. `FredHTTPError`, `EcosResultError`, `LlmError`가 그 예다. 단 원래 예외를 `raise ... from error`로 잇는다. 원인을 끊으면 추적이 거기서 멈춘다.
-- **예외를 문자열로 뭉개지 않는다.** `str(error)`나 `type(error).__name__`으로 바꿔 담으면 위에서 종류로 갈라낼 수 없다. 판단을 위에 맡길 거면 종류를 그대로 올리거나, 결과 객체에 담아야 한다면 예외 객체 자체를 들고 간다.
-- **`except Exception`으로 넓게 잡지 않는다.** 잡아야 할 이유가 있으면 잡되 **반드시 다시 올린다.** 로그만 남기고 넘어가지 않는다. 넓게 잡아야만 하는 자리에는 왜 그런지 주석을 남긴다.
-- **로그는 예외를 대체하지 않는다.** `logger.warning`만 남기고 정상 반환하면 Airflow는 그 태스크를 성공으로 표시한다. 아무도 보지 않는 경고가 되고, 다음 실행도 같은 자리에서 같은 경고를 남긴다.
-- **부분 실패를 결과로 바꾸는 것은 그것이 정상 흐름일 때만 한다.** 문서 하나가 실패해도 나머지를 저장하는 것처럼 설계가 그렇게 정해진 경우다. 그때도 실패한 건수와 원인을 올리고, 전부 실패하면 태스크를 실패시킨다.
-- **조용한 성공을 만들지 않는다.** 잘린 응답, 0건, 빈 본문이 오류를 가릴 수 있으면 실패로 만든다. `writing-collectors` 스킬의 "전체 건수와 받은 행 수를 대조한다"와 같은 이유다.
-- **LLM이 낸 값의 조용한 성공은 얼굴이 따로 있다.** 대상 넷 중 하나만 온 응답, 왕복 상한에 잘린 조사, `ToolMessage`가 되어 성공으로 끝난 상한 초과, "결과 없음"으로 위장한 DB 연결 끊김 — 넷 다 태스크가 초록으로 끝난다. 그 자리의 규칙은 `writing-llm-flows` 스킬의 **"조용한 성공을 만들지 않는 LLM 흐름"** 여덟이고, 축은 **파악·이유·수정**이다.
-- **재시도 여부 판단을 위에 맡기려면 판단할 것을 위로 올려야 한다.** 아래에서 분류해 놓고 위로 문자열만 보내면 그 분류는 존재하지 않는 것과 같다.
+- **자체 예외 타입을 만드는 것은 좋다.** 원인을 좁혀 부르는 쪽이 판단할 수 있게 하는 것이
+  목적이다. 이 저장소의 `FredHTTPError`, `EcosResultError`, `LlmError`가 그 예다.
+  단 원래 예외를 `raise ... from error`로 잇는다. 원인을 끊으면 추적이 거기서 멈춘다.
+- **예외를 문자열로 뭉개지 않는다.** `str(error)`나 `type(error).__name__`으로 바꿔 담으면
+  위에서 종류로 갈라낼 수 없다. 판단을 위에 맡길 거면 종류를 그대로 올리거나, 결과 객체에
+  담아야 한다면 예외 객체 자체를 들고 간다.
+- **`except Exception`으로 넓게 잡지 않는다.** 잡아야 할 이유가 있으면 잡되 **반드시 다시
+  올린다.** 로그만 남기고 넘어가지 않는다. 넓게 잡아야만 하는 자리에는 왜 그런지 주석을
+  남긴다.
+- **로그는 예외를 대체하지 않는다.** `logger.warning`만 남기고 정상 반환하면 Airflow는 그
+  태스크를 성공으로 표시한다. 아무도 보지 않는 경고가 되고, 다음 실행도 같은 자리에서
+  같은 경고를 남긴다.
+- **부분 실패를 결과로 바꾸는 것은 그것이 정상 흐름일 때만 한다.** 문서 하나가 실패해도
+  나머지를 저장하는 것처럼 설계가 그렇게 정해진 경우다. 그때도 실패한 건수와 원인을
+  올리고, 전부 실패하면 태스크를 실패시킨다.
+- **조용한 성공을 만들지 않는다.** 잘린 응답, 0건, 빈 본문이 오류를 가릴 수 있으면 실패로
+  만든다. `writing-collectors` 스킬의 "전체 건수와 받은 행 수를 대조한다"와 같은 이유다.
+- **LLM이 낸 값의 조용한 성공은 얼굴이 따로 있다.** 대상 넷 중 하나만 온 응답, 왕복 상한에
+  잘린 조사, `ToolMessage`가 되어 성공으로 끝난 상한 초과, "결과 없음"으로 위장한 DB 연결
+  끊김 — 넷 다 태스크가 초록으로 끝난다. 그 자리의 규칙은 `writing-llm-flows` 스킬의
+  **"조용한 성공을 만들지 않는 LLM 흐름"** 여덟이고, 축은 **파악·이유·수정**이다.
+- **재시도 여부 판단을 위에 맡기려면 판단할 것을 위로 올려야 한다.** 아래에서 분류해 놓고
+  위로 문자열만 보내면 그 분류는 존재하지 않는 것과 같다.
 
 ### DAG의 실패 판정
 
@@ -400,12 +563,13 @@ LLM에게 매기게 하는 점수도 같은 눈금으로 받는다.
 `logical_date`의 시각으로 모드를 가르면, 모드가 실행자의 의도가 아니라 시계에서 나온다.
 `logical_date`가 없는 수동 실행은 벽시계로 떨어져 **UI의 Trigger 버튼이 조용히 다른 모드를
 돌린다.** 2026-08-21에 옛 추론의 단일 DAG를 장전·장후로 나눈 이유가 이것이고,
-`kospi_forecast_daily`·`kospi_intraday_daily`·`kospi_review_daily`가 그 배치를 이어받았다.
+`kospi_forecast_daily`(장전)·`kospi_intraday_daily`(장중)·`kospi_review_daily`(장후)가
+그 배치를 그대로 이어받았다.
 
 나누면 따라오는 것:
 
 - 한쪽 모드에서만 도는 태스크가 다른 쪽 실행에서 **빈 성공으로 보이는 일**이 없어진다.
-  전에는 장전 실행의 `grade_followups`·`narrate_followups`가 즉시 반환하면서 성공 표시였다.
+  옛 추론에서는 장전 실행의 채점·해설 태스크가 즉시 반환하면서 성공 표시였다.
 - 모드마다 재시도·타임아웃을 따로 줄 수 있다. 앞단이 다르면 기다리는 성격도 다르다.
 - 따로 pause 할 수 있고 `max_active_runs`가 서로를 막지 않는다.
 
@@ -418,7 +582,7 @@ LLM에게 매기게 하는 점수도 같은 눈금으로 받는다.
 이유로 기다려 DAG 하나이고, `kospi.intraday.resolve_slot`이 ① Param → ② `logical_date` →
 ③ **실패** 순으로 슬롯을 정한다. 가까운 슬롯으로 반올림하지도 않는다. 조용히 다른 슬롯을
 도는 것보다 안 도는 편이 낫다는 것이 2026-08-21에 얻은 교훈이고, 그것을 지키면 시각이
-여럿인 것 자체는 문제가 아니다. 슬롯 시각의 원본은 상수 하나(`INTRADAY_SLOT_TIMES`)이고
+여럿인 것 자체는 문제가 아니다. 슬롯 시각의 원본은 상수 하나(`kospi.domain.SLOT_TIMES`)이고
 DAG의 cron과 어긋나지 않게 테스트가 둘을 대조한다.
 
 ### 모드로 갈리는 함수도 나눈다
@@ -432,8 +596,8 @@ DAG를 나눈 뒤 공유 모듈에 `if mode == "..."`가 남으면 절반만 나
 - **모드마다 다른 것은 모드별 모듈이 갖는다.** 기준 시각, readiness guard, 조회 창의 시작,
   어느 세션을 볼지 같은 것이다. 기준 구현은 `airflow/modules/kospi/common.py`와
   `kospi/forecast.py`·`kospi/intraday.py`·`kospi/review.py` 넷이다.
-- 공유 함수가 모드별 값을 **인자로 받게** 만들면 분기가 사라진다. `observed_state`가
-  슬롯 대신 세션 날짜를 받는 것이 그 형태다 — 어느 세션을 볼지는 부르는 쪽이 정한다.
+- 공유 함수가 모드별 값을 **인자로 받게** 만들면 분기가 사라진다. `build_observed_state`가
+  슬롯 대신 기준 시각과 기준가를 받는 것이 그 형태다 — 무엇을 볼지는 부르는 쪽이 정한다.
 
 어느 형태든 **되돌릴 수 없는 오류는 즉시 `AirflowFailException`으로 바꾼다.** 설정·인증·주소
 문제(HTTP 4xx)는 재시도해도 같은 답이다. 재시도할 값어치가 있는 것(`ConnectionError`)은
@@ -444,7 +608,7 @@ DAG를 나눈 뒤 공유 모듈에 `if mode == "..."`가 남으면 절반만 나
 사이에 있어서, 그 노드가 예외를 문자열로 바꾸는 바람에 DAG가 판단할 것을 잃었다. **중간 층은
 예외를 통과시킨다.**
 
-## 관측과 Sentry 규칙
+## 관측과 Sentry
 
 Sentry 프로젝트는 둘이다. Airflow는 NAS `.env`의 `AIRFLOW__SENTRY__*`로, realtime은
 `config.yaml`의 `sentry_*`로 붙는다. realtime의 `sentry_sdk.init`(`apps/realtime/main.py`)이
@@ -457,3 +621,7 @@ DSN이 비면 전체 비활성이다. 새 상주 서비스(FastAPI 등)도 같�
   외부 API 지연, 저장 실패율처럼 나중에 대시보드나 알림이 필요해질 값이 코드에 생기면
   Sentry metrics 후보로 지점과 이유를 알린다. 사용자가 스스로 인지하지 못할 수 있다는
   전제로 먼저 말하되, 계측 코드를 임의로 추가하지는 않는다.
+
+# graphify
+- **graphify** (`.claude/skills/graphify/SKILL.md`) - any input to knowledge graph. Trigger: `/graphify`
+When the user types `/graphify`, use the installed graphify skill or instructions before doing anything else.

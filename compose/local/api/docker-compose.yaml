@@ -3,7 +3,7 @@
 # `just dev`의 DB(호스트 15432)를 보는 config.yaml이 필요하다. 운영은 compose/prod/api/이다.
 # 서비스 전용 환경변수는 없다 — 읽을 DB 별칭은 `apps/api/main.py`의 상수다.
 #
-# 로컬은 앞자리 1을 붙이는 관례다(db 15432, redis 16379, grafana 13000). 컨테이너 안
+# 로컬은 앞자리 1을 붙이는 관례다(db 15432, redis 16379). 컨테이너 안
 # 바인드는 운영과 같은 8000이고 밖으로 보이는 포트만 다르다.
 services:
   api:

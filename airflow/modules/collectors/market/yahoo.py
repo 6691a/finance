@@ -4,7 +4,7 @@
 `apps/`도 `core/`도 보지 못한다. 그래서 DAG가 실행 시점에 필요한 코드는 전부 여기 있어야
 한다. `dags/`에는 스케줄과 오케스트레이션만 두고 수집 규칙은 이 모듈에 둔다.
 
-저장 대상 테이블의 정의는 백엔드의 `apps/models/market.py`가 원본이고, 여기 SQL의 컬럼
+저장 대상 테이블의 정의는 백엔드의 `apps/models/market/series.py`가 원본이고, 여기 SQL의 컬럼
 이름은 `tests/collectors/test_yahoo.py`가 그 모델 metadata와 대조한다.
 
 `fred.py`·`ecos.py`와 목적이 다르다. 저쪽은 하루 한 값을 `indicator_observation`에 쌓는
@@ -54,9 +54,11 @@ from pydantic import (
 )
 from scrapling.fetchers import Fetcher
 
+from modules.collectors.kis import QuoteBar
 from modules.db import Connection
 from modules.sql import read_sql
 from modules.upsert import execute_upserts
+from modules.utility import normalize_to_utc, require_finite
 
 YAHOO_CHART_URL = "https://query1.finance.yahoo.com/v8/finance/chart/{symbol}"
 SOURCE = "yahoo"
@@ -217,33 +219,6 @@ class YahooPayloadError(ValueError):
     """
 
 
-class QuoteBar(BaseModel):
-    """정규화한 1분봉 1건."""
-
-    model_config = ConfigDict(frozen=True)
-
-    bar_at: AwareDatetime
-    open: Decimal
-    high: Decimal
-    low: Decimal
-    close: Decimal
-    volume: int | None
-    previous_close: Decimal
-
-    @field_validator("bar_at")
-    @classmethod
-    def normalize_to_utc(cls, moment: datetime) -> datetime:
-        return moment.astimezone(UTC)
-
-    @field_validator("open", "high", "low", "close", "previous_close")
-    @classmethod
-    def require_finite(cls, value: Decimal) -> Decimal:
-        # Decimal은 "NaN"과 "Infinity"도 받아들인다. 시세로 저장하면 이후 집계가 전부 오염된다.
-        if not value.is_finite():
-            raise ValueError("quote value must be a finite number")
-        return value
-
-
 class ParsedBars(BaseModel):
     """한 심볼의 파싱 결과.
 
@@ -337,8 +312,7 @@ class YahooResponse(BaseModel):
     @field_validator("started_at", "completed_at")
     @classmethod
     def normalize_to_utc(cls, moment: datetime) -> datetime:
-        # 저장·비교용 시각은 UTC로 정규화한다. naive datetime은 AwareDatetime이 이미 막는다.
-        return moment.astimezone(UTC)
+        return normalize_to_utc(moment)
 
     @model_validator(mode="after")
     def require_ordered_timestamps(self) -> Self:
@@ -755,9 +729,7 @@ class DailyBar(BaseModel):
     @field_validator("open", "high", "low", "close")
     @classmethod
     def require_finite(cls, value: Decimal) -> Decimal:
-        if not value.is_finite():
-            raise ValueError("quote value must be a finite number")
-        return value
+        return require_finite(value, "quote value")
 
 
 class ParsedDailyBars(BaseModel):

@@ -63,7 +63,7 @@ from modules.kospi.state import GradedForecast, ReviewState
 
 if TYPE_CHECKING:
     from modules.kospi.generation import ReviewDraft
-from modules.kospi.store import KospiStore
+from modules.kospi.store import KospiStore, dag_run_id_of, try_number_of
 
 logger = logging.getLogger(__name__)
 
@@ -192,8 +192,8 @@ def observe() -> dict[str, Any]:
             as_of_at=as_of_at,
             llm_model=llm.model_name(model),
             prompt_version=REVIEW_PROMPT_VERSION,
-            dag_run_id=_dag_run_id(context),
-            try_number=_try_number(context),
+            dag_run_id=dag_run_id_of(context),
+            try_number=try_number_of(context),
         )
 
         try:
@@ -415,13 +415,3 @@ def _observe_result(
 
 def _next_day(day: date) -> date:
     return date.fromordinal(day.toordinal() + 1)
-
-
-def _dag_run_id(context: dict[str, Any]) -> str:
-    run = context.get("dag_run")
-    return str(getattr(run, "run_id", "") or "unknown")
-
-
-def _try_number(context: dict[str, Any]) -> int:
-    instance = context.get("task_instance") or context.get("ti")
-    return int(getattr(instance, "try_number", 1) or 1)

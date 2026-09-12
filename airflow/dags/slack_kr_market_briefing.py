@@ -47,25 +47,23 @@ LLM 요약은 없다 — 2026-08-19까지 붙였지만 표가 이미 말하는 �
 """
 
 import logging
-import os
 import time
 from datetime import UTC, datetime, timedelta
-from typing import Any
 
 import pendulum
-from airflow.providers.postgres.hooks.postgres import PostgresHook
 from airflow.sdk import dag, get_current_context, task
-from airflow.sdk.exceptions import AirflowFailException, AirflowSkipException
+from airflow.sdk.exceptions import AirflowFailException
 from airflow.timetables.trigger import MultipleCronTriggerTimetable
-from pydantic import SecretStr
 
+from modules import dag_common
 from modules.briefing import chart, market, market_data
 from modules.briefing.market import MarketScope
-from modules.market_session import krx_open_day
 from modules.slack import UPLOAD_PROCESSING_WAIT_SECONDS, SlackClient, SlackError
-from modules.utility import CONNECTION_ID, KST_TIMEZONE
+from modules.utility import KST_TIMEZONE
 
 logger = logging.getLogger(__name__)
+
+SLACK_CHANNEL_ENV = "SLACK_CHANNEL_MARKET"
 
 # 08:10 프리마켓(시작 10분 뒤), 09:00 개장(프리마켓 마감 요약), 매시 정각 10:00~19:00
 # (정규장과 NXT 애프터마켓), 15:35 KRX 마감, 20:15 최종 마감이다.
@@ -86,20 +84,6 @@ SCHEDULE = MultipleCronTriggerTimetable(
 # 그 직후 발송인 08:10과 20:15에만 싣는다. 20:15는 REST 확정 배치(20:05) 뒤라 하루 완결값이다.
 # `SCHEDULE`에 있는 시각이어야 한다 — 없으면 일봉이 영영 안 나간다.
 DAILY_CHART_SLOTS_KST = ((8, 10), (20, 15))
-
-
-def _connection() -> Any:
-    # 반환 타입은 provider 버전에 따라 psycopg2/psycopg3 래퍼로 갈린다. 어느 쪽이든 PEP 249다.
-    return PostgresHook(postgres_conn_id=CONNECTION_ID).get_conn()
-
-
-def _slack_settings() -> tuple[SecretStr, str]:
-    token = os.environ.get("SLACK_BOT_TOKEN")
-    channel = os.environ.get("SLACK_CHANNEL_MARKET")
-    if not token or not channel:
-        # 설정 누락이라 재시도해도 같다. 값 자체는 메시지에 넣지 않는다.
-        raise AirflowFailException("SLACK_BOT_TOKEN and SLACK_CHANNEL_MARKET are required")
-    return SecretStr(token), channel
 
 
 def _scope(now: datetime) -> MarketScope:
@@ -126,16 +110,6 @@ def _wants_daily_chart(now: datetime) -> bool:
     return (local.hour, local.minute) in DAILY_CHART_SLOTS_KST
 
 
-def _skip_when_closed(connection: Any, today_kst: pendulum.Date) -> None:
-    """확정 휴장일이면 건너뛴다. **모르면 보낸다.**
-
-    휴장일에는 모든 국내 섹션이 전일 값 재탕이라 하루 두 번 보내면 소음이다. 반대로 달력을
-    아직 못 채웠다는 이유로 진짜 거래일 브리핑을 빠뜨리는 것이 더 나쁘다.
-    """
-    if krx_open_day(connection, today_kst) is False:
-        raise AirflowSkipException(f"KRX is closed on {today_kst}")
-
-
 @dag(
     dag_id="slack_kr_market_briefing",
     dag_display_name="💬 한국장 브리핑 (Slack)",
@@ -152,13 +126,14 @@ def _skip_when_closed(connection: Any, today_kst: pendulum.Date) -> None:
 def slack_kr_market_briefing():
     @task(task_display_name="한국장 브리핑 발송")
     def send_briefing() -> str:
-        token, channel = _slack_settings()
+        token, channel = dag_common.slack_settings(SLACK_CHANNEL_ENV)
         now = datetime.now(UTC)
         scope = _scope(now)
 
-        connection = _connection()
+        connection = dag_common.connection()
         try:
-            _skip_when_closed(connection, now.astimezone(KST_TIMEZONE).date())
+            # 휴장일에는 모든 국내 섹션이 전일 값 재탕이라 하루 두 번 보내면 소음이다. 모르면 보낸다.
+            dag_common.skip_unless_krx_open(connection, now.astimezone(KST_TIMEZONE).date())
             reader = market_data.MarketBriefingReader(
                 connection,
                 now,

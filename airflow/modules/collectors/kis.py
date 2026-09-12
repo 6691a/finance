@@ -5,7 +5,7 @@
 한다. `dags/`에는 스케줄과 오케스트레이션만 두고 수집 규칙은 이 모듈에 둔다.
 
 저장 대상은 `yahoo.py`와 같은 `quote_bar` 테이블이고 `provider`로 갈린다. 정의의 원본은
-백엔드의 `apps/models/market.py`이며 여기 SQL의 컬럼 이름은 `tests/collectors/test_kis.py`가
+백엔드의 `apps/models/market/series.py`이며 여기 SQL의 컬럼 이름은 `tests/collectors/test_kis.py`가
 그 모델 metadata와 대조한다.
 
 ## 왜 Yahoo가 아니라 KIS인가
@@ -49,11 +49,10 @@ from datetime import UTC, date, datetime, time, timedelta
 from decimal import Decimal, InvalidOperation
 from enum import StrEnum
 from os import environ
-from typing import Protocol, Self
+from typing import Any, Protocol, Self
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlencode
 from urllib.request import Request, urlopen
-from zoneinfo import ZoneInfo
 
 from pydantic import (
     AwareDatetime,
@@ -65,6 +64,7 @@ from pydantic import (
 )
 
 from modules.sql import read_sql
+from modules.utility import KST, normalize_to_utc, require_finite
 
 logger = logging.getLogger(__name__)
 
@@ -95,8 +95,6 @@ SESSION_LAST_BAR = time(15, 30)
 # 봉이 없어 자연히 비므로 경계를 셋으로 나눌 필요가 없다.
 NXT_SESSION_FIRST_BAR = time(8, 0)
 NXT_SESSION_LAST_BAR = time(20, 0)
-
-KST = ZoneInfo("Asia/Seoul")
 
 REQUEST_TIMEOUT_SECONDS = 30
 
@@ -175,7 +173,7 @@ class StockExchange(StrEnum):
     """국내 주식 거래소. 값이 `stock_bar.exchange`에 그대로 저장된다.
 
     `division_code`가 KIS `FID_COND_MRKT_DIV_CODE` 값이다. 통합(`UN`)은 쓰지 않는다 —
-    두 거래소 체결을 섞어 어느 쪽 값도 아니게 된다. `apps/models/market.py`의
+    두 거래소 체결을 섞어 어느 쪽 값도 아니게 된다. `apps/models/market/series.py`의
     `StockExchange`와 값이 같아야 하고 테스트가 둘을 대조한다.
     """
 
@@ -363,15 +361,12 @@ class QuoteBar(BaseModel):
     @field_validator("bar_at")
     @classmethod
     def normalize_to_utc(cls, moment: datetime) -> datetime:
-        return moment.astimezone(UTC)
+        return normalize_to_utc(moment)
 
     @field_validator("open", "high", "low", "close", "previous_close")
     @classmethod
     def require_finite(cls, value: Decimal) -> Decimal:
-        # Decimal은 "NaN"과 "Infinity"도 받아들인다. 시세로 저장하면 이후 집계가 전부 오염된다.
-        if not value.is_finite():
-            raise ValueError("quote value must be a finite number")
-        return value
+        return require_finite(value, "quote value")
 
 
 class KisResponse(BaseModel):
@@ -393,7 +388,7 @@ class KisResponse(BaseModel):
     @field_validator("started_at", "completed_at")
     @classmethod
     def normalize_to_utc(cls, moment: datetime) -> datetime:
-        return moment.astimezone(UTC)
+        return normalize_to_utc(moment)
 
     @model_validator(mode="after")
     def require_ordered_timestamps(self) -> Self:
@@ -537,11 +532,58 @@ def _extract_message(raw: bytes) -> str:
 
 
 def _decimal(value: str, field: str) -> Decimal:
-    # 값이 `"         976.16"`처럼 공백으로 패딩돼 온다.
+    # 값이 `"         976.16"`처럼 공백으로 패딩돼 온다. 봉 조회(`kis_quote`·해외지수)가 쓴다.
     try:
         return Decimal(value.strip())
     except (InvalidOperation, ValueError) as error:
         raise KisPayloadError(f"KIS returned a non-numeric {field}: {value!r}") from error
+
+
+def decode_payload(body: bytes) -> dict[str, Any]:
+    """조회 응답 본문을 JSON 객체로 읽고 `rt_cd`가 성공인지 본다.
+
+    수급·포지션·투자의견처럼 `output`을 표로 받는 조회가 공유한다. 실패 코드는
+    `result_error`가 종류를 갈라 올린다. 연속조회 헤더(`tr_cont`)는 본문 밖이라 여기서
+    보지 않는다 — 잘림을 실패로 보는 조회는 부르는 쪽이 헤더를 따로 본다.
+    """
+    try:
+        payload = json.loads(body)
+    except json.JSONDecodeError as error:
+        raise KisPayloadError(f"KIS returned a non-JSON body: {error}") from None
+    if not isinstance(payload, dict):
+        raise KisPayloadError("KIS returned a JSON body that is not an object")
+
+    code = str(payload.get("rt_cd", ""))
+    if code != "0":
+        raise result_error(code, str(payload.get("msg1", "")).strip())
+    return payload
+
+
+def output_rows(payload: dict[str, Any], key: str) -> list[dict[str, Any]]:
+    """`output`·`output2` 같은 표 칸을 행 목록으로 편다. 행이 하나면 객체로 오는 조회가 있다."""
+    output = payload.get(key) or []
+    if isinstance(output, dict):
+        return [output]
+    if not isinstance(output, list):
+        raise KisPayloadError(f"KIS returned a {key} that is neither a list nor an object")
+    return output
+
+
+def decimal_or_zero(value: Any, field: str) -> Decimal:
+    """금액·비율 한 칸. 공백 패딩과 쉼표가 붙어 오고 음수는 정상값이다.
+
+    **빈 칸은 0이다**(2026-08-28 판정) — 수급·포지션 조회의 칸은 순매수 수량·금액·잔고라
+    "그 투자자가 그날 순매수 0"이 정상 관측이고 제공처도 그 뜻으로 빈 칸을 준다.
+    목표주가처럼 0이 말이 안 되는 칸은 반대로 실패시킨다
+    (`collectors/analyst/kis_opinion.py`의 `_decimal`).
+    """
+    text = str(value if value is not None else "").strip().replace(",", "")
+    if not text or text == "-":
+        return Decimal(0)
+    try:
+        return Decimal(text)
+    except InvalidOperation:
+        raise KisPayloadError(f"KIS returned a non-numeric {field}: {value!r}") from None
 
 
 # 쿼리는 `sql/` 볼륨에 둔다. 배포 Airflow가 `/opt/airflow/sql`로 마운트하는 폴더다.

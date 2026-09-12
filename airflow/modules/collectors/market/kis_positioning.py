@@ -8,7 +8,7 @@
 나눈 것은 `kis_market_calendar.py`와 같은 이유다. 분봉 수집과 이 일별 수집은 스케줄도
 실패 처리도 달라서, 한 파일에 두면 어느 상수가 어느 수집의 것인지 읽기 어려워진다.
 
-저장 대상은 `krx_*` 다섯 테이블이다. 정의의 원본은 백엔드의 `apps/models/market.py`이며
+저장 대상은 `krx_*` 다섯 테이블이다. 정의의 원본은 백엔드의 `apps/models/market/positioning.py`이며
 여기 SQL의 컬럼 이름은 `tests/collectors/test_kis_positioning.py`가 그 모델 metadata와
 대조한다.
 
@@ -44,7 +44,7 @@ import json
 import logging
 from collections.abc import Sequence
 from datetime import UTC, date, datetime, timedelta
-from decimal import Decimal, InvalidOperation
+from decimal import Decimal
 from enum import StrEnum
 from typing import Any, Self
 
@@ -53,7 +53,9 @@ from pydantic import BaseModel, ConfigDict, SecretStr, ValidationError
 from modules.collectors.kis import (
     SOURCE,
     KisPayloadError,
-    result_error,
+    decimal_or_zero,
+    decode_payload,
+    output_rows,
     send_get,
 )
 from modules.db import Connection
@@ -171,24 +173,9 @@ def _day(value: str, field: str) -> date:
         raise KisPayloadError(f"{field} is not a real date: {value!r}") from None
 
 
-def _decimal(value: Any, field: str) -> Decimal:
-    """금액·비율 한 칸. 공백 패딩과 쉼표가 붙어 오고 음수는 정상값이다."""
-    text = str(value if value is not None else "").strip().replace(",", "")
-    if not text or text == "-":
-        # **여기서는 0이 진짜 값이다**(2026-08-28 판정) — 칸이 순매수 수량·금액·잔고라
-        # "그 투자자가 그날 순매수 0"이 정상 관측이고 제공처도 그 뜻으로 빈 칸을 준다.
-        # 목표주가처럼 0이 말이 안 되는 칸은 반대로 실패시킨다
-        # (`collectors/analyst/kis_opinion.py`의 같은 이름 함수).
-        return Decimal(0)
-    try:
-        return Decimal(text)
-    except InvalidOperation:
-        raise KisPayloadError(f"KIS returned a non-numeric {field}: {value!r}") from None
-
-
 def _int(value: Any, field: str) -> int:
     """수량 한 칸. 소수점이 붙어 오는 필드가 있어 Decimal을 거쳐 자른다."""
-    amount = _decimal(value, field)
+    amount = decimal_or_zero(value, field)
     if amount != amount.to_integral_value():
         raise KisPayloadError(f"KIS returned a fractional {field}: {value!r}")
     return int(amount)
@@ -225,24 +212,24 @@ class CreditBalanceRow(BaseModel):
         return cls(
             trade_date=_day(row["deal_date"], "deal_date"),
             settlement_date=_day(row["stlm_date"], "stlm_date"),
-            close_price=_decimal(row.get("stck_prpr"), "stck_prpr"),
+            close_price=decimal_or_zero(row.get("stck_prpr"), "stck_prpr"),
             accumulated_volume=_int(row.get("acml_vol"), "acml_vol"),
             loan_new_quantity=_int(row.get("whol_loan_new_stcn"), "whol_loan_new_stcn"),
             loan_repayment_quantity=_int(row.get("whol_loan_rdmp_stcn"), "whol_loan_rdmp_stcn"),
             loan_balance_quantity=_int(row.get("whol_loan_rmnd_stcn"), "whol_loan_rmnd_stcn"),
-            loan_new_amount=_decimal(row.get("whol_loan_new_amt"), "whol_loan_new_amt"),
-            loan_repayment_amount=_decimal(row.get("whol_loan_rdmp_amt"), "whol_loan_rdmp_amt"),
-            loan_balance_amount=_decimal(row.get("whol_loan_rmnd_amt"), "whol_loan_rmnd_amt"),
-            loan_balance_rate=_decimal(row.get("whol_loan_rmnd_rate"), "whol_loan_rmnd_rate"),
-            loan_supply_rate=_decimal(row.get("whol_loan_gvrt"), "whol_loan_gvrt"),
+            loan_new_amount=decimal_or_zero(row.get("whol_loan_new_amt"), "whol_loan_new_amt"),
+            loan_repayment_amount=decimal_or_zero(row.get("whol_loan_rdmp_amt"), "whol_loan_rdmp_amt"),
+            loan_balance_amount=decimal_or_zero(row.get("whol_loan_rmnd_amt"), "whol_loan_rmnd_amt"),
+            loan_balance_rate=decimal_or_zero(row.get("whol_loan_rmnd_rate"), "whol_loan_rmnd_rate"),
+            loan_supply_rate=decimal_or_zero(row.get("whol_loan_gvrt"), "whol_loan_gvrt"),
             short_loan_new_quantity=_int(row.get("whol_stln_new_stcn"), "whol_stln_new_stcn"),
             short_loan_repayment_quantity=_int(row.get("whol_stln_rdmp_stcn"), "whol_stln_rdmp_stcn"),
             short_loan_balance_quantity=_int(row.get("whol_stln_rmnd_stcn"), "whol_stln_rmnd_stcn"),
-            short_loan_new_amount=_decimal(row.get("whol_stln_new_amt"), "whol_stln_new_amt"),
-            short_loan_repayment_amount=_decimal(row.get("whol_stln_rdmp_amt"), "whol_stln_rdmp_amt"),
-            short_loan_balance_amount=_decimal(row.get("whol_stln_rmnd_amt"), "whol_stln_rmnd_amt"),
-            short_loan_balance_rate=_decimal(row.get("whol_stln_rmnd_rate"), "whol_stln_rmnd_rate"),
-            short_loan_supply_rate=_decimal(row.get("whol_stln_gvrt"), "whol_stln_gvrt"),
+            short_loan_new_amount=decimal_or_zero(row.get("whol_stln_new_amt"), "whol_stln_new_amt"),
+            short_loan_repayment_amount=decimal_or_zero(row.get("whol_stln_rdmp_amt"), "whol_stln_rdmp_amt"),
+            short_loan_balance_amount=decimal_or_zero(row.get("whol_stln_rmnd_amt"), "whol_stln_rmnd_amt"),
+            short_loan_balance_rate=decimal_or_zero(row.get("whol_stln_rmnd_rate"), "whol_stln_rmnd_rate"),
+            short_loan_supply_rate=decimal_or_zero(row.get("whol_stln_gvrt"), "whol_stln_gvrt"),
         )
 
 
@@ -276,16 +263,18 @@ class RankingRow(BaseModel):
             rank=rank,
             stock_code=code,
             stock_name=str(row.get("hts_kor_isnm", "")).strip(),
-            close_price=_decimal(row.get("stck_prpr"), "stck_prpr"),
+            close_price=decimal_or_zero(row.get("stck_prpr"), "stck_prpr"),
             accumulated_volume=_int(row.get("acml_vol"), "acml_vol"),
             loan_balance_quantity=_int(row.get("whol_loan_rmnd_stcn"), "whol_loan_rmnd_stcn"),
-            loan_balance_amount=_decimal(row.get("whol_loan_rmnd_amt"), "whol_loan_rmnd_amt"),
-            loan_balance_rate=_decimal(row.get("whol_loan_rmnd_rate"), "whol_loan_rmnd_rate"),
+            loan_balance_amount=decimal_or_zero(row.get("whol_loan_rmnd_amt"), "whol_loan_rmnd_amt"),
+            loan_balance_rate=decimal_or_zero(row.get("whol_loan_rmnd_rate"), "whol_loan_rmnd_rate"),
             short_loan_balance_quantity=_int(row.get("whol_stln_rmnd_stcn"), "whol_stln_rmnd_stcn"),
-            short_loan_balance_amount=_decimal(row.get("whol_stln_rmnd_amt"), "whol_stln_rmnd_amt"),
-            short_loan_balance_rate=_decimal(row.get("whol_stln_rmnd_rate"), "whol_stln_rmnd_rate"),
-            loan_balance_growth_rate=_decimal(row.get("nday_vrss_loan_rmnd_inrt"), "nday_vrss_loan_rmnd_inrt"),
-            short_loan_balance_growth_rate=_decimal(row.get("nday_vrss_stln_rmnd_inrt"), "nday_vrss_stln_rmnd_inrt"),
+            short_loan_balance_amount=decimal_or_zero(row.get("whol_stln_rmnd_amt"), "whol_stln_rmnd_amt"),
+            short_loan_balance_rate=decimal_or_zero(row.get("whol_stln_rmnd_rate"), "whol_stln_rmnd_rate"),
+            loan_balance_growth_rate=decimal_or_zero(row.get("nday_vrss_loan_rmnd_inrt"), "nday_vrss_loan_rmnd_inrt"),
+            short_loan_balance_growth_rate=decimal_or_zero(
+                row.get("nday_vrss_stln_rmnd_inrt"), "nday_vrss_stln_rmnd_inrt"
+            ),
         )
 
 
@@ -315,20 +304,20 @@ class MarketFundsRow(BaseModel):
         # `prdy_ctrt`는 읽지 않는다. 실측 값이 등락률과 맞지 않았다.
         return cls(
             business_date=_day(row["bsop_date"], "bsop_date"),
-            index_close=_decimal(row.get("bstp_nmix_prpr"), "bstp_nmix_prpr"),
-            index_change=_decimal(row.get("bstp_nmix_prdy_vrss"), "bstp_nmix_prdy_vrss"),
-            market_capitalization=_decimal(row.get("hts_avls"), "hts_avls"),
-            customer_deposit=_decimal(row.get("cust_dpmn_amt"), "cust_dpmn_amt"),
-            customer_deposit_change=_decimal(row.get("cust_dpmn_amt_prdy_vrss"), "cust_dpmn_amt_prdy_vrss"),
-            turnover_ratio=_decimal(row.get("amt_tnrt"), "amt_tnrt"),
-            unsettled_amount=_decimal(row.get("uncl_amt"), "uncl_amt"),
-            credit_loan_balance=_decimal(row.get("crdt_loan_rmnd"), "crdt_loan_rmnd"),
-            futures_margin_amount=_decimal(row.get("futs_tfam_amt"), "futs_tfam_amt"),
-            equity_fund_amount=_decimal(row.get("sttp_amt"), "sttp_amt"),
-            mixed_fund_amount=_decimal(row.get("mxtp_amt"), "mxtp_amt"),
-            bond_fund_amount=_decimal(row.get("bntp_amt"), "bntp_amt"),
-            mmf_amount=_decimal(row.get("mmf_amt"), "mmf_amt"),
-            securities_lending_amount=_decimal(row.get("secu_lend_amt"), "secu_lend_amt"),
+            index_close=decimal_or_zero(row.get("bstp_nmix_prpr"), "bstp_nmix_prpr"),
+            index_change=decimal_or_zero(row.get("bstp_nmix_prdy_vrss"), "bstp_nmix_prdy_vrss"),
+            market_capitalization=decimal_or_zero(row.get("hts_avls"), "hts_avls"),
+            customer_deposit=decimal_or_zero(row.get("cust_dpmn_amt"), "cust_dpmn_amt"),
+            customer_deposit_change=decimal_or_zero(row.get("cust_dpmn_amt_prdy_vrss"), "cust_dpmn_amt_prdy_vrss"),
+            turnover_ratio=decimal_or_zero(row.get("amt_tnrt"), "amt_tnrt"),
+            unsettled_amount=decimal_or_zero(row.get("uncl_amt"), "uncl_amt"),
+            credit_loan_balance=decimal_or_zero(row.get("crdt_loan_rmnd"), "crdt_loan_rmnd"),
+            futures_margin_amount=decimal_or_zero(row.get("futs_tfam_amt"), "futs_tfam_amt"),
+            equity_fund_amount=decimal_or_zero(row.get("sttp_amt"), "sttp_amt"),
+            mixed_fund_amount=decimal_or_zero(row.get("mxtp_amt"), "mxtp_amt"),
+            bond_fund_amount=decimal_or_zero(row.get("bntp_amt"), "bntp_amt"),
+            mmf_amount=decimal_or_zero(row.get("mmf_amt"), "mmf_amt"),
+            securities_lending_amount=decimal_or_zero(row.get("secu_lend_amt"), "secu_lend_amt"),
         )
 
 
@@ -355,18 +344,22 @@ class ShortSaleRow(BaseModel):
     def from_payload(cls, row: dict[str, Any]) -> "ShortSaleRow":
         return cls(
             business_date=_day(row["stck_bsop_date"], "stck_bsop_date"),
-            close_price=_decimal(row.get("stck_clpr"), "stck_clpr"),
+            close_price=decimal_or_zero(row.get("stck_clpr"), "stck_clpr"),
             accumulated_volume=_int(row.get("acml_vol"), "acml_vol"),
             short_sale_quantity=_int(row.get("ssts_cntg_qty"), "ssts_cntg_qty"),
-            short_sale_volume_ratio=_decimal(row.get("ssts_vol_rlim"), "ssts_vol_rlim"),
+            short_sale_volume_ratio=decimal_or_zero(row.get("ssts_vol_rlim"), "ssts_vol_rlim"),
             accumulated_short_sale_quantity=_int(row.get("acml_ssts_cntg_qty"), "acml_ssts_cntg_qty"),
-            accumulated_short_sale_volume_ratio=_decimal(row.get("acml_ssts_cntg_qty_rlim"), "acml_ssts_cntg_qty_rlim"),
-            short_sale_amount=_decimal(row.get("ssts_tr_pbmn"), "ssts_tr_pbmn"),
-            short_sale_amount_ratio=_decimal(row.get("ssts_tr_pbmn_rlim"), "ssts_tr_pbmn_rlim"),
-            accumulated_short_sale_amount=_decimal(row.get("acml_ssts_tr_pbmn"), "acml_ssts_tr_pbmn"),
-            accumulated_short_sale_amount_ratio=_decimal(row.get("acml_ssts_tr_pbmn_rlim"), "acml_ssts_tr_pbmn_rlim"),
-            total_amount=_decimal(row.get("acml_tr_pbmn"), "acml_tr_pbmn"),
-            short_sale_average_price=_decimal(row.get("avrg_prc"), "avrg_prc"),
+            accumulated_short_sale_volume_ratio=decimal_or_zero(
+                row.get("acml_ssts_cntg_qty_rlim"), "acml_ssts_cntg_qty_rlim"
+            ),
+            short_sale_amount=decimal_or_zero(row.get("ssts_tr_pbmn"), "ssts_tr_pbmn"),
+            short_sale_amount_ratio=decimal_or_zero(row.get("ssts_tr_pbmn_rlim"), "ssts_tr_pbmn_rlim"),
+            accumulated_short_sale_amount=decimal_or_zero(row.get("acml_ssts_tr_pbmn"), "acml_ssts_tr_pbmn"),
+            accumulated_short_sale_amount_ratio=decimal_or_zero(
+                row.get("acml_ssts_tr_pbmn_rlim"), "acml_ssts_tr_pbmn_rlim"
+            ),
+            total_amount=decimal_or_zero(row.get("acml_tr_pbmn"), "acml_tr_pbmn"),
+            short_sale_average_price=decimal_or_zero(row.get("avrg_prc"), "avrg_prc"),
         )
 
 
@@ -389,14 +382,14 @@ class LendingRow(BaseModel):
     def from_payload(cls, row: dict[str, Any]) -> "LendingRow":
         return cls(
             business_date=_day(row["bsop_date"], "bsop_date"),
-            close_price=_decimal(row.get("stck_prpr"), "stck_prpr"),
-            price_change=_decimal(row.get("prdy_vrss"), "prdy_vrss"),
+            close_price=decimal_or_zero(row.get("stck_prpr"), "stck_prpr"),
+            price_change=decimal_or_zero(row.get("prdy_vrss"), "prdy_vrss"),
             accumulated_volume=_int(row.get("acml_vol"), "acml_vol"),
             new_quantity=_int(row.get("new_stcn"), "new_stcn"),
             repayment_quantity=_int(row.get("rdmp_stcn"), "rdmp_stcn"),
             balance_change_quantity=_int(row.get("prdy_rmnd_vrss"), "prdy_rmnd_vrss"),
             balance_quantity=_int(row.get("rmnd_stcn"), "rmnd_stcn"),
-            balance_amount=_decimal(row.get("rmnd_amt"), "rmnd_amt"),
+            balance_amount=decimal_or_zero(row.get("rmnd_amt"), "rmnd_amt"),
         )
 
 
@@ -412,15 +405,6 @@ class Fetch(BaseModel):
     metadata: dict[str, Any]
     started_at: datetime
     completed_at: datetime
-
-
-def _rows(payload: dict[str, Any], key: str) -> list[dict[str, Any]]:
-    output = payload.get(key) or []
-    if isinstance(output, dict):
-        return [output]
-    if not isinstance(output, list):
-        raise KisPayloadError(f"KIS returned a {key} that is neither a list nor an object")
-    return output
 
 
 def _reject_future_rows(rows: Sequence[Any], observation_end: date, label: str) -> None:
@@ -472,17 +456,7 @@ class KisPositioningCollector:
         query: dict[str, str],
     ) -> dict[str, Any]:
         body, _, _ = send_get(self._token, self._app_key, self._app_secret, path, tr_id, query)
-        try:
-            payload = json.loads(body)
-        except json.JSONDecodeError as error:
-            raise KisPayloadError(f"KIS returned a non-JSON body: {error}") from None
-        if not isinstance(payload, dict):
-            raise KisPayloadError("KIS returned a JSON body that is not an object")
-
-        code = str(payload.get("rt_cd", ""))
-        if code != "0":
-            raise result_error(code, str(payload.get("msg1", "")).strip())
-        return payload
+        return decode_payload(body)
 
     def fetch_credit_balance(
         self,
@@ -507,7 +481,7 @@ class KisPositioningCollector:
                 "FID_INPUT_DATE_1": requested.strftime("%Y%m%d"),
             },
         )
-        raw = _rows(payload, "output")
+        raw = output_rows(payload, "output")
         try:
             parsed = [CreditBalanceRow.from_payload(row) for row in raw]
         except (KeyError, ValidationError) as error:
@@ -586,7 +560,7 @@ class KisPositioningCollector:
             },
         )
 
-        head = _rows(payload, "output1")
+        head = output_rows(payload, "output1")
         if not head:
             raise KisPayloadError("credit ranking response has no output1 with the standard dates")
         # **stnd_date2가 기준일이고 stnd_date1이 비교일이다.** 초판 문서가 반대로 적었다.
@@ -595,7 +569,7 @@ class KisPositioningCollector:
         if comparison_date >= standard_date:
             raise KisPayloadError(f"credit ranking dates are not ordered: {comparison_date} >= {standard_date}")
 
-        raw = _rows(payload, "output2")
+        raw = output_rows(payload, "output2")
         if not raw:
             # 이 API는 늘 최신 완전 스냅샷을 준다. 빈 배열은 휴장이 아니라 고장이다.
             raise KisPayloadError("credit ranking returned no rows")
@@ -640,7 +614,7 @@ class KisPositioningCollector:
             MARKET_FUNDS_TR_ID,
             {"FID_INPUT_DATE_1": observation_end.strftime("%Y%m%d")},
         )
-        raw = _rows(payload, "output")
+        raw = output_rows(payload, "output")
         try:
             rows = tuple(MarketFundsRow.from_payload(row) for row in raw)
         except (KeyError, ValidationError) as error:
@@ -678,7 +652,7 @@ class KisPositioningCollector:
                 "FID_INPUT_DATE_2": observation_end.strftime("%Y%m%d"),
             },
         )
-        raw = _rows(payload, "output2")
+        raw = output_rows(payload, "output2")
         try:
             rows = tuple(ShortSaleRow.from_payload(row) for row in raw)
         except (KeyError, ValidationError) as error:
@@ -722,7 +696,7 @@ class KisPositioningCollector:
                 "CTS": "",
             },
         )
-        raw = _rows(payload, "output1")
+        raw = output_rows(payload, "output1")
         try:
             rows = tuple(LendingRow.from_payload(row) for row in raw)
         except (KeyError, ValidationError) as error:
@@ -766,7 +740,7 @@ class KisPositioningCollector:
                 "CTS": "",
             },
         )
-        raw = _rows(payload, "output1")
+        raw = output_rows(payload, "output1")
         try:
             rows = tuple(LendingRow.from_payload(row) for row in raw)
         except (KeyError, ValidationError) as error:

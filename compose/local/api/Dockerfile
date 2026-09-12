@@ -10,7 +10,7 @@
 # 그건 운영 Airflow 이미지에 이미 깔린 것에 맞춰야 하는 특수한 사정이다.
 #
 # `--only-group api`가 그 이미지가 쓰는 것만 깐다. `[project].dependencies` 전체를 깔면
-# scrapling[fetchers](playwright·patchright)와 ipykernel까지 따라온다.
+# scrapling[fetchers](playwright·patchright)까지 따라온다.
 # `--no-install-project`인 이유는 apps/를 설치하지 않고 마운트해서 PYTHONPATH로 보기 때문이다.
 #
 # `uvicorn apps.api.app:app`이 아니라 `python -m apps.api.main`이다. 전자는 모듈 수준

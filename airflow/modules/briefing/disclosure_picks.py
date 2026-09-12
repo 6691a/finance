@@ -29,7 +29,7 @@ from typing import Any, TypedDict
 
 from langchain_core.language_models import BaseChatModel
 from langchain_core.messages import BaseMessage, HumanMessage, SystemMessage
-from langgraph.graph import END, START, StateGraph
+from langgraph.graph import END
 from pydantic import ValidationError
 
 from modules import llm, untrusted
@@ -131,13 +131,7 @@ class DisclosurePicker:
         return highlights
 
     def _build_graph(self):
-        graph = StateGraph(HighlightState)
-        graph.add_node("call", self._call)
-        graph.add_node("repair", self._repair)
-        graph.add_edge(START, "call")
-        graph.add_conditional_edges("call", self._next, {"repair": "repair", END: END})
-        graph.add_edge("repair", "call")
-        return graph.compile()
+        return llm.call_repair_graph(HighlightState, call=self._call, repair=self._repair, next_node=self._next)
 
     def _call(self, state: HighlightState) -> dict[str, Any]:
         """스키마를 강제해 한 번 부른다. 제공처가 스키마를 안 받으면 그때만 한 번 더."""
@@ -145,7 +139,7 @@ class DisclosurePicker:
         reply = llm.invoke(self._model, messages, schema=self._schema)
 
         try:
-            highlights = self.parse(_text(reply), state["allowed_ids"])
+            highlights = self.parse(llm.reply_text(reply), state["allowed_ids"])
         except HighlightError as error:
             return {"messages": [*messages, reply], "highlights": None, "error": str(error)}
         return {"messages": [*messages, reply], "highlights": highlights, "error": None}
@@ -169,11 +163,3 @@ def _shorten(highlight: Highlight) -> Highlight:
     if len(highlight.reason) <= MAX_REASON_CHARS:
         return highlight
     return highlight.model_copy(update={"reason": highlight.reason[:MAX_REASON_CHARS].rstrip()})
-
-
-def _text(reply: Any) -> str:
-    """응답 본문. 제공처에 따라 문자열이 아니라 조각 리스트로 온다."""
-    content = reply.content
-    if isinstance(content, str):
-        return content
-    return "".join(part if isinstance(part, str) else part.get("text", "") for part in content)

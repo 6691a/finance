@@ -1,6 +1,7 @@
 """종목 이벤트의 기대치·실제값을 추출하고 서프라이즈를 판정한다.
 
-`docs/analysis/market-thesis/8-expectation.md`의 실행 절반이다. 삼성전자 주주환원 발표(2026-08-22)가
+종목 이벤트 기대치 설계의 실행 절반이다(설계 문서 `docs/analysis/market-thesis/8-expectation.md`는
+옛 추론과 함께 지웠다, 2026-09-01). 삼성전자 주주환원 발표(2026-08-22)가
 시장 기대치에 못 미쳐 하락했는데, 기대치가 리포트 산문에만 있어 시스템이 "기대 대비
 미달"을 만들지 못했다 — 그 빈 칸을 채운다.
 
@@ -29,7 +30,7 @@ extract_claims (LLM)  →  judge_outcomes (LLM 없음)  →  notify_slack
 
 ## 필요한 환경
 
-- `OPENAI_API_KEY`. 어떤 모델을 부를지는 `modules/llm.py`의 `expectation_model()`이 코드로
+- `OPENAI_API_KEY`. 어떤 모델을 부를지는 `modules/llm.py`의 `openai_model()`이 코드로
   정하고 키는 그 LangChain 클래스가 자기 이름으로 읽는다.
 - `SLACK_BOT_TOKEN`, `SLACK_CHANNEL_MARKET` — thesis·시장 브리핑과 같은 채널을 재사용한다.
 - `CONNECTION_ID`가 가리키는 Airflow 연결.
@@ -51,11 +52,11 @@ from datetime import UTC, datetime, timedelta
 from typing import Any
 
 import pendulum
-from airflow.providers.postgres.hooks.postgres import PostgresHook
 from airflow.sdk import Param, dag, get_current_context, task
 from airflow.sdk.exceptions import AirflowFailException
 from pydantic import SecretStr
 
+from modules import dag_common
 from modules.expectation.domain import (
     DEFAULT_BATCH_SIZE,
     ExtractionError,
@@ -71,19 +72,13 @@ from modules.expectation.judgment import (
     render_blocks,
     render_text,
 )
-from modules.llm import LlmError, RetryableLlmError, expectation_model, model_name
+from modules.llm import LlmError, RetryableLlmError, model_name, openai_model
 from modules.slack import SlackClient, SlackError
-from modules.utility import CONNECTION_ID, KST_TIMEZONE, atomic
+from modules.utility import KST_TIMEZONE, atomic
 
 logger = logging.getLogger(__name__)
 
 BATCH_SIZE_PARAM = "batch_size"
-
-
-def _connection() -> Any:
-    # 반환 타입은 provider 버전에 따라 psycopg2/psycopg3 래퍼로 갈린다. 런타임 객체는
-    # 어느 쪽이든 PEP 249 연결이라 commit·rollback을 갖는다.
-    return PostgresHook(postgres_conn_id=CONNECTION_ID).get_conn()
 
 
 @dag(
@@ -117,7 +112,7 @@ def event_expectation_hourly():
         params = dict(context.get("params") or {})
         batch_size = int(params.get(BATCH_SIZE_PARAM) or DEFAULT_BATCH_SIZE)
 
-        connection = _connection()
+        connection = dag_common.connection()
         try:
             documents = ExpectationStore(connection).pending(batch_size)
         finally:
@@ -128,7 +123,7 @@ def event_expectation_hourly():
             return 0
 
         # 어떤 모델을 부를지는 `modules/llm.py`가 정한다. 키는 그쪽 LangChain 클래스가 읽는다.
-        model = expectation_model()
+        model = openai_model()
         extractor = ExpectationExtractor(model)
         extracted_at = datetime.now(UTC)
 
@@ -144,7 +139,7 @@ def event_expectation_hourly():
                 # ponytail: 원장에 차단 칸이 없어 `llm_model`에 사유를 적는다. 건수는
                 # `WHERE llm_model LIKE 'blocked:%'`로 센다. 칸이 필요해지면 컬럼으로 뺀다.
                 logger.warning("document %s blocked before the model: %s", document.id, blocked)
-                with closing(_connection()) as store_connection, atomic(store_connection):
+                with closing(dag_common.connection()) as store_connection, atomic(store_connection):
                     ExpectationStore(store_connection).store_extraction(
                         document, (), "blocked:" + ",".join(blocked), extracted_at
                     )
@@ -167,7 +162,7 @@ def event_expectation_hourly():
 
             claims = filter_claims(response, document)
             # 문서 하나가 트랜잭션 하나다. 앞의 성공을 뒤의 실패가 되돌리지 않는다.
-            with closing(_connection()) as store_connection, atomic(store_connection):
+            with closing(dag_common.connection()) as store_connection, atomic(store_connection):
                 ExpectationStore(store_connection).store_extraction(
                     document, claims, model_name(model), extracted_at
                 )
@@ -199,7 +194,7 @@ def event_expectation_hourly():
         del extracted  # 의존성 선언용이다. 추출이 끝난 뒤의 주장까지 판정에 들어가야 한다.
         context = get_current_context()
         dag_run_id = str(context["run_id"])
-        with closing(_connection()) as connection, atomic(connection):
+        with closing(dag_common.connection()) as connection, atomic(connection):
             judged = ExpectationStore(connection).judge(dag_run_id)
         logger.info("Wrote %s new outcome rows", len(judged))
         return [outcome.model_dump(mode="json") for outcome in judged]

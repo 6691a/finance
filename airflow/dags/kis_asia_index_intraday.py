@@ -56,17 +56,14 @@
 """
 
 import logging
-import os
 from contextlib import closing
 from datetime import UTC, datetime, timedelta
-from typing import Any
 
 import pendulum
-from airflow.providers.postgres.hooks.postgres import PostgresHook
 from airflow.sdk import Param, Variable, dag, get_current_context, task
 from airflow.sdk.exceptions import AirflowFailException
-from pydantic import SecretStr
 
+from modules import dag_common
 from modules.collectors.kis import KisHTTPError, KisPayloadError, KisResultError, access_token
 from modules.collectors.market.kis_overseas_index import (
     MAX_BARS_PER_REQUEST,
@@ -74,7 +71,7 @@ from modules.collectors.market.kis_overseas_index import (
     AsiaIndexFetch,
     KisOverseasIndexCollector,
 )
-from modules.utility import CONNECTION_ID, KIS_UNRECOVERABLE_STATUSES, KST_TIMEZONE, atomic
+from modules.utility import KST_TIMEZONE, atomic
 
 logger = logging.getLogger(__name__)
 
@@ -84,43 +81,6 @@ SCHEDULE = "*/5 9-17 * * 1-5"
 # 지연 15분 + 폴링 5분 + 여유. 15로 두면 정렬된 봉이 전부 잘린다(Yahoo 수집이 그랬다).
 LOOKBACK_MINUTES = 30
 LOOKBACK_MINUTES_PARAM = "lookback_minutes"
-
-
-def _credentials() -> tuple[SecretStr, SecretStr]:
-    app_key = os.environ.get("KIS_APP_KEY")
-    app_secret = os.environ.get("KIS_APP_SECRET")
-    if not app_key or not app_secret:
-        raise AirflowFailException("KIS_APP_KEY and KIS_APP_SECRET are required")
-    return SecretStr(app_key), SecretStr(app_secret)
-
-
-def _cached_token(app_key: SecretStr, app_secret: SecretStr, force: bool = False) -> SecretStr:
-    """`kis_quote_intraday`와 같은 캐시를 쓴다. 저장소를 고르는 일만 여기 있다."""
-    return access_token(Variable, app_key, app_secret, force=force)
-
-
-def _connection() -> Any:
-    return PostgresHook(postgres_conn_id=CONNECTION_ID).get_conn()
-
-
-def _fetch_with_retry(
-    collector: KisOverseasIndexCollector,
-    index: AsiaIndex,
-    since: datetime,
-    app_key: SecretStr,
-    app_secret: SecretStr,
-) -> AsiaIndexFetch:
-    """401이면 토큰을 한 번만 재발급하고 다시 시도한다. 되돌릴 수 없는 HTTP 오류는 즉시 실패다."""
-    try:
-        return collector.fetch_since(index, since)
-    except KisHTTPError as error:
-        if error.status in KIS_UNRECOVERABLE_STATUSES:
-            raise AirflowFailException(f"{index.value}: {error}") from error
-        if error.status != 401:
-            raise
-        logger.warning("KIS returned 401; reissuing the token once")
-        reissued = KisOverseasIndexCollector(_cached_token(app_key, app_secret, force=True), app_key, app_secret)
-        return reissued.fetch_since(index, since)
 
 
 @dag(
@@ -158,14 +118,24 @@ def kis_asia_index_intraday():
             raise AirflowFailException(f"{LOOKBACK_MINUTES_PARAM} must be between 1 and {MAX_BARS_PER_REQUEST}")
         since = datetime.now(UTC) - timedelta(minutes=lookback_minutes)
 
-        app_key, app_secret = _credentials()
-        collector = KisOverseasIndexCollector(_cached_token(app_key, app_secret), app_key, app_secret)
+        app_key, app_secret = dag_common.kis_credentials()
+        collector = KisOverseasIndexCollector(access_token(Variable, app_key, app_secret), app_key, app_secret)
 
         fetches: list[AsiaIndexFetch] = []
         failures: list[str] = []
         for index in AsiaIndex:
             try:
-                fetches.append(_fetch_with_retry(collector, index, since, app_key, app_secret))
+                fetches.append(
+                    dag_common.call_with_token_reissue(
+                        collector,
+                        KisOverseasIndexCollector.fetch_since,
+                        index,
+                        since,
+                        app_key=app_key,
+                        app_secret=app_secret,
+                        label=index.value,
+                    )
+                )
             except KisHTTPError as error:
                 logger.warning("%s failed with HTTP %s", index.value, error.status)
                 failures.append(f"{index.value}({error})")
@@ -180,7 +150,7 @@ def kis_asia_index_intraday():
         if not fetches:
             raise AirflowFailException(f"Every Asian index failed: {'; '.join(failures)}")
 
-        with closing(_connection()) as connection, atomic(connection):
+        with closing(dag_common.connection()) as connection, atomic(connection):
             stored = [collector.store(connection, fetch) for fetch in fetches]
 
         # 봉 0건은 정상이다. 휴장·개장 전·마감 뒤면 모든 지수가 0건이고 그 run도 성공이다.

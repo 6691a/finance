@@ -4,7 +4,7 @@
 `tests/collectors/test_kis_overseas_index_daily_collector.py`·`test_kis_asia_index.py`가 덮는다.
 """
 
-from datetime import UTC, date, datetime, timedelta
+from datetime import UTC, date, datetime
 
 import pendulum
 import pytest
@@ -82,17 +82,6 @@ def test_a_backfill_end_date_is_read_as_given():
 def test_an_unreadable_end_date_fails_before_any_call(given):
     with pytest.raises(AirflowFailException, match="must be YYYY-MM-DD"):
         kis_asia_index_daily.requested_end_date(SESSION_DATE, {"end_date": given})
-
-
-def test_an_empty_start_date_keeps_the_fixed_span():
-    start_date = kis_asia_index_daily.requested_start_date(SESSION_DATE, {})
-
-    assert start_date == SESSION_DATE - timedelta(days=kis_asia_index_daily.SPAN_CALENDAR_DAYS)
-
-
-def test_a_start_date_after_the_end_fails_before_any_call():
-    with pytest.raises(AirflowFailException, match="must not be after"):
-        kis_asia_index_daily.requested_start_date(SESSION_DATE, {"start_date": "2026-09-05"})
 
 
 def test_the_backfill_span_is_cut_by_the_shared_rule():

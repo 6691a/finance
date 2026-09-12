@@ -8,7 +8,7 @@
 설계는 `docs/collection/korea-industry-macro-expansion.md`에 있다.
 
 저장 대상은 `disclosure_event`와 `earnings_fact`다. 정의의 원본은 백엔드의
-`apps/models/market.py`이며 여기 SQL의 컬럼 이름은 `tests/collectors/test_dart.py`가 그 모델
+`apps/models/market/fundamentals.py`이며 여기 SQL의 컬럼 이름은 `tests/collectors/test_dart.py`가 그 모델
 metadata와 대조한다.
 
 아래 계약은 2026-08-12에 실제 응답으로 확인했다.
@@ -379,7 +379,7 @@ class DisclosureFetch(BaseModel):
 class StatementScope(StrEnum):
     """재무제표 범위. 연결과 별도를 합치거나 서로 대체하지 않는다.
 
-    `apps/models/market.py`의 같은 이름 Enum과 값이 같아야 한다. Airflow 트리는 `apps/`를
+    `apps/models/market/fundamentals.py`의 같은 이름 Enum과 값이 같아야 한다. Airflow 트리는 `apps/`를
     보지 못해 한 벌을 더 두고, `tests/collectors/test_dart.py`가 둘을 대조한다.
     """
 

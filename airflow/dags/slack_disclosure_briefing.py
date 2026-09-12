@@ -1,7 +1,7 @@
 """새로 감지된 공시를 Slack에 알린다.
 
 `docs/briefing/disclosure-briefing.md`의 구현이다. `dart_disclosure_intraday`가 평일
-2분마다 삼성전자·SK하이닉스의 새 공시를 `disclosure_event`에 넣는데, 그 행을 읽는 곳이
+2분마다 산업 대표 20사의 새 공시를 `disclosure_event`에 넣는데, 그 행을 읽는 곳이
 추론 툴 `recent_disclosures` 하나뿐이었다. 모델이 근거로 쓰는 경로지 사람이 "방금 뭐가
 올라왔나"를 보는 경로가 아니다.
 
@@ -48,41 +48,29 @@ data interval이라 정상 실행에서는 한 공시가 정확히 한 창에만
 """
 
 import logging
-import os
 from datetime import UTC, datetime, timedelta
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING
 
 import pendulum
-from airflow.providers.postgres.hooks.postgres import PostgresHook
 from airflow.sdk import dag, get_current_context, task
 from airflow.sdk.exceptions import AirflowFailException
-from pydantic import SecretStr
 
+from modules import dag_common
 from modules.briefing import disclosures
 from modules.slack import SlackClient, SlackError
 
 if TYPE_CHECKING:
     from modules.briefing.disclosures import Highlight
-from modules.utility import CONNECTION_ID, KST_TIMEZONE
+from modules.utility import KST_TIMEZONE
 
 logger = logging.getLogger(__name__)
+
+SLACK_CHANNEL_ENV = "SLACK_CHANNEL_DOCUMENT"
 
 # 수집(`dart_disclosure_intraday`)이 평일 KST 07:00~20:58에 2분마다 돈다. 그보다 느슨하게
 # 10분마다 돌며 그 창의 새 공시만 보낸다. 20:50이 마지막이라 20:58 수집분은 다음 날 첫
 # 실행이 아니라 이 날의 마지막 창에 들지 못한다 — 장이 닫힌 뒤라 늦어도 값어치가 같다.
 SCHEDULE = "*/10 7-20 * * 1-5"  # KST 평일 07:00~20:50, 10분마다 = UTC 전일 22:00~11:50
-
-
-def _connection() -> Any:
-    return PostgresHook(postgres_conn_id=CONNECTION_ID).get_conn()
-
-
-def _slack_settings() -> tuple[SecretStr, str]:
-    token = os.environ.get("SLACK_BOT_TOKEN")
-    channel = os.environ.get("SLACK_CHANNEL_DOCUMENT")
-    if not token or not channel:
-        raise AirflowFailException("SLACK_BOT_TOKEN and SLACK_CHANNEL_DOCUMENT are required")
-    return SecretStr(token), channel
 
 
 def _window() -> tuple[datetime, datetime]:
@@ -137,11 +125,11 @@ def _highlight(
 def slack_disclosure_briefing():
     @task(task_display_name="새 공시 알림 발송")
     def send_alert() -> str:
-        token, channel = _slack_settings()
+        token, channel = dag_common.slack_settings(SLACK_CHANNEL_ENV)
         window_start, window_end = _window()
         now = datetime.now(UTC)
 
-        connection = _connection()
+        connection = dag_common.connection()
         try:
             batch = disclosures.collect_batch(connection, now, window_start, window_end)
         finally:

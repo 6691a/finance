@@ -16,13 +16,6 @@ services:
       timeout: 3s
       retries: 5
 
-  redis:
-    image: redis:8-alpine
-    ports:
-      - "16379:6379"
-    volumes:
-      - redis:/data
-
   neo4j:
     image: neo4j:5.26.29-community
     environment:
@@ -40,5 +33,4 @@ services:
 
 volumes:
   psql:
-  redis:
   neo4j:

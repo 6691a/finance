@@ -34,7 +34,7 @@
 
 ## 필요한 환경
 
-- `OPENAI_API_KEY`. 어떤 모델을 부를지는 `modules/llm.py`의 `document_model()`이 코드로 정하고
+- `OPENAI_API_KEY`. 어떤 모델을 부를지는 `modules/llm.py`의 `openai_model()`이 코드로 정하고
   키는 그 LangChain 클래스가 자기 이름으로 읽는다. 키가 없으면 모델을 만들 때 실패한다.
   DAG은 `config.yaml`을 읽지 못하므로 환경변수로 준다.
 - `LLM_PERSPECTIVE`는 선택이고 기본이 `global`이다. 세계에서 일어난 일이 한국 시장에 닿는
@@ -58,13 +58,12 @@
 import logging
 from contextlib import closing
 from datetime import UTC, datetime, timedelta
-from typing import Any
 
 import pendulum
-from airflow.providers.postgres.hooks.postgres import PostgresHook
 from airflow.sdk import Param, dag, get_current_context, task
 from airflow.sdk.exceptions import AirflowFailException
 
+from modules import dag_common
 from modules.assessment import (
     DEFAULT_BATCH_SIZE,
     AssessmentBatch,
@@ -75,18 +74,12 @@ from modules.assessment import (
     filter_tags,
 )
 from modules.dedup import link_duplicates
-from modules.llm import RetryableLlmError, document_model, model_name
-from modules.utility import CONNECTION_ID, KST_TIMEZONE, atomic
+from modules.llm import RetryableLlmError, model_name, openai_model
+from modules.utility import KST_TIMEZONE, atomic
 
 logger = logging.getLogger(__name__)
 
 BATCH_SIZE_PARAM = "batch_size"
-
-
-def _connection() -> Any:
-    # 반환 타입은 provider 버전에 따라 psycopg2/psycopg3 래퍼로 갈린다. 런타임 객체는
-    # 어느 쪽이든 PEP 249 연결이라 commit·rollback을 갖는다.
-    return PostgresHook(postgres_conn_id=CONNECTION_ID).get_conn()
 
 
 @dag(
@@ -119,7 +112,7 @@ def document_assessment_hourly():
         # 평가 전에 같은 기사([속보] 스텁 vs 본기사)를 대표에 연결한다. 연결된 문서는
         # 평가·브리핑에서 빠진다. 외부 API가 없어 실패는 DB 오류뿐이고, 그건 그대로 올려
         # Airflow가 재시도한다.
-        connection = _connection()
+        connection = dag_common.connection()
         try:
             outcome = link_duplicates(connection)
         finally:
@@ -148,7 +141,7 @@ def document_assessment_hourly():
             # 설정 누락이라 재시도해도 같다. 메시지에 키 값은 들어가지 않는다.
             raise AirflowFailException(str(error)) from error
 
-        connection = _connection()
+        connection = dag_common.connection()
         try:
             store = AssessmentStore(connection, settings.prompt_revision)
             candidates = store.candidates()
@@ -164,7 +157,7 @@ def document_assessment_hourly():
             raise AirflowFailException("No instrument or indicator candidates; seed the masters first")
 
         # 어떤 모델을 부를지는 `modules/llm.py`가 정한다. 키는 그쪽 LangChain 클래스가 읽는다.
-        model = document_model()
+        model = openai_model()
         batch = AssessmentBatch(DocumentAssessor(model, settings), settings.max_concurrency)
         # 평가는 그래프가 한 번에 돌린다. 문서별 성공·형식 오류·제공처 오류를 모두 결과로
         # 모은 뒤 성공 결과를 먼저 저장하고, 마지막에 Airflow 재시도 여부를 결정한다.
@@ -179,7 +172,7 @@ def document_assessment_hourly():
             document = by_id[result.document_id]
             if result.blocked:
                 # 모델에게 안 보냈다. 점수 없이 닫아 다음 실행이 다시 집지 않게 한다.
-                with closing(_connection()) as connection, atomic(connection):
+                with closing(dag_common.connection()) as connection, atomic(connection):
                     AssessmentStore(connection, settings.prompt_revision).store_blocked(
                         document, result.blocked, assessed_at
                     )
@@ -194,7 +187,7 @@ def document_assessment_hourly():
             instruments, indicators = filter_tags(assessment, candidates, document.id)
 
             # 문서 하나가 트랜잭션 하나다. 앞의 성공을 뒤의 실패가 되돌리지 않는다.
-            with closing(_connection()) as connection, atomic(connection):
+            with closing(dag_common.connection()) as connection, atomic(connection):
                 AssessmentStore(connection, settings.prompt_revision).store(
                     document,
                     assessment,

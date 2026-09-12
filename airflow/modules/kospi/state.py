@@ -19,13 +19,14 @@ from pydantic import BaseModel, ConfigDict
 from modules.kospi.domain import Direction, Factor, FactorUnit, ObservationSign, RunSlot
 
 
-class _State(BaseModel):
-    """관측 상태는 전부 불변이다. 재시도 경로에서 바뀌면 저장된 것과 모델이 본 것이 어긋난다."""
+class FrozenModel(BaseModel):
+    """불변 Pydantic 모델의 공통 베이스. 재시도 경로에서 값이 바뀌면 저장된 것과 모델이 본 것이
+    어긋난다(저장소 규칙). `shock/`의 데이터 모양도 이것을 쓴다 — 이 모듈이 가벼워서다."""
 
     model_config = ConfigDict(frozen=True)
 
 
-class DailyBar(_State):
+class DailyBar(FrozenModel):
     """확정 일봉 하루. `index_daily`의 한 행이다."""
 
     business_date: date
@@ -35,7 +36,7 @@ class DailyBar(_State):
     change_pct: Decimal | None = None
 
 
-class MoveBaseline(_State):
+class MoveBaseline(FrozenModel):
     """최근 일봉이 실제로 얼마나 움직였나. **모델이 크기를 부를 때 딛고 설 자리다.**
 
     프롬프트가 "최근 진폭에서 출발하라"고만 말하면 모델은 창 안의 열다섯 봉을 눈대중한다.
@@ -58,7 +59,7 @@ class MoveBaseline(_State):
     up_day_ratio: Decimal | None = None
 
 
-class RelationRow(_State):
+class RelationRow(FrozenModel):
     """관계 표의 한 줄. 가중치는 코드가 관측에서 계산한 값이다.
 
     **`recent_signs`가 가중치와 함께 가는 이유**는 가중치 하나로 "오래 일관된 -0.5"와
@@ -74,7 +75,7 @@ class RelationRow(_State):
     recent_signs: tuple[ObservationSign, ...] = ()
 
 
-class MemoryRow(_State):
+class MemoryRow(FrozenModel):
     """활성 메모 하나. 전망이 읽고 관찰이 판정한다.
 
     **사실이 아니라 지난 관찰의 메모다.** 프롬프트가 그것을 밝히고, 전망이 이것을 근거로
@@ -88,7 +89,7 @@ class MemoryRow(_State):
     verify_count: int = 0
 
 
-class FlowRow(_State):
+class FlowRow(FrozenModel):
     """오늘 그 시각까지의 투자자별 누적 순매수(주). 장중 슬롯만 본다.
 
     **수량이다.** `market_investor_flow_snapshot`의 금액 칸은 모델 주석이 "단위 미확정"이라
@@ -103,7 +104,7 @@ class FlowRow(_State):
     individual_net_buy_qty: float | None = None
 
 
-class IntradayState(_State):
+class IntradayState(FrozenModel):
     """장중 슬롯만 보는 것. 장전에는 이 블록이 통째로 없다.
 
     `so_far_pct`와 예측 축을 가르는 것이 이 블록의 핵심이다 — `base_price`가 지금 가격이고
@@ -119,7 +120,7 @@ class IntradayState(_State):
     flows: FlowRow | None = None
 
 
-class EarlierReason(_State):
+class EarlierReason(FrozenModel):
     """앞 슬롯 이유 하나. **요인 코드를 문장과 함께 싣는다.**
 
     문장만 주면 모델이 "S&P500이 올랐다"는 글을 읽고도 그것이 `SP500` 요인이라는 것을 다시
@@ -134,7 +135,7 @@ class EarlierReason(_State):
     memory_id: int | None = None
 
 
-class EarlierSlot(_State):
+class EarlierSlot(FrozenModel):
     """오늘 앞선 슬롯이 낸 답. 장중 슬롯이 본다.
 
     **정답이 아니라 그때의 판단이다.** 프롬프트가 그것을 밝히고, 이유가 이것을 이어받으면
@@ -150,7 +151,7 @@ class EarlierSlot(_State):
     reasons: tuple[EarlierReason, ...] = ()
 
 
-class ObservedState(_State):
+class ObservedState(FrozenModel):
     """전망 하나가 보는 것 전부. 슬롯 셋이 같은 모델을 쓰고 칸이 몇 개 비거나 찬다."""
 
     run_date: date
@@ -170,7 +171,7 @@ class ObservedState(_State):
     earlier_slots: tuple[EarlierSlot, ...] = ()
 
 
-class GradedForecast(_State):
+class GradedForecast(FrozenModel):
     """오늘 슬롯 하나의 전망과 그 채점. 장후 관찰이 본다."""
 
     slot: RunSlot
@@ -184,7 +185,7 @@ class GradedForecast(_State):
     within_band: bool | None = None
 
 
-class FactorMove(_State):
+class FactorMove(FrozenModel):
     """숫자 요인 하나의 그날 값. 장후 관찰이 **요인마다 하나씩** 받는 표의 한 줄이다.
 
     **모델이 요인을 고르지 않게 하는 자리다**(설계 §8.10). 툴로 조회한 요인만 관찰할 수
@@ -209,7 +210,7 @@ class FactorMove(_State):
     change_pct: float | None = None
 
 
-class ReviewState(_State):
+class ReviewState(FrozenModel):
     """장후 관찰이 보는 것 전부.
 
     전망과 달리 **오늘 종가를 안다.** 맞히는 것이 목적이 아니라 무엇이 움직였는지를

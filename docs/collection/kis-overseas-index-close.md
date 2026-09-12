@@ -6,7 +6,7 @@
 > - 한계: 다우 현물은 KIS 분봉이 없다. 미국은 마감 전 두 시간치만 쌓인다. 니케이는 KIS도 15분 지연이다. 같은 아시아 지수가 Yahoo·KIS 두 벌로 쌓여 브리핑에 두 줄로 뜨는 것은 후속 작업이다.
 
 > 작성 기준: 2026-08-22  
-> 상태: 구현 완료(2026-08-22). 수집기는 `KisOverseasIndexCollector` 클래스다(2026-08-23). §13 아시아 장중 분봉·일봉은 구현 완료, 운영 반영 전(2026-09-04)  
+> 상태: 구현 완료(2026-08-22). 수집기는 `KisOverseasIndexCollector` 클래스다(2026-08-23). §13 아시아 장중 분봉·일봉은 구현 완료, 장중 분봉 DAG는 2026-09-04에 운영에 켬  
 > 대상: S&P500(`SPX`)·나스닥 종합(`COMP`) 현물 마감 분봉 수집, `slack_us_market_briefing` 표 분리  
 > 의존: `quote_symbol` 마스터, `index_bar`, `market_session`, `modules/briefing/market.py`  
 > 산출물: `airflow/modules/collectors/market/kis_overseas_index.py`, `airflow/dags/kis_overseas_index_close.py`,

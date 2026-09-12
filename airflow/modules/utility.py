@@ -1,11 +1,22 @@
+"""상태 없는 공통 잎. 수집기·브리핑이 같은 답을 내야 하는 상수와 변환을 한 벌만 둔다.
+
+`config`·`database`·Airflow를 import하지 않는다 — 어디서 불러도 배포 환경을 요구하지 않는다.
+"""
+
 from collections.abc import Iterator
 from contextlib import contextmanager
+from datetime import UTC, date, datetime
+from decimal import Decimal
 from os import environ
-from typing import Any
+from typing import Any, Protocol
+from zoneinfo import ZoneInfo
 
 from pendulum import timezone
 
+# pendulum 시간대. DAG의 `start_date`처럼 pendulum 메서드를 쓰는 자리가 받는다.
 KST_TIMEZONE = timezone("Asia/Seoul")
+# 표준 라이브러리 시간대. `datetime.astimezone`·`tzinfo=`처럼 pendulum이 필요 없는 자리가 받는다.
+KST = ZoneInfo("Asia/Seoul")
 
 CONNECTION_ID = "finance"
 
@@ -33,3 +44,39 @@ def atomic(connection: Any) -> Iterator[Any]:
     except Exception:
         connection.rollback()
         raise
+
+
+def normalize_to_utc(moment: datetime) -> datetime:
+    """저장·비교용 시각을 UTC로 정규화한다. Pydantic 모델의 시각 validator가 부른다.
+
+    naive datetime은 `AwareDatetime`이 이미 막으므로 여기서는 시간대만 바꾼다.
+    """
+    return moment.astimezone(UTC)
+
+
+def require_finite(value: Decimal, subject: str) -> Decimal:
+    """`Decimal`이 유한한 수인지 본다. Pydantic 모델의 값 validator가 부른다.
+
+    Decimal은 "NaN"과 "Infinity"도 받아들인다. 그대로 저장하면 이후 집계가 전부 오염된다.
+    `subject`는 오류 문장의 주어다(`observation value`·`quote value`).
+    """
+    if not value.is_finite():
+        raise ValueError(f"{subject} must be a finite number")
+    return value
+
+
+class ObservationPeriod(Protocol):
+    """조회 구간을 갖는 요청 모델의 모양. `require_ordered_period`가 받는다."""
+
+    @property
+    def observation_start(self) -> date: ...
+
+    @property
+    def observation_end(self) -> date: ...
+
+
+def require_ordered_period[P: ObservationPeriod](request: P) -> P:
+    """조회 구간의 시작이 끝보다 뒤가 아닌지 본다. 요청 모델의 `model_validator`가 부른다."""
+    if request.observation_start > request.observation_end:
+        raise ValueError("observation_start must not be after observation_end")
+    return request

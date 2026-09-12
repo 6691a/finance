@@ -12,8 +12,7 @@ from sqlalchemy import (
 )
 from sqlalchemy.orm import Mapped, mapped_column
 
-from apps.core.database import EntityBase, table_options
-from apps.models.analysis._columns import _enum_column
+from apps.core.database import EntityBase, enum_column, table_options
 
 
 class SignalDirection(StrEnum):
@@ -93,7 +92,7 @@ class TechnicalSignal(EntityBase):
         comment="사건이 일어난 KRX 거래일. 그날 확정 종가로 계산한 지표가 직전 거래일과 교차했다",
     )
     kind: Mapped[TechnicalSignalKind] = mapped_column(
-        _enum_column(TechnicalSignalKind),
+        enum_column(TechnicalSignalKind),
         nullable=False,
         comment=(
             "신호 종류(sma_cross는 SMA20/SMA60 교차, macd_cross는 MACD와 시그널 라인 교차, "
@@ -101,7 +100,7 @@ class TechnicalSignal(EntityBase):
         ),
     )
     direction: Mapped[SignalDirection] = mapped_column(
-        _enum_column(SignalDirection),
+        enum_column(SignalDirection),
         nullable=False,
         comment=(
             "사건의 방향(up 또는 down). 골든크로스·MACD 상향·과매도 탈출이 up이다. "

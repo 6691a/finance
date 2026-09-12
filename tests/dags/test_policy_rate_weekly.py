@@ -77,23 +77,6 @@ def test_no_failure_lets_the_task_succeed():
     assert policy_rate_weekly.require_no_failures("FRED", []) is None
 
 
-@pytest.mark.parametrize("code", ["INFO-100", "ERROR-100", "ERROR-300"])
-def test_unrecoverable_ecos_codes_are_not_retried(code):
-    assert policy_rate_weekly.is_unrecoverable_result(code)
-
-
-@pytest.mark.parametrize("code", ["INFO-200", "ERROR-500", "ERROR-600"])
-def test_provider_side_ecos_codes_are_retried(code):
-    assert not policy_rate_weekly.is_unrecoverable_result(code)
-
-
-def test_a_missing_api_key_fails_before_any_call(monkeypatch):
-    monkeypatch.delenv("ECOS_API_KEY", raising=False)
-
-    with pytest.raises(AirflowFailException, match="ECOS_API_KEY"):
-        policy_rate_weekly.require_env("ECOS_API_KEY")
-
-
 def test_zero_observations_in_the_window_fail_the_task():
     """45일 창에 0건은 발표 전이 아니라 식별자·제공처 고장이다(G-41). ECOS는 그 상태를
     `INFO-200`으로 답해 예외를 안 내니 여기서 세지 않으면 매주 "성공, 0건"이다."""

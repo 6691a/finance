@@ -9,6 +9,7 @@ import pytest
 from airflow.sdk.exceptions import AirflowFailException
 
 from dags import event_expectation_hourly as module
+from modules import dag_common
 from modules.expectation.domain import ExtractionError, PendingExtractionDocument
 from modules.expectation.extraction import ExtractionResponse
 from modules.expectation.judgment import JudgedOutcome
@@ -45,7 +46,7 @@ class FakeConnection:
 
 def _prepare(monkeypatch, documents, extract, stored: list[int]):
     monkeypatch.setattr(module, "get_current_context", lambda: {"params": {}, "run_id": "manual__x"})
-    monkeypatch.setattr(module, "_connection", FakeConnection)
+    monkeypatch.setattr(dag_common, "connection", FakeConnection)
 
     class FakeStore:
         def __init__(self, connection) -> None:
@@ -58,7 +59,7 @@ def _prepare(monkeypatch, documents, extract, stored: list[int]):
             stored.append(document.id)
 
     monkeypatch.setattr(module, "ExpectationStore", FakeStore)
-    monkeypatch.setattr(module, "expectation_model", lambda: object())
+    monkeypatch.setattr(module, "openai_model", lambda: object())
     monkeypatch.setattr(module, "model_name", lambda model: "test-model")
     monkeypatch.setattr(module, "filter_claims", lambda response, document: ())
 

@@ -53,17 +53,14 @@
 """
 
 import logging
-import os
 from contextlib import closing
 from datetime import UTC, datetime, timedelta
-from typing import Any
 
 import pendulum
-from airflow.providers.postgres.hooks.postgres import PostgresHook
-from airflow.sdk import Param, Variable, dag, get_current_context, task
-from airflow.sdk.exceptions import AirflowFailException, AirflowSkipException
-from pydantic import SecretStr
+from airflow.sdk import Variable, dag, get_current_context, task
+from airflow.sdk.exceptions import AirflowFailException
 
+from modules import dag_common
 from modules.collectors.analyst.kis_opinion import (
     OPINION_LOOKBACK_DAYS,
     KisAnalystOpinionCollector,
@@ -76,35 +73,9 @@ from modules.collectors.kis import (
     KisTimeWindowError,
     access_token,
 )
-from modules.market_session import krx_open_day
-from modules.period import (
-    LOOKBACK_DAYS_PARAM,
-    OBSERVATION_END_PARAM,
-    OBSERVATION_START_PARAM,
-    PeriodError,
-    resolve_observation_period,
-)
-from modules.utility import CONNECTION_ID, KIS_UNRECOVERABLE_STATUSES, KST_TIMEZONE, atomic
+from modules.utility import KIS_UNRECOVERABLE_STATUSES, KST_TIMEZONE, atomic
 
 logger = logging.getLogger(__name__)
-
-
-def _credentials() -> tuple[SecretStr, SecretStr]:
-    app_key = os.environ.get("KIS_APP_KEY")
-    app_secret = os.environ.get("KIS_APP_SECRET")
-    if not app_key or not app_secret:
-        raise AirflowFailException("KIS_APP_KEY and KIS_APP_SECRET are required")
-    return SecretStr(app_key), SecretStr(app_secret)
-
-
-def _connection() -> Any:
-    return PostgresHook(postgres_conn_id=CONNECTION_ID).get_conn()
-
-
-def _skip_when_closed(connection: Any, today_kst) -> None:
-    """확정 휴장일이면 태스크를 건너뛴다. 행이 없거나 아직 판정하지 않았으면 그대로 수집한다."""
-    if krx_open_day(connection, today_kst) is False:
-        raise AirflowSkipException(f"KRX is closed on {today_kst}")
 
 
 @dag(
@@ -118,29 +89,15 @@ def _skip_when_closed(connection: Any, today_kst) -> None:
     # 장전 추론(08:35)을 넘기지 않도록 짧게 두 번 시도한다.
     default_args={"retries": 2, "retry_delay": timedelta(minutes=5)},
     params={
-        OBSERVATION_START_PARAM: Param(
-            None,
-            type=["null", "string"],
-            format="date",
-            title="조회 시작일",
-            description="비우면 observation_end에서 lookback_days만큼 뺀 날. 주면 lookback_days를 무시한다.",
-        ),
-        OBSERVATION_END_PARAM: Param(
-            None,
-            type=["null", "string"],
-            format="date",
-            title="조회 종료일",
-            description="비우면 이 run 시각의 KST 날짜. 과거 구간을 넣을 때 직접 넘긴다.",
-        ),
-        LOOKBACK_DAYS_PARAM: Param(
-            OPINION_LOOKBACK_DAYS,
-            type="integer",
-            minimum=1,
-            title="되돌아볼 일수",
-            description=(
-                "구간을 지정하지 않을 때만 쓴다. 의견은 목표주가·의견이 바뀔 때만 찍혀 "
-                "종목당 월 5~10건이라 한 달을 다시 받는다. 겹쳐 읽어도 upsert라 무해하다."
+        **dag_common.observation_period_params(
+            lookback_default=OPINION_LOOKBACK_DAYS,
+            lookback_hint=(
+                "구간을 지정하지 않을 때만 쓴다. 의견은 목표주가·의견이 바뀔 때만 찍혀 종목당 월 5~10건이라 한 달을 "
+                "다시 받는다. 겹쳐 읽어도 upsert라 무해하다."
             ),
+            start_title="조회 시작일",
+            end_title="조회 종료일",
+            end_hint="비우면 이 run 시각의 KST 날짜. 과거 구간을 넣을 때 직접 넘긴다.",
         ),
     },
     doc_md=__doc__,
@@ -150,20 +107,17 @@ def kis_analyst_opinion_daily():
     @task(task_display_name="종목 투자의견")
     def collect_opinions() -> int:
         context = get_current_context()
-        try:
-            observation_start, observation_end = resolve_observation_period(
-                context, default_lookback_days=OPINION_LOOKBACK_DAYS
-            )
-        except PeriodError as error:
-            raise AirflowFailException(str(error)) from error
+        observation_start, observation_end = dag_common.resolve_period_or_fail(
+            context, default_lookback_days=OPINION_LOOKBACK_DAYS
+        )
 
-        app_key, app_secret = _credentials()
+        app_key, app_secret = dag_common.kis_credentials()
         collector = KisAnalystOpinionCollector(access_token(Variable, app_key, app_secret), app_key, app_secret)
 
         stored = 0
         failures: list[str] = []
-        with closing(_connection()) as connection:
-            _skip_when_closed(connection, datetime.now(UTC).astimezone(KST_TIMEZONE).date())
+        with closing(dag_common.connection()) as connection:
+            dag_common.skip_unless_krx_open(connection, datetime.now(UTC).astimezone(KST_TIMEZONE).date())
             stocks = watched_stocks(connection)
             if not stocks:
                 raise AirflowFailException("instrument has no watched stock; nothing to collect")

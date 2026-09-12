@@ -13,11 +13,10 @@ from sqlalchemy import (
     Text,
     UniqueConstraint,
 )
-from sqlalchemy import Enum as SqlEnum
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 
-from apps.core.database import EntityBase, table_options
+from apps.core.database import EntityBase, enum_column, table_options
 
 
 class SourceKind(StrEnum):
@@ -122,12 +121,7 @@ class DocumentSource(EntityBase):
     )
     name: Mapped[str] = mapped_column(Text, nullable=False, comment="출처 표시 이름")
     source_kind: Mapped[SourceKind] = mapped_column(
-        SqlEnum(
-            SourceKind,
-            native_enum=False,
-            length=20,
-            values_callable=lambda enum: [member.value for member in enum],
-        ),
+        enum_column(SourceKind),
         nullable=False,
         comment="출처 종류(official, media, research). 공식기관 문서는 가치 점수와 무관하게 보관하고 research는 report로 저장한다",
     )
@@ -142,12 +136,7 @@ class DocumentSource(EntityBase):
         comment="발견 채널 URL(RSS 또는 Atom). 인증이 없어 그대로 저장한다",
     )
     collection_mode: Mapped[CollectionMode] = mapped_column(
-        SqlEnum(
-            CollectionMode,
-            native_enum=False,
-            length=20,
-            values_callable=lambda enum: [member.value for member in enum],
-        ),
+        enum_column(CollectionMode),
         nullable=False,
         comment=(
             "어디까지 저장할지. metadata_only는 제목·URL만, feed_content는 피드가 준 요약까지, "
@@ -231,12 +220,7 @@ class Document(EntityBase):
     )
     canonical_url: Mapped[str] = mapped_column(Text, nullable=False, comment="문서 원문 URL")
     document_type: Mapped[DocumentType] = mapped_column(
-        SqlEnum(
-            DocumentType,
-            native_enum=False,
-            length=20,
-            values_callable=lambda enum: [member.value for member in enum],
-        ),
+        enum_column(DocumentType),
         nullable=False,
         comment="문서 종류(article, report, press_release 또는 speech)",
     )
@@ -252,12 +236,7 @@ class Document(EntityBase):
         comment="정규화한 본문. 길이 상한을 두지 않는다. 아직 못 받았으면 NULL이고 그 사유는 body_status가 갖는다",
     )
     body_status: Mapped[BodyStatus | None] = mapped_column(
-        SqlEnum(
-            BodyStatus,
-            native_enum=False,
-            length=20,
-            values_callable=lambda enum: [member.value for member in enum],
-        ),
+        enum_column(BodyStatus),
         nullable=True,
         comment=(
             "본문 수집 결과(ok, empty, attachment_only 또는 unavailable). "
@@ -303,12 +282,7 @@ class Document(EntityBase):
         comment="근거가 되는 source_record 레코드 ID",
     )
     direction: Mapped[Direction | None] = mapped_column(
-        SqlEnum(
-            Direction,
-            native_enum=False,
-            length=20,
-            values_callable=lambda enum: [member.value for member in enum],
-        ),
+        enum_column(Direction),
         nullable=True,
         comment="LLM이 본 방향(positive, negative 또는 neutral). 평가 전이면 NULL이다",
     )
@@ -461,12 +435,7 @@ class DocumentAttachment(EntityBase):
         comment="문서 안에서의 순서(0부터). 페이지에 나온 차례일 뿐 자연키가 아니다",
     )
     kind: Mapped[AttachmentKind] = mapped_column(
-        SqlEnum(
-            AttachmentKind,
-            native_enum=False,
-            length=20,
-            values_callable=lambda enum: [member.value for member in enum],
-        ),
+        enum_column(AttachmentKind),
         nullable=False,
         comment="내려받은 파일(file)인지 링크만 남긴 영상(video)인지",
     )
@@ -505,12 +474,7 @@ class DocumentAttachment(EntityBase):
         comment="파일을 내려받은 시각(UTC). 영상은 NULL이다",
     )
     parse_status: Mapped[AttachmentParseStatus | None] = mapped_column(
-        SqlEnum(
-            AttachmentParseStatus,
-            native_enum=False,
-            length=20,
-            values_callable=lambda enum: [member.value for member in enum],
-        ),
+        enum_column(AttachmentParseStatus),
         nullable=True,
         comment="첨부 파일에서 텍스트를 뽑아 본 결과. NULL은 아직 해 보지 않았다는 뜻이고 그 집합이 파싱 큐다",
     )

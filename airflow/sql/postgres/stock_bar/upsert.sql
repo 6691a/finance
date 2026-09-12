@@ -6,7 +6,7 @@
 -- is_final=true로 확정한다(문서 5.2). WebSocket 잠정 경로는 SQL 파일이 아니라
 -- `apps/realtime/repository.py`의 ORM이다.
 --
--- 정의의 원본은 `apps/models/market.py`의 `StockBar`이고
+-- 정의의 원본은 `apps/models/market/series.py`의 `StockBar`이고
 -- `tests/collectors/test_kis.py`가 여기 컬럼을 그 모델 metadata와 대조한다.
 INSERT INTO stock_bar (
     provider,

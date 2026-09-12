@@ -68,9 +68,5 @@ def image(slack_file_id: str, alt_text: str) -> dict[str, Any]:
     return {"type": "image", "slack_file": {"id": slack_file_id}, "alt_text": alt_text}
 
 
-def divider() -> dict[str, Any]:
-    return {"type": "divider"}
-
-
 def context(lines: Sequence[str]) -> dict[str, Any]:
     return {"type": "context", "elements": [{"type": "mrkdwn", "text": " · ".join(lines)[:MAX_SECTION_CHARS]}]}

@@ -2,7 +2,7 @@
 -- 멱등 키는 (provider, symbol, business_date)다. 장이 열려 있는 동안 받은 마지막 봉은
 -- 미완성이라 다음 실행이 확정값으로 덮는다.
 --
--- 정의의 원본은 `apps/models/market.py`의 `BondFutureDaily`이고
+-- 정의의 원본은 `apps/models/market/series.py`의 `BondFutureDaily`이고
 -- 수집기 테스트가 여기 컬럼을 그 모델 metadata와 대조한다.
 INSERT INTO bond_future_daily (
     provider,

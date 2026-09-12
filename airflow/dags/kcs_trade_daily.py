@@ -78,11 +78,11 @@ from contextlib import closing
 from datetime import timedelta
 
 import pendulum
-from airflow.providers.postgres.hooks.postgres import PostgresHook
-from airflow.sdk import Param, dag, get_current_context, task
+from airflow.sdk import dag, get_current_context, task
 from airflow.sdk.exceptions import AirflowFailException
 from pydantic import SecretStr, ValidationError
 
+from modules import dag_common
 from modules.collectors.indicator.kcs import (
     DATASETS,
     KcsDataset,
@@ -92,14 +92,7 @@ from modules.collectors.indicator.kcs import (
     KcsResultError,
     KcsTradeCollector,
 )
-from modules.period import (
-    LOOKBACK_DAYS_PARAM,
-    OBSERVATION_END_PARAM,
-    OBSERVATION_START_PARAM,
-    PeriodError,
-    resolve_observation_period,
-)
-from modules.utility import CONNECTION_ID, KST_TIMEZONE, UNRECOVERABLE_STATUSES, atomic
+from modules.utility import KST_TIMEZONE, UNRECOVERABLE_STATUSES, atomic
 
 logger = logging.getLogger(__name__)
 
@@ -122,26 +115,13 @@ UNRECOVERABLE_RESULT_CODES = frozenset({"99", "12", "30", "31"})
     max_active_runs=1,
     default_args={"retries": 2, "retry_delay": timedelta(hours=1)},
     params={
-        OBSERVATION_START_PARAM: Param(
-            None,
-            type=["null", "string"],
-            format="date",
-            title="조회 시작일",
-            description="비우면 observation_end에서 lookback_days만큼 앞으로 잡는다. 걸친 달은 통째로 받는다.",
-        ),
-        OBSERVATION_END_PARAM: Param(
-            None,
-            type=["null", "string"],
-            format="date",
-            title="조회 종료일",
-            description="비우면 이 run의 data_interval_end를 KST 날짜로 바꿔 쓴다.",
-        ),
-        LOOKBACK_DAYS_PARAM: Param(
-            LOOKBACK_DAYS_TRADE,
-            type="integer",
-            minimum=1,
-            title="되돌아볼 일수",
-            description="제공처가 전월까지의 값을 정정으로 갱신한다. 짧게 잡으면 그 정정을 못 받는다.",
+        **dag_common.observation_period_params(
+            lookback_default=LOOKBACK_DAYS_TRADE,
+            lookback_hint="제공처가 전월까지의 값을 정정으로 갱신한다. 짧게 잡으면 그 정정을 못 받는다.",
+            start_title="조회 시작일",
+            end_title="조회 종료일",
+            start_hint="비우면 observation_end에서 lookback_days만큼 앞으로 잡는다. 걸친 달은 통째로 받는다.",
+            end_hint="비우면 이 run의 data_interval_end를 KST 날짜로 바꿔 쓴다.",
         ),
     },
     doc_md=__doc__,
@@ -157,10 +137,7 @@ def kcs_trade_daily():
         나누지 않는다.
         """
         context = get_current_context()
-        try:
-            observation_start, observation_end = resolve_observation_period(context, LOOKBACK_DAYS_TRADE)
-        except PeriodError as error:
-            raise AirflowFailException(str(error)) from error
+        observation_start, observation_end = dag_common.resolve_period_or_fail(context, LOOKBACK_DAYS_TRADE)
 
         try:
             request = KcsRequest.from_dates(KcsDataset(dataset_key), observation_start, observation_end)
@@ -183,7 +160,7 @@ def kcs_trade_daily():
                 logger.warning("KCS asked to retry after %s seconds", error.retry_after)
             raise
 
-        with closing(PostgresHook(postgres_conn_id=CONNECTION_ID).get_conn()) as connection:
+        with closing(dag_common.connection()) as connection:
             try:
                 with atomic(connection):
                     count = collector.store_observations(connection, response)

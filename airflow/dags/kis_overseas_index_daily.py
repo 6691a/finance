@@ -62,17 +62,15 @@ airflow dags trigger kis_overseas_index_daily \
 """
 
 import logging
-import os
 from contextlib import closing
 from datetime import date, timedelta
 from typing import Any
 
 import pendulum
-from airflow.providers.postgres.hooks.postgres import PostgresHook
 from airflow.sdk import Param, Variable, dag, get_current_context, task
-from airflow.sdk.exceptions import AirflowFailException, AirflowSkipException
-from pydantic import SecretStr
+from airflow.sdk.exceptions import AirflowFailException
 
+from modules import dag_common
 from modules.collectors.kis import (
     KisHTTPError,
     KisPayloadError,
@@ -83,40 +81,18 @@ from modules.collectors.kis import (
 from modules.collectors.market.kis_overseas_index import OverseasIndex, us_session_date
 from modules.collectors.market.kis_overseas_index_daily import (
     KisOverseasIndexDailyCollector,
-    OverseasIndexDailyFetch,
 )
-from modules.market_session import us_equity_open_day
 from modules.period import (
     END_DATE_PARAM,
     SPAN_CALENDAR_DAYS,
     START_DATE_PARAM,
-    PeriodError,
-    calendar_day,
     fetch_windows,
-    span_start,
 )
-from modules.utility import CONNECTION_ID, KIS_UNRECOVERABLE_STATUSES, KST_TIMEZONE, atomic
+from modules.utility import KST_TIMEZONE, atomic
 
 logger = logging.getLogger(__name__)
 
 SCHEDULE = "35 7 * * 2-6"  # KST 화~토 07:35 = UTC 월~금 22:35
-
-
-def _credentials() -> tuple[SecretStr, SecretStr]:
-    app_key = os.environ.get("KIS_APP_KEY")
-    app_secret = os.environ.get("KIS_APP_SECRET")
-    if not app_key or not app_secret:
-        raise AirflowFailException("KIS_APP_KEY and KIS_APP_SECRET are required")
-    return SecretStr(app_key), SecretStr(app_secret)
-
-
-def _cached_token(app_key: SecretStr, app_secret: SecretStr, force: bool = False) -> SecretStr:
-    """`kis_overseas_index_close`와 같은 캐시를 쓴다. 저장소를 고르는 일만 여기 있다."""
-    return access_token(Variable, app_key, app_secret, force=force)
-
-
-def _connection() -> Any:
-    return PostgresHook(postgres_conn_id=CONNECTION_ID).get_conn()
 
 
 def _session_date() -> date:
@@ -130,62 +106,12 @@ def _session_date() -> date:
     return us_session_date(reference)
 
 
-def _calendar_day(given: Any, name: str) -> date:
-    """`YYYY-MM-DD` 하나를 읽는다. 규칙은 `modules/period.py`에 한 벌 있다.
-
-    여기 남는 것은 그 실패를 어떤 Airflow 예외로 올릴지뿐이다.
-    """
-    try:
-        return calendar_day(given, name)
-    except PeriodError as error:
-        raise AirflowFailException(str(error)) from None
-
-
 def requested_end_date(session_date: date, params: dict[str, Any]) -> date:
     """이 run이 구간의 끝으로 쓸 날짜. 비우면 이 run이 기대하는 뉴욕 세션 날짜다."""
     given = params.get(END_DATE_PARAM)
     if not given:
         return session_date
-    return _calendar_day(given, END_DATE_PARAM)
-
-
-def requested_start_date(end_date: date, params: dict[str, Any]) -> date:
-    """이 run이 구간의 시작으로 쓸 날짜. 비우면 200달력일 앞이다.
-
-    끝보다 뒤인 시작은 조용히 빈 구간이 되므로 막는다.
-    """
-    given = params.get(START_DATE_PARAM)
-    if not given:
-        return span_start(end_date)
-    start_date = _calendar_day(given, START_DATE_PARAM)
-    if start_date > end_date:
-        raise AirflowFailException(f"{START_DATE_PARAM} {start_date} must not be after {END_DATE_PARAM} {end_date}")
-    return start_date
-
-
-def _fetch_with_retry(
-    collector: KisOverseasIndexDailyCollector,
-    index: OverseasIndex,
-    window_start: date,
-    window_end: date,
-    app_key: SecretStr,
-    app_secret: SecretStr,
-) -> OverseasIndexDailyFetch:
-    """401이면 토큰을 한 번만 재발급하고 다시 시도한다. 되돌릴 수 없는 HTTP 오류는 즉시 실패다.
-
-    토큰은 수집기 객체가 사는 동안 안 변하므로 재발급은 객체를 다시 만드는 것이다.
-    자격 증명이 여기 남는 이유는 재발급이 DAG의 일이기 때문이다.
-    """
-    try:
-        return collector.fetch(index, window_start, window_end)
-    except KisHTTPError as error:
-        if error.status in KIS_UNRECOVERABLE_STATUSES:
-            raise AirflowFailException(f"{index.value}: {error}") from error
-        if error.status != 401:
-            raise
-        logger.warning("KIS returned 401; reissuing the token once")
-        reissued = KisOverseasIndexDailyCollector(_cached_token(app_key, app_secret, force=True), app_key, app_secret)
-        return reissued.fetch(index, window_start, window_end)
+    return dag_common.calendar_day_or_fail(given, END_DATE_PARAM)
 
 
 @dag(
@@ -227,30 +153,37 @@ def kis_overseas_index_daily():
         params = dict(context.get("params") or {})
 
         end_date = requested_end_date(_session_date(), params)
-        start_date = requested_start_date(end_date, params)
+        start_date = dag_common.requested_start_date(end_date, params)
         windows = fetch_windows(start_date, end_date)
 
         # 자동 실행만 휴장일을 건너뛴다. 백필은 끝 날짜가 휴장일이어도 구간 안의 거래일이
         # 목적이므로 막을 이유가 없다. 캘린더가 없으면(`None`) 진행한다 — 빈 응답을 실패로
         # 만드는 수집기 검사가 잡는다.
         if not params.get(END_DATE_PARAM) and not params.get(START_DATE_PARAM):
-            with closing(_connection()) as connection:
-                closed = us_equity_open_day(connection, end_date) is False
-            if closed:
-                raise AirflowSkipException(f"US equity market was closed on {end_date}")
+            with closing(dag_common.connection()) as connection:
+                dag_common.skip_unless_us_open(connection, end_date)
 
-        app_key, app_secret = _credentials()
-        collector = KisOverseasIndexDailyCollector(_cached_token(app_key, app_secret), app_key, app_secret)
+        app_key, app_secret = dag_common.kis_credentials()
+        collector = KisOverseasIndexDailyCollector(access_token(Variable, app_key, app_secret), app_key, app_secret)
 
         stored = 0
         failures: list[str] = []
-        with closing(_connection()) as connection:
+        with closing(dag_common.connection()) as connection:
             for index in OverseasIndex:
                 # 창 하나가 실패하면 그 심볼의 남은 창은 건너뛴다. 구멍 난 구간 위에 나머지를
                 # 얹어 봐야 수익률 계산이 그 구멍에서 멈춘다.
                 for window_start, window_end in windows:
                     try:
-                        fetch = _fetch_with_retry(collector, index, window_start, window_end, app_key, app_secret)
+                        fetch = dag_common.call_with_token_reissue(
+                            collector,
+                            KisOverseasIndexDailyCollector.fetch,
+                            index,
+                            window_start,
+                            window_end,
+                            app_key=app_key,
+                            app_secret=app_secret,
+                            label=index.value,
+                        )
                     except KisHTTPError as error:
                         logger.warning("%s failed with HTTP %s", index.value, error.status)
                         failures.append(f"{index.value} {window_start}~{window_end}({error})")

@@ -35,20 +35,10 @@ databases:
     migration:
       enabled: false
 
-redises:
-  default:
-    url: redis://localhost:16379/0
-  stream:
-    url: redis://localhost:16379/1
-    decode_responses: false
-
 kis_app_key: ""
 kis_app_secret: ""
 kis_rest_domain: https://openapi.koreainvestment.com:9443
 kis_websocket_domain: ws://ops.koreainvestment.com:21000
-
-fred_api_key: ""
-ecos_api_key: ""
 
 # 비우면 Sentry 전체 비활성. 채우면 에러 이벤트, 로그 전송, 트레이싱이 켜진다.
 sentry_dsn: ""

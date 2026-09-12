@@ -5,8 +5,6 @@ asyncpg>=0.31.0
 pydantic>=2.11
 pydantic-settings>=2
 pyyaml>=6
-# apps.core.config가 apps.core.redis(RedisConfig)를 import해서 필요하다. 연결은 안 한다.
-redis>=8.1.0
 websockets>=17.0.1
 # 프로세스를 죽이는 예외를 Sentry로 보낸다. config.yaml의 sentry_dsn이 비면 비활성.
 sentry-sdk>=2

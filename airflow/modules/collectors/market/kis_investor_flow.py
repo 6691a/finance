@@ -10,7 +10,7 @@
 `kis_positioning.py`와 같은 이유로 모듈을 나눴다.
 
 저장 대상은 `stock_investor_estimate_snapshot`, `market_investor_flow_snapshot`,
-`stock_investor_trade_daily`다. 정의의 원본은 백엔드의 `apps/models/market.py`이며 여기 SQL의
+`stock_investor_trade_daily`다. 정의의 원본은 백엔드의 `apps/models/market/investor_flow.py`이며 여기 SQL의
 컬럼 이름은 `tests/collectors/test_kis_investor_flow.py`가 그 모델 metadata와 대조한다.
 
 ## 클래스인 이유
@@ -20,10 +20,10 @@
 `fetch_*(...)` 반복이다.
 
 세 조회를 한 클래스에 둔다. 셋이 같은 자격 증명과 같은 응답 규약(`rt_cd`, `output`)을 쓰기
-때문이다. 나누면 `_call`·`_rows`가 세 벌이 된다. 부르는 DAG이 둘(장중·일별)인 것은 스케줄이
+때문이다. 나누면 `_call`이 세 벌이 된다. 부르는 DAG이 둘(장중·일별)인 것은 스케줄이
 다른 것이지 수집 규칙이 다른 것이 아니다.
 
-상태가 필요 없는 것은 클래스 밖이다. 응답 칸 파싱(`_int`, `_decimal`), 값 모양
+상태가 필요 없는 것은 클래스 밖이다. 응답 칸 파싱(`_int`, `kis.decimal_or_zero`), 값 모양
 (`*Row`, `*Fetch`), 대상 목록(`InvestorFlowStock`, `InvestorFlowMarket`)이 그것이다.
 **Pydantic 모델을 클래스 안에 중첩하지 않는다** — 테스트와 다른 모듈이 import한다.
 
@@ -153,7 +153,7 @@
 import json
 import logging
 from datetime import UTC, date, datetime
-from decimal import Decimal, InvalidOperation
+from decimal import Decimal
 from enum import StrEnum
 from typing import Any, Self
 
@@ -162,7 +162,9 @@ from pydantic import BaseModel, ConfigDict, SecretStr, ValidationError
 from modules.collectors.kis import (
     SOURCE,
     KisPayloadError,
-    result_error,
+    decimal_or_zero,
+    decode_payload,
+    output_rows,
     send_get,
 )
 from modules.db import Connection
@@ -187,8 +189,7 @@ DAILY_TRADE_SOURCE_KEY = "investor_trade_by_stock_daily"
 # 찾을 필요가 없다(실측: 247540이 `J`로 KSQ150 응답).
 DAILY_TRADE_MARKET_DIV = "J"
 
-# 한 응답이 담는 거래일 수. `tr_cont`가 빈 문자열로 와서 연속조회가 없다(실측).
-DAILY_TRADE_ROWS_PER_CALL = 30
+# 한 응답이 담는 거래일 수는 30이다. `tr_cont`가 빈 문자열로 와서 연속조회가 없다(실측).
 
 # 투자자 항등식이 성립하기 시작하는 첫 거래일. **제공처가 정한 값이지 우리 취향이 아니다.**
 #
@@ -200,7 +201,7 @@ DAILY_TRADE_ROWS_PER_CALL = 30
 # 깨지는 것이 세부 합만이 아니라 **닫힘까지**라는 점이 판단을 갈랐다. 분류 하나를 빠뜨린
 # 것이 아니라 그 행 전체를 못 믿는다는 뜻이라, 항등식을 완화하는 대신 그 앞을 안 받는다.
 # 완화해서 받으면 못 믿는 세부 수급이 DB에 들어가고 `stock_investor_flows` 툴과 브리핑이
-# 그것을 읽는다(docs/analysis/market-thesis/10-base-rate.md 2.5절).
+# 그것을 읽는다.
 IDENTITY_EPOCH = date(2018, 12, 10)
 
 STOCK_ESTIMATE_UPSERT = read_sql("postgres", "stock_investor_estimate_snapshot", "upsert.sql")
@@ -273,20 +274,6 @@ def _int(value: Any, field: str) -> int:
     try:
         return int(text)
     except ValueError:
-        raise KisPayloadError(f"KIS returned a non-numeric {field}: {value!r}") from None
-
-
-def _decimal(value: Any, field: str) -> Decimal:
-    text = str(value if value is not None else "").strip().replace(",", "")
-    if not text or text == "-":
-        # **여기서는 0이 진짜 값이다**(2026-08-28 판정) — 칸이 순매수 수량·금액·잔고라
-        # "그 투자자가 그날 순매수 0"이 정상 관측이고 제공처도 그 뜻으로 빈 칸을 준다.
-        # 목표주가처럼 0이 말이 안 되는 칸은 반대로 실패시킨다
-        # (`collectors/analyst/kis_opinion.py`의 같은 이름 함수).
-        return Decimal(0)
-    try:
-        return Decimal(text)
-    except InvalidOperation:
         raise KisPayloadError(f"KIS returned a non-numeric {field}: {value!r}") from None
 
 
@@ -392,7 +379,7 @@ class MarketFlowRow(BaseModel):
                 f"{name}_sell_qty": _int(row.get(f"{prefix}_seln_vol"), f"{prefix}_seln_vol"),
                 f"{name}_buy_qty": _int(row.get(f"{prefix}_shnu_vol"), f"{prefix}_shnu_vol"),
                 f"{name}_net_buy_qty": _int(row.get(f"{prefix}_ntby_qty"), f"{prefix}_ntby_qty"),
-                f"{name}_net_buy_amount": _decimal(row.get(f"{prefix}_ntby_tr_pbmn"), f"{prefix}_ntby_tr_pbmn"),
+                f"{name}_net_buy_amount": decimal_or_zero(row.get(f"{prefix}_ntby_tr_pbmn"), f"{prefix}_ntby_tr_pbmn"),
             }
 
         for name, field in INSTITUTION_PARTS + OTHER_PARTS:
@@ -488,19 +475,21 @@ class StockTradeDailyRow(BaseModel):
 
         values: dict[str, Any] = {
             "business_date": business_date,
-            "open_price": _decimal(row.get("stck_oprc"), "stck_oprc"),
-            "high_price": _decimal(row.get("stck_hgpr"), "stck_hgpr"),
-            "low_price": _decimal(row.get("stck_lwpr"), "stck_lwpr"),
-            "close_price": _decimal(row.get("stck_clpr"), "stck_clpr"),
+            "open_price": decimal_or_zero(row.get("stck_oprc"), "stck_oprc"),
+            "high_price": decimal_or_zero(row.get("stck_hgpr"), "stck_hgpr"),
+            "low_price": decimal_or_zero(row.get("stck_lwpr"), "stck_lwpr"),
+            "close_price": decimal_or_zero(row.get("stck_clpr"), "stck_clpr"),
             "accumulated_volume": _int(row.get("acml_vol"), "acml_vol"),
             # 이 칸만 원 단위다. 투자자별 대금은 백만원이다(실측).
-            "accumulated_trade_amount": _decimal(row.get("acml_tr_pbmn"), "acml_tr_pbmn"),
+            "accumulated_trade_amount": decimal_or_zero(row.get("acml_tr_pbmn"), "acml_tr_pbmn"),
             "foreign_registered_net_buy_qty": _int(row.get("frgn_reg_ntby_qty"), "frgn_reg_ntby_qty"),
             "foreign_unregistered_net_buy_qty": _int(row.get("frgn_nreg_ntby_qty"), "frgn_nreg_ntby_qty"),
         }
         for name, prefix in (("foreign", "frgn"), ("institution", "orgn"), ("individual", "prsn")):
             values[f"{name}_net_buy_qty"] = _int(row.get(f"{prefix}_ntby_qty"), f"{prefix}_ntby_qty")
-            values[f"{name}_net_buy_amount"] = _decimal(row.get(f"{prefix}_ntby_tr_pbmn"), f"{prefix}_ntby_tr_pbmn")
+            values[f"{name}_net_buy_amount"] = decimal_or_zero(
+                row.get(f"{prefix}_ntby_tr_pbmn"), f"{prefix}_ntby_tr_pbmn"
+            )
         for name, field in INSTITUTION_PARTS + OTHER_PARTS:
             values[f"{name}_net_buy_qty"] = _int(row.get(field), field)
 
@@ -618,7 +607,7 @@ class KisInvestorFlowCollector:
 
     한 실행이 객체 하나다. 토큰은 발급 횟수 제한이 있어 DAG이 한 번 받아 넘긴다. 세 조회를
     한 클래스에 두는 것은 셋이 같은 자격 증명과 같은 응답 규약(`rt_cd`, `output`)을 쓰기
-    때문이다. 나누면 `_call`·`_rows`가 세 벌이 된다.
+    때문이다. 나누면 `_call`이 세 벌이 된다.
 
     조회하는 쪽(장중 DAG은 추정·시장 누적, 일별 DAG은 확정 일별)이 다른 것은 스케줄이지
     수집 규칙이 아니다.
@@ -641,7 +630,7 @@ class KisInvestorFlowCollector:
             STOCK_ESTIMATE_TR_ID,
             {"MKSC_SHRN_ISCD": stock.value},
         )
-        raw = self._rows(payload, "output2")
+        raw = output_rows(payload, "output2")
         try:
             rows = tuple(StockEstimateRow.from_payload(row) for row in raw)
         except (KeyError, ValidationError) as error:
@@ -671,7 +660,7 @@ class KisInvestorFlowCollector:
             MARKET_FLOW_TR_ID,
             {"FID_INPUT_ISCD": market.primary_code, "FID_INPUT_ISCD_2": market.secondary_code},
         )
-        raw = self._rows(payload, "output")
+        raw = output_rows(payload, "output")
         if not raw:
             raise KisPayloadError(f"KIS returned no market flow row for {market.value}")
 
@@ -725,7 +714,7 @@ class KisInvestorFlowCollector:
                 "FID_ETC_CLS_CODE": "",
             },
         )
-        raw = self._rows(payload, "output2")
+        raw = output_rows(payload, "output2")
         if since is not None:
             kept = [row for row in raw if str(row.get("stck_bsop_date", "")) >= since.strftime("%Y%m%d")]
             if len(kept) != len(raw):
@@ -909,26 +898,7 @@ class KisInvestorFlowCollector:
 
     def _call(self, path: str, tr_id: str, query: dict[str, str]) -> dict[str, Any]:
         body, _, _ = send_get(self._token, self._app_key, self._app_secret, path, tr_id, query)
-        try:
-            payload = json.loads(body)
-        except json.JSONDecodeError as error:
-            raise KisPayloadError(f"KIS returned a non-JSON body: {error}") from None
-        if not isinstance(payload, dict):
-            raise KisPayloadError("KIS returned a JSON body that is not an object")
-
-        code = str(payload.get("rt_cd", ""))
-        if code != "0":
-            raise result_error(code, str(payload.get("msg1", "")).strip())
-        return payload
-
-    @staticmethod
-    def _rows(payload: dict[str, Any], key: str) -> list[dict[str, Any]]:
-        output = payload.get(key) or []
-        if isinstance(output, dict):
-            return [output]
-        if not isinstance(output, list):
-            raise KisPayloadError(f"KIS returned a {key} that is neither a list nor an object")
-        return output
+        return decode_payload(body)
 
     @staticmethod
     def _insert_source_record(

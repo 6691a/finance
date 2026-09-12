@@ -4,6 +4,7 @@ import pytest
 from airflow.sdk.exceptions import AirflowFailException
 
 from dags import document_assessment_hourly as module
+from modules import dag_common
 from modules.assessment import Assessment, AssessmentResult, Candidates, PendingDocument
 from modules.llm import RetryableLlmError
 
@@ -59,7 +60,7 @@ def test_evaluate_saves_successes_before_raising_provider_error(monkeypatch, ret
             )
 
     monkeypatch.setattr(module, "get_current_context", lambda: {"params": {}})
-    monkeypatch.setattr(module, "_connection", lambda: connections.append(FakeConnection()) or connections[-1])
+    monkeypatch.setattr(dag_common, "connection", lambda: connections.append(FakeConnection()) or connections[-1])
 
     class FakeStore:
         def __init__(self, connection, prompt_revision) -> None:
@@ -75,7 +76,7 @@ def test_evaluate_saves_successes_before_raising_provider_error(monkeypatch, ret
             persisted.append(document.id)
 
     monkeypatch.setattr(module, "AssessmentStore", FakeStore)
-    monkeypatch.setattr(module, "document_model", lambda: object())
+    monkeypatch.setattr(module, "openai_model", lambda: object())
     monkeypatch.setattr(module, "DocumentAssessor", lambda model, settings: object())
     monkeypatch.setattr(module, "AssessmentBatch", FakeBatch)
     monkeypatch.setattr(module, "model_name", lambda model: "test-model")
@@ -102,7 +103,7 @@ def test_evaluate_closes_a_blocked_document_without_a_score(monkeypatch):
             return (AssessmentResult(document_id=DOCUMENT.id, blocked=("ignore_instructions",)),)
 
     monkeypatch.setattr(module, "get_current_context", lambda: {"params": {}})
-    monkeypatch.setattr(module, "_connection", lambda: connections.append(FakeConnection()) or connections[-1])
+    monkeypatch.setattr(dag_common, "connection", lambda: connections.append(FakeConnection()) or connections[-1])
 
     class FakeStore:
         def __init__(self, connection, prompt_revision) -> None:
@@ -121,7 +122,7 @@ def test_evaluate_closes_a_blocked_document_without_a_score(monkeypatch):
             closed.append((document.id, tuple(blocked)))
 
     monkeypatch.setattr(module, "AssessmentStore", FakeStore)
-    monkeypatch.setattr(module, "document_model", lambda: object())
+    monkeypatch.setattr(module, "openai_model", lambda: object())
     monkeypatch.setattr(module, "DocumentAssessor", lambda model, settings: object())
     monkeypatch.setattr(module, "AssessmentBatch", FakeBatch)
     monkeypatch.setattr(module, "model_name", lambda model: "test-model")

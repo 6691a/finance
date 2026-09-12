@@ -51,18 +51,15 @@ KIS가 개별 종목의 외국인·기관 **추정** 순매수를 하루 몇 차
 """
 
 import logging
-import os
 from contextlib import closing
 from datetime import UTC, datetime, timedelta
-from typing import Any
 
 import pendulum
-from airflow.providers.postgres.hooks.postgres import PostgresHook
 from airflow.sdk import Variable, dag, task
-from airflow.sdk.exceptions import AirflowFailException, AirflowSkipException
+from airflow.sdk.exceptions import AirflowFailException
 from airflow.timetables.trigger import MultipleCronTriggerTimetable
-from pydantic import SecretStr
 
+from modules import dag_common
 from modules.collectors.kis import (
     KisHTTPError,
     KisPayloadError,
@@ -74,8 +71,7 @@ from modules.collectors.market.kis_investor_flow import (
     InvestorFlowStock,
     KisInvestorFlowCollector,
 )
-from modules.market_session import krx_open_day
-from modules.utility import CONNECTION_ID, KIS_UNRECOVERABLE_STATUSES, KST_TIMEZONE, atomic
+from modules.utility import KIS_UNRECOVERABLE_STATUSES, KST_TIMEZONE, atomic
 
 logger = logging.getLogger(__name__)
 
@@ -89,18 +85,6 @@ SCHEDULE = MultipleCronTriggerTimetable(
     "35 14 * * 1-5",  # KST 평일 14:35 = UTC 05:35
     timezone=KST_TIMEZONE,
 )
-
-
-def _credentials() -> tuple[SecretStr, SecretStr]:
-    app_key = os.environ.get("KIS_APP_KEY")
-    app_secret = os.environ.get("KIS_APP_SECRET")
-    if not app_key or not app_secret:
-        raise AirflowFailException("KIS_APP_KEY and KIS_APP_SECRET are required")
-    return SecretStr(app_key), SecretStr(app_secret)
-
-
-def _connection() -> Any:
-    return PostgresHook(postgres_conn_id=CONNECTION_ID).get_conn()
 
 
 @dag(
@@ -121,15 +105,10 @@ def kis_investor_estimate_intraday():
     def collect() -> int:
         now_kst = datetime.now(UTC).astimezone(KST_TIMEZONE)
 
-        connection = _connection()
-        try:
-            closed = krx_open_day(connection, now_kst.date()) is False
-        finally:
-            connection.close()
-        if closed:
-            raise AirflowSkipException(f"KRX is closed on {now_kst.date()}")
+        with closing(dag_common.connection()) as connection:
+            dag_common.skip_unless_krx_open(connection, now_kst.date())
 
-        app_key, app_secret = _credentials()
+        app_key, app_secret = dag_common.kis_credentials()
         collector = KisInvestorFlowCollector(access_token(Variable, app_key, app_secret), app_key, app_secret)
 
         # 응답에 날짜가 없어 호출자가 넘긴다. 정규장 안에서만 도니 KST 오늘이 영업일이다.
@@ -137,7 +116,7 @@ def kis_investor_estimate_intraday():
 
         stored = 0
         failures: list[str] = []
-        with closing(_connection()) as connection:
+        with closing(dag_common.connection()) as connection:
             for stock in InvestorFlowStock:
                 try:
                     fetch = collector.fetch_stock_estimates(stock, business_date)

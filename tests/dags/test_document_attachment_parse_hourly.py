@@ -2,6 +2,7 @@ import pytest
 from airflow.sdk.exceptions import AirflowFailException
 
 from dags import document_attachment_parse_hourly as module
+from modules import dag_common
 from modules.collectors.document.pdf import ParseCandidate, ParsedAttachment
 
 CANDIDATE = ParseCandidate(id=7, storage_path="documents/boj/1042/0.pdf")
@@ -46,7 +47,7 @@ def run_parse(monkeypatch, tmp_path, *, waiting, parse, store=lambda result: 1, 
     monkeypatch.setattr(module, "DEFAULT_FILE_ROOT", tmp_path)
     monkeypatch.setattr(module, "AttachmentPdfParser", FakeParser)
     monkeypatch.setattr(module, "pending_attachments", lambda connection, limit: waiting)
-    monkeypatch.setattr(module, "_connection", fake_connection)
+    monkeypatch.setattr(dag_common, "connection", fake_connection)
 
     task = module.document_attachment_parse_hourly.task_dict["parse"]
     return task.python_callable(params={"batch_size": batch_size}), stored, connections

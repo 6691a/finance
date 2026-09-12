@@ -10,15 +10,10 @@ def test_settings_loads_every_field_from_yaml_only(monkeypatch, tmp_path):
             databases:
               default:
                 url: postgresql+asyncpg://yaml:y@localhost/yaml
-            redises:
-              default:
-                url: redis://localhost/7
             kis_app_key: yaml-key
             kis_app_secret: yaml-secret
             kis_rest_domain: https://yaml.example.com
             kis_websocket_domain: wss://yaml.example.com
-            fred_api_key: yaml-fred
-            ecos_api_key: yaml-ecos
             sentry_dsn: https://yaml.example.com/1
             sentry_environment: yaml
             sentry_release: yaml@local
@@ -37,4 +32,3 @@ def test_settings_loads_every_field_from_yaml_only(monkeypatch, tmp_path):
 
     assert settings.kis_app_key == "yaml-key"
     assert settings.databases["default"].url.endswith("/yaml")
-    assert settings.redises["default"].url == "redis://localhost/7"

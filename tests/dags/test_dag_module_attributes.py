@@ -14,6 +14,20 @@ import pytest
 
 # (모듈 경로, 그 모듈에서 부르는 이름들). DAG 파일에서 `모듈.이름(` 꼴로 쓰는 것.
 MODULE_ATTRIBUTES: dict[str, tuple[str, ...]] = {
+    "modules.dag_common": (
+        "connection",
+        "kis_credentials",
+        "slack_settings",
+        "call_with_token_reissue",
+        "observation_period_params",
+        "resolve_period_or_fail",
+        "calendar_day_or_fail",
+        "requested_start_date",
+        "skip_unless_krx_open",
+        "skip_unless_us_open",
+        "is_unrecoverable_result",
+        "require_env",
+    ),
     "modules.kospi.common": ("notify_forecast", "notify_review", "notify_param", "run_date_param"),
     "modules.kospi.forecast": ("build",),
     "modules.kospi.intraday": ("build", "run_slot_param"),

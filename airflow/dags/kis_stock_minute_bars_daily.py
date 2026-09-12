@@ -76,17 +76,15 @@ WebSocket 쪽 `KIS_ENABLE_NXT_WEBSOCKET`도 기본값과 허용 값이 같다. �
 """
 
 import logging
-import os
 import re
 from datetime import date, timedelta
 from typing import Any
 
 import pendulum
-from airflow.providers.postgres.hooks.postgres import PostgresHook
 from airflow.sdk import Param, Variable, dag, get_current_context, task
 from airflow.sdk.exceptions import AirflowFailException
-from pydantic import SecretStr
 
+from modules import dag_common
 from modules.collectors.kis import (
     DomesticStock,
     KisHTTPError,
@@ -101,7 +99,7 @@ from modules.collectors.market.kis_quote import (
     last_settled_close,
 )
 from modules.market_session import krx_open_day
-from modules.utility import CONNECTION_ID, KIS_UNRECOVERABLE_STATUSES, KST_TIMEZONE
+from modules.utility import KIS_UNRECOVERABLE_STATUSES, KST_TIMEZONE
 
 logger = logging.getLogger(__name__)
 
@@ -115,20 +113,6 @@ DAYS_PARAM = "days"
 # 이 DAG는 `max_active_runs=1`이라 긴 백필 run이 그날 마감 확정 run을 직접 점유한다. 상한이
 # 없으면 `days` 오타 하나(3650)가 정규 확정을 며칠 멈춘다. 더 넓은 구간은 run을 나눈다.
 MAX_DAYS = 31
-
-
-def _credentials() -> tuple[SecretStr, SecretStr]:
-    app_key = os.environ.get("KIS_APP_KEY")
-    app_secret = os.environ.get("KIS_APP_SECRET")
-    if not app_key or not app_secret:
-        raise AirflowFailException("KIS_APP_KEY and KIS_APP_SECRET are required")
-    return SecretStr(app_key), SecretStr(app_secret)
-
-
-def _connection() -> Any:
-    # 반환 타입은 provider 버전에 따라 psycopg2/psycopg3 래퍼로 갈린다. 런타임 객체는
-    # 어느 쪽이든 PEP 249 연결이라 commit·rollback을 갖는다.
-    return PostgresHook(postgres_conn_id=CONNECTION_ID).get_conn()
 
 
 def _run_date() -> date:
@@ -239,7 +223,7 @@ def kis_stock_minute_bars_daily():
         business_date = requested_business_date(_run_date(), params)
         days = requested_days(params)
 
-        app_key, app_secret = _credentials()
+        app_key, app_secret = dag_common.kis_credentials()
         try:
             exchanges = rest_exchanges()
         except ValueError as error:
@@ -252,7 +236,7 @@ def kis_stock_minute_bars_daily():
         for offset in range(days):
             target = business_date - timedelta(days=offset)
             for stock in DomesticStock:
-                connection = _connection()
+                connection = dag_common.connection()
                 try:
                     base = last_settled_close(connection, stock.value, target)
                     open_day = krx_open_day(connection, target)
@@ -300,7 +284,7 @@ def kis_stock_minute_bars_daily():
                             failures.append(failure)
                         continue
 
-                    connection = _connection()
+                    connection = dag_common.connection()
                     try:
                         rows = collector.store_stock_bars(connection, fetch)
                         connection.commit()

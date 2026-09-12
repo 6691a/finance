@@ -7,7 +7,7 @@
 -- 같은 분에 REST와 WebSocket 값이 겹치면 마지막 정상값이 남고 source_record_id가 그 행을
 -- 실제로 갱신한 원천을 가리킨다.
 --
--- 정의의 원본은 `apps/models/market.py`의 `MarketMovementSnapshot`이고
+-- 정의의 원본은 `apps/models/market/positioning.py`의 `MarketMovementSnapshot`이고
 -- `tests/collectors/test_kis.py`가 여기 컬럼을 그 모델 metadata와 대조한다.
 INSERT INTO market_movement_snapshot (
     provider,

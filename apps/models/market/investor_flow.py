@@ -18,10 +18,9 @@ from sqlalchemy import (
     Text,
     UniqueConstraint,
 )
-from sqlalchemy import Enum as SqlEnum
 from sqlalchemy.orm import Mapped, mapped_column
 
-from apps.core.database import EntityBase, table_options
+from apps.core.database import EntityBase, enum_column, table_options
 
 
 class StockInvestorEstimateSnapshot(EntityBase):
@@ -160,12 +159,7 @@ class MarketInvestorFlowSnapshot(EntityBase):
 
     provider: Mapped[str] = mapped_column(Text, nullable=False, comment="데이터 제공처 식별자(kis)")
     market_code: Mapped[InvestorFlowMarketCode] = mapped_column(
-        SqlEnum(
-            InvestorFlowMarketCode,
-            native_enum=False,
-            length=20,
-            values_callable=lambda enum: [member.value for member in enum],
-        ),
+        enum_column(InvestorFlowMarketCode),
         nullable=False,
         comment=(
             "시장 구분(KOSPI, KOSDAQ, FUTURES, CALL_OPTION, PUT_OPTION, STOCK_FUTURES, ETF). "

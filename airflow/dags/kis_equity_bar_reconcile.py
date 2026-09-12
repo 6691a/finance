@@ -60,18 +60,15 @@ NXT는 08:00~20:05다. NXT는 `KIS_ENABLE_NXT_REST`로 뗄 수 있고, 그 판�
 """
 
 import logging
-import os
 from contextlib import closing
 from datetime import UTC, date, datetime, time, timedelta
 from decimal import Decimal
-from typing import Any
 
 import pendulum
-from airflow.providers.postgres.hooks.postgres import PostgresHook
 from airflow.sdk import Variable, dag, task
 from airflow.sdk.exceptions import AirflowFailException, AirflowSkipException
-from pydantic import SecretStr
 
+from modules import dag_common
 from modules.collectors.kis import (
     DomesticStock,
     KisHTTPError,
@@ -87,8 +84,7 @@ from modules.collectors.market.kis_quote import (
     StockBarFetch,
     last_settled_close,
 )
-from modules.market_session import krx_open_day
-from modules.utility import CONNECTION_ID, KIS_UNRECOVERABLE_STATUSES, KST_TIMEZONE, atomic
+from modules.utility import KST_TIMEZONE, atomic
 
 logger = logging.getLogger(__name__)
 
@@ -98,34 +94,6 @@ SESSION_GRACE_MINUTES = 5
 
 # 조정 한 번에 허용하는 KIS 호출 수. 한 응답이 120봉이라 최근 두 시간을 덮는다.
 RECONCILE_MAX_CALLS = 1
-
-
-def _credentials() -> tuple[SecretStr, SecretStr]:
-    app_key = os.environ.get("KIS_APP_KEY")
-    app_secret = os.environ.get("KIS_APP_SECRET")
-    if not app_key or not app_secret:
-        raise AirflowFailException("KIS_APP_KEY and KIS_APP_SECRET are required")
-    return SecretStr(app_key), SecretStr(app_secret)
-
-
-def _connection() -> Any:
-    # 반환 타입은 provider 버전에 따라 psycopg2/psycopg3 래퍼로 갈린다. 런타임 객체는
-    # 어느 쪽이든 PEP 249 연결이라 commit·rollback을 갖는다.
-    return PostgresHook(postgres_conn_id=CONNECTION_ID).get_conn()
-
-
-def _skip_when_closed(connection: Any, today_kst: date) -> None:
-    """확정 휴장일이면 skip.
-
-    행이 없거나 아직 판정하지 않았으면 계속한다. **모르면 수집을 계속한다** — 캘린더 수집이
-    실패했다는 이유로 진짜 거래일 데이터를 잃는 것이 빈 요청 몇 번보다 나쁘다.
-    """
-    if krx_open_day(connection, today_kst) is False:
-        raise AirflowSkipException(f"KRX is closed on {today_kst}")
-
-
-def _collector(app_key: SecretStr, app_secret: SecretStr, force: bool = False) -> KisQuoteCollector:
-    return KisQuoteCollector(access_token(Variable, app_key, app_secret, force=force), app_key, app_secret)
 
 
 def active_exchanges(now_kst: datetime) -> tuple[StockExchange, ...]:
@@ -148,36 +116,24 @@ def _grace_end(exchange: StockExchange) -> time:
 
 def _fetch(
     collector: KisQuoteCollector,
-    app_key: SecretStr,
-    app_secret: SecretStr,
     stock: DomesticStock,
     business_date: date,
     previous_close: Decimal,
     exchange: StockExchange,
     now: datetime,
 ) -> StockBarFetch:
-    """종목 봉을 최근 한 호출만 받는다. 401이면 토큰을 한 번만 재발급하고 다시 시도한다.
+    """종목 봉을 최근 한 호출만 받는다.
 
     `until=now`가 진행 중인 분을 잘라 낸다. 그 규칙은 수집기가 알고 여기서는 기준 시각만 준다.
     """
-
-    def call(active: KisQuoteCollector) -> StockBarFetch:
-        return active.fetch_stock_bars(
-            stock,
-            business_date,
-            previous_close,
-            exchange,
-            until=now,
-            max_calls=RECONCILE_MAX_CALLS,
-        )
-
-    try:
-        return call(collector)
-    except KisHTTPError as error:
-        if error.status != 401:
-            raise
-        logger.warning("KIS returned 401; reissuing the token once")
-        return call(_collector(app_key, app_secret, force=True))
+    return collector.fetch_stock_bars(
+        stock,
+        business_date,
+        previous_close,
+        exchange,
+        until=now,
+        max_calls=RECONCILE_MAX_CALLS,
+    )
 
 
 @dag(
@@ -209,14 +165,14 @@ def kis_equity_bar_reconcile():
         if not exchanges:
             raise AirflowSkipException(f"No exchange session is live at {now_kst:%H:%M} KST")
 
-        app_key, app_secret = _credentials()
-        collector = _collector(app_key, app_secret)
+        app_key, app_secret = dag_common.kis_credentials()
+        collector = KisQuoteCollector(access_token(Variable, app_key, app_secret), app_key, app_secret)
 
         stored = 0
         succeeded: list[str] = []
         failures: list[str] = []
-        with closing(_connection()) as connection:
-            _skip_when_closed(connection, today_kst)
+        with closing(dag_common.connection()) as connection:
+            dag_common.skip_unless_krx_open(connection, today_kst)
 
             for stock in DomesticStock:
                 base = last_settled_close(connection, stock.value, today_kst)
@@ -227,11 +183,21 @@ def kis_equity_bar_reconcile():
 
                 for exchange in exchanges:
                     name = f"{stock.value}:{exchange.value}"
+                    # 401이면 토큰을 한 번만 재발급하고 다시 시도한다(`call_with_token_reissue`).
                     try:
-                        fetch = _fetch(collector, app_key, app_secret, stock, today_kst, base, exchange, now)
+                        fetch = dag_common.call_with_token_reissue(
+                            collector,
+                            _fetch,
+                            stock,
+                            today_kst,
+                            base,
+                            exchange,
+                            now,
+                            app_key=app_key,
+                            app_secret=app_secret,
+                            label=name,
+                        )
                     except KisHTTPError as error:
-                        if error.status in KIS_UNRECOVERABLE_STATUSES:
-                            raise AirflowFailException(f"{name}: {error}") from error
                         logger.warning("%s failed with HTTP %s", name, error.status)
                         failures.append(f"{name}({error})")
                         continue

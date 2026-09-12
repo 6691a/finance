@@ -27,8 +27,7 @@ from sqlalchemy import (
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 
-from apps.core.database import EntityBase, table_options
-from apps.models.analysis._columns import _enum_column
+from apps.core.database import EntityBase, enum_column, table_options
 
 
 class KospiSlot(StrEnum):
@@ -127,7 +126,7 @@ class KospiForecast(EntityBase):
         comment="전망이 대상으로 삼은 세션 날짜(KST). 시각은 담지 않는다",
     )
     slot: Mapped[KospiSlot] = mapped_column(
-        _enum_column(KospiSlot),
+        enum_column(KospiSlot),
         nullable=False,
         comment=(
             "전망을 만든 슬롯(pre_open은 장전 08:35, midday는 장중 11:35, pre_close는 마감전 14:35 KST). "
@@ -161,7 +160,7 @@ class KospiForecast(EntityBase):
         ),
     )
     direction: Mapped[KospiDirection] = mapped_column(
-        _enum_column(KospiDirection),
+        enum_column(KospiDirection),
         nullable=False,
         comment="전망 방향(up/down). flat이 없다 — 크기와 폭이 '얼마나 움직이나'를 이미 말한다",
     )
@@ -293,7 +292,7 @@ class KospiLlmRun(EntityBase):
     )
 
     kind: Mapped[KospiLlmRunKind] = mapped_column(
-        _enum_column(KospiLlmRunKind),
+        enum_column(KospiLlmRunKind),
         nullable=False,
         comment="대화의 종류(forecast는 전망, review는 장후 관찰). 프롬프트도 판도 다르다",
     )
@@ -302,7 +301,7 @@ class KospiLlmRun(EntityBase):
         comment="이 대화가 대상으로 삼은 세션 날짜(KST)",
     )
     slot: Mapped[KospiSlot | None] = mapped_column(
-        _enum_column(KospiSlot),
+        enum_column(KospiSlot),
         nullable=True,
         comment="전망 대화의 슬롯. 장후 관찰은 슬롯이 없어 NULL이다",
     )
@@ -312,7 +311,7 @@ class KospiLlmRun(EntityBase):
         comment="이 대화의 조회 기준 시각(UTC). 슬롯이 정한다",
     )
     status: Mapped[KospiLlmRunStatus] = mapped_column(
-        _enum_column(KospiLlmRunStatus),
+        enum_column(KospiLlmRunStatus),
         nullable=False,
         comment="대화의 상태. running으로 열고 succeeded 또는 failed로 닫는다",
     )
@@ -492,7 +491,7 @@ class KospiToolCall(EntityBase):
         Integer, nullable=False, server_default="0", comment="그 본문의 문자 수. 예산 분석의 재료다"
     )
     error_kind: Mapped[KospiToolCallErrorKind | None] = mapped_column(
-        _enum_column(KospiToolCallErrorKind),
+        enum_column(KospiToolCallErrorKind),
         nullable=True,
         comment=(
             "실패 종류(unknown_tool·validation은 함수에 못 닿음, limit은 우리 상한, "

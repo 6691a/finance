@@ -2,7 +2,7 @@
 -- 멱등 키는 (market_code, session_date)다.
 --
 -- 국내는 KIS 국내휴장일조회가 판정의 주인이므로 effective_open_day와 verified_by를 함께 쓴다.
--- 정의의 원본은 `apps/models/market.py`의 `MarketSession`이고
+-- 정의의 원본은 `apps/models/market/sessions.py`의 `MarketSession`이고
 -- `tests/collectors/test_kis_market_calendar.py`가 여기 컬럼을 그 모델 metadata와 대조한다.
 INSERT INTO market_session (
     market_code,

@@ -19,10 +19,9 @@ from sqlalchemy import (
     Text,
     UniqueConstraint,
 )
-from sqlalchemy import Enum as SqlEnum
 from sqlalchemy.orm import Mapped, mapped_column
 
-from apps.core.database import EntityBase, table_options
+from apps.core.database import EntityBase, enum_column, table_options
 
 
 class IndicatorObservation(EntityBase):
@@ -121,12 +120,7 @@ class MarketSession(EntityBase):
     )
 
     market_code: Mapped[MarketCode] = mapped_column(
-        SqlEnum(
-            MarketCode,
-            native_enum=False,
-            length=20,
-            values_callable=lambda enum: [member.value for member in enum],
-        ),
+        enum_column(MarketCode),
         nullable=False,
         comment="휴장 캘린더를 공유하는 시장 묶음(KRX, US_EQUITY). 상장 거래소를 뜻하는 Market enum과는 다른 체계다",
     )
@@ -186,12 +180,7 @@ class MarketSession(EntityBase):
         ),
     )
     verified_by: Mapped[SessionVerifier | None] = mapped_column(
-        SqlEnum(
-            SessionVerifier,
-            native_enum=False,
-            length=20,
-            values_callable=lambda enum: [member.value for member in enum],
-        ),
+        enum_column(SessionVerifier),
         nullable=True,
         comment="effective_open_day를 채운 제공처(kis, nyse)",
     )

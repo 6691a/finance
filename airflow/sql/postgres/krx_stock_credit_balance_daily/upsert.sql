@@ -4,7 +4,7 @@
 -- **거래일이 키이고 결제일은 값이다.** 이 API의 입력은 결제일이지만 사용자가 보는 추이는
 -- 거래일 기준이다. 실측에서 결제 시차가 2영업일이었다.
 --
--- 정의의 원본은 `apps/models/market.py`의 `KrxStockCreditBalanceDaily`이고
+-- 정의의 원본은 `apps/models/market/positioning.py`의 `KrxStockCreditBalanceDaily`이고
 -- `tests/collectors/test_kis.py`가 여기 컬럼을 그 모델 metadata와 대조한다.
 INSERT INTO krx_stock_credit_balance_daily (
     provider, stock_code, trade_date, settlement_date, close_price, accumulated_volume,

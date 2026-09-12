@@ -2,7 +2,7 @@
 
 태스크는 하나다. 재무성 CSV 한 파일이 곡선 전체를 담고 있어 시계열마다 요청할 일이 없다.
 `fred_treasury_daily`, `ecos_market_rate_daily`가 시계열마다 태스크를 매핑하는 것과 다르다.
-수집 대상은 `modules.collectors.mof.JgbSeries`가 정한다(현재 `JGB2Y`, `JGB5Y`, `JGB10Y`,
+수집 대상은 `modules.collectors.indicator.mof.JgbSeries`가 정한다(현재 `JGB2Y`, `JGB5Y`, `JGB10Y`,
 `JGB20Y`, `JGB30Y`, `JGB40Y`). 시계열을 늘려도 이 파일은 바뀌지 않는다.
 
 재무성이 주는 열은 1~40년 열다섯 개지만 실제 입찰 발행되는 연한만 저장한다. 나머지는 발행
@@ -22,7 +22,7 @@
     data/jgbcm_all.csv   1974-09-24부터 지난달 말까지. 이번 달은 없다
 
 **어느 한쪽도 최근 며칠과 과거를 함께 담지 못한다.** 조회 구간이 달 경계를 넘으면 둘 다
-받아야 하고, 그 판단은 `modules.collectors.mof.fetch_curves`가 한다. 받은 파일마다
+받아야 하고, 그 판단은 `modules.collectors.indicator.mof`가 한다. 받은 파일마다
 `source_record`가 한 행씩 생기므로 매달 초 며칠은 한 run이 레코드를 두 개 남긴다.
 정상이다.
 
@@ -108,10 +108,10 @@ from contextlib import closing
 from datetime import timedelta
 
 import pendulum
-from airflow.providers.postgres.hooks.postgres import PostgresHook
 from airflow.sdk import Param, dag, get_current_context, task
 from airflow.sdk.exceptions import AirflowFailException
 
+from modules import dag_common
 from modules.collectors.indicator.mof import (
     MofFile,
     MofHTTPError,
@@ -120,15 +120,7 @@ from modules.collectors.indicator.mof import (
     fetch_curves,
     store_observations,
 )
-from modules.period import (
-    LOOKBACK_DAYS,
-    LOOKBACK_DAYS_PARAM,
-    OBSERVATION_END_PARAM,
-    OBSERVATION_START_PARAM,
-    PeriodError,
-    resolve_observation_period,
-)
-from modules.utility import CONNECTION_ID, KST_TIMEZONE, UNRECOVERABLE_STATUSES, atomic
+from modules.utility import KST_TIMEZONE, UNRECOVERABLE_STATUSES, atomic
 
 logger = logging.getLogger(__name__)
 
@@ -159,26 +151,10 @@ def resolve_source_file(value: object) -> MofFile | None:
     max_active_runs=1,
     default_args={"retries": 2, "retry_delay": timedelta(hours=1)},
     params={
-        OBSERVATION_START_PARAM: Param(
-            None,
-            type=["null", "string"],
-            format="date",
-            title="조회 시작 기준일",
-            description="비우면 observation_end에서 lookback_days만큼 뺀 날. 주면 lookback_days를 무시한다.",
-        ),
-        OBSERVATION_END_PARAM: Param(
-            None,
-            type=["null", "string"],
-            format="date",
-            title="조회 종료 기준일",
-            description="비우면 이 run 시각의 KST 날짜. 과거 구간을 한 번에 넣을 때 직접 넘긴다.",
-        ),
-        LOOKBACK_DAYS_PARAM: Param(
-            LOOKBACK_DAYS,
-            type="integer",
-            minimum=1,
-            title="되돌아볼 일수",
-            description="구간을 지정하지 않을 때만 쓴다. 1이면 그 run의 하루만 저장한다.",
+        **dag_common.observation_period_params(
+            lookback_hint="구간을 지정하지 않을 때만 쓴다. 1이면 그 run의 하루만 저장한다.",
+            start_title="조회 시작 기준일",
+            end_title="조회 종료 기준일",
         ),
         SOURCE_FILE_PARAM: Param(
             AUTO_FILE,
@@ -195,10 +171,7 @@ def mof_jgb_daily():
     @task(task_display_name="JGB 수집·저장")
     def collect() -> int:
         context = get_current_context()
-        try:
-            observation_start, observation_end = resolve_observation_period(context)
-        except PeriodError as error:
-            raise AirflowFailException(str(error)) from error
+        observation_start, observation_end = dag_common.resolve_period_or_fail(context)
 
         params = context.get("params") or {}
         request = MofRequest(
@@ -219,7 +192,7 @@ def mof_jgb_daily():
             # 커버리지 부족도 여기 걸린다. 둘 다 파라미터나 제공처 형식 문제라 재시도해도 같다.
             raise AirflowFailException(str(error)) from error
 
-        with closing(PostgresHook(postgres_conn_id=CONNECTION_ID).get_conn()) as connection:
+        with closing(dag_common.connection()) as connection:
             try:
                 with atomic(connection):
                     # 파일이 여럿이면 한 트랜잭션에 함께 넣는다. 한쪽만 커밋되면 구간에 구멍이 남는다.

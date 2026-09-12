@@ -9,7 +9,11 @@
 - 상태: **구현 완료.** `airflow/modules/technical/indicators.py`(계산)·`technical/signals.py`(검출·저장),
   `airflow/dags/technical_signal_daily.py`, `apps/models/analysis/technical.py`의 `TechnicalSignal`,
   리비전 `c9f4b2e70a18`까지 있다. 남은 것은 코드가 아니라 관측이다 — 12.6절 SQL로 신호 셋의
-  지평별 적중률을 본다
+  지평별 적중률을 본다. **소비자 한쪽은 사라졌다** — 9·12.5·14절이 가리키는
+  `airflow/modules/thesis/*`·`tests/modules/test_thesis_*.py`·`apps/models/analysis/thesis.py`·
+  `docs/analysis/market-thesis/`·`technical_signal/select_thesis_recent.sql`은 옛 추론과 함께
+  2026-09-03에 지웠다. 후속인 `airflow/modules/kospi/`는 기술 지표·신호를 읽지 않는다.
+  `technical_signal/`에 남은 SQL은 브리핑의 `select_recent.sql`과 `upsert.sql`이다
 - 성격: **설계 계약과 구현 기록이다.** 1~8·12·14절이 계약이고, 9절은 그때의 구현 순서,
   13절은 2026-08-23 검토에서 고친 점이다. 9절의 체크박스와 Task 단위는 당시 작업 단위를
   그대로 둔 것이라 지금 실행할 지시가 아니다
@@ -157,7 +161,7 @@ Strategy Builder는 기술지표를 시세 API 응답에서 받는 것이 아니
 
 인증·기본 헤더·`tr_cont` 요청은 기존 `modules.collectors.kis.send_get()`을 재사용한다. 첫 요청의 `tr_cont`는 빈 문자열이고 응답 헤더가 `M` 또는 `F`이면 다음 요청은 `N`이다. 페이지 사이는 기존 KIS 달력 수집기와 같은 0.5초를 기다리고 테스트는 `sleep=0`으로 없앤다. 공식 예제처럼 최대 10장까지만 허용하되, 열 번째 응답에도 다음 장이 있으면 그 심볼을 저장하지 않고 실패시킨다.
 
-**연속조회가 실제로 되는지는 검증되지 않았다.** 같은 KIS의 확정 수급 일별 API는 `tr_cont`가 빈 문자열로 와서 연속조회가 없고, 한 응답이 30거래일로 잘린다(`collectors/market/kis_investor_flow.py`의 `DAILY_TRADE_ROWS_PER_CALL`, 실측). KIS 기간별 차트 API도 한 응답 100봉 상한이 흔하다. 구현 첫 단계에서 200달력일 구간을 한 번 요청해 **행 수와 응답 헤더 `tr_cont`를 실측**하고 둘 중 하나로 확정한다.
+**연속조회가 실제로 되는지는 검증되지 않았다.** 같은 KIS의 확정 수급 일별 API는 `tr_cont`가 빈 문자열로 와서 연속조회가 없고, 한 응답이 30거래일로 잘린다(`collectors/market/kis_investor_flow.py`의 주석, 실측). KIS 기간별 차트 API도 한 응답 100봉 상한이 흔하다. 구현 첫 단계에서 200달력일 구간을 한 번 요청해 **행 수와 응답 헤더 `tr_cont`를 실측**하고 둘 중 하나로 확정한다.
 
 - `tr_cont`가 `M`/`F`로 오면 위 연속조회 그대로.
 - 오지 않고 행이 잘리면 `kis_investor_flow.fetch_stock_trade_daily`처럼 **날짜 창을 뒤로 옮긴다.** 받은 가장 오래된 날짜의 전날을 다음 `FID_INPUT_DATE_2`로 쓰고, 창이 요청 시작일에 닿거나 빈 응답이 오면 멈춘다. 상한 10창은 같다.
@@ -293,7 +297,7 @@ volume_ratio20 = 120 / 109.5 = 1.095890410958904
 
 ## 6. 조회 계약
 
-본문 조회 SQL `airflow/sql/postgres/technical/select_history.sql`과 빈 결과 목록 SQL `select_symbols.sql` 두 개만 둔다.
+본문 조회 SQL `airflow/sql/postgres/technical/select_history.sql` 하나만 둔다. 빈 결과 목록 SQL `select_symbols.sql`은 설계에는 있었으나 부르는 코드가 없어 지웠다(2026-09-10).
 
 ```sql
 WITH requested AS (
@@ -362,7 +366,7 @@ ORDER BY symbol, business_date DESC
 
 `daily_history`는 `symbols=[요청 심볼]`, `include_watched=false`로 호출한다. Slack 브리핑은 `symbols=["KOSPI", "KOSDAQ"]`, `include_watched=true`로 한 번 호출한다. 따라서 watched 종목이 늘어도 브리핑 코드를 바꾸지 않는다.
 
-빈 결과에서 보여 줄 심볼 목록은 다음 `technical/select_symbols.sql`로 옮긴다.
+빈 결과에서 보여 줄 심볼 목록은 다음 `technical/select_symbols.sql`로 옮기려 했다(파일은 부르는 코드가 없어 2026-09-10에 지웠다. 아래는 설계 당시의 초안이다).
 
 ```sql
 WITH available AS (
@@ -561,7 +565,7 @@ uv run ruff check airflow/dags/kis_index_daily.py tests/dags/test_kis_index_dail
 **Files:**
 
 - Create: `airflow/sql/postgres/technical/select_history.sql`
-- Create: `airflow/sql/postgres/technical/select_symbols.sql`
+- ~~Create: `airflow/sql/postgres/technical/select_symbols.sql`~~ (부르는 코드가 없어 지웠다, 2026-09-10)
 - Delete: `airflow/sql/postgres/quote_daily/select_thesis_history.sql`
 - Delete: `airflow/sql/postgres/quote_daily/select_thesis_symbols.sql`
 - Modify: `airflow/modules/thesis/toolbox.py`
@@ -892,8 +896,8 @@ def detect_signals(
 | `provider` | Text | 원천 제공처. 현재는 `kis`뿐이다 |
 | `symbol` | Text | `KOSPI`·`KOSDAQ` 또는 6자리 종목코드. 마스터로 외래키를 걸지 않는다(`thesis.subject_code`와 같은 이유) |
 | `signal_date` | Date | 사건이 난 KRX 거래일 |
-| `kind` | `_enum_column(TechnicalSignalKind)` + CHECK | `sma_cross`·`macd_cross`·`rsi_reversal` |
-| `direction` | `_enum_column(ThesisDirection)` + `CHECK direction IN ('up', 'down')` | 기존 enum 재사용. `flat`은 CHECK로 막는다 |
+| `kind` | `enum_column(TechnicalSignalKind)` + CHECK | `sma_cross`·`macd_cross`·`rsi_reversal` |
+| `direction` | `enum_column(ThesisDirection)` + `CHECK direction IN ('up', 'down')` | 기존 enum 재사용. `flat`은 CHECK로 막는다 |
 | `close`, `sma20`, `sma60`, `macd`, `macd_signal` | Numeric — `stock_investor_trade_daily`의 가격 컬럼과 같은 정밀도 | 사건 당시 값 |
 | `rsi14` | Numeric(6, 2) | 0~100 |
 | `volume_ratio20` | Numeric(10, 4), nullable | 계산 불가면 NULL |
@@ -931,9 +935,9 @@ def detect_signals(
 
 `MarketSummary.signals: tuple[RecentSignal, ...]`는 `symbol, signal_date, kind, direction` 넷뿐인 Pydantic 모델이다. 표 렌더러가 `technicals`와 symbol로 맞춘다. 미국장 scope에는 없다(7.2절과 같음).
 
-### 12.5 thesis
+### 12.5 thesis (2026-09-03에 지움)
 
-7.1절 `recent_signals`다. 조회 SQL은 브리핑과 **별도 파일** `technical_signal/select_thesis_recent.sql`이다 — 툴은 `created_at <= as_of_at`로 걸고 브리핑은 지금까지를 본다. 기존 쿼리에 파라미터를 얹어 공유하지 않는 것은 프로젝트 규칙이다.
+7.1절 `recent_signals`였다. 조회 SQL은 브리핑과 **별도 파일** `technical_signal/select_thesis_recent.sql`이었다 — 툴은 `created_at <= as_of_at`로 걸고 브리핑은 지금까지를 본다. 기존 쿼리에 파라미터를 얹어 공유하지 않는 것은 프로젝트 규칙이다.
 
 - 파라미터 `(symbol, as_of_at, since_date)`. `since_date`는 `as_of_at`의 60거래일 전.
 - 툴 수·`MAX_TOOL_CALLS`·`MAX_TOOL_ROUNDS`는 그대로다. `TOOL_DESCRIPTIONS`의 `daily_history` 설명에 신호 세 종류와 "사건이지 판정이 아니다", "장후 슬롯(15:30)은 당일 신호를 아직 못 본다"를 적는다.
@@ -1028,6 +1032,10 @@ ORDER BY kind, direction, rule_version, horizon;
 - `kis_investor_trade_daily`의 `pages` Param은 최소 1이고 상한이 없다. Task 6의 `pages: 5`(150거래일)가 된다.
 
 ## 14. LLM 추론·평가에서 쓰는 방법
+
+> **2026-09-03에 소비자가 사라졌다.** 이 절의 `thesis/` 모듈·테이블·문서는 옛 추론과 함께
+> 지웠고, 후속인 `airflow/modules/kospi/`는 관측 상태에 기술 블록을 넣지 않는다. 아래는
+> 그때의 계약 기록이다.
 
 지표와 신호를 만들어 두는 것만으로는 추론이 나아지지 않는다. 모델이 **언제 무엇을 보고**, 그것을 **어떻게 인용하고**, 그 인용이 **실제로 도움이 됐는지**를 잴 수 있어야 한다. 세 층을 각각 정한다. 기준 구현은 `thesis.common.observed_state`(관측 상태), `ThesisToolbox`(툴·근거 레지스트리), `thesis_outcome`·`thesis_evidence`(채점·인용 기록)다.
 

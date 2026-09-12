@@ -209,6 +209,10 @@ class KospiToolbox:
     def round_count(self) -> int:
         return self._ledger.round_count
 
+    # `begin_round`·`close_open_records`는 원장으로 그대로 넘긴다. 원장을 밖에 드러내지 않는
+    # 이유는 `finish_round`다 — 그것만 툴박스가 아는 툴 이름을 끼워야 해서, 한 왕복의 세 단계
+    # 중 하나만 툴박스에 있고 둘은 `toolbox.ledger.*`로 부르면 부르는 쪽이 두 객체를 번갈아
+    # 본다. 테스트의 가짜 툴박스도 이 표면 하나만 흉내 낸다.
     def begin_round(self, tool_calls: Sequence[dict[str, Any]]) -> None:
         self._ledger.begin_round(tool_calls)
 

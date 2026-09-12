@@ -61,8 +61,7 @@ def detect_and_store(
 
     `lookback_bars`는 계산에 쓰려고 **읽어 오는** 봉 수이고 `scan_bars`는 그중 사건을 찾을
     구간이다. 지표에 워밍업이 필요하므로 앞엣것이 뒤엣것보다 커야 한다. 기본값은 일상 실행의
-    조회 창이고, 이력 백필만 이 값을 넓힌다
-    (docs/analysis/market-thesis/10-base-rate.md 4.1절).
+    조회 창이고, 이력 백필만 이 값을 넓힌다.
 
     **`as_of_at`을 과거로 굴려 백필하지 않는다.** `select_history.sql`의 cutoff는
     `business_date`가 아니라 `created_at`이고, 백필한 행은 `created_at`이 전부 백필 시각이라

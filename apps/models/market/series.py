@@ -21,10 +21,9 @@ from sqlalchemy import (
     Text,
     UniqueConstraint,
 )
-from sqlalchemy import Enum as SqlEnum
 from sqlalchemy.orm import Mapped, declared_attr, mapped_column
 
-from apps.core.database import EntityBase, table_options
+from apps.core.database import EntityBase, enum_column, table_options
 
 
 class StockExchange(StrEnum):
@@ -343,12 +342,7 @@ class StockBar(EntityBase):
         ),
     )
     exchange: Mapped[StockExchange] = mapped_column(
-        SqlEnum(
-            StockExchange,
-            native_enum=False,
-            length=20,
-            values_callable=lambda enum: [member.value for member in enum],
-        ),
+        enum_column(StockExchange),
         nullable=False,
         comment="체결이 일어난 거래소(KRX, NXT, NYSE, NASDAQ). 통합(UN) 시세는 받지 않는다",
     )
@@ -422,12 +416,7 @@ class StockDaily(EntityBase):
         comment="국내는 한국거래소 6자리 종목코드, 해외 상장 종목은 저장 심볼(TSMC_ADR)이다",
     )
     exchange: Mapped[StockExchange] = mapped_column(
-        SqlEnum(
-            StockExchange,
-            native_enum=False,
-            length=20,
-            values_callable=lambda enum: [member.value for member in enum],
-        ),
+        enum_column(StockExchange),
         nullable=False,
         comment="체결이 일어난 거래소(KRX, NXT, NYSE, NASDAQ). 통합(UN) 시세는 받지 않는다",
     )

@@ -51,17 +51,15 @@ DAG마다 따로 받지 않는다.
 """
 
 import logging
-import os
 from contextlib import closing
-from datetime import UTC, date, datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 import pendulum
-from airflow.providers.postgres.hooks.postgres import PostgresHook
-from airflow.sdk import Param, Variable, dag, get_current_context, task
-from airflow.sdk.exceptions import AirflowFailException, AirflowSkipException
-from pydantic import SecretStr
+from airflow.sdk import Variable, dag, get_current_context, task
+from airflow.sdk.exceptions import AirflowFailException
 
+from modules import dag_common
 from modules.collectors.kis import (
     KisHTTPError,
     KisPayloadError,
@@ -75,48 +73,9 @@ from modules.collectors.market.kis_positioning import (
     LendingMarket,
     PositioningStock,
 )
-from modules.market_session import krx_open_day
-from modules.period import (
-    LOOKBACK_DAYS,
-    LOOKBACK_DAYS_PARAM,
-    OBSERVATION_END_PARAM,
-    OBSERVATION_START_PARAM,
-    PeriodError,
-    resolve_observation_period,
-)
-from modules.utility import CONNECTION_ID, KIS_UNRECOVERABLE_STATUSES, KST_TIMEZONE, atomic
+from modules.utility import KIS_UNRECOVERABLE_STATUSES, KST_TIMEZONE, atomic
 
 logger = logging.getLogger(__name__)
-
-
-def _credentials() -> tuple[SecretStr, SecretStr]:
-    app_key = os.environ.get("KIS_APP_KEY")
-    app_secret = os.environ.get("KIS_APP_SECRET")
-    if not app_key or not app_secret:
-        raise AirflowFailException("KIS_APP_KEY and KIS_APP_SECRET are required")
-    return SecretStr(app_key), SecretStr(app_secret)
-
-
-def _connection() -> Any:
-    return PostgresHook(postgres_conn_id=CONNECTION_ID).get_conn()
-
-
-def _skip_when_closed(session_kst: date) -> None:
-    """관측 대상 거래일이 확정 휴장일이면 태스크를 건너뛴다.
-
-    **묻는 날짜는 실행일이 아니라 그 전날이다.** 이 DAG는 전 영업일의 확정치를 다음 날
-    아침에 받으므로, 실행일로 물으면 토요일 08:10 run이 "오늘 KRX 휴장"으로 매주 건너뛰고
-    금요일 값이 화요일까지 확정 전 0으로 남는다(2026-08-29 실측).
-
-    행이 없거나 아직 판정하지 않았으면 그대로 수집한다.
-    """
-    connection = _connection()
-    try:
-        closed = krx_open_day(connection, session_kst) is False
-    finally:
-        connection.close()
-    if closed:
-        raise AirflowSkipException(f"KRX was closed on {session_kst}")
 
 
 @dag(
@@ -129,26 +88,10 @@ def _skip_when_closed(session_kst: date) -> None:
     max_active_runs=1,
     default_args={"retries": 2, "retry_delay": timedelta(hours=1)},
     params={
-        OBSERVATION_START_PARAM: Param(
-            None,
-            type=["null", "string"],
-            format="date",
-            title="조회 시작 거래일",
-            description="비우면 observation_end에서 lookback_days만큼 뺀 날. 주면 lookback_days를 무시한다.",
-        ),
-        OBSERVATION_END_PARAM: Param(
-            None,
-            type=["null", "string"],
-            format="date",
-            title="조회 종료 거래일",
-            description="비우면 이 run 시각의 KST 날짜. 과거 구간을 한 번에 넣을 때 직접 넘긴다.",
-        ),
-        LOOKBACK_DAYS_PARAM: Param(
-            LOOKBACK_DAYS,
-            type="integer",
-            minimum=1,
-            title="되돌아볼 일수",
-            description="구간을 지정하지 않을 때만 쓴다. 증시자금과 신용순위는 이 값을 쓰지 않는다.",
+        **dag_common.observation_period_params(
+            lookback_hint="구간을 지정하지 않을 때만 쓴다. 증시자금과 신용순위는 이 값을 쓰지 않는다.",
+            start_title="조회 시작 거래일",
+            end_title="조회 종료 거래일",
         ),
     },
     doc_md=__doc__,
@@ -158,14 +101,17 @@ def kis_market_positioning_daily():
     @task(task_display_name="KRX 포지션 지표")
     def collect_krx() -> int:
         context = get_current_context()
-        try:
-            observation_start, observation_end = resolve_observation_period(context)
-        except PeriodError as error:
-            raise AirflowFailException(str(error)) from error
+        observation_start, observation_end = dag_common.resolve_period_or_fail(context)
 
-        _skip_when_closed(datetime.now(UTC).astimezone(KST_TIMEZONE).date() - timedelta(days=1))
+        # 휴장 판정에 묻는 날짜는 실행일이 아니라 그 전날이다. 이 DAG는 전 영업일의 확정치를
+        # 다음 날 아침에 받으므로, 실행일로 물으면 토요일 08:10 run이 "오늘 KRX 휴장"으로 매주
+        # 건너뛰고 금요일 값이 화요일까지 확정 전 0으로 남는다(2026-08-29 실측).
+        with closing(dag_common.connection()) as connection:
+            dag_common.skip_unless_krx_open(
+                connection, datetime.now(UTC).astimezone(KST_TIMEZONE).date() - timedelta(days=1)
+            )
 
-        app_key, app_secret = _credentials()
+        app_key, app_secret = dag_common.kis_credentials()
         collector = KisPositioningCollector(access_token(Variable, app_key, app_secret), app_key, app_secret)
 
         # 호출 하나가 트랜잭션 하나다. 앞의 성공을 뒤의 실패가 되돌리지 않는다.
@@ -214,7 +160,7 @@ def kis_market_positioning_daily():
 
         stored = 0
         failures: list[str] = []
-        with closing(_connection()) as connection:
+        with closing(dag_common.connection()) as connection:
             for name, call, store in jobs:
                 try:
                     fetch = call()

@@ -541,7 +541,7 @@ investigate → (조건부) tools → answer → (조건부) repair → answer
 | YAML 프롬프트 읽기·치환 | `airflow/modules/prompt.py` |
 | 응답 스키마 강제 | `airflow/modules/schema.py` |
 | 툴 호출 기록 | `airflow/modules/thesis/tool_ledger.py`의 `ToolCallLedger` → `modules/kospi/tool_ledger.py`로 옮긴다(옛 폴더가 지워지므로) |
-| Neo4j 드라이버 | `airflow/modules/graph/query.py`의 `driver()` 패턴과 env 셋 |
+| Neo4j 드라이버 | `airflow/modules/kospi/graph.py`의 `driver()` — 옛 `graph/query.py`의 패턴과 env 셋을 이어받았다 |
 | Slack 발송 | `airflow/modules/slack.py` |
 
 **새로 만드는 것**: `airflow/modules/kospi/` 여덟, 프롬프트 YAML 둘, SQL(툴 넷 + `bars` +

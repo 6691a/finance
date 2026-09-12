@@ -7,6 +7,7 @@ import pytest
 from airflow.sdk.exceptions import AirflowSkipException
 
 from dags import kis_overseas_index_close, slack_us_market_briefing
+from modules import dag_common
 from modules.briefing import market_data
 
 
@@ -50,8 +51,12 @@ def fake_hook(monkeypatch, row: tuple | None) -> FakeConnection:
         def get_conn(self) -> FakeConnection:
             return connection
 
-    monkeypatch.setattr(kis_overseas_index_close, "PostgresHook", Hook)
+    monkeypatch.setattr(dag_common, "PostgresHook", Hook)
     return connection
+
+
+class StopAfterGuard(Exception):
+    """휴장 판정 바로 뒤에서 태스크를 멈춘다. 그 뒤는 외부 호출이다."""
 
 
 def test_the_dag_runs_after_the_us_close_and_before_the_briefing():
@@ -85,15 +90,23 @@ def test_display_metadata_is_filled():
     [((False,), True), ((True,), False), ((None,), False), (None, False)],
 )
 def test_it_skips_only_on_a_confirmed_us_holiday(monkeypatch, row, skips):
-    """모르면(캘린더 없음) 진행한다. 묵은 날짜 검사가 뒤에서 잡는다."""
+    """모르면(캘린더 없음) 진행한다. 묵은 날짜 검사가 뒤에서 잡는다.
+
+    판정 자체는 `dag_common.skip_unless_us_open`이 하고 `tests/modules/test_dag_common.py`가
+    덮는다. 여기서 보는 것은 이 태스크가 **세션 날짜로** 미국 달력을 묻고 연결을 닫는지다.
+    """
     connection = fake_hook(monkeypatch, row)
     session_date = date(2026, 8, 24)
+    monkeypatch.setattr(kis_overseas_index_close, "_session_date", lambda: session_date)
 
-    if skips:
-        with pytest.raises(AirflowSkipException):
-            kis_overseas_index_close._skip_when_closed(session_date)
-    else:
-        kis_overseas_index_close._skip_when_closed(session_date)
+    def stop() -> tuple:
+        raise StopAfterGuard
+
+    monkeypatch.setattr(dag_common, "kis_credentials", stop)
+    task = kis_overseas_index_close.kis_overseas_index_close.task_dict["collect"]
+
+    with pytest.raises(AirflowSkipException if skips else StopAfterGuard):
+        task.python_callable()
 
     assert connection.closed
     assert connection.recorded_cursor.parameters == ("US_EQUITY", session_date)

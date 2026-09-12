@@ -9,8 +9,8 @@
 - 상태: **포착·원인 분석 모두 구현 완료(2026-09-04), 배포 대기.** §6.4의 시뮬 결과로
   설계가 두 번 바뀌었고(문서 창을 사건 이후로 못 박음, 검색을 1판에 넣음) 그것까지
   코드에 있다. 운영에서 돈 적은 없다.
-  §11의 1~3단계(표·판정·장중 DAG)가 코드에 있고 4단계(원인 분석 LLM)는 없다 — 3단계를
-  2주 관찰한 뒤에 붙인다. 착수 게이트였던 `kis_asia_index_intraday`는 2026-09-04에 켰고
+  §11의 1~3단계(표·판정·장중 DAG)와 4단계(원인 분석 LLM, `market_shock_cause_daily`·
+  `modules/shock/cause.py`·`search.py`, 2026-09-05)가 모두 코드에 있다. 착수 게이트였던 `kis_asia_index_intraday`는 2026-09-04에 켰고
   첫 스케줄 실행이 09-07(월) 09:00이다(`start_date`가 09-05).
 - 계기: 2026-09-03 14:00~14:30 KST에 코스피가 30분 만에 −3.3% 빠졌다 되돌렸다. 일본 50bp
   인상 관측이 돌았다는 말이 있었고 사실이 아니어서 금방 회복했다. **우리 시스템은 그날
@@ -22,7 +22,7 @@
   `airflow/sql/postgres/`의 `market_shock_event/` 아홉·`market_shock_search_hit/` 둘·
   `shock_documents/` 하나,
   `airflow/dags/market_shock_intraday.py`·`market_shock_cause_daily.py`,
-  `modules/llm.py`의 `shock_model()`,
+  `modules/llm.py`의 `openai_model()`,
   테스트 넷(`test_shock_detect` 16개·`test_shock_store` 7개·`test_shock_cause` 16개·
   `test_market_shock_schema` 8개)와 `test_kospi_domain`의 하한 대조 하나.
 - 관련 원본: 전망은 [kospi-forecast.md](kospi-forecast.md), 수집 계약은
@@ -73,7 +73,7 @@ LLM, 최대 3영업일).
 | 전망 연동 | **1판에서 안 만든다.** 자리만 §10에 적는다 | 사용자 판단(2026-09-04) — 일회성 사건이라 관계 그래프에 쌓아도 가중치가 안 생긴다 |
 | 그래프·메모 | **안 쓴다** | 위와 같다. Neo4j를 안 건드린다 |
 | 표 | Postgres `market_shock_event` **하나** | 원장을 따로 두지 않는다(§5.2) |
-| 모델 | `llm.shock_model()` = **`gpt-5.6-luna`**(`ChatOpenAI`, `max_retries=0`) | **툴 없이 문서를 읽고 구조화 JSON을 내는 일이라 추론 깊이가 축이 아니다.** `document_model()`·`expectation_model()`과 같은 모양이고, 프롬프트에 실리는 `reason`·`new_facts`를 쓴 것도 그 모델이다. 실측에서 grok-4.6과 답·근거가 같았다(§6.4) |
+| 모델 | `llm.openai_model()` = **`gpt-5.6-luna`**(`ChatOpenAI`, `max_retries=0`) | **툴 없이 문서를 읽고 구조화 JSON을 내는 일이라 추론 깊이가 축이 아니다.** 문서 평가·기대치 추출과 같은 팩토리 하나를 쓰고(2026-09-12에 셋을 합쳤다), 프롬프트에 실리는 `reason`·`new_facts`를 쓴 것도 그 모델이다. 실측에서 grok-4.6과 답·근거가 같았다(§6.4) |
 | 판 동결 | **이벤트 10건까지** | 한 달 8.6건이라 약 5주다. 그 전에 문장을 고치면 무엇 때문인지 못 가른다 |
 
 ## 2. 두 단계

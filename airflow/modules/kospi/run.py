@@ -21,7 +21,7 @@ from typing import Any
 
 from modules.kospi import common
 from modules.kospi.domain import PROMPT_VERSION, RunSlot, change_pct
-from modules.kospi.store import KospiStore
+from modules.kospi.store import KospiStore, dag_run_id_of, try_number_of
 
 logger = logging.getLogger(__name__)
 
@@ -80,8 +80,8 @@ def build_and_store(
         as_of_at=as_of_at,
         llm_model=llm.model_name(model),
         prompt_version=PROMPT_VERSION,
-        dag_run_id=_dag_run_id(context),
-        try_number=_try_number(context),
+        dag_run_id=dag_run_id_of(context),
+        try_number=try_number_of(context),
     )
 
     try:
@@ -135,7 +135,7 @@ def build_and_store(
         input_state=observed.model_dump(mode="json"),
         prompt_version=PROMPT_VERSION,
         llm_model=llm.model_name(model),
-        dag_run_id=_dag_run_id(context),
+        dag_run_id=dag_run_id_of(context),
         llm_run_id=llm_run_id,
     )
     if stored_id is None:
@@ -208,13 +208,3 @@ def _result(run_date: date, slot: RunSlot, *, reused: bool) -> dict[str, Any]:
     들고 다니면 어느 쪽이 맞는지 정해야 한다.
     """
     return {"run_date": run_date.isoformat(), "slot": slot.value, "reused": reused}
-
-
-def _dag_run_id(context: dict[str, Any]) -> str:
-    run = context.get("dag_run")
-    return str(getattr(run, "run_id", "") or "unknown")
-
-
-def _try_number(context: dict[str, Any]) -> int:
-    instance = context.get("task_instance") or context.get("ti")
-    return int(getattr(instance, "try_number", 1) or 1)

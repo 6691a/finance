@@ -57,11 +57,11 @@ from contextlib import closing
 from datetime import timedelta
 
 import pendulum
-from airflow.providers.postgres.hooks.postgres import PostgresHook
-from airflow.sdk import Param, dag, get_current_context, task
+from airflow.sdk import dag, get_current_context, task
 from airflow.sdk.exceptions import AirflowFailException
 from pydantic import SecretStr
 
+from modules import dag_common
 from modules.collectors.indicator.fred import (
     MACRO_SERIES,
     FredCollector,
@@ -69,14 +69,7 @@ from modules.collectors.indicator.fred import (
     FredPayloadError,
     FredRequest,
 )
-from modules.period import (
-    LOOKBACK_DAYS_PARAM,
-    OBSERVATION_END_PARAM,
-    OBSERVATION_START_PARAM,
-    PeriodError,
-    resolve_observation_period,
-)
-from modules.utility import CONNECTION_ID, KST_TIMEZONE, UNRECOVERABLE_STATUSES, atomic
+from modules.utility import KST_TIMEZONE, UNRECOVERABLE_STATUSES, atomic
 
 logger = logging.getLogger(__name__)
 
@@ -96,26 +89,13 @@ LOOKBACK_DAYS_MACRO = 190
     max_active_runs=1,
     default_args={"retries": 2, "retry_delay": timedelta(hours=1)},
     params={
-        OBSERVATION_START_PARAM: Param(
-            None,
-            type=["null", "string"],
-            format="date",
-            title="조회 시작일",
-            description="비우면 observation_end에서 lookback_days만큼 앞으로 잡는다.",
-        ),
-        OBSERVATION_END_PARAM: Param(
-            None,
-            type=["null", "string"],
-            format="date",
-            title="조회 종료일",
-            description="비우면 이 run의 data_interval_end를 KST 날짜로 바꿔 쓴다.",
-        ),
-        LOOKBACK_DAYS_PARAM: Param(
-            LOOKBACK_DAYS_MACRO,
-            type="integer",
-            minimum=1,
-            title="되돌아볼 일수",
-            description="월간 발표와 정정을 흡수한다. 짧게 잡으면 아직 발표되지 않은 달만 묻게 된다.",
+        **dag_common.observation_period_params(
+            lookback_default=LOOKBACK_DAYS_MACRO,
+            lookback_hint="월간 발표와 정정을 흡수한다. 짧게 잡으면 아직 발표되지 않은 달만 묻게 된다.",
+            start_title="조회 시작일",
+            end_title="조회 종료일",
+            start_hint="비우면 observation_end에서 lookback_days만큼 앞으로 잡는다.",
+            end_hint="비우면 이 run의 data_interval_end를 KST 날짜로 바꿔 쓴다.",
         ),
     },
     doc_md=__doc__,
@@ -130,10 +110,7 @@ def fred_macro_daily():
         계열만 다시 호출한다. `fred_treasury_daily`와 같은 구조다.
         """
         context = get_current_context()
-        try:
-            observation_start, observation_end = resolve_observation_period(context, LOOKBACK_DAYS_MACRO)
-        except PeriodError as error:
-            raise AirflowFailException(str(error)) from error
+        observation_start, observation_end = dag_common.resolve_period_or_fail(context, LOOKBACK_DAYS_MACRO)
 
         request = FredRequest(
             series_id=series_id,
@@ -155,7 +132,7 @@ def fred_macro_daily():
                 logger.warning("FRED asked to retry after %s seconds", error.retry_after)
             raise
 
-        with closing(PostgresHook(postgres_conn_id=CONNECTION_ID).get_conn()) as connection:
+        with closing(dag_common.connection()) as connection:
             try:
                 with atomic(connection):
                     count = collector.store_observations(connection, response)

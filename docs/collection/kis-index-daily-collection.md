@@ -531,7 +531,7 @@ DAG를 실패시킨다. 자연키 upsert라 Airflow 재시도는 안전하다.
 - `tests/migrations/test_quote_split_revision.py`: 새 컬럼과 기존 `quote_daily` 뷰 호환
 - `tests/migrations/test_quote_symbol_catalog.py`: 다섯 심볼의 기존 provider·kind 불변
 - `tests/dags/test_quote_intraday.py`: DAG 일정 충돌 없음
-- `technical/select_history.sql`, `technical/select_symbols.sql`이 새 행을 별도 수정 없이 읽는지
+- `technical/select_history.sql`이 새 행을 별도 수정 없이 읽는지
 
 ## 10. 구현 순서
 

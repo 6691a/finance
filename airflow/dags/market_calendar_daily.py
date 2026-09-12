@@ -65,18 +65,16 @@ NYSE 페이지는 3년치를 미리 고시한다.
 """
 
 import logging
-import os
 from collections.abc import Callable
 from contextlib import closing
 from datetime import date, timedelta
 from typing import Any
 
 import pendulum
-from airflow.providers.postgres.hooks.postgres import PostgresHook
 from airflow.sdk import Param, Variable, dag, get_current_context, task
 from airflow.sdk.exceptions import AirflowFailException
-from pydantic import SecretStr
 
+from modules import dag_common
 from modules.collectors.calendar.kis_market_calendar import (
     KisCursorError,
     KisMarketCalendarCollector,
@@ -89,30 +87,16 @@ from modules.collectors.calendar.nyse_calendar import (
     store_calendar,
 )
 from modules.collectors.kis import (
-    KisHTTPError,
     KisPayloadError,
     KisResultError,
     access_token,
 )
-from modules.utility import CONNECTION_ID, KIS_UNRECOVERABLE_STATUSES, KST_TIMEZONE, atomic
+from modules.utility import KST_TIMEZONE, atomic
 
 logger = logging.getLogger(__name__)
 
 BASE_DATE_PARAM = "base_date"
 TRADE_DATE_PARAM = "trade_date"
-
-
-def _credentials() -> tuple[SecretStr, SecretStr]:
-    app_key = os.environ.get("KIS_APP_KEY")
-    app_secret = os.environ.get("KIS_APP_SECRET")
-    if not app_key or not app_secret:
-        raise AirflowFailException("KIS_APP_KEY and KIS_APP_SECRET are required")
-    return SecretStr(app_key), SecretStr(app_secret)
-
-
-def _cached_token(app_key: SecretStr, app_secret: SecretStr, force: bool = False) -> SecretStr:
-    """`kis_quote_intraday`와 같은 캐시를 쓴다. 저장소를 고르는 일만 여기 있다."""
-    return access_token(Variable, app_key, app_secret, force=force)
 
 
 def _requested_date(parameter: str) -> date:
@@ -130,33 +114,13 @@ def _requested_date(parameter: str) -> date:
     return reference.astimezone(KST_TIMEZONE).date()
 
 
-def _fetch_with_retry(call, collector: KisMarketCalendarCollector, app_key: SecretStr, app_secret: SecretStr):
-    """401이면 토큰을 한 번만 재발급하고 다시 시도한다.
-
-    토큰은 수집기 객체가 사는 동안 안 변하므로 재발급은 객체를 다시 만드는 것이다.
-    """
-    try:
-        return call(collector)
-    except KisHTTPError as error:
-        if error.status in KIS_UNRECOVERABLE_STATUSES:
-            raise AirflowFailException(str(error)) from error
-        if error.status != 401:
-            raise
-        logger.warning("KIS returned 401; reissuing the token once")
-        return call(_collector(app_key, app_secret, force=True))
-
-
-def _collector(app_key: SecretStr, app_secret: SecretStr, force: bool = False) -> KisMarketCalendarCollector:
-    return KisMarketCalendarCollector(_cached_token(app_key, app_secret, force=force), app_key, app_secret)
-
-
 def _store[Stored](store: Callable[..., Stored], *arguments: Any) -> Stored:
     """저장 한 번을 한 트랜잭션으로 감싼다.
 
     위임 대상 셋의 반환이 갈린다 — `store_domestic`·`store_calendar`는 저장 건수(`int`)이고
     `store_overseas`는 `UsSettlement | None`이다. 그래서 구체 타입이 아니라 `TypeVar`다.
     """
-    with closing(PostgresHook(postgres_conn_id=CONNECTION_ID).get_conn()) as connection:
+    with closing(dag_common.connection()) as connection:
         try:
             with atomic(connection):
                 return store(connection, *arguments)
@@ -208,12 +172,16 @@ def market_calendar_daily():
     @task(task_display_name="국내 휴장일")
     def domestic_holiday() -> int:
         base_date = _requested_date(BASE_DATE_PARAM)
-        app_key, app_secret = _credentials()
-        collector = _collector(app_key, app_secret)
+        app_key, app_secret = dag_common.kis_credentials()
+        collector = KisMarketCalendarCollector(access_token(Variable, app_key, app_secret), app_key, app_secret)
 
         try:
-            fetch = _fetch_with_retry(
-                lambda active: active.fetch_domestic_calendar(base_date), collector, app_key, app_secret
+            fetch = dag_common.call_with_token_reissue(
+                collector,
+                KisMarketCalendarCollector.fetch_domestic_calendar,
+                base_date,
+                app_key=app_key,
+                app_secret=app_secret,
             )
         except (KisCursorError, KisResultError) as error:
             raise AirflowFailException(str(error)) from error
@@ -242,12 +210,16 @@ def market_calendar_daily():
     @task(task_display_name="해외 결제일")
     def overseas_settlement() -> int:
         trade_date = _requested_date(TRADE_DATE_PARAM)
-        app_key, app_secret = _credentials()
-        collector = _collector(app_key, app_secret)
+        app_key, app_secret = dag_common.kis_credentials()
+        collector = KisMarketCalendarCollector(access_token(Variable, app_key, app_secret), app_key, app_secret)
 
         try:
-            fetch = _fetch_with_retry(
-                lambda active: active.fetch_overseas_settlement(trade_date), collector, app_key, app_secret
+            fetch = dag_common.call_with_token_reissue(
+                collector,
+                KisMarketCalendarCollector.fetch_overseas_settlement,
+                trade_date,
+                app_key=app_key,
+                app_secret=app_secret,
             )
         except (KisCursorError, KisResultError) as error:
             raise AirflowFailException(str(error)) from error

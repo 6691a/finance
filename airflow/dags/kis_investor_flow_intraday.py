@@ -43,17 +43,14 @@
 """
 
 import logging
-import os
 from contextlib import closing
 from datetime import UTC, datetime, time, timedelta
-from typing import Any
 
 import pendulum
-from airflow.providers.postgres.hooks.postgres import PostgresHook
 from airflow.sdk import Variable, dag, task
 from airflow.sdk.exceptions import AirflowFailException, AirflowSkipException
-from pydantic import SecretStr
 
+from modules import dag_common
 from modules.collectors.kis import (
     KisHTTPError,
     KisPayloadError,
@@ -65,26 +62,13 @@ from modules.collectors.market.kis_investor_flow import (
     InvestorFlowMarket,
     KisInvestorFlowCollector,
 )
-from modules.market_session import krx_open_day
-from modules.utility import CONNECTION_ID, KIS_UNRECOVERABLE_STATUSES, KST_TIMEZONE, atomic
+from modules.utility import KIS_UNRECOVERABLE_STATUSES, KST_TIMEZONE, atomic
 
 logger = logging.getLogger(__name__)
 
 # KIS가 이 조회의 첫 집계를 내는 시각. 실측으로 09:05 run 은 값이 있었고 09:00 정각과
 # 09:02 재시도는 전부 0이었다(2026-08-19).
 FIRST_AGGREGATION_TIME = time(9, 5)
-
-
-def _credentials() -> tuple[SecretStr, SecretStr]:
-    app_key = os.environ.get("KIS_APP_KEY")
-    app_secret = os.environ.get("KIS_APP_SECRET")
-    if not app_key or not app_secret:
-        raise AirflowFailException("KIS_APP_KEY and KIS_APP_SECRET are required")
-    return SecretStr(app_key), SecretStr(app_secret)
-
-
-def _connection() -> Any:
-    return PostgresHook(postgres_conn_id=CONNECTION_ID).get_conn()
 
 
 def before_first_aggregation(now_kst: datetime) -> bool:
@@ -116,18 +100,13 @@ def kis_investor_flow_intraday():
         now = datetime.now(UTC)
         now_kst = now.astimezone(KST_TIMEZONE)
 
-        connection = _connection()
-        try:
-            closed = krx_open_day(connection, now_kst.date()) is False
-        finally:
-            connection.close()
-        if closed:
-            raise AirflowSkipException(f"KRX is closed on {now_kst.date()}")
+        with closing(dag_common.connection()) as connection:
+            dag_common.skip_unless_krx_open(connection, now_kst.date())
 
         if before_first_aggregation(now_kst):
             raise AirflowSkipException("KIS has not published the first aggregation yet")
 
-        app_key, app_secret = _credentials()
+        app_key, app_secret = dag_common.kis_credentials()
         collector = KisInvestorFlowCollector(access_token(Variable, app_key, app_secret), app_key, app_secret)
 
         # 이 조회에는 원천 시각이 없다. 응답을 받은 분으로 찍는다.
@@ -135,7 +114,7 @@ def kis_investor_flow_intraday():
 
         stored = 0
         failures: list[str] = []
-        with closing(_connection()) as connection:
+        with closing(dag_common.connection()) as connection:
             for market in InvestorFlowMarket:
                 try:
                     fetch = collector.fetch_market_flow(market, observed_at)

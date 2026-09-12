@@ -24,9 +24,13 @@ from collections.abc import Mapping, Sequence
 from datetime import date, datetime, time, timedelta
 from decimal import ROUND_HALF_UP, Decimal
 from enum import StrEnum
-from typing import Protocol
+from typing import TYPE_CHECKING
 
 from pydantic import BaseModel, ConfigDict
+
+if TYPE_CHECKING:
+    # `state`가 이 모듈을 import하므로 실행 시점에 가져오면 순환이다. 타입에만 쓴다.
+    from modules.kospi.state import FactorMove
 
 # ---------------------------------------------------------------------------
 # 판(版)
@@ -683,8 +687,8 @@ def relation_weight(
 
 
 def stale_factor_moves(
-    moves: Sequence["FactorMoveLike"], last_value_dates: Mapping[Factor, date | None]
-) -> tuple[list["FactorMoveLike"], list["FactorMoveLike"]]:
+    moves: Sequence["FactorMove"], last_value_dates: Mapping[Factor, date | None]
+) -> tuple[list["FactorMove"], list["FactorMove"]]:
     """요인 값 표를 **신선한 줄과 안 바뀐 줄**로 가른다. 앞이 모델에게 가고 뒤는 원장에만 남는다.
 
     안 바뀐 줄은 둘이다 — 값이 없는 줄, 그리고 값의 거래일이 지난 관찰이 본 것과 같은 줄.
@@ -694,8 +698,8 @@ def stale_factor_moves(
     지난 관찰에 `value_date`가 없으면(옛 엣지, 관측 0) 신선으로 본다 — 모른다고 빼면
     처음부터 아무 것도 안 본다.
     """
-    fresh: list[FactorMoveLike] = []
-    stale: list[FactorMoveLike] = []
+    fresh: list[FactorMove] = []
+    stale: list[FactorMove] = []
     for move in moves:
         last = last_value_dates.get(move.factor)
         if move.business_date is None or (last is not None and move.business_date == last):
@@ -703,17 +707,6 @@ def stale_factor_moves(
         else:
             fresh.append(move)
     return fresh, stale
-
-
-class FactorMoveLike(Protocol):
-    """`stale_factor_moves`가 보는 두 칸. `state.FactorMove`가 이 모양이다 — 이 모듈이
-    `state`를 import하면 순환이라 프로토콜로 둔다."""
-
-    @property
-    def factor(self) -> Factor: ...
-
-    @property
-    def business_date(self) -> date | None: ...
 
 
 def memory_expired(created_on: date, as_of_date: date, *, max_age_days: int = MEMORY_MAX_AGE_DAYS) -> bool:

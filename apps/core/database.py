@@ -1,10 +1,12 @@
 from collections.abc import Mapping
 from datetime import datetime
+from enum import StrEnum
 from typing import TypeVar
 
 from pydantic import BaseModel as PydanticBaseModel
 from pydantic import ConfigDict, Field, model_validator
 from sqlalchemy import BigInteger, DateTime, Table, func
+from sqlalchemy import Enum as SqlEnum
 from sqlalchemy.ext.asyncio import (
     AsyncEngine,
     AsyncSession,
@@ -77,6 +79,21 @@ def table_options(
         "comment": comment,
         "info": {"database": database, "managed": managed},
     }
+
+
+def enum_column(enum: type[StrEnum]) -> SqlEnum:
+    """`StrEnum`을 VARCHAR(20) + CHECK로 내리는 공통 형태.
+
+    PostgreSQL native enum은 값 추가·삭제 마이그레이션 비용이 커서 쓰지 않는다(프로젝트 규칙).
+    저장되는 것은 멤버 이름이 아니라 `.value`다. 모든 모델이 같은 형태를 쓰므로 한 벌만 둔다 —
+    전에는 24곳이 인라인이고 두 도메인이 같은 함수를 각자 갖고 있었다(2026-09-12 통합).
+    """
+    return SqlEnum(
+        enum,
+        native_enum=False,
+        length=20,
+        values_callable=lambda members: [member.value for member in members],
+    )
 
 
 def table_database(table: Table) -> str:

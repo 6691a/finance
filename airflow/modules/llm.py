@@ -68,7 +68,7 @@ run을 모아 배치로 보내는데, Airflow 태스크 프로세스가 큐를 �
 """
 
 import logging
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from typing import Any
 
 import openai
@@ -78,6 +78,8 @@ from langchain_core.messages import AIMessage, BaseMessage, HumanMessage
 from langchain_core.tools import BaseTool
 from langchain_openai import ChatOpenAI
 from langchain_xai import ChatXAI
+from langgraph.graph import END, START, StateGraph
+from langgraph.graph.state import CompiledStateGraph
 
 from modules.prompt import read_fragments
 from modules.schema import format_instruction
@@ -122,8 +124,13 @@ class UnsupportedResponseFormat(LlmError):
 UNSUPPORTED_MARKERS = ("response_format", "json_schema", "structured output")
 
 
-def document_model() -> BaseChatModel:
-    """문서 태깅(`modules/assessment.py`)이 쓰는 모델.
+def openai_model() -> BaseChatModel:
+    """문서 태깅(`assessment.py`)·이벤트 기대치 추출(`expectation/extraction.py`)·급변의 사후 원인
+    분석(`shock/cause.py`)이 쓰는 모델.
+
+    셋 다 **툴 없이** 문서를 프롬프트에 싣고 한 번 물어 구조화 JSON을 받는 일이라 정의가
+    하나다. 흐름 하나만 다른 모델로 옮기고 싶어지면 그때 함수를 가른다 — 미리 갈라 두지 않는다.
+    `kospi_model`이 grok인 이유는 툴 호출 품질인데 여기에는 그 축이 없다.
 
     키는 `OPENAI_API_KEY`에서 온다. 모델을 바꾸려면 이 함수를 고친다. 제공처를 바꾸려면 여기서
     다른 LangChain 클래스를 만들어 돌려주면 되고, 부르는 쪽은 `BaseChatModel`만 안다.
@@ -131,45 +138,39 @@ def document_model() -> BaseChatModel:
     return ChatOpenAI(
         model="gpt-5.6-luna",
         timeout=REQUEST_TIMEOUT_SECONDS,
-        max_retries=0,
-    )
-
-
-
-
-def expectation_model() -> BaseChatModel:
-    """이벤트 기대치 추출(`modules/expectation/extraction.py`)이 쓰는 모델.
-
-    문서 하나를 읽고 구조화 JSON을 내는 일이라 문서 태깅과 같은 모델로 시작한다. 함수를
-    나눠 두는 이유도 같다 — 추출만 다른 모델로 옮기고 싶어질 때 이 함수만 고친다.
-    """
-    return ChatOpenAI(
-        model="gpt-5.6-luna",
-        timeout=REQUEST_TIMEOUT_SECONDS,
         # 재시도는 Airflow가 한다. 위 모듈 docstring 참고.
         max_retries=0,
     )
 
 
-def shock_model() -> BaseChatModel:
-    """급변의 사후 원인 분석(`modules/shock/cause.py`)이 쓰는 모델.
+def call_repair_graph(
+    state_type: type,
+    *,
+    call: Callable[[Any], dict[str, Any]],
+    repair: Callable[[Any], dict[str, Any]],
+    next_node: Callable[[Any], str],
+) -> CompiledStateGraph:
+    """호출 하나에 교정 재요청이 붙는 그래프. **다섯 흐름이 글자 그대로 같은 모양이다.**
 
-    **툴이 없다.** 문서와 검색 결과를 프롬프트에 통째로 싣고 한 번 물어 구조화 JSON을
-    받는다 — `document_model`·`expectation_model`과 같은 모양이라 같은 모델로 시작한다.
-    `kospi_model`이 grok인 이유는 툴 호출 품질인데 여기에는 그 축이 없다.
-
-    프롬프트에 실리는 문서 평가(`reason`·`new_facts`)를 쓴 것도 이 모델이라 눈금이 같다.
-
-    2026-09-04 실측에서 grok-4.6과 근거 문서 세 건이 같았고, 갈렸던 `cause_kind`는
-    프롬프트 앵커를 넣자 둘 다 같은 값으로 수렴했다 — 차이가 모델이 아니라 프롬프트에
-    있었다(설계 §6.4).
+    `call`이 묻고 검증까지 하며, `next_node`가 `"repair"`나 `END`를 돌려준다 — 몇 번 교정할지는
+    흐름이 정한다(대개 한 번, `shock/cause`는 두 번). 노드 이름 `call`·`repair`는 트레이스에
+    남으므로 바꾸지 않는다.
     """
-    return ChatOpenAI(
-        model="gpt-5.6-luna",
-        timeout=REQUEST_TIMEOUT_SECONDS,
-        # 재시도는 Airflow가 한다. 위 모듈 docstring 참고.
-        max_retries=0,
-    )
+    graph = StateGraph(state_type)
+    graph.add_node("call", call)
+    graph.add_node("repair", repair)
+    graph.add_edge(START, "call")
+    graph.add_conditional_edges("call", next_node, {"repair": "repair", END: END})
+    graph.add_edge("repair", "call")
+    return graph.compile()
+
+
+def reply_text(message: BaseMessage) -> str:
+    """응답 본문을 문자열로. 제공처에 따라 문자열이 아니라 조각 리스트로 온다."""
+    content = message.content
+    if isinstance(content, str):
+        return content
+    return "".join(part if isinstance(part, str) else part.get("text", "") for part in content)
 
 
 def _conversation_headers(conv_id: str) -> dict[str, str]:
@@ -182,9 +183,8 @@ def _conversation_headers(conv_id: str) -> dict[str, str]:
 def briefing_model(conv_id: str) -> BaseChatModel:
     """Slack 브리핑 선별(`modules/briefing/picks.py`)이 쓰는 모델.
 
-    지금은 `document_model`과 같은 모델이지만 함수를 나눠 둔다. 태깅은 문서 한 건을 읽고
-    JSON을 내는 일이고 브리핑은 집계 표를 읽고 글을 쓰는 일이라, 한쪽만 다른 모델로 옮기고
-    싶어질 때 그 함수만 고치면 된다.
+    태깅(`openai_model`)은 문서 한 건을 읽고 JSON을 내는 일이고 브리핑은 집계 표를 읽고
+    글을 쓰는 일이라 제공처부터 다르다.
 
     `conv_id`는 이 발송 하나를 가리키는 결정적 문자열이다(모듈 docstring 참고).
     """

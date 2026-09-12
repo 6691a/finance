@@ -2,6 +2,7 @@ import pytest
 from airflow.sdk.exceptions import AirflowFailException
 
 from dags import document_body_hourly as module
+from modules import dag_common
 from modules.collectors.document.body import BodyCandidate, DocumentBody
 from modules.collectors.document.documents import DocumentGoneError, DocumentHTTPError
 
@@ -62,7 +63,7 @@ def run_collect(monkeypatch, tmp_path, *, waiting, collect, download=None, batch
     monkeypatch.setattr(module, "DEFAULT_FILE_ROOT", tmp_path)
     monkeypatch.setattr(module, "DocumentBodyCollector", FakeCollector)
     monkeypatch.setattr(module, "pending_bodies", lambda connection, limit: waiting)
-    monkeypatch.setattr(module, "_connection", fake_connection)
+    monkeypatch.setattr(dag_common, "connection", fake_connection)
 
     task = module.document_body_hourly.task_dict["collect"]
     result = task.python_callable(params={"batch_size": batch_size})
@@ -192,7 +193,7 @@ def test_an_empty_queue_is_not_a_failure(monkeypatch, tmp_path):
 def test_the_batch_size_reaches_the_queue(monkeypatch, tmp_path):
     seen: list[int] = []
     monkeypatch.setattr(module, "DEFAULT_FILE_ROOT", tmp_path)
-    monkeypatch.setattr(module, "_connection", lambda: FakeConnection())
+    monkeypatch.setattr(dag_common, "connection", lambda: FakeConnection())
     monkeypatch.setattr(
         module,
         "pending_bodies",

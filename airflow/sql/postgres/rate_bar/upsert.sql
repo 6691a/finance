@@ -3,7 +3,7 @@
 -- 행을 늘리지 않고 최신 값으로 갱신한다. symbol은 제공처 안에서만 고유하므로
 -- provider가 키에 함께 들어간다.
 --
--- 정의의 원본은 `apps/models/market.py`의 `RateBar`이고
+-- 정의의 원본은 `apps/models/market/series.py`의 `RateBar`이고
 -- 수집기 테스트가 여기 컬럼을 그 모델 metadata와 대조한다.
 INSERT INTO rate_bar (
     provider,

@@ -10,6 +10,7 @@ import pytest
 from airflow.sdk.exceptions import AirflowFailException
 
 from dags import kis_analyst_opinion_daily
+from modules import dag_common
 from modules.collectors.analyst.kis_opinion import OPINION_LOOKBACK_DAYS
 from modules.period import LOOKBACK_DAYS
 
@@ -70,20 +71,20 @@ def _run_task(monkeypatch, *, rows_per_stock: int):
         def store(self, connection, fetch):
             return rows_per_stock
 
-    monkeypatch.setattr(module, "_credentials", lambda: ("key", "secret"))
+    monkeypatch.setattr(dag_common, "kis_credentials", lambda: ("key", "secret"))
     monkeypatch.setattr(module, "access_token", lambda *args: "token")
     class FakeConnection:
         def close(self) -> None:
             pass
 
-    monkeypatch.setattr(module, "_connection", FakeConnection)
-    monkeypatch.setattr(module, "_skip_when_closed", lambda connection, today: None)
+    monkeypatch.setattr(dag_common, "connection", FakeConnection)
+    monkeypatch.setattr(dag_common, "skip_unless_krx_open", lambda connection, today: None)
     monkeypatch.setattr(module, "watched_stocks", lambda connection: (("005930", "삼성전자"),))
     monkeypatch.setattr(module, "KisAnalystOpinionCollector", FakeCollector)
     monkeypatch.setattr(module, "atomic", lambda connection: contextlib.nullcontext())
     monkeypatch.setattr(
-        module,
-        "resolve_observation_period",
+        dag_common,
+        "resolve_period_or_fail",
         lambda context, default_lookback_days: (date(2026, 7, 29), date(2026, 8, 27)),
     )
     monkeypatch.setattr(module, "get_current_context", dict)

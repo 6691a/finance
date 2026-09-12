@@ -125,16 +125,15 @@ ECOS는 데이터 없음(`INFO-200`)으로 답해서 **조용한 0건**이 된�
 """
 
 import logging
-import os
 from contextlib import closing
 from datetime import date, timedelta
 
 import pendulum
-from airflow.providers.postgres.hooks.postgres import PostgresHook
-from airflow.sdk import Param, dag, get_current_context, task
+from airflow.sdk import dag, get_current_context, task
 from airflow.sdk.exceptions import AirflowFailException
 from pydantic import SecretStr
 
+from modules import dag_common
 from modules.collectors.indicator.bbk_statement import (
     BbkStatementHTTPError,
     BbkStatementPayloadError,
@@ -165,14 +164,7 @@ from modules.collectors.indicator.fred import (
     FredPayloadError,
     FredRequest,
 )
-from modules.period import (
-    LOOKBACK_DAYS_PARAM,
-    OBSERVATION_END_PARAM,
-    OBSERVATION_START_PARAM,
-    PeriodError,
-    resolve_observation_period,
-)
-from modules.utility import CONNECTION_ID, KST_TIMEZONE, UNRECOVERABLE_STATUSES, atomic
+from modules.utility import KST_TIMEZONE, UNRECOVERABLE_STATUSES, atomic
 
 logger = logging.getLogger(__name__)
 
@@ -182,31 +174,11 @@ logger = logging.getLogger(__name__)
 # 800일이면 분기 경계가 여덟 번 들어가고 둘을 모두 덮는다. 겹쳐 받는 것은 멱등 키가 흡수한다.
 LOOKBACK_DAYS_ASSETS = 800
 
-# ECOS는 실패도 HTTP 200에 `RESULT.CODE`로 알린다. `policy_rate_weekly`가 같은 판정을
-# 갖고 있다. DAG끼리 import하지 않으므로 두 벌이고, 한쪽을 고치면 다른 쪽도 함께 본다.
-INVALID_KEY_CODE = "INFO-100"
-UNRECOVERABLE_RESULT_PREFIXES = ("ERROR-1", "ERROR-2", "ERROR-3", "ERROR-4")
-
-
-def is_unrecoverable_result(code: str) -> bool:
-    """이 `RESULT.CODE`가 재시도로 풀리지 않는 오류인지."""
-    return code == INVALID_KEY_CODE or code.startswith(UNRECOVERABLE_RESULT_PREFIXES)
-
 
 def resolve_period():
     """이 run이 저장할 관측 구간. 파라미터 문제는 재시도해도 같으므로 즉시 실패시킨다."""
     context = get_current_context()
-    try:
-        return resolve_observation_period(context, LOOKBACK_DAYS_ASSETS)
-    except PeriodError as error:
-        raise AirflowFailException(str(error)) from error
-
-
-def require_env(name: str) -> str:
-    value = os.environ.get(name)
-    if not value:
-        raise AirflowFailException(f"{name} is required")
-    return value
+    return dag_common.resolve_period_or_fail(context, LOOKBACK_DAYS_ASSETS)
 
 
 def require_no_failures(provider: str, failures: list[str]) -> None:
@@ -240,26 +212,9 @@ def require_observations(name: str, stored: int, observation_start: date, observ
     max_active_runs=1,
     default_args={"retries": 2, "retry_delay": timedelta(hours=1)},
     params={
-        OBSERVATION_START_PARAM: Param(
-            None,
-            type=["null", "string"],
-            format="date",
-            title="조회 시작 관측일",
-            description="비우면 observation_end에서 lookback_days만큼 뺀 날. 주면 lookback_days를 무시한다.",
-        ),
-        OBSERVATION_END_PARAM: Param(
-            None,
-            type=["null", "string"],
-            format="date",
-            title="조회 종료 관측일",
-            description="비우면 이 run 시각의 KST 날짜. 과거 구간을 한 번에 넣을 때 직접 넘긴다.",
-        ),
-        LOOKBACK_DAYS_PARAM: Param(
-            LOOKBACK_DAYS_ASSETS,
-            type="integer",
-            minimum=1,
-            title="되돌아볼 일수",
-            description="구간을 지정하지 않을 때만 쓴다. 발표가 가장 밀린 계열(영국 분기 총자산)에 맞춘 값이다.",
+        **dag_common.observation_period_params(
+            lookback_default=LOOKBACK_DAYS_ASSETS,
+            lookback_hint="구간을 지정하지 않을 때만 쓴다. 발표가 가장 밀린 계열(영국 분기 총자산)에 맞춘 값이다.",
         ),
     },
     doc_md=__doc__,
@@ -269,7 +224,7 @@ def central_bank_assets_weekly():
     @task(task_display_name="미국·유로 지역·일본 (FRED)")
     def collect_fred() -> int:
         observation_start, observation_end = resolve_period()
-        collector = FredCollector(SecretStr(require_env("FRED_API_KEY")))
+        collector = FredCollector(SecretStr(dag_common.require_env("FRED_API_KEY")))
 
         stored = 0
         failures: list[str] = []
@@ -289,7 +244,7 @@ def central_bank_assets_weekly():
                 failures.append(f"{series}({error})")
                 continue
 
-            with closing(PostgresHook(postgres_conn_id=CONNECTION_ID).get_conn()) as connection:
+            with closing(dag_common.connection()) as connection:
                 try:
                     with atomic(connection):
                         count = collector.store_observations(connection, response)
@@ -306,7 +261,7 @@ def central_bank_assets_weekly():
     @task(task_display_name="한국 (ECOS)")
     def collect_ecos() -> int:
         observation_start, observation_end = resolve_period()
-        collector = EcosCollector(SecretStr(require_env("ECOS_API_KEY")))
+        collector = EcosCollector(SecretStr(dag_common.require_env("ECOS_API_KEY")))
 
         stored = 0
         failures: list[str] = []
@@ -326,12 +281,12 @@ def central_bank_assets_weekly():
                 failures.append(f"{series}({error})")
                 continue
 
-            with closing(PostgresHook(postgres_conn_id=CONNECTION_ID).get_conn()) as connection:
+            with closing(dag_common.connection()) as connection:
                 try:
                     with atomic(connection):
                         count = collector.store_observations(connection, response)
                 except EcosResultError as error:
-                    if is_unrecoverable_result(error.code):
+                    if dag_common.is_unrecoverable_result(error.code):
                         raise AirflowFailException(str(error)) from error
                     failures.append(f"{series}({error})")
                     continue
@@ -360,7 +315,7 @@ def central_bank_assets_weekly():
                 logger.warning("Bundesbank asked to retry after %s seconds", error.retry_after)
             raise
 
-        with closing(PostgresHook(postgres_conn_id=CONNECTION_ID).get_conn()) as connection:
+        with closing(dag_common.connection()) as connection:
             try:
                 with atomic(connection):
                     count = store_statement_observations(connection, response)
@@ -390,7 +345,7 @@ def central_bank_assets_weekly():
                 logger.warning("BoE asked to retry after %s seconds", error.retry_after)
             raise
 
-        with closing(PostgresHook(postgres_conn_id=CONNECTION_ID).get_conn()) as connection:
+        with closing(dag_common.connection()) as connection:
             try:
                 with atomic(connection):
                     count = store_boe_observations(connection, response)

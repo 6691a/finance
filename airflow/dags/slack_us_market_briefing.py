@@ -27,45 +27,23 @@ KST 날짜로 물으면 세션 하나가 두 날짜에 걸친다. `market_data.u
 시간대만 나눠 보내는 것이라 채널을 쪼개지 않는다.
 """
 
-import os
 from datetime import UTC, datetime, timedelta
-from typing import Any
 
 import pendulum
-from airflow.providers.postgres.hooks.postgres import PostgresHook
 from airflow.sdk import dag, task
-from airflow.sdk.exceptions import AirflowFailException, AirflowSkipException
-from pydantic import SecretStr
+from airflow.sdk.exceptions import AirflowFailException
 
+from modules import dag_common
 from modules.briefing import market, market_data
 from modules.briefing.market import MarketScope
-from modules.market_session import us_equity_open_day
 from modules.slack import SlackClient, SlackError
-from modules.utility import CONNECTION_ID, KST_TIMEZONE
+from modules.utility import KST_TIMEZONE
 
 # KST 화~토 08:00 = UTC 월~금 23:00. 미국 마감과 아침 수집이 끝난 뒤다.
 SCHEDULE = "0 8 * * 2-6"
 
-
-def _connection() -> Any:
-    return PostgresHook(postgres_conn_id=CONNECTION_ID).get_conn()
-
-
-def _slack_settings() -> tuple[SecretStr, str]:
-    token = os.environ.get("SLACK_BOT_TOKEN")
-    channel = os.environ.get("SLACK_CHANNEL_MARKET")
-    if not token or not channel:
-        raise AirflowFailException("SLACK_BOT_TOKEN and SLACK_CHANNEL_MARKET are required")
-    return SecretStr(token), channel
-
-
-def _skip_when_closed(connection: Any, session_date) -> None:
-    """미국 확정 휴장일이면 건너뛴다. 모르면 보낸다.
-
-    날짜는 뉴욕 기준이다. KST 날짜로 물으면 세션의 절반이 엉뚱한 날을 본다.
-    """
-    if us_equity_open_day(connection, session_date) is False:
-        raise AirflowSkipException(f"US equity market was closed on {session_date}")
+# 한국장과 같은 주제라 채널을 공유한다.
+SLACK_CHANNEL_ENV = "SLACK_CHANNEL_MARKET"
 
 
 @dag(
@@ -83,12 +61,13 @@ def _skip_when_closed(connection: Any, session_date) -> None:
 def slack_us_market_briefing():
     @task(task_display_name="미국장 마감 브리핑 발송")
     def send_briefing() -> str:
-        token, channel = _slack_settings()
+        token, channel = dag_common.slack_settings(SLACK_CHANNEL_ENV)
         now = datetime.now(UTC)
 
-        connection = _connection()
+        connection = dag_common.connection()
         try:
-            _skip_when_closed(connection, market_data.us_session_date(now))
+            # 날짜는 뉴욕 기준이다. KST 날짜로 물으면 세션의 절반이 엉뚱한 날을 본다. 모르면 보낸다.
+            dag_common.skip_unless_us_open(connection, market_data.us_session_date(now))
             summary = market_data.MarketBriefingReader(connection, now).summary()
         finally:
             connection.close()

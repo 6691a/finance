@@ -90,19 +90,18 @@ CPU를 같이 쓰는 DAG이 생기면 같은 pool에 물린다.
 import logging
 from contextlib import closing
 from datetime import timedelta
-from typing import Any
 
 import pendulum
-from airflow.providers.postgres.hooks.postgres import PostgresHook
 from airflow.sdk import Param, dag, task
 from airflow.sdk.exceptions import AirflowFailException
 
+from modules import dag_common
 from modules.collectors.document.pdf import (
     DEFAULT_FILE_ROOT,
     AttachmentPdfParser,
     pending_attachments,
 )
-from modules.utility import CONNECTION_ID, KST_TIMEZONE, atomic
+from modules.utility import KST_TIMEZONE, atomic
 
 logger = logging.getLogger(__name__)
 
@@ -111,10 +110,6 @@ DEFAULT_BATCH_SIZE = 50
 
 # 제공처 파일이 그런 것이라 우리가 고칠 것이 없는 상태. 상태로 확정해 큐에서 빼되 건수는 센다.
 SETTLED_BAD_STATUSES = ("failed", "unsupported")
-
-
-def _connection() -> Any:
-    return PostgresHook(postgres_conn_id=CONNECTION_ID).get_conn()
 
 
 @dag(
@@ -152,7 +147,7 @@ def document_attachment_parse_hourly():
         parser = AttachmentPdfParser(file_root)
         batch_size = int(context["params"]["batch_size"])
 
-        with closing(_connection()) as connection:
+        with closing(dag_common.connection()) as connection:
             waiting = pending_attachments(connection, batch_size)
 
         if not waiting:
@@ -196,7 +191,7 @@ def document_attachment_parse_hourly():
                 logger.warning("attachment %s parsed partially: %s", candidate.id, "; ".join(result.failures))
 
             try:
-                with closing(_connection()) as connection, atomic(connection):
+                with closing(dag_common.connection()) as connection, atomic(connection):
                     updated = parser.store(connection, result)
             except Exception as error:
                 # 파싱은 됐는데 못 썼다. **삼키지 않는다** — 나머지 첨부는 계속 저장하되

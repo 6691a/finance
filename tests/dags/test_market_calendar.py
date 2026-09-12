@@ -8,9 +8,10 @@ from datetime import UTC, date, datetime
 from typing import Self
 
 import pytest
-from airflow.sdk.exceptions import AirflowFailException
+from airflow.sdk.exceptions import AirflowFailException, AirflowSkipException
 
 from dags import kis_quote_intraday, market_calendar_daily, yahoo_quote_intraday
+from modules import dag_common
 from modules.collectors.market.yahoo import US_EQUITY_SYMBOLS, QuoteSymbol
 
 
@@ -44,7 +45,8 @@ class FakeConnection:
         self.closed = True
 
 
-def fake_hook(module, monkeypatch, row: tuple | None) -> FakeConnection:
+def fake_hook(monkeypatch, row: tuple | None) -> FakeConnection:
+    """연결은 DAG 파일이 아니라 `dag_common.connection`이 연다. Hook을 거기서 바꿔 끼운다."""
     connection = FakeConnection(row)
 
     class Hook:
@@ -54,8 +56,12 @@ def fake_hook(module, monkeypatch, row: tuple | None) -> FakeConnection:
         def get_conn(self) -> FakeConnection:
             return connection
 
-    monkeypatch.setattr(module, "PostgresHook", Hook)
+    monkeypatch.setattr(dag_common, "PostgresHook", Hook)
     return connection
+
+
+class StopAfterGuard(Exception):
+    """휴장 판정 바로 뒤에서 태스크를 멈춘다. 그 뒤는 KIS 호출이다."""
 
 
 def test_the_calendar_dag_runs_once_a_morning():
@@ -84,15 +90,29 @@ def test_nyse_creates_the_us_rows_before_kis_fills_the_settlement():
     ],
 )
 def test_kis_skips_only_on_a_confirmed_krx_holiday(monkeypatch, row, closed):
-    connection = fake_hook(kis_quote_intraday, monkeypatch, row)
+    """판정은 `dag_common.skip_unless_krx_open`이 한다. 여기서 보는 것은 두 태스크가 **둘 다**
+    오늘 KST 날짜로 묻고 연결을 닫는지다 — 한쪽에만 걸면 다른 쪽이 휴장일에 그대로 돈다."""
+    today_kst = datetime.now(UTC).astimezone(kis_quote_intraday.KST_TIMEZONE).date()
 
-    assert kis_quote_intraday._closed_today(date(2026, 8, 17)) is closed
-    assert connection.recorded_cursor.parameters == ("KRX", date(2026, 8, 17))
-    assert connection.closed
+    def stop() -> tuple:
+        raise StopAfterGuard
+
+    monkeypatch.setattr(kis_quote_intraday, "get_current_context", lambda: {"params": {}})
+    monkeypatch.setattr(dag_common, "kis_credentials", stop)
+
+    for task_id in ("collect", "collect_movement"):
+        connection = fake_hook(monkeypatch, row)
+        task = kis_quote_intraday.kis_quote_intraday.task_dict[task_id]
+
+        with pytest.raises(AirflowSkipException if closed else StopAfterGuard):
+            task.python_callable()
+
+        assert connection.recorded_cursor.parameters == ("KRX", today_kst)
+        assert connection.closed
 
 
 def test_yahoo_drops_only_the_us_spot_symbols_when_us_equities_are_closed(monkeypatch):
-    fake_hook(yahoo_quote_intraday, monkeypatch, (False,))
+    fake_hook(monkeypatch, (False,))
 
     symbols = yahoo_quote_intraday.polling_symbols()
 
@@ -105,13 +125,13 @@ def test_yahoo_drops_only_the_us_spot_symbols_when_us_equities_are_closed(monkey
 
 @pytest.mark.parametrize("row", [(True,), (None,), None])
 def test_yahoo_keeps_every_symbol_unless_the_holiday_is_confirmed(monkeypatch, row):
-    fake_hook(yahoo_quote_intraday, monkeypatch, row)
+    fake_hook(monkeypatch, row)
 
     assert yahoo_quote_intraday.polling_symbols() == tuple(QuoteSymbol)
 
 
 def test_yahoo_asks_with_the_new_york_date(monkeypatch):
-    connection = fake_hook(yahoo_quote_intraday, monkeypatch, (True,))
+    connection = fake_hook(monkeypatch, (True,))
 
     class FrozenDatetime(datetime):
         @classmethod

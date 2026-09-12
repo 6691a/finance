@@ -1,6 +1,6 @@
 """수집한 문서를 LLM으로 태깅하고 점수를 매긴다.
 
-`docs/analysis/economic-document-archive-design.md` 2단계의 LLM 절반이다. 수집(`collectors/documents.py`)과
+`docs/analysis/economic-document-archive-design.md` 2단계의 LLM 절반이다. 수집(`collectors/document/documents.py`)과
 나뉘어 있어 **모델이나 키가 없어도 원문 수집은 계속 돈다.** 여기가 못 돌면 문서는 태그 없이
 쌓이고, 다음 실행이 밀린 것부터 집는다.
 
@@ -80,7 +80,7 @@ from datetime import UTC, datetime
 from typing import Annotated, Any, Literal, Self, TypedDict
 
 from langchain_core.language_models import BaseChatModel
-from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, SystemMessage
+from langchain_core.messages import BaseMessage, HumanMessage, SystemMessage
 from langgraph.graph import END, START, StateGraph
 from langgraph.types import Send
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
@@ -383,13 +383,7 @@ class DocumentAssessor:
         return assessment
 
     def _build_graph(self):
-        graph = StateGraph(AssessState)
-        graph.add_node("call", self._call)
-        graph.add_node("repair", self._repair)
-        graph.add_edge(START, "call")
-        graph.add_conditional_edges("call", self._next, {"repair": "repair", END: END})
-        graph.add_edge("repair", "call")
-        return graph.compile()
+        return llm.call_repair_graph(AssessState, call=self._call, repair=self._repair, next_node=self._next)
 
     def _call(self, state: AssessState) -> dict[str, Any]:
         """스키마를 강제해 한 번 부른다. 스키마 폴백은 `llm.invoke`가 한다."""
@@ -397,7 +391,7 @@ class DocumentAssessor:
         reply = llm.invoke(self._model, messages, schema=self._schema)
 
         try:
-            return {"messages": [*messages, reply], "assessment": self.parse(_text(reply)), "error": None}
+            return {"messages": [*messages, reply], "assessment": self.parse(llm.reply_text(reply)), "error": None}
         except AssessmentError as error:
             return {"messages": [*messages, reply], "assessment": None, "error": str(error)}
 
@@ -483,14 +477,6 @@ class AssessmentBatch:
             logger.error("document %s hit a non-retryable LLM error: %s", document.id, error)
             return {"results": [AssessmentResult(document_id=document.id, error=str(error), retryable=False)]}
         return {"results": [AssessmentResult(document_id=document.id, assessment=assessment)]}
-
-
-def _text(message: AIMessage) -> str:
-    """응답 본문을 문자열로. 제공처가 블록 배열로 답해도 같은 자리에서 흡수한다."""
-    content = message.content
-    if isinstance(content, str):
-        return content
-    return "".join(part.get("text", "") for part in content if isinstance(part, dict))
 
 
 def filter_tags(

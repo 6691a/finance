@@ -28,10 +28,10 @@ import operator
 from typing import Annotated, Any, TypedDict
 
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, SystemMessage
-from langgraph.graph import END, START, StateGraph
+from langgraph.graph import END
 
 from modules import untrusted
-from modules.llm import UNTRUSTED_TEXT, invoke, model_name, shock_model
+from modules.llm import UNTRUSTED_TEXT, call_repair_graph, invoke, model_name, openai_model
 from modules.prompt import read_prompt
 from modules.schema import json_object, response_format
 from modules.shock.domain import (
@@ -65,14 +65,8 @@ class ShockCauseBuilder:
     """그래프를 소유한다. 생성자에서 한 번 컴파일한다."""
 
     def __init__(self) -> None:
-        self._model = shock_model()
-        graph = StateGraph(_State)
-        graph.add_node("call", self._call)
-        graph.add_node("repair", self._repair)
-        graph.add_edge(START, "call")
-        graph.add_conditional_edges("call", self._next, {"repair": "repair", END: END})
-        graph.add_edge("repair", "call")
-        self._graph = graph.compile()
+        self._model = openai_model()
+        self._graph = call_repair_graph(_State, call=self._call, repair=self._repair, next_node=self._next)
 
     @property
     def model_name(self) -> str:

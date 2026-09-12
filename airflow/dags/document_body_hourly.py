@@ -46,13 +46,12 @@
 import logging
 from contextlib import closing
 from datetime import timedelta
-from typing import Any
 
 import pendulum
-from airflow.providers.postgres.hooks.postgres import PostgresHook
 from airflow.sdk import Param, dag, task
 from airflow.sdk.exceptions import AirflowFailException
 
+from modules import dag_common
 from modules.collectors.document.body import (
     DEFAULT_FILE_ROOT,
     BodyCandidate,
@@ -61,17 +60,13 @@ from modules.collectors.document.body import (
     pending_bodies,
 )
 from modules.collectors.document.documents import DocumentGoneError, DocumentHTTPError, DocumentPayloadError
-from modules.utility import CONNECTION_ID, KST_TIMEZONE, UNRECOVERABLE_STATUSES, atomic
+from modules.utility import KST_TIMEZONE, UNRECOVERABLE_STATUSES, atomic
 
 logger = logging.getLogger(__name__)
 
 # 한 실행이 처리할 문서 수. **본문 길이나 파일 크기의 상한이 아니라 배치 상한이다.**
 # 3,598건(2026-08-30 실측)이 밀려 있어 이 값이면 백필이 18시간, 하루면 끝난다.
 DEFAULT_BATCH_SIZE = 200
-
-
-def _connection() -> Any:
-    return PostgresHook(postgres_conn_id=CONNECTION_ID).get_conn()
 
 
 @dag(
@@ -109,7 +104,7 @@ def document_body_hourly():
         collector = DocumentBodyCollector(file_root)
         batch_size = int(context["params"]["batch_size"])
 
-        with closing(_connection()) as connection:
+        with closing(dag_common.connection()) as connection:
             waiting = pending_bodies(connection, batch_size)
 
         if not waiting:
@@ -135,7 +130,7 @@ def document_body_hourly():
             except DocumentGoneError as error:
                 # 제공처가 지운 문서다. 원본이 없는 행은 남길 이유가 없어 지운다. 실패로 세지 않는다.
                 logger.info("%s was deleted by its provider (%s); removing the document", candidate.canonical_url, error)
-                with closing(_connection()) as connection, atomic(connection):
+                with closing(dag_common.connection()) as connection, atomic(connection):
                     collector.delete_document(connection, candidate.id)
                 continue
             except DocumentPayloadError as error:
@@ -154,7 +149,7 @@ def document_body_hourly():
                 failures.append(f"{candidate.id}({error})")
                 continue
 
-            with closing(_connection()) as connection, atomic(connection):
+            with closing(dag_common.connection()) as connection, atomic(connection):
                 stored += collector.store_body(connection, result)
 
             _attach_files(collector, candidate, result, attachment_failures)
@@ -196,7 +191,7 @@ def _attach_files(
             failures.append(f"{candidate.id}:{url}({error})")
             continue
 
-        with closing(_connection()) as connection, atomic(connection):
+        with closing(dag_common.connection()) as connection, atomic(connection):
             collector.store_attachment(connection, candidate.id, attachment)
 
 

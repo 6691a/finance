@@ -76,14 +76,13 @@ import logging
 import os
 from contextlib import closing
 from datetime import UTC, datetime, timedelta
-from typing import Any
 
 import pendulum
-from airflow.providers.postgres.hooks.postgres import PostgresHook
 from airflow.sdk import Param, dag, get_current_context, task
 from airflow.sdk.exceptions import AirflowFailException
 from pydantic import SecretStr
 
+from modules import dag_common
 from modules.collectors.document.dart import (
     STATUS_RATE_LIMIT,
     DartCollector,
@@ -98,7 +97,7 @@ from modules.collectors.document.dart import (
     pending_earnings,
     periodic_report,
 )
-from modules.utility import CONNECTION_ID, KST_TIMEZONE, UNRECOVERABLE_STATUSES, atomic
+from modules.utility import KST_TIMEZONE, UNRECOVERABLE_STATUSES, atomic
 
 logger = logging.getLogger(__name__)
 
@@ -121,13 +120,9 @@ def _lookback_days() -> int:
     return days
 
 
-def _connection() -> Any:
-    return PostgresHook(postgres_conn_id=CONNECTION_ID).get_conn()
-
-
 def _entities() -> tuple[FilingEntity, ...]:
     """수집 대상. **마스터가 비면 실패다** — 0건 성공으로 두면 매 2분이 조용히 아무 것도 안 한다."""
-    with closing(_connection()) as connection:
+    with closing(dag_common.connection()) as connection:
         entities = filing_entities(connection)
     if not entities:
         raise AirflowFailException("instrument has no filing entity; nothing to collect")
@@ -194,7 +189,7 @@ def dart_disclosure_intraday():
                 failures.append(f"{entity.stock_code}({error})")
                 continue
 
-            with closing(_connection()) as connection:
+            with closing(dag_common.connection()) as connection:
                 try:
                     with atomic(connection):
                         stored += collector.store_disclosures(connection, fetch)
@@ -215,7 +210,7 @@ def dart_disclosure_intraday():
         since = datetime.now(UTC).astimezone(KST_TIMEZONE).date() - timedelta(days=_lookback_days() - 1)
 
         entities = _entities()
-        connection = _connection()
+        connection = dag_common.connection()
         try:
             waiting = pending_earnings(connection, tuple(entity.stock_code for entity in entities), since)
         finally:
@@ -244,7 +239,7 @@ def dart_disclosure_intraday():
             if fetch is None:
                 continue
 
-            with closing(_connection()) as connection, atomic(connection):
+            with closing(dag_common.connection()) as connection, atomic(connection):
                 stored += collector.store_earnings(connection, fetch)
 
             logger.info(
@@ -273,7 +268,7 @@ def dart_disclosure_intraday():
         collector = _collector()
         since = datetime.now(UTC).astimezone(KST_TIMEZONE).date() - timedelta(days=_lookback_days() - 1)
 
-        with closing(_connection()) as connection:
+        with closing(dag_common.connection()) as connection:
             entities = filing_entities(connection)
             if not entities:
                 raise AirflowFailException("instrument has no filing entity; nothing to collect")
@@ -302,7 +297,7 @@ def dart_disclosure_intraday():
             if body is None:
                 continue
 
-            with closing(_connection()) as connection, atomic(connection):
+            with closing(dag_common.connection()) as connection, atomic(connection):
                 stored += collector.store_body(connection, disclosure.rcept_no, body)
 
             logger.info(

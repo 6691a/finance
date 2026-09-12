@@ -1,6 +1,6 @@
 """한국투자증권 API에서 국내 휴장일과 해외 결제일을 수집한다.
 
-저장 대상은 `market_session` 테이블이다. 정의의 원본은 백엔드의 `apps/models/market.py`이며
+저장 대상은 `market_session` 테이블이다. 정의의 원본은 백엔드의 `apps/models/market/sessions.py`이며
 여기 SQL의 컬럼 이름은 `tests/collectors/test_kis_market_calendar.py`가 그 모델 metadata와
 대조한다.
 

@@ -36,19 +36,19 @@ RSS는 최근 항목만 준다. **수집을 시작하기 전 기간은 영영 �
 
 - `CONNECTION_ID`가 가리키는 Airflow 연결. 접속 정보는 `AIRFLOW_CONN_FINANCE`가 갖는다.
 - 인증은 없다. 전부 공개 피드다. 네이버 리서치(`naver_research_*`)는 robots.txt가 일반 봇을
-  막는 내부 JSON이고, 사용자 결정으로 수집한다(`docs/analysis/market-thesis/6-analyst.md` 1.2절).
+  막는 내부 JSON이고, 사용자 결정으로 수집한다(2026-08-21. 근거를 적은 설계 문서는 옛 추론과
+  함께 지웠다).
 """
 
 import logging
 from contextlib import closing
 from datetime import UTC, datetime, timedelta
-from typing import Any
 
 import pendulum
-from airflow.providers.postgres.hooks.postgres import PostgresHook
 from airflow.sdk import dag, task
 from airflow.sdk.exceptions import AirflowFailException
 
+from modules import dag_common
 from modules.collectors.document.document_listings import LISTING_SOURCES
 from modules.collectors.document.documents import (
     DocumentHTTPError,
@@ -60,13 +60,9 @@ from modules.collectors.document.documents import (
     parse_feed,
     store_documents,
 )
-from modules.utility import CONNECTION_ID, KST_TIMEZONE, UNRECOVERABLE_STATUSES, atomic
+from modules.utility import KST_TIMEZONE, UNRECOVERABLE_STATUSES, atomic
 
 logger = logging.getLogger(__name__)
-
-
-def _connection() -> Any:
-    return PostgresHook(postgres_conn_id=CONNECTION_ID).get_conn()
 
 
 def collect_source(source: FeedSource, detected_at: datetime) -> tuple[int, SourceOutcome]:
@@ -80,7 +76,7 @@ def collect_source(source: FeedSource, detected_at: datetime) -> tuple[int, Sour
         response = fetch_feed(source)
         items, truncated = parse_feed(response.body, source.slug, source.feed_url)
 
-    with closing(_connection()) as connection:
+    with closing(dag_common.connection()) as connection:
         if listing is not None and listing.enrich is not None:
             # 상세 요청(HTTP)은 트랜잭션 바깥이다. 기존 항목을 빼고 새 항목만 채운다.
             items = listing.enrich(connection, source, items)
@@ -109,7 +105,7 @@ def collect_source(source: FeedSource, detected_at: datetime) -> tuple[int, Sour
 def document_ingestion_hourly():
     @task(task_display_name="피드 수집·저장")
     def collect() -> int:
-        connection = _connection()
+        connection = dag_common.connection()
         try:
             sources = enabled_sources(connection)
         finally:

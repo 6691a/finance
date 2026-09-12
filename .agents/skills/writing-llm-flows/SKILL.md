@@ -97,7 +97,7 @@ ToolNode(tools, handle_tool_errors=(ToolLimitExceeded,))
 ## 모델 선택과 자격 증명
 
 - **어떤 모델을 쓸지는 코드가 정한다.** 모델 정의는 `airflow/modules/llm.py`에 LangChain
-  문법 그대로 모아 두고(`document_model()`·`kospi_model()`·`expectation_model()` 등) 바꿀 때 그
+  문법 그대로 모아 두고(`openai_model()`·`kospi_model()` 등) 바꿀 때 그
   함수를 고친다. `base_url`·모델명을 환경변수로 빼서 제공처를 갈아 끼우지 않는다 —
   LangChain은 제공처마다 클래스와 인자가 달라 문자열 설정 몇 개로 흉내 내면 어느 쪽도
   제대로 못 쓴다.

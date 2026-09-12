@@ -10,7 +10,7 @@
 """
 
 from collections.abc import Sequence
-from typing import Any, Protocol
+from typing import Any
 
 try:
     # psycopg2 전용 고속 경로. 이 모듈의 필수 의존성은 아니라서 없으면 `None`으로 두고
@@ -21,17 +21,13 @@ except ImportError:  # pragma: no cover - Airflow 이미지에는 psycopg2가 �
     _Psycopg2Cursor = None
     _execute_batch = None
 
+from modules.db import Cursor
+
 # 한 번에 묶어 보낼 문장 수. 고시일자 하나가 통화당 1500행 가까이 되던 환율 수집이 기준이었다.
 UPSERT_PAGE_SIZE = 500
 
 
-class BatchCursor(Protocol):
-    def execute(self, statement: str, parameters: Sequence[Any]) -> object: ...
-
-    def executemany(self, statement: str, parameters: Sequence[Sequence[Any]]) -> object: ...
-
-
-def execute_upserts(cursor: BatchCursor, statement: str, parameters: Sequence[Sequence[Any]]) -> None:
+def execute_upserts(cursor: Cursor, statement: str, parameters: Sequence[Sequence[Any]]) -> None:
     """같은 문장을 여러 파라미터로 실행한다. 빈 목록이면 아무 것도 하지 않는다.
 
     `execute_batch`가 없으면 PEP 249 표준 `executemany`로 물러선다. psycopg3의

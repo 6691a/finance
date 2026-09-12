@@ -4,7 +4,7 @@
 -- **슬롯이 키에 들어간다.** 한 번 조회에 갱신 슬롯마다 한 행이 오므로, 수집 시각을 키로
 -- 쓰면 그 행들이 같은 분에 몰려 마지막 하나만 남는다.
 --
--- 정의의 원본은 `apps/models/market.py`의 `StockInvestorEstimateSnapshot`이고
+-- 정의의 원본은 `apps/models/market/investor_flow.py`의 `StockInvestorEstimateSnapshot`이고
 -- `tests/collectors/test_kis_investor_flow.py`가 여기 컬럼을 그 모델 metadata와 대조한다.
 INSERT INTO stock_investor_estimate_snapshot (
     provider, stock_code, business_date, source_time_code,

@@ -32,7 +32,6 @@ import logging
 from collections.abc import Callable
 from datetime import UTC, date, datetime, timedelta
 from urllib.parse import urljoin
-from zoneinfo import ZoneInfo
 
 from curl_cffi.curl import CurlError
 from pydantic import BaseModel, ConfigDict, field_validator
@@ -57,10 +56,9 @@ from modules.collectors.document.naver_research import (
     NaverResearchCollector,
 )
 from modules.db import Connection
+from modules.utility import KST
 
 logger = logging.getLogger(__name__)
-
-KST = ZoneInfo("Asia/Seoul")
 
 # KRX 조회 구간 패딩. 목록 조회가 날짜 구간을 요구하는데, 연휴가 껴도 직전 발표가
 # 구간 안에 들어와야 0건이 정상인지 판단할 수 있다. `boe.FETCH_PADDING_DAYS`와 같은 취지다.

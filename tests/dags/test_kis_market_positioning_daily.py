@@ -9,6 +9,7 @@ import pytest
 from airflow.sdk.exceptions import AirflowSkipException
 
 from dags import kis_market_positioning_daily
+from modules import dag_common
 
 
 def test_the_dag_runs_once_on_the_next_business_morning():
@@ -46,13 +47,18 @@ def test_the_guard_asks_about_yesterday_so_the_saturday_run_is_not_skipped(monke
         def now(tz):
             return datetime(2026, 8, 28, 23, 10, tzinfo=UTC)  # KST 토 2026-08-29 08:10
 
-    def fake_skip(session_kst: date) -> None:
+    class FakeConnection:
+        def close(self) -> None:
+            pass
+
+    def fake_skip(connection, session_kst: date) -> None:
         asked.append(session_kst)
         raise AirflowSkipException("여기서 멈춘다 — 뒤는 외부 호출이다")
 
     monkeypatch.setattr(module, "datetime", FakeDatetime)
-    monkeypatch.setattr(module, "_skip_when_closed", fake_skip)
-    monkeypatch.setattr(module, "resolve_observation_period", lambda context: (date(2026, 8, 22), date(2026, 8, 29)))
+    monkeypatch.setattr(dag_common, "connection", FakeConnection)
+    monkeypatch.setattr(dag_common, "skip_unless_krx_open", fake_skip)
+    monkeypatch.setattr(dag_common, "resolve_period_or_fail", lambda context: (date(2026, 8, 22), date(2026, 8, 29)))
     monkeypatch.setattr(module, "get_current_context", dict)
 
     with pytest.raises(AirflowSkipException):

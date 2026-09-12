@@ -26,25 +26,10 @@ from sqlalchemy import (
     Text,
     UniqueConstraint,
 )
-from sqlalchemy import Enum as SqlEnum
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 
-from apps.core.database import EntityBase, table_options
-
-
-def _enum_column(enum: type[StrEnum]) -> SqlEnum:
-    """`StrEnum`을 VARCHAR + CHECK로 내리는 공통 형태.
-
-    `apps/models/analysis/_columns.py`의 같은 함수와 글자 그대로 같다. 저쪽을 import하면
-    `market`이 `analysis`에 의존하게 되는데, 두 도메인은 서로를 모르는 것이 맞다.
-    """
-    return SqlEnum(
-        enum,
-        native_enum=False,
-        length=20,
-        values_callable=lambda members: [member.value for member in members],
-    )
+from apps.core.database import EntityBase, enum_column, table_options
 
 
 class ShockDirection(StrEnum):
@@ -148,7 +133,7 @@ class MarketShockEvent(EntityBase):
         comment="사건이 일어난 세션 날짜(KST). 시각은 담지 않는다",
     )
     direction: Mapped[ShockDirection] = mapped_column(
-        _enum_column(ShockDirection),
+        enum_column(ShockDirection),
         nullable=False,
         comment="급변의 방향(drop은 고점 대비 하락, surge는 저점 대비 상승)",
     )
@@ -220,7 +205,7 @@ class MarketShockEvent(EntityBase):
         comment="포착 Slack을 보낸 시각(UTC). NULL이면 저장은 됐고 발송이 실패한 것이다",
     )
     cause_status: Mapped[ShockCauseStatus] = mapped_column(
-        _enum_column(ShockCauseStatus),
+        enum_column(ShockCauseStatus),
         nullable=False,
         server_default=ShockCauseStatus.PENDING.value,
         comment="원인 분석의 상태(pending은 아직, resolved는 찾음, unknown은 기한 안에 못 찾음)",
@@ -245,7 +230,7 @@ class MarketShockEvent(EntityBase):
         comment="원인 한 문장. resolved에서만 채워진다",
     )
     cause_kind: Mapped[ShockCauseKind | None] = mapped_column(
-        _enum_column(ShockCauseKind),
+        enum_column(ShockCauseKind),
         nullable=True,
         comment="원인이 루머로 밝혀졌나(rumor) 사실로 확인됐나(confirmed) 가릴 수 없나(unclear)",
     )

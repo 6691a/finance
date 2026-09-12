@@ -1,8 +1,6 @@
 import pytest
-from dependency_injector import providers
 from pydantic import ValidationError
 
-from apps.core.container import Container
 from apps.core.database import Database, _connect_args_for
 from tests.helpers import SettingsForTest as Settings
 
@@ -16,13 +14,10 @@ def make_settings(**overrides: object) -> Settings:
             "default": {"url": DEFAULT_URL},
             "analytics": {"url": ANALYTICS_URL},
         },
-        "redises": {"default": {"url": "redis://localhost:16379/0"}},
         "kis_app_key": "key",
         "kis_app_secret": "secret",
         "kis_rest_domain": "https://example.com",
         "kis_websocket_domain": "ws://example.com",
-        "fred_api_key": "fred",
-        "ecos_api_key": "ecos",
         "sentry_dsn": "",
         "sentry_environment": "test",
         "sentry_release": "test",
@@ -99,29 +94,6 @@ async def test_unknown_database_alias_raises_key_error():
             database.get_engine("missing")
     finally:
         await database.dispose()
-
-
-@pytest.mark.asyncio
-async def test_container_keeps_database_singleton_and_injects_all_aliases():
-    settings = make_settings(
-        databases={
-            "default": {"url": DEFAULT_URL},
-            "analytics": {"url": ANALYTICS_URL},
-        }
-    )
-    test_container = Container()
-    test_container.settings.override(providers.Object(settings))
-
-    try:
-        first = test_container.database()
-        second = test_container.database()
-
-        assert first is second
-        assert first.get_engine("analytics") is not first.get_engine()
-    finally:
-        await first.dispose()
-        test_container.database.reset()
-        test_container.settings.reset_override()
 
 
 @pytest.mark.asyncio

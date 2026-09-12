@@ -32,25 +32,25 @@
 """
 
 import logging
-import os
 from datetime import UTC, datetime, timedelta
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING
 
 import pendulum
-from airflow.providers.postgres.hooks.postgres import PostgresHook
 from airflow.sdk import dag, task
 from airflow.sdk.exceptions import AirflowFailException
 from airflow.timetables.trigger import MultipleCronTriggerTimetable
-from pydantic import SecretStr
 
+from modules import dag_common
 from modules.briefing import documents
 from modules.slack import SlackClient, SlackError
 
 if TYPE_CHECKING:
     from modules.briefing.picks import Pick
-from modules.utility import CONNECTION_ID, KST_TIMEZONE
+from modules.utility import KST_TIMEZONE
 
 logger = logging.getLogger(__name__)
+
+SLACK_CHANNEL_ENV = "SLACK_CHANNEL_DOCUMENT"
 
 # 하루 네 번, 창은 직전 발송 이후만(`documents.window_hours_at`). 자사주 매입 공시처럼
 # 시장에 바로 반영되는 기사가 다음날 아침에야 실리면 늦다(2026-08-19 SK하이닉스 실측).
@@ -62,18 +62,6 @@ SCHEDULE = MultipleCronTriggerTimetable(
     "0 20 * * *",  # KST 20:00 NXT 마감 = UTC 11:00
     timezone=KST_TIMEZONE,
 )
-
-
-def _connection() -> Any:
-    return PostgresHook(postgres_conn_id=CONNECTION_ID).get_conn()
-
-
-def _slack_settings() -> tuple[SecretStr, str]:
-    token = os.environ.get("SLACK_BOT_TOKEN")
-    channel = os.environ.get("SLACK_CHANNEL_DOCUMENT")
-    if not token or not channel:
-        raise AirflowFailException("SLACK_BOT_TOKEN and SLACK_CHANNEL_DOCUMENT are required")
-    return SecretStr(token), channel
 
 
 @dag(
@@ -91,10 +79,10 @@ def _slack_settings() -> tuple[SecretStr, str]:
 def slack_document_briefing():
     @task(task_display_name="문서 평가 브리핑 발송")
     def send_briefing() -> str:
-        token, channel = _slack_settings()
+        token, channel = dag_common.slack_settings(SLACK_CHANNEL_ENV)
         now = datetime.now(UTC)
 
-        connection = _connection()
+        connection = dag_common.connection()
         try:
             summary = documents.collect_summary(
                 connection, now, window_hours=documents.window_hours_at(now)

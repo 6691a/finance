@@ -11,12 +11,10 @@ from typing import Self
 import pytest
 
 from modules.dedup import (
-    TITLE_SIMILARITY_THRESHOLD,
     DedupDocument,
     link_duplicates,
     normalize_title,
     resolve_links,
-    title_similarity,
     titles_duplicate,
 )
 from modules.sql import read_sql
@@ -60,19 +58,6 @@ class TestNormalizeTitle:
 
     def test_collapses_whitespace_and_case(self):
         assert normalize_title("  KOSPI   급락 ") == normalize_title("kospi 급락")
-
-
-class TestTitleSimilarity:
-    def test_the_observed_yonhap_pair_is_a_duplicate(self):
-        # 이 작업을 시작하게 한 실제 쌍이다. 이 쌍이 임계를 넘지 못하면 규칙이 무의미하다.
-        a = "코스피, 장초반 5∼6%대 급락…매도 사이드카 발동"
-        b = "[속보] 코스피 5~6%대 급락…매도 사이드카 발동"
-        assert title_similarity(a, b) >= TITLE_SIMILARITY_THRESHOLD
-
-    def test_unrelated_titles_stay_below_the_threshold(self):
-        a = "코스피, 장초반 5∼6%대 급락…매도 사이드카 발동"
-        b = "원/달러 환율 1,400원 돌파…9개월 만에 최고"
-        assert title_similarity(a, b) < TITLE_SIMILARITY_THRESHOLD
 
 
 class TestTitlesDuplicate:

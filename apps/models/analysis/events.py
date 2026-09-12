@@ -22,8 +22,7 @@ from sqlalchemy import (
 )
 from sqlalchemy.orm import Mapped, mapped_column
 
-from apps.core.database import EntityBase, table_options
-from apps.models.analysis._columns import _enum_column
+from apps.core.database import EntityBase, enum_column, table_options
 
 
 class StockEventType(StrEnum):
@@ -164,7 +163,7 @@ class StockEventClaim(EntityBase):
         comment="한국거래소 종목코드(예: 005930). instrument로 외래키를 걸지 않는다",
     )
     event_type: Mapped[StockEventType] = mapped_column(
-        _enum_column(StockEventType),
+        enum_column(StockEventType),
         nullable=False,
         comment="이벤트 종류(shareholder_return, earnings, guidance)",
     )
@@ -174,12 +173,12 @@ class StockEventClaim(EntityBase):
         comment="대상 기간 표기. 연간(2026), 분기(2026Q2), 반기(2026H1)만 허용한다. 기대와 실제를 잇는 키의 한 축이다",
     )
     metric: Mapped[StockEventMetric] = mapped_column(
-        _enum_column(StockEventMetric),
+        enum_column(StockEventMetric),
         nullable=False,
         comment="이벤트 지표. 단위는 지표가 정하며 전부 원(KRW)이다. 실적 지표는 earnings_fact.metric과 같은 값이다",
     )
     claim_kind: Mapped[StockEventClaimKind] = mapped_column(
-        _enum_column(StockEventClaimKind),
+        enum_column(StockEventClaimKind),
         nullable=False,
         comment="주장의 종류(expectation은 기대치, actual은 실제 발표값)",
     )
@@ -325,7 +324,7 @@ class StockEventOutcome(EntityBase):
         comment="한국거래소 종목코드(예: 005930). instrument로 외래키를 걸지 않는다",
     )
     event_type: Mapped[StockEventType] = mapped_column(
-        _enum_column(StockEventType),
+        enum_column(StockEventType),
         nullable=False,
         comment="이벤트 종류(shareholder_return, earnings, guidance)",
     )
@@ -335,7 +334,7 @@ class StockEventOutcome(EntityBase):
         comment="대상 기간 표기(2026, 2026Q2, 2026H1). stock_event_claim과 같은 규칙이다",
     )
     metric: Mapped[StockEventMetric] = mapped_column(
-        _enum_column(StockEventMetric),
+        enum_column(StockEventMetric),
         nullable=False,
         comment="이벤트 지표. 단위는 지표가 정하며 전부 원(KRW)이다",
     )
@@ -360,7 +359,7 @@ class StockEventOutcome(EntityBase):
         comment="(실제 - 기대) / |기대| × 100. 기대 대비 어긋난 정도(퍼센트)다",
     )
     verdict: Mapped[SurpriseVerdict] = mapped_column(
-        _enum_column(SurpriseVerdict),
+        enum_column(SurpriseVerdict),
         nullable=False,
         comment="판정(beat/meet/miss). |surprise_pct|가 허용 밴드 안이면 meet, 밖이면 부호로 가른다. LLM이 만들지 않는다",
     )

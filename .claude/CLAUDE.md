@@ -48,23 +48,20 @@ Codex용 규칙 원본은 [.codex/AGENTS.md](../.codex/AGENTS.md)이며 두 문�
 | --- | --- |
 | `../apps/core/config.py` | `config.yaml`을 읽는 Pydantic 설정. `settings` 싱글턴 제공 |
 | `../apps/core/database.py` | `Base`, `EntityBase`, 다중 DB 별칭을 관리하는 `Database` |
-| `../apps/core/redis.py` | Redis 연결 관리 |
-| `../apps/core/container.py` | dependency-injector 컨테이너(상주 서비스는 안 쓴다 — 아래 규칙) |
-| `../apps/core/utility.py` | 상태 없는 공통 변환(`utc_text`·`kst_today`). `airflow/modules/utility.py`의 대칭 |
 | `apps/models/` | SQLAlchemy 모델. 파일은 도메인 단위로만 나눈다(스키마와 무관) |
 | `apps/realtime/` | KIS 실시간 WebSocket 수집 서비스. `python -m apps.realtime.main`, `compose/prod/` 배포 |
 | `apps/api/` | 읽기 전용 조회 API(FastAPI). 리소스는 늘어난다 — 지금은 시장 추론. `python -m apps.api.main`, `compose/prod/api/` 배포 |
 | `migrations/` | Alembic. 리비전 파일은 `migrations/versions` 하나를 모든 별칭이 공유한다 |
 | `migrations/routing.py` | 어떤 테이블이 어떤 DB 별칭에 속하는지 판단하는 순수 함수 |
 | `../airflow/dags/` | Airflow DAG. 폴더로 나누지 않는다 — 스케줄·재시도·실패 판정만 갖는 얇은 파일이다 (아래 규칙) |
-| `../airflow/modules/` | DAG이 쓰는 공유 코드. 도메인 폴더(`collectors/`·`briefing/`·`expectation/`·`technical/`·`kospi/`)로 나누고 최상위에는 공용 잎만 둔다. 하위 패키지 `__init__.py`는 비운다 — 재수출하면 가벼운 모듈 하나를 import해도 LangChain이 딸려 온다. (아래 규칙) |
+| `../airflow/modules/` | DAG이 쓰는 공유 코드. 도메인 폴더(`collectors/`·`briefing/`·`expectation/`·`technical/`·`kospi/`·`shock/`)로 나누고 최상위에는 공용 잎만 둔다. 하위 패키지 `__init__.py`는 비운다 — 재수출하면 가벼운 모듈 하나를 import해도 LangChain이 딸려 온다. (아래 규칙) |
 | `../airflow/modules/collectors/` | 수집기. 도메인 폴더(`market/`·`document/`·`indicator/`·`calendar/`·`analyst/`)로 나눈다. 전환 진행 상황은 [docs/convention/collectors-class-migration.md](../docs/convention/collectors-class-migration.md) |
 | `tests/` | pytest |
 | `notebooks/` | 손으로 돌려 보는 Jupyter 노트북. 파서·수집기가 실제 데이터에서 무엇을 하는지 눈으로 확인하는 자리다. **`.gitignore`에 있어 커밋되지 않는다** — 실행하면 앱키와 시세 응답이 출력에 남는다. **DAG도 서비스도 여기를 import하지 않는다**: 코드의 원본은 언제나 `airflow/`와 `apps/`이고 노트북은 그것을 부르기만 한다 |
 
 `apps/models/`의 모듈은 도메인 단위로 나눈다(`raw.py`, `reference.py`, `content.py`).
 한 도메인이 커지면 그 안에서 다시 패키지로 나눈다(2026-08-25) — `market/`이
-`sessions.py`·`series.py`·`fundamentals.py`·`positioning.py`·`investor_flow.py`,
+`sessions.py`·`series.py`·`fundamentals.py`·`positioning.py`·`investor_flow.py`·`shock.py`,
 `analysis/`가 `kospi.py`·`events.py`·`technical.py`다.
 테이블은 스키마를 지정하지 않고 연결의 `search_path`(PostgreSQL 기본 `public`)를 그대로 따르므로
 파일 이름이 PostgreSQL 스키마와 대응하지 않는다.
@@ -112,8 +109,9 @@ Airflow가 실행하지 않는 상주 서비스는 `apps/` 아래 **패키지 �
 테스트와 도구가 설정 파일 없이 그 모듈을 import할 수 있어야 한다.
 
 같은 이유로 **컨테이너도 설정을 스스로 읽지 않는다.** `providers.Dependency()`로 선언하고
-`main.py`가 채운다. `apps/core/container.py`가 그 규칙 밖에 있는데(본문에서 settings를
-읽는다), 그래서 상주 서비스가 그것을 쓰지 않는다.
+`main.py`가 채운다. 공유 컨테이너(`apps/core/container.py`)는 본문에서 settings를 읽어
+그 규칙 밖에 있었고 쓰는 곳도 없어 지웠다(2026-09-10) — 상주 서비스마다 자기
+`container.py`를 갖는다.
 
 ### 의존성은 생성자로 주입한다
 
@@ -153,16 +151,6 @@ provider 수명은 뜻을 갖는다 — 엔진 풀처럼 프로세스에 한 벌
 - **wiring은 패키지를 통째로 건다**(`WiringConfiguration(packages=["apps.api.routes"])`).
   모듈을 하나씩 적으면 새 리소스를 더할 때 `container.py`도 함께 고쳐야 하고, 빠뜨리면
   `Provide` 객체가 그대로 주입되어 조용히 틀린다.
-
-### 상태 없는 변환은 `apps/core/utility.py`에 한 벌
-
-시각 표기(`utc_text`), 날짜 경계(`kst_today`)처럼 **여러 서비스가 같은 답을 내야 하는 변환**은
-거기 둔다. 같은 로직을 두 모듈이 각자 갖고 있으면 한쪽만 고친 날 한 응답 안에서 표기가
-갈린다. 이 모듈은 `config`·`database`·`redis`를 import하지 않아 어디서 불러도 `config.yaml`을
-요구하지 않는다.
-
-`airflow/modules/utility.py`가 Airflow 쪽의 같은 자리다. 두 트리는 서로를 import하지 않으므로
-같은 규칙이 양쪽에 한 벌씩 있고, 어긋나면 테스트가 잡는다.
 
 ## 명령어
 
@@ -241,9 +229,12 @@ DAG가 쓰는 코드는 **위치는 Airflow를, 규칙은 백엔드를** 따른�
   제공처. 예: `📈 국내 지수·선물 1분봉 (KIS)`), 한 문장 `description`,
   `doc_md=__doc__`(모듈 docstring에 설계 배경)이 필수다. `Param`에도 `title`과
   `description`을 단다. 빈 문자열로 두지 않는다.
-- 의존성은 Airflow 환경에 있는 것만 쓴다. 표준 라이브러리, Pydantic, PEP 249 연결,
-  HTML 수집용 `scrapling[fetchers]`, 그리고 브리핑 차트용 matplotlib(+한글 폰트
-  `fonts-nanum`)이다. SQLAlchemy 모델과 `core.config`는 import하지 않는다.
+- 의존성은 Airflow 환경에 있는 것만 쓴다. 베이스 이미지의 표준 라이브러리·Pydantic·
+  PEP 249 연결(`PostgresHook`)에 더해 `compose/local/airflow/requirements.txt`가 이미지에
+  굽는 것 — HTML 수집용 `scrapling[fetchers]`, PDF 파싱 `pymupdf`, LLM 호출
+  `langchain-xai`·`langgraph`·`openai`·`langsmith`, Slack `slack-sdk`, `sentry-sdk`,
+  브리핑 차트용 matplotlib(+한글 폰트 `fonts-nanum`), Neo4j 드라이버 `neo4j` — 이다. 목록의 원본은 그 파일이고 줄마다 어느 모듈이 왜 쓰는지가
+  적혀 있다. SQLAlchemy 모델과 `core.config`는 import하지 않는다.
   여기에 더 넣으려면 운영 Airflow 이미지에 먼저 들어가야 한다. matplotlib은 없어도
   브리핑이 죽지 않도록 함수 안에서 import한다(`modules/briefing/chart.py`).
 - 테이블 정의의 원본은 백엔드의 `apps/models`다. 수집기는 문자열 SQL을 쓰므로
@@ -253,7 +244,7 @@ DAG가 쓰는 코드는 **위치는 Airflow를, 규칙은 백엔드를** 따른�
 ## `airflow/modules/`의 폴더
 
 **한 도메인의 파일이 셋 이상이면 폴더로 내리고 접두어를 뗀다.** `collectors/`·`briefing/`·
-`expectation/`·`technical/`·`kospi/`가 그 형태다(2026-08-27에 셋을 내렸다 — 최상위 `.py`가
+`expectation/`·`technical/`·`kospi/`·`shock/`가 그 형태다(2026-08-27에 셋을 내렸다 — 최상위 `.py`가
 31개에서 12개로 줄었다). `modules.kospi.kospi_domain`은 말을 더듬으므로
 `modules.kospi.domain`이다. `collectors/`가 파일 이름에 제공처를 남긴 것
 (`market/kis_positioning.py`)과 다른 판단인데, 저기는 접두어가 **제공처**라 뜻이 있고
@@ -270,8 +261,12 @@ DAG가 쓰는 코드는 **위치는 Airflow를, 규칙은 백엔드를** 따른�
   늦게 올린다(`kospi/run.py`·`review.py`가 그 형태이고 `briefing/chart.py`가 matplotlib에
   같은 것을 쓴다). 타입에만 쓰는 이름은 `TYPE_CHECKING`으로 남긴다.
 - **최상위에 남는 것은 공용 잎이다.** `db`·`sql`·`upsert`·`utility`·`period`·`schema`·
-  `slack`·`llm`·`prompt`·`market_session`·`assessment`·`dedup`·`usage`·`untrusted` **열넷**이다.
-  열둘은 300줄 미만이고 둘이 넘는다(`assessment` 637, `llm` 350 — 2026-09-01 실측).
+  `slack`·`llm`·`prompt`·`market_session`·`assessment`·`dedup`·`usage`·`untrusted`·
+  `dag_common` **열다섯**이다. 열셋은 300줄 미만이고 둘이 넘는다(`assessment` 688, `llm` 312 —
+  2026-09-12 실측). `dag_common`만 Airflow를 import한다 — DAG 파일 스물여섯이 똑같이 복사해
+  갖고 있던 Hook 연결·자격 증명·관측창 `Param`·토큰 재발급·휴장 스킵을 한 벌로 모은 것이라
+  (2026-09-12) DAG 파일과 `kospi/common.py`만 import한다. `modules/`의 다른 코드가 이것을
+  import하면 `test_import_weight`가 깬다.
   **이것들을 `core/` 같은 폴더로 모으지 않는다** — 114개 파일 226줄을 고치고 얻는 것이 목록
   열 줄이다(2026-08-27 실측). 폴더는 파일이 많아서 만드는 것이지 정리해 보이려고 만드는
   것이 아니다. **줄 수는 폴더로 내리는 기준이 아니다** — 기준은 "한 도메인의 파일이 셋
@@ -283,8 +278,9 @@ DAG가 쓰는 코드는 **위치는 Airflow를, 규칙은 백엔드를** 따른�
   둘의 `forecast`·`review`).
 - **이동과 파일 분리를 같은 커밋에 두지 않는다.** 어느 쪽이 회귀를 만들었는지 못 가른다.
   옛 추론의 툴박스는 2026-09-01에 셋을 떼어 1,556→920줄이 됐다 — 인자 스키마
-  (`tool_args.py`), 행 변환(`tool_rows.py`), 툴 호출 원장(`tool_ledger.py`)이고 `kospi/`가
-  그 배치를 그대로 이어받았다.
+  (`tool_args.py`), 행 변환(`tool_rows.py`), 툴 호출 원장(`tool_ledger.py`)이다. `kospi/`는
+  그중 `tool_args.py`·`tool_ledger.py`를 이어받았고 행 변환 파일은 없다 — 툴이 Pydantic
+  모델(`kospi/tools.py`)을 돌려주고 `toolbox.py`의 `_body`가 그것을 JSON으로 편다.
   **원장은 상태를 쥐므로 파일이 아니라 클래스(`ToolCallLedger`)로 갈랐고** 툴박스가
   그것을 소유한다. 기준은
   [collectors-class-migration.md](../docs/convention/collectors-class-migration.md)의
@@ -320,8 +316,9 @@ DAG가 쓰는 코드는 **위치는 Airflow를, 규칙은 백엔드를** 따른�
 자격 증명을 쥐는 수집기 10모듈(2026-08-23)과 연결·기준 시각을 쥐는 흐름 코드
 9곳(2026-08-25)은 클래스로 옮겼고, 수집기는 도메인 폴더로 내려갔다(2026-08-25).
 **`connection`을 첫 인자로 받는 모듈 함수는 이제 `modules/dedup.py`·`market_session.py`·
-`technical/signals.py`처럼 진입점이 하나뿐인 곳에만 남아 있다** — 새로 만들 때 그 형태를
-따라가지 않는다. 남은 단계는 없다.
+`technical/signals.py`처럼 진입점이 하나뿐인 곳, 그리고 DAG 파일이 부르는 두 줄짜리 휴장
+가드(`dag_common.skip_unless_*`)에만 남아 있다** — 새로 만들 때 그 형태를 따라가지 않는다.
+남은 단계는 없다.
 [docs/convention/collectors-class-migration.md](../docs/convention/collectors-class-migration.md)가 폴더
 구조(도메인별 `market/`·`document/`·`indicator/`·`calendar/`·`analyst/`)와 어디서
 갈랐는지, 그리고 **함수로 두는 것이 맞다고 판정한 모듈과 그 이유**를 갖는다.
@@ -433,7 +430,7 @@ DAG가 쓰는 코드는 **위치는 Airflow를, 규칙은 백엔드를** 따른�
 - **테스트도 모델로 넘긴다.** 픽스처가 맨 dict면 프롬프트에 실릴 키가 테스트에서만 존재할 수 있다.
 
 **wire 조립 경계는 예외다.** Slack 블록, LangGraph 노드 반환, JSON Schema, 검증 전
-외부 응답 파싱, 그리고 모델을 JSON으로 펴는 자리(`kospi/tool_rows.py`)는 dict로 둔다.
+외부 응답 파싱, 그리고 모델을 JSON으로 펴는 자리(`kospi/toolbox.py`의 `_body`)는 dict로 둔다.
 그 dict는 제공처 규격이거나 모델을 JSON으로 바꾸는 경계 그 자체라 모델로 감싸면 같은 검증이
 두 번이 된다. 그 밖의 도메인 값은 **처음부터 모델로 쓴다.**
 

@@ -111,10 +111,10 @@ from contextlib import closing
 from datetime import timedelta
 
 import pendulum
-from airflow.providers.postgres.hooks.postgres import PostgresHook
-from airflow.sdk import Param, dag, get_current_context, task
+from airflow.sdk import dag, get_current_context, task
 from airflow.sdk.exceptions import AirflowFailException
 
+from modules import dag_common
 from modules.collectors.indicator.boe import (
     GILT_DATASET,
     BoeHTTPError,
@@ -123,15 +123,7 @@ from modules.collectors.indicator.boe import (
     fetch_curve,
     store_observations,
 )
-from modules.period import (
-    LOOKBACK_DAYS,
-    LOOKBACK_DAYS_PARAM,
-    OBSERVATION_END_PARAM,
-    OBSERVATION_START_PARAM,
-    PeriodError,
-    resolve_observation_period,
-)
-from modules.utility import CONNECTION_ID, KST_TIMEZONE, UNRECOVERABLE_STATUSES, atomic
+from modules.utility import KST_TIMEZONE, UNRECOVERABLE_STATUSES, atomic
 
 logger = logging.getLogger(__name__)
 
@@ -146,26 +138,10 @@ logger = logging.getLogger(__name__)
     max_active_runs=1,
     default_args={"retries": 2, "retry_delay": timedelta(hours=1)},
     params={
-        OBSERVATION_START_PARAM: Param(
-            None,
-            type=["null", "string"],
-            format="date",
-            title="조회 시작 기준일",
-            description="비우면 observation_end에서 lookback_days만큼 뺀 날. 주면 lookback_days를 무시한다.",
-        ),
-        OBSERVATION_END_PARAM: Param(
-            None,
-            type=["null", "string"],
-            format="date",
-            title="조회 종료 기준일",
-            description="비우면 이 run 시각의 KST 날짜. 과거 구간을 한 번에 넣을 때 직접 넘긴다.",
-        ),
-        LOOKBACK_DAYS_PARAM: Param(
-            LOOKBACK_DAYS,
-            type="integer",
-            minimum=1,
-            title="되돌아볼 일수",
-            description="구간을 지정하지 않을 때만 쓴다. 1이면 그 run의 하루만 저장한다.",
+        **dag_common.observation_period_params(
+            lookback_hint="구간을 지정하지 않을 때만 쓴다. 1이면 그 run의 하루만 저장한다.",
+            start_title="조회 시작 기준일",
+            end_title="조회 종료 기준일",
         ),
     },
     doc_md=__doc__,
@@ -175,10 +151,7 @@ def boe_gilt_daily():
     @task
     def collect() -> int:
         context = get_current_context()
-        try:
-            observation_start, observation_end = resolve_observation_period(context)
-        except PeriodError as error:
-            raise AirflowFailException(str(error)) from error
+        observation_start, observation_end = dag_common.resolve_period_or_fail(context)
 
         request = BoeRequest(
             dataset=GILT_DATASET,
@@ -195,7 +168,7 @@ def boe_gilt_daily():
                 logger.warning("BoE asked to retry after %s seconds", error.retry_after)
             raise
 
-        with closing(PostgresHook(postgres_conn_id=CONNECTION_ID).get_conn()) as connection:
+        with closing(dag_common.connection()) as connection:
             try:
                 with atomic(connection):
                     count = store_observations(connection, response)

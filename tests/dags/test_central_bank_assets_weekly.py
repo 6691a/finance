@@ -129,18 +129,3 @@ def test_no_failure_lets_the_task_succeed():
     assert central_bank_assets_weekly.require_no_failures("FRED", []) is None
 
 
-@pytest.mark.parametrize("code", ["INFO-100", "ERROR-100", "ERROR-300"])
-def test_unrecoverable_ecos_codes_are_not_retried(code):
-    assert central_bank_assets_weekly.is_unrecoverable_result(code)
-
-
-@pytest.mark.parametrize("code", ["INFO-200", "ERROR-500", "ERROR-600"])
-def test_provider_side_ecos_codes_are_retried(code):
-    assert not central_bank_assets_weekly.is_unrecoverable_result(code)
-
-
-def test_a_missing_api_key_fails_before_any_call(monkeypatch):
-    monkeypatch.delenv("FRED_API_KEY", raising=False)
-
-    with pytest.raises(AirflowFailException, match="FRED_API_KEY"):
-        central_bank_assets_weekly.require_env("FRED_API_KEY")

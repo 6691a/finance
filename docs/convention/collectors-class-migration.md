@@ -2,7 +2,7 @@
 
 > **한눈에**
 > - 왜: 데이터를 모아 오는 코드가 인증 정보·DB 연결·기준 시각 같은 "한 번 정해지면 안 바뀌는 값"을 함수마다 다시 넘겨 받고 있었다. 한 증권사 인증값 셋이 47곳에서 반복돼 값 하나가 바뀌면 47곳을 고쳐야 했다.
-> - 무엇: "안 바뀌는 값을 들고 다니는 동작은 클래스로, 상태 없는 변환은 함수로"라는 규칙과 그 적용 결과다. 수집기 11개와 흐름 코드 9곳을 옮기고 수집기를 주제별 폴더로 정리했다. 함수로 남긴 곳과 이유, 큰 파일을 나누는 기준도 있다.
+> - 무엇: "안 바뀌는 값을 들고 다니는 동작은 클래스로, 상태 없는 변환은 함수로"라는 규칙과 그 적용 결과다. 수집기 15개와 흐름 코드 9곳을 옮기고 수집기를 주제별 폴더로 정리했다. 함수로 남긴 곳과 이유, 큰 파일을 나누는 기준도 있다.
 > - 한계: 남은 단계는 없다. 이제는 "왜 그렇게 나눴나"의 기록이다.
 
 `.claude/CLAUDE.md`의 "클래스와 함수를 가르는 기준"을 저장소에 적용하는 진행 문서다.
@@ -106,6 +106,10 @@ airflow/modules/collectors/
 | `collectors/market/kis_positioning.py` | `KisPositioningCollector` | 2026-08-23 |
 | `collectors/market/kis_quote.py` | `KisQuoteCollector` | 2026-08-23 (`kis.py`에서 분리 2026-08-25) |
 | `collectors/market/kis_index_daily.py` | `KisIndexDailyCollector` | 2026-08-25 (`kis_quote.py`에서 분리) |
+| `collectors/market/kis_future_daily.py` | `KisFutureDailyCollector` | 2026-08-27 (처음부터 클래스) |
+| `collectors/market/kis_overseas_index_daily.py` | `KisOverseasIndexDailyCollector` | 2026-08-27 (처음부터 클래스) |
+| `collectors/indicator/kcs.py` | `KcsTradeCollector` | 2026-08-28 (처음부터 클래스) |
+| `collectors/document/body.py` | `DocumentBodyCollector` | 2026-08-30 (처음부터 클래스) |
 
 ### 1단계 — 자격 증명을 인자로 도는 수집기 (완료, 2026-08-23)
 
@@ -126,7 +130,8 @@ airflow/modules/collectors/
 ### 2단계 — 연결·기준 시각·레지스트리를 도는 흐름 코드 (완료, 2026-08-25)
 
 수집기가 아니지만 같은 규칙에 걸리던 곳이다. 기준 구현은
-`airflow/modules/thesis/nxt_review.py`의 `NxtAfterHoursReview`였다 — 그 클래스 docstring이
+`airflow/modules/thesis/nxt_review.py`의 `NxtAfterHoursReview`였다(옛 추론과 함께 2026-09-03에
+지웠고, 지금은 `modules/kospi/store.py`의 `KospiStore`가 같은 자리다) — 그 클래스 docstring이
 규칙을 그대로 적어 뒀다("연결과 세션 날짜가 상태다… 함수로 두면 인자에 매번 다시 들어간다",
 "기준 시각 계산은 모듈 함수다"). 나머지는 전부 그것의 미적용판이었다.
 
@@ -178,14 +183,17 @@ airflow/modules/collectors/
 
 ```
 airflow/modules/collectors/
-    kis.py                      KIS 공용 층(인증·전송·식별자). 아래 다섯이 함께 쓴다
+    kis.py                      KIS 공용 층(인증·전송·식별자). 아래 KIS 수집기 아홉이 함께 쓴다
     analyst/kis_opinion.py
     calendar/kis_market_calendar.py  nyse_calendar.py
-    document/dart.py  naver_research.py  documents.py  document_listings.py
-    indicator/fred.py  ecos.py  bbk.py  boe.py  ecb.py  ecb_irs.py  mof.py
-    market/kis_quote.py  kis_index_daily.py  kis_investor_flow.py
-           kis_positioning.py  kis_overseas_index.py  yahoo.py
+    document/dart.py  naver_research.py  documents.py  document_listings.py  body.py  pdf.py
+    indicator/fred.py  ecos.py  bbk.py  bbk_statement.py  boe.py  ecb.py  ecb_irs.py  mof.py  kcs.py
+    market/kis_quote.py  kis_index_daily.py  kis_future_daily.py  kis_investor_flow.py
+           kis_positioning.py  kis_overseas_index.py  kis_overseas_index_daily.py  yahoo.py
 ```
+
+(2026-09-10 실측. `document/body.py`·`pdf.py`, `indicator/bbk_statement.py`·`kcs.py`,
+`market/kis_future_daily.py`·`kis_overseas_index_daily.py`는 이동 뒤에 같은 규칙으로 더해졌다.)
 
 **`kis.py`만 루트에 남는다.** 그 판단은 이렇게 갈랐다:
 
@@ -196,7 +204,7 @@ airflow/modules/collectors/
   시각이 아니라 구간이고, 이어받기 규칙과 잘림 판정이 이 API에만 있다. 분봉을 고칠 때 읽지
   않아도 되는 코드라 뗐다. 같은 경계로 `tests/collectors/test_kis_index_daily_collector.py`도
   갈랐다 — 수집기마다 테스트 파일 하나가 이 저장소의 관례이고 가짜 커서도 파일마다 자기 것을 둔다.
-- **`kis.py`에 남은 것** — KIS를 부르는 **다섯 수집기가 함께 쓰는 층**. 토큰 발급·캐시
+- **`kis.py`에 남은 것** — KIS를 부르는 **아홉 수집기가 함께 쓰는 층**. 토큰 발급·캐시
   (`issue_token`·`access_token`), 전송(`send_get`), 오류 종류(`KisHTTPError`·
   `KisResultError`·`KisPayloadError`), 식별자 Enum(`DomesticFuture`·`DomesticIndex`·
   `DomesticStock`·`StockExchange`)과 거래장 손잡이(`rest_exchanges`), 공용 봉 모델
@@ -223,7 +231,7 @@ import하므로 이제 `monkeypatch.setattr(kis_quote, "send_get", ...)`다. 형
   새 모듈이 가까운 파일에서 복사해 온 결과라 그 차이는 의도가 아니라 사고였다.
   - `Cursor`는 **여섯 메서드를 다 요구한다.** 모듈마다 좁히면 다시 스무 개가 된다.
   - `Connection`은 `cursor()`만 요구한다. 커밋 경계는 대부분 DAG이 `utility.atomic`으로
-    쥔다. 스스로 커밋하는 `thesis.ThesisStore`와 `dedup.link_duplicates`만
+    쥔다. 스스로 커밋하는 `kospi.store.KospiStore`와 `dedup.link_duplicates`만
     `TransactionalConnection`을 쓴다.
 - **`briefing/ops.py`의 `ExpectedSource`가 `NamedTuple`이었다.** 규칙은 "데이터 모양은
   언제나 Pydantic 모델"이고, 저장소에 남은 유일한 비-Pydantic 데이터 모양이었다.
@@ -277,8 +285,8 @@ import하므로 이제 `monkeypatch.setattr(kis_quote, "send_get", ...)`다. 형
 
 | 파일 | 유지 이유 |
 | --- | --- |
-| `airflow/modules/thesis/tools.py` | 작은 Pydantic DTO 카탈로그이며 운영 소비자가 `thesis/toolbox.py` 하나뿐 |
-| `airflow/modules/thesis/state.py` | 관측 상태·XCom 계약을 모은 의존성 방화벽이며 아홉 파일이 쓴다 |
+| `airflow/modules/kospi/tools.py` | 작은 Pydantic DTO 카탈로그이며 운영 소비자가 `kospi/toolbox.py` 하나뿐 |
+| `airflow/modules/kospi/state.py` | 관측 상태·XCom 계약을 모은 의존성 방화벽이며 아홉 파일이 쓴다 |
 | `airflow/modules/collectors/indicator/ecos.py` | 한 제공처의 wire model과 collector가 응집돼 있음 |
 | `airflow/modules/assessment.py` | 두 LangGraph 클래스와 DTO가 하나의 평가 배치 흐름을 구성 |
 | `airflow/modules/collectors/document/dart.py` | 한 인증·전송 계약 아래 공시와 실적 파서가 이미 함수 경계로 갈려 있음 |

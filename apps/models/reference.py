@@ -8,10 +8,9 @@ from sqlalchemy import (
     UniqueConstraint,
     text,
 )
-from sqlalchemy import Enum as SqlEnum
 from sqlalchemy.orm import Mapped, mapped_column
 
-from apps.core.database import EntityBase, table_options
+from apps.core.database import EntityBase, enum_column, table_options
 
 
 class SeriesKind(StrEnum):
@@ -119,12 +118,7 @@ class IndicatorSeries(EntityBase):
         ),
     )
     kind: Mapped[SeriesKind] = mapped_column(
-        SqlEnum(
-            SeriesKind,
-            native_enum=False,
-            length=20,
-            values_callable=lambda enum: [member.value for member in enum],
-        ),
+        enum_column(SeriesKind),
         nullable=False,
         comment=(
             "시계열의 종류(government_bond, money_market, policy_rate, tips_rate, credit_spread, "
@@ -207,12 +201,7 @@ class QuoteSymbol(EntityBase):
         comment="제공처 안에서 심볼을 가리키는 식별자. quote_bar.symbol과 같은 값이다",
     )
     kind: Mapped[QuoteSymbolKind] = mapped_column(
-        SqlEnum(
-            QuoteSymbolKind,
-            native_enum=False,
-            length=20,
-            values_callable=lambda enum: [member.value for member in enum],
-        ),
+        enum_column(QuoteSymbolKind),
         nullable=False,
         comment=(
             "값의 종류(index, index_future, fx, rate, bond_future, commodity, equity, crypto). "
@@ -289,12 +278,7 @@ class Instrument(EntityBase):
         comment="거래 시장에서 사용하는 종목 코드",
     )
     market: Mapped[Market] = mapped_column(
-        SqlEnum(
-            Market,
-            native_enum=False,
-            length=20,
-            values_callable=lambda enum: [member.value for member in enum],
-        ),
+        enum_column(Market),
         nullable=False,
         comment="종목이 상장된 거래 시장(kospi, kosdaq, nyse 또는 nasdaq)",
     )
@@ -304,12 +288,7 @@ class Instrument(EntityBase):
         comment="종목 표시 이름",
     )
     kind: Mapped[InstrumentKind] = mapped_column(
-        SqlEnum(
-            InstrumentKind,
-            native_enum=False,
-            length=20,
-            values_callable=lambda enum: [member.value for member in enum],
-        ),
+        enum_column(InstrumentKind),
         nullable=False,
         comment="가격 수집 소스를 가르는 유형(equity, etf 또는 index)",
     )

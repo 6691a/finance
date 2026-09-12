@@ -73,18 +73,15 @@
 """
 
 import logging
-import os
 from contextlib import closing
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal, InvalidOperation
 
 import pendulum
-from airflow.providers.postgres.hooks.postgres import PostgresHook
 from airflow.sdk import Param, dag, get_current_context, task
 from airflow.sdk.exceptions import AirflowFailException, AirflowSkipException
-from pydantic import SecretStr
 
-from modules.market_session import krx_open_day
+from modules import dag_common
 from modules.shock.detect import detect, peer_move
 from modules.shock.domain import (
     COOLDOWN_MINUTES,
@@ -97,9 +94,11 @@ from modules.shock.domain import (
 from modules.shock.render import render_blocks, render_text
 from modules.shock.store import ShockStore, within_cooldown
 from modules.slack import SlackClient
-from modules.utility import CONNECTION_ID, KST_TIMEZONE, atomic
+from modules.utility import KST_TIMEZONE, atomic
 
 logger = logging.getLogger(__name__)
+
+SLACK_CHANNEL_ENV = "SLACK_CHANNEL_MARKET"
 
 THRESHOLD_PARAM = "threshold_pct"
 WINDOW_PARAM = "window_minutes"
@@ -112,15 +111,6 @@ NOTIFY_PARAM = "notify"
 # 대개 그날 마감~다음날 아침에 원인이 나오지만 안 나올 수도 있어 사흘을 둔다. 날짜는
 # 우리가 세지 않는다 — `market_session.effective_open_day`가 판정의 주인이다.
 CAUSE_BUSINESS_DAYS = 3
-
-
-def _slack_settings() -> tuple[SecretStr, str]:
-    token = os.environ.get("SLACK_BOT_TOKEN")
-    channel = os.environ.get("SLACK_CHANNEL_MARKET")
-    if not token or not channel:
-        # 설정 누락이라 재시도해도 같다. 값 자체는 메시지에 넣지 않는다.
-        raise AirflowFailException("SLACK_BOT_TOKEN and SLACK_CHANNEL_MARKET are required")
-    return SecretStr(token), channel
 
 
 @dag(
@@ -197,11 +187,10 @@ def market_shock_intraday():
         session_date = window_end.astimezone(KST_TIMEZONE).date()
         min_bars = max(1, window_minutes // 2)
 
-        with closing(PostgresHook(postgres_conn_id=CONNECTION_ID).get_conn()) as connection:
+        with closing(dag_common.connection()) as connection:
             # 답을 모르면 계속한다. 캘린더가 밀렸다고 진짜 거래일을 잃는 것이 휴장일에 빈
             # 조회를 한 번 더 하는 것보다 나쁘다(`modules/market_session.py`의 규칙).
-            if krx_open_day(connection, session_date) is False:
-                raise AirflowSkipException(f"KRX is closed on {session_date}")
+            dag_common.skip_unless_krx_open(connection, session_date)
 
             store = ShockStore(connection)
             bars = store.bars(TRIGGER_SYMBOL, window_start=window_start, window_end=window_end)
@@ -274,7 +263,7 @@ def market_shock_intraday():
                 return event_id
 
             # 저장 트랜잭션 밖에서 보낸다. 발송 실패가 사건 기록까지 되돌리면 안 된다.
-            token, channel = _slack_settings()
+            token, channel = dag_common.slack_settings(SLACK_CHANNEL_ENV)
             SlackClient(token).post_message(
                 channel,
                 text=render_text(event),

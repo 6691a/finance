@@ -13,6 +13,7 @@ from dags import (
     slack_ops_briefing,
     slack_us_market_briefing,
 )
+from modules import dag_common
 
 ALL_BRIEFINGS = [
     slack_kr_market_briefing,
@@ -112,7 +113,7 @@ def test_missing_slack_settings_fail_without_retry(module, monkeypatch):
         monkeypatch.delenv(name, raising=False)
 
     with pytest.raises(AirflowFailException):
-        module._slack_settings()
+        dag_common.slack_settings(module.SLACK_CHANNEL_ENV)
 
 
 @pytest.mark.parametrize("module", ALL_BRIEFINGS)
@@ -121,7 +122,7 @@ def test_the_token_is_wrapped_so_logs_cannot_print_it(module, monkeypatch):
     for name in ("SLACK_CHANNEL_MARKET", "SLACK_CHANNEL_DOCUMENT", "SLACK_CHANNEL_OPS"):
         monkeypatch.setenv(name, "C123")
 
-    token, channel = module._slack_settings()
+    token, channel = dag_common.slack_settings(module.SLACK_CHANNEL_ENV)
 
     assert "xoxb-secret" not in str(token)
     assert channel == "C123"
@@ -134,7 +135,7 @@ def test_each_report_goes_to_its_own_channel(monkeypatch):
     monkeypatch.setenv("SLACK_CHANNEL_DOCUMENT", "C-document")
     monkeypatch.setenv("SLACK_CHANNEL_OPS", "C-ops")
 
-    channels = {module._slack_settings()[1] for module in ALL_BRIEFINGS}
+    channels = {dag_common.slack_settings(module.SLACK_CHANNEL_ENV)[1] for module in ALL_BRIEFINGS}
 
     # 한국장과 미국장은 같은 주제라 채널을 공유한다. 문서·운영은 각자 채널이다.
     assert channels == {"C-market", "C-document", "C-ops"}

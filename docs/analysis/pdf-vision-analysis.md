@@ -283,7 +283,7 @@ def attachment_vision_model() -> BaseChatModel:
     )
 ```
 
-- 문서 태깅(`document_model`)과 **같은 모델·같은 키**(`OPENAI_API_KEY`)다. 키를 새로 발급하지
+- 문서 태깅(`openai_model`)과 **같은 모델·같은 키**(`OPENAI_API_KEY`)다. 키를 새로 발급하지
   않고, `langchain-openai`가 이미 이미지에 있어 의존성도 늘지 않는다.
 - **이 모델이 우리 크롭(한글 리포트 표, 중앙은행 차트)을 읽는지는 아직 재지 않았다.**
   이 문서를 켤 때 **프로토타입이 먼저다** — 실제 크롭 20~30장을 스크래치패드에서 태워

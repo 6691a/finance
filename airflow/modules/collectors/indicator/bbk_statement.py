@@ -81,8 +81,10 @@ from pydantic import (
     model_validator,
 )
 
+from modules.collectors.indicator.bbk import column_name
 from modules.db import Connection
 from modules.sql import read_sql
+from modules.utility import normalize_to_utc, require_finite, require_ordered_period
 
 BBK_URL = "https://api.statistiken.bundesbank.de/rest/data"
 
@@ -147,8 +149,7 @@ class StatementSeries(StrEnum):
 
     @property
     def column_name(self) -> str:
-        """응답 헤더에 나오는 값 열 이름. 데이터셋 이름이 앞에 붙는다."""
-        return f"{DATASET}.{self.series_key}"
+        return column_name(DATASET, self.series_key)
 
 
 BALANCE_SHEET_SERIES: tuple[str, ...] = tuple(series.value for series in StatementSeries)
@@ -203,9 +204,7 @@ class StatementRequest(BaseModel):
 
     @model_validator(mode="after")
     def require_ordered_period(self) -> Self:
-        if self.observation_start > self.observation_end:
-            raise ValueError("observation_start must not be after observation_end")
-        return self
+        return require_ordered_period(self)
 
 
 class StatementObservation(BaseModel):
@@ -220,10 +219,7 @@ class StatementObservation(BaseModel):
     @field_validator("value")
     @classmethod
     def require_finite(cls, value: Decimal) -> Decimal:
-        # Decimal은 "NaN"과 "Infinity"도 받아들인다. 지표 값으로 저장하면 이후 집계가 전부 오염된다.
-        if not value.is_finite():
-            raise ValueError("observation value must be a finite number")
-        return value
+        return require_finite(value, "observation value")
 
     @property
     def series_id(self) -> str:
@@ -259,8 +255,7 @@ class StatementResponse(BaseModel):
     @field_validator("started_at", "completed_at")
     @classmethod
     def normalize_to_utc(cls, moment: datetime) -> datetime:
-        # 저장·비교용 시각은 UTC로 정규화한다. naive datetime은 AwareDatetime이 이미 막는다.
-        return moment.astimezone(UTC)
+        return normalize_to_utc(moment)
 
 
 def build_series_key() -> str:

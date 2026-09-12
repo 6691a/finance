@@ -11,6 +11,7 @@ from datetime import date, datetime, timedelta
 from decimal import Decimal
 
 from modules.db import Connection
+from modules.kospi.state import FrozenModel
 from modules.shock.domain import (
     BAR_PROVIDER,
     INDEX_BAR_TABLE,
@@ -23,7 +24,6 @@ from modules.shock.domain import (
     PeerMove,
     PeerSpec,
     ShockEvent,
-    _State,
 )
 from modules.sql import read_sql
 
@@ -50,7 +50,7 @@ class ShockStoreError(RuntimeError):
     """행이 있어야 할 자리에 없다. 다시 불러도 같은 결과다."""
 
 
-class PendingCause(_State):
+class PendingCause(FrozenModel):
     """원인을 아직 못 찾은 급변 하나. `select_pending_causes.sql`의 한 행이다."""
 
     id: int
@@ -70,7 +70,7 @@ class PendingCause(_State):
     attempts: int = 0
 
 
-class ExpiredCause(_State):
+class ExpiredCause(FrozenModel):
     """기한을 다 쓰고 닫힌 급변 하나. Slack에 실을 것만 갖는다."""
 
     id: int

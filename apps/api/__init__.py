@@ -21,7 +21,7 @@ Slack이 보여 주는 것은 채택된 방향 하나의 확률·이유와 근�
 그 연결에 `default_transaction_read_only = on`을 걸어, 실수로 쓰기가 들어가도 PostgreSQL이
 거절한다. `apps/realtime/`가 대상 별칭에 `read_only: false`를 요구하는 가드의 정확한 반대다.
 
-기록이 불변인 것이 이 도메인의 1원칙이라(`docs/analysis/market-thesis/README.md`) 사람이
+기록이 불변인 것이 이 도메인의 1원칙이라 사람이
 행을 고치는 경로를 앱에 두지 않는다.
 
 ## 배포
@@ -31,5 +31,5 @@ Slack이 보여 주는 것은 채택된 방향 하나의 확률·이유와 근�
 `config.yaml`은 컨테이너 여럿이 공유하는 접속 정보라 "이 컨테이너가 어디에 바인드하나"는
 거기 속하지 않는다.
 
-설계는 `docs/analysis/market-thesis/12-api.md`에 있다.
+설계 문서는 옛 추론과 함께 지웠다(2026-09-01).
 """

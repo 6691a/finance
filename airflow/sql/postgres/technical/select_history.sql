@@ -2,7 +2,7 @@
 --
 -- **두 원천을 한 모양으로 읽는다.** 국내 지수는 `index_daily`(뷰 `quote_daily`)에, 국내 종목은
 -- `stock_investor_trade_daily`에 있고 컬럼 이름이 다르다. 종목 확정 종가가 저기 있는 이유는
--- 수급과 같은 응답으로 오기 때문이다(`apps/models/market.py`의 StockInvestorTradeDaily).
+-- 수급과 같은 응답으로 오기 때문이다(`apps/models/market/investor_flow.py`의 StockInvestorTradeDaily).
 --
 -- KIS equity 행을 뷰 쪽에서 빼는 이유는 겹침을 막기 위해서다. 해외 상장 종목(TSMC ADR)은
 -- yahoo provider라 그대로 통과한다.

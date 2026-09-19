@@ -768,6 +768,25 @@ def test_close_conflicts_reports_every_disagreeing_day(monkeypatch):
     assert kis_investor_flow.close_conflicts(connection, fetch) == (date(2026, 8, 13), date(2026, 8, 14))
 
 
+def test_close_conflicts_ignores_rows_written_on_their_own_business_day(monkeypatch):
+    """당일 종가는 NXT 실시간가라 잠정값이다. 다음 날 KRX 종가와 어긋나도 소급 조정이 아니다.
+
+    2026-09-18 운영 실측: 18:10에 저장한 당일 종가(000660 1,847,000)가 KRX 종가(1,857,000)와
+    달라 매일 전 구간 재수집이 돌았고, 확인 재조회에서 당일 값이 또 움직여 태스크가 죽었다.
+    SQL은 이 테스트에서 실행되지 않는다 — 조건이 빠지지 않았는지만 지킨다. 실제 동작은 운영
+    DB를 읽기 전용으로 조회해 확인했다(내일 시나리오는 빈 결과, 액면분할 시나리오는 당일을
+    뺀 전부).
+    """
+    monkeypatch.setattr(kis_investor_flow, "send_get", fake_send_get(body(output2=[DAILY_ROW])))
+    fetch = COLLECTOR.fetch_stock_trade_daily(SAMSUNG, BUSINESS_DATE)
+    connection = ConflictConnection()
+
+    kis_investor_flow.close_conflicts(connection, fetch)
+
+    statement, _parameters = connection.recorded_cursor.calls[0]
+    assert "(stored.updated_at AT TIME ZONE 'Asia/Seoul')::date > stored.business_date" in statement
+
+
 def test_close_conflicts_skips_the_query_when_nothing_came_back(monkeypatch):
     """0행은 정상이다(상장 전 구간). 빈 배열로 조회하면 비교할 것이 없는데 왕복만 는다."""
     monkeypatch.setattr(kis_investor_flow, "send_get", fake_send_get(body(output2=[])))

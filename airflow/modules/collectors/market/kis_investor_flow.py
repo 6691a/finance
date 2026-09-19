@@ -585,6 +585,9 @@ def close_conflicts(connection: Connection, fetch: StockTradeDailyFetch) -> tupl
 
     **저장 전에 부른다.** upsert가 먼저 돌면 무엇이 옛 값이었는지 알 방법이 없다.
 
+    **자기 거래일 당일에 쓴 저장 행은 비교하지 않는다.** 그 종가는 NXT 실시간가라 다음 날
+    KRX 종가와 어긋나는 것이 정상이고 소급 조정이 아니다(SQL 주석에 실측이 있다).
+
     판단은 DAG가 한다. 여기는 어긋난 거래일만 돌려준다. `missing_open_days`와 같은 이유로
     함수다 — KIS 자격 증명을 보지 않는다.
     """

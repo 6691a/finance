@@ -10,10 +10,21 @@
 --
 -- **세로가 아니라 가로로 본다.** 날짜 간 급락은 진짜 폭락일 수 있어 조정과 가를 수 없다.
 -- 여기서 보는 것은 **같은 거래일의 두 값**이다 — 과거는 변하지 않으므로 한 날짜의 종가가
--- 둘일 수 없고, 어긋났다면 소급 조정 말고는 설명이 없다. 그래서 오탐이 없다.
+-- 둘일 수 없고, 어긋났다면 소급 조정 말고는 설명이 없다. 확정된 행끼리는 그래서 오탐이 없다
+-- (당일 잠정값은 아래에서 뺀다).
 --
 -- 종가 하나만 본다. 조정은 OHLC와 수량을 전부 바꾸므로 하나로 충분하다.
 -- 비교는 numeric끼리라 자릿수 표기 차이(53000 대 53000.00)에 걸리지 않는다.
+--
+-- **자기 거래일 당일에 쓴 행은 비교하지 않는다. 그 종가는 잠정값이다.** "과거는 변하지 않는다"는
+-- 전제가 당일에는 성립하지 않는다 — KIS는 18:10에 당일 종가를 KRX 종가가 아니라 NXT
+-- 애프터마켓(20:00까지)의 실시간가로 준다(2026-09-18 실측: 000660의 09-18 저장값 1,847,000은
+-- KRX 15:30 종가 1,857,000이 아니라 NXT 18:10 봉 1,846,000 쪽이었다). 다음 날 같은 날짜가
+-- KRX 종가로 오면 어긋나고, 그것을 소급 조정으로 읽어 전 구간을 재수집하다가 확인 재조회에서
+-- 또 당일 값이 움직여 죽었다(2026-09-15부터 매일 재수집, 09-17·18 실패). upsert가 다음 날
+-- 확정값으로 덮으므로 비교에서 빼도 잃는 것이 없다.
+-- 진짜 소급 조정은 분할일 이전 **전 기간**을 바꾸므로 당일 이후에 쓴 행들이 여전히 걸린다.
+-- 날짜 경계는 KRX 거래일이라 KST다.
 --
 -- 판단은 DAG가 한다. 여기는 어긋난 거래일만 돌려준다.
 SELECT stored.business_date
@@ -22,5 +33,6 @@ JOIN unnest(%s::date[], %s::numeric[]) AS incoming(business_date, close_price)
   ON incoming.business_date = stored.business_date
 WHERE stored.provider = 'kis'
   AND stored.stock_code = %s
+  AND (stored.updated_at AT TIME ZONE 'Asia/Seoul')::date > stored.business_date
   AND stored.close_price IS DISTINCT FROM incoming.close_price
 ORDER BY stored.business_date

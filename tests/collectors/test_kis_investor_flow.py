@@ -768,14 +768,14 @@ def test_close_conflicts_reports_every_disagreeing_day(monkeypatch):
     assert kis_investor_flow.close_conflicts(connection, fetch) == (date(2026, 8, 13), date(2026, 8, 14))
 
 
-def test_close_conflicts_ignores_rows_written_on_their_own_business_day(monkeypatch):
-    """당일 종가는 NXT 실시간가라 잠정값이다. 다음 날 KRX 종가와 어긋나도 소급 조정이 아니다.
+def test_close_conflicts_ignores_the_latest_stored_row(monkeypatch):
+    """가장 최근 행의 종가는 마지막 체결가(NXT 포함)라 잠정값이다. 그래서 대조에서 뺀다.
 
-    2026-09-18 운영 실측: 18:10에 저장한 당일 종가(000660 1,847,000)가 KRX 종가(1,857,000)와
-    달라 매일 전 구간 재수집이 돌았고, 확인 재조회에서 당일 값이 또 움직여 태스크가 죽었다.
-    SQL은 이 테스트에서 실행되지 않는다 — 조건이 빠지지 않았는지만 지킨다. 실제 동작은 운영
-    DB를 읽기 전용으로 조회해 확인했다(내일 시나리오는 빈 결과, 액면분할 시나리오는 당일을
-    뺀 전부).
+    2026-09-18 운영 실측: 18:10에 저장한 종가(000660 1,847,000)가 KRX 종가(1,857,000)와 달라
+    매일 전 구간 재수집이 돌았고, 확인 재조회에서 값이 또 움직여 태스크가 죽었다. 이틀 뒤
+    일요일에 다시 받은 행도 NXT 값이었다 — 그래서 저장 시각(`updated_at`)이 아니라 위치로
+    가른다. SQL은 이 테스트에서 실행되지 않는다 — 조건이 빠지지 않았는지만 지킨다. 실제
+    동작은 운영 DB를 읽기 전용으로 조회해 확인했다.
     """
     monkeypatch.setattr(kis_investor_flow, "send_get", fake_send_get(body(output2=[DAILY_ROW])))
     fetch = COLLECTOR.fetch_stock_trade_daily(SAMSUNG, BUSINESS_DATE)
@@ -784,7 +784,8 @@ def test_close_conflicts_ignores_rows_written_on_their_own_business_day(monkeypa
     kis_investor_flow.close_conflicts(connection, fetch)
 
     statement, _parameters = connection.recorded_cursor.calls[0]
-    assert "(stored.updated_at AT TIME ZONE 'Asia/Seoul')::date > stored.business_date" in statement
+    assert "stored.business_date < (" in statement
+    assert "SELECT max(latest.business_date)" in statement
 
 
 def test_close_conflicts_skips_the_query_when_nothing_came_back(monkeypatch):

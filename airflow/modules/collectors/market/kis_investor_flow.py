@@ -162,6 +162,7 @@ from pydantic import BaseModel, ConfigDict, SecretStr, ValidationError
 from modules.collectors.kis import (
     SOURCE,
     KisPayloadError,
+    StockExchange,
     decimal_or_zero,
     decode_payload,
     output_rows,
@@ -183,11 +184,16 @@ MARKET_FLOW_SOURCE_KEY = "investor_time_by_market"
 
 DAILY_TRADE_PATH = "/uapi/domestic-stock/v1/quotations/investor-trade-by-stock-daily"
 DAILY_TRADE_TR_ID = "FHPTJ04160001"
-DAILY_TRADE_SOURCE_KEY = "investor_trade_by_stock_daily"
+# 원장의 조회 이름도 거래소로 가른다. 어느 표를 채운 수집인지 계보만 보고 알아야 한다.
+DAILY_TRADE_SOURCE_KEYS = {
+    StockExchange.KRX: "investor_trade_by_stock_daily",
+    StockExchange.NXT: "investor_trade_by_stock_daily_nxt",
+}
 
-# 이 조회는 시장 구분 하나로 코스피와 코스닥을 함께 받는다. 장중 시장 조회처럼 시장별 코드를
-# 찾을 필요가 없다(실측: 247540이 `J`로 KSQ150 응답).
-DAILY_TRADE_MARKET_DIV = "J"
+# 시장 코드는 수집기가 든다(`StockExchange.division_code`: KRX `J`, NXT `NX`). KRX 조회는 시장 구분 하나로
+# 코스피와 코스닥을 함께 받는다. 장중 시장 조회처럼 시장별 코드를 찾을 필요가 없다(실측: 247540이 `J`로
+# KSQ150 응답). 통합(`UN`)은 어느 거래소 값도 아니라 받지 않는다(2026-09-20 실측: 005930 09-15 종가가
+# KRX 248,500, NXT 250,000, UN 250,500).
 
 # 한 응답이 담는 거래일 수는 30이다. `tr_cont`가 빈 문자열로 와서 연속조회가 없다(실측).
 
@@ -204,13 +210,43 @@ DAILY_TRADE_MARKET_DIV = "J"
 # 그것을 읽는다.
 IDENTITY_EPOCH = date(2018, 12, 10)
 
+# NXT 일봉에서 실제 값이 나오기 시작하는 첫 거래일. **제공처가 정한 값이다.** 2026-09-20 실측: 그 앞은
+# `NX`로 불러도 응답에 행은 오되 시가·종가·거래량이 빈 문자열이고, 파서가 빈 칸을 0으로 읽어 조용히
+# 통과시킨다. 그래서 이 날짜 아래를 받지 않는 것이 유일한 장치다. 2025-03-24 이후 두 종목은 30행이 전부
+# 실제 값이었다(2026-09-20 실측).
+NXT_FIRST_TRADE_DATE = date(2025, 3, 24)
+
 STOCK_ESTIMATE_UPSERT = read_sql("postgres", "stock_investor_estimate_snapshot", "upsert.sql")
-DAILY_TRADE_UPSERT = read_sql("postgres", "stock_investor_trade_daily", "upsert.sql")
-DAILY_TRADE_COUNT_STORED = read_sql("postgres", "stock_investor_trade_daily", "count_stored.sql")
-DAILY_TRADE_MISSING_OPEN_DAYS = read_sql("postgres", "stock_investor_trade_daily", "select_missing_open_days.sql")
-DAILY_TRADE_CLOSE_CONFLICTS = read_sql("postgres", "stock_investor_trade_daily", "select_close_conflicts.sql")
 MARKET_FLOW_UPSERT = read_sql("postgres", "market_investor_flow_snapshot", "upsert.sql")
 SOURCE_RECORD_INSERT = read_sql("postgres", "source_record", "insert.sql")
+
+
+class TradeDailySql(BaseModel):
+    """거래소 한 곳의 일봉·수급 표를 다루는 SQL 넷. KRX와 NXT가 표만 다르고 모양이 같다."""
+
+    model_config = ConfigDict(frozen=True)
+
+    upsert: str
+    count_stored: str
+    missing_open_days: str
+    close_conflicts: str
+
+    @classmethod
+    def load(cls, folder: str) -> Self:
+        return cls(
+            upsert=read_sql("postgres", folder, "upsert.sql"),
+            count_stored=read_sql("postgres", folder, "count_stored.sql"),
+            missing_open_days=read_sql("postgres", folder, "select_missing_open_days.sql"),
+            close_conflicts=read_sql("postgres", folder, "select_close_conflicts.sql"),
+        )
+
+
+# 표를 갈라 둔 이유: 같은 표에 거래소 열을 더하면 그 표를 읽는 SQL 열둘이 하나라도 KRX 조건을 빠뜨릴 때
+# 같은 날짜가 두 행으로 나와 종가·SMA가 조용히 틀린다(설계 docs/collection/kis-stock-daily-nxt.md 5절).
+TRADE_DAILY_SQL: dict[StockExchange, TradeDailySql] = {
+    StockExchange.KRX: TradeDailySql.load("stock_investor_trade_daily"),
+    StockExchange.NXT: TradeDailySql.load("stock_investor_trade_daily_nxt"),
+}
 
 
 class InvestorFlowStock(StrEnum):
@@ -555,6 +591,8 @@ class StockTradeDailyFetch(BaseModel):
     model_config = ConfigDict(frozen=True)
 
     stock_code: str
+    # 이 응답을 받은 거래소. 저장·대조가 어느 표를 볼지 응답이 스스로 안다.
+    exchange: StockExchange
     end_date: date
     rows: tuple[StockTradeDailyRow, ...]
     started_at: datetime
@@ -569,10 +607,15 @@ class StoreVerificationError(RuntimeError):
     """
 
 
-def missing_open_days(connection: Connection, stock_code: str, start: date, end: date) -> tuple[date, ...]:
-    """구간 안에서 KRX가 열었는데 일봉이 없는 거래일. KIS 자격 증명과 무관해 함수로 둔다."""
+def missing_open_days(
+    connection: Connection, stock_code: str, start: date, end: date, *, exchange: StockExchange
+) -> tuple[date, ...]:
+    """구간 안에서 KRX가 열었는데 그 거래소의 일봉이 없는 거래일. KIS 자격 증명과 무관해 함수로 둔다.
+
+    `exchange`를 기본값 없이 받는다. 빠뜨리면 KRX 표를 보고 NXT 구멍을 못 찾는데 오류로 안 보인다.
+    """
     with connection.cursor() as cursor:
-        cursor.execute(DAILY_TRADE_MISSING_OPEN_DAYS, (stock_code, start, end))
+        cursor.execute(TRADE_DAILY_SQL[exchange].missing_open_days, (stock_code, start, end))
         return tuple(row[0] for row in cursor.fetchall())
 
 
@@ -595,7 +638,7 @@ def close_conflicts(connection: Connection, fetch: StockTradeDailyFetch) -> tupl
         return ()
     with connection.cursor() as cursor:
         cursor.execute(
-            DAILY_TRADE_CLOSE_CONFLICTS,
+            TRADE_DAILY_SQL[fetch.exchange].close_conflicts,
             (
                 [row.business_date for row in fetch.rows],
                 [row.close_price for row in fetch.rows],
@@ -614,12 +657,22 @@ class KisInvestorFlowCollector:
 
     조회하는 쪽(장중 DAG은 추정·시장 누적, 일별 DAG은 확정 일별)이 다른 것은 스케줄이지
     수집 규칙이 아니다.
+
+    `exchange`는 **확정 일별 조회에만 쓴다**(KRX `J`, NXT `NX`). 한 실행 동안 안 변하는 값이라
+    생성자가 받는다. 장중 추정·시장 누적은 KRX 조회뿐이라 기본값 그대로 둔다.
     """
 
-    def __init__(self, token: SecretStr, app_key: SecretStr, app_secret: SecretStr) -> None:
+    def __init__(
+        self,
+        token: SecretStr,
+        app_key: SecretStr,
+        app_secret: SecretStr,
+        exchange: StockExchange = StockExchange.KRX,
+    ) -> None:
         self._token = token
         self._app_key = app_key
         self._app_secret = app_secret
+        self._exchange = exchange
 
     def fetch_stock_estimates(self, stock: InvestorFlowStock, business_date: date) -> StockEstimateFetch:
         """한 종목의 외국인·기관 추정 순매수를 받는다.
@@ -710,7 +763,7 @@ class KisInvestorFlowCollector:
             DAILY_TRADE_PATH,
             DAILY_TRADE_TR_ID,
             {
-                "FID_COND_MRKT_DIV_CODE": DAILY_TRADE_MARKET_DIV,
+                "FID_COND_MRKT_DIV_CODE": self._exchange.division_code,
                 "FID_INPUT_ISCD": stock.value,
                 "FID_INPUT_DATE_1": end_date.strftime("%Y%m%d"),
                 "FID_ORG_ADJ_PRC": "",
@@ -745,6 +798,7 @@ class KisInvestorFlowCollector:
 
         return StockTradeDailyFetch(
             stock_code=stock.value,
+            exchange=self._exchange,
             end_date=end_date,
             rows=rows,
             started_at=started_at,
@@ -832,13 +886,17 @@ class KisInvestorFlowCollector:
         return 1
 
     def store_stock_trade_daily(self, connection: Connection, fetch: StockTradeDailyFetch) -> int:
-        """거래일마다 한 행을 저장한다. 확정값이라 다시 받아도 같은 값으로 갱신된다."""
+        """거래일마다 한 행을 저장한다. 확정값이라 다시 받아도 같은 값으로 갱신된다.
+
+        **어느 표에 쓸지는 응답이 정한다**(`fetch.exchange`). KRX 수집기가 NXT 응답을 받아도 NXT 표로 간다.
+        """
         rows = fetch.rows
         covered = sorted(row.business_date for row in rows)
+        sql = TRADE_DAILY_SQL[fetch.exchange]
         with connection.cursor() as cursor:
             source_record_id = self._insert_source_record(
                 cursor,
-                DAILY_TRADE_SOURCE_KEY,
+                DAILY_TRADE_SOURCE_KEYS[fetch.exchange],
                 fetch.started_at,
                 fetch.completed_at,
                 len(rows),
@@ -853,7 +911,7 @@ class KisInvestorFlowCollector:
             )
             execute_upserts(
                 cursor,
-                DAILY_TRADE_UPSERT,
+                sql.upsert,
                 [
                     (
                         fetch.stock_code,
@@ -888,7 +946,7 @@ class KisInvestorFlowCollector:
             )
             # upsert가 실제로 남았는지 되센다. 이 값을 세지 않고 len(rows)를 돌려주면
             # 덜 들어간 실행이 성공으로 남는다(count_stored.sql 주석 참고).
-            cursor.execute(DAILY_TRADE_COUNT_STORED, (fetch.stock_code, covered, source_record_id))
+            cursor.execute(sql.count_stored, (fetch.stock_code, covered, source_record_id))
             stored = cursor.fetchone()[0]
         if stored != len(rows):
             raise StoreVerificationError(

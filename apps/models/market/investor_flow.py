@@ -386,3 +386,134 @@ class StockInvestorTradeDaily(EntityBase):
         nullable=False,
         comment="이 행을 마지막으로 갱신한 수집의 source_record 레코드 ID",
     )
+
+
+class StockInvestorTradeDailyNxt(EntityBase):
+    """종목별 투자자 매매동향 확정 일별값의 NXT 판. `StockInvestorTradeDaily`(KRX)와 컬럼이 같다.
+
+    KIS 투자자 일별 API를 시장 코드 `NX`로 불러 받는다(2026-09-20 실측). 시가·고가·저가·종가·거래량과
+    투자자별 수급이 전부 **NXT 체결만의 값**이다. 종가는 NXT 마지막 봉 종가와 같았다.
+
+    **같은 표에 거래소 열을 더하지 않고 표를 따로 둔 이유.** 이 표를 읽는 SQL이 열둘이라 하나라도
+    KRX 조건을 빠뜨리면 같은 날짜가 두 행으로 나와 종가·SMA가 조용히 틀린다. 두 표가 어긋나지
+    않는지는 `tests/models/test_market_models.py`가 컬럼 이름·타입·널 여부로 대조한다.
+    설계는 `docs/collection/kis-stock-daily-nxt.md`다.
+
+    **NXT 실제 값은 2025-03-24부터다.** 그 앞은 응답에 빈 행이 오므로 수집기가 시작일 아래를 받지 않는다.
+    컬럼 설명은 KRX 표와 같은 뜻이고 거래소만 다르다. 항등식 넷과 대금 단위(수량 주, 투자자별 대금
+    백만원, `accumulated_trade_amount`만 원)도 같다.
+    """
+
+    __tablename__ = "stock_investor_trade_daily_nxt"
+    __table_args__ = (
+        UniqueConstraint(
+            "provider",
+            "stock_code",
+            "business_date",
+            name="uq_stock_investor_trade_daily_nxt_natural_key",
+        ),
+        Index("ix_stock_investor_trade_daily_nxt_source_record_id", "source_record_id"),
+        Index("ix_stock_investor_trade_daily_nxt_business_date", "business_date"),
+        table_options(
+            comment="종목별 투자자 매매동향의 NXT 확정 일별값을 누적하는 테이블. KRX 표와 컬럼이 같다",
+            database="default",
+        ),
+    )
+
+    provider: Mapped[str] = mapped_column(Text, nullable=False, comment="데이터 제공처 식별자(kis)")
+    stock_code: Mapped[str] = mapped_column(
+        Text, nullable=False, comment="6자리 종목코드(005930, 000660). 종목 이름은 instrument 마스터가 갖는다"
+    )
+    business_date: Mapped[date] = mapped_column(
+        nullable=False,
+        comment="거래일(stck_bsop_date). NXT 영업일 기준이며 시각은 담지 않는다",
+    )
+    open_price: Mapped[Decimal] = mapped_column(
+        Numeric(18, 4), nullable=False, comment="시가(stck_oprc). NXT 체결 기준. 단위는 원"
+    )
+    high_price: Mapped[Decimal] = mapped_column(
+        Numeric(18, 4), nullable=False, comment="고가(stck_hgpr). NXT 체결 기준. 단위는 원"
+    )
+    low_price: Mapped[Decimal] = mapped_column(
+        Numeric(18, 4), nullable=False, comment="저가(stck_lwpr). NXT 체결 기준. 단위는 원"
+    )
+    close_price: Mapped[Decimal] = mapped_column(
+        Numeric(18, 4),
+        nullable=False,
+        comment="종가(stck_clpr). NXT 마감가(마지막 체결가). 단위는 원. 20:00 뒤에 받아야 확정이다",
+    )
+    accumulated_volume: Mapped[int] = mapped_column(
+        BigInteger, nullable=False, comment="누적 거래량(acml_vol). NXT 체결만의 거래량. 단위는 주"
+    )
+    accumulated_trade_amount: Mapped[Decimal] = mapped_column(
+        Numeric(24, 2),
+        nullable=False,
+        comment="누적 거래대금(acml_tr_pbmn). **단위는 원이다.** 투자자별 대금만 백만원이라 섞어 쓰면 안 된다",
+    )
+    foreign_net_buy_qty: Mapped[int] = mapped_column(
+        BigInteger,
+        nullable=False,
+        comment="외국인 순매수 수량(frgn_ntby_qty). 단위는 주. 등록+미등록과 일치하는지 검증한다",
+    )
+    foreign_registered_net_buy_qty: Mapped[int] = mapped_column(
+        BigInteger, nullable=False, comment="외국인 등록분 순매수 수량(frgn_reg_ntby_qty). 단위는 주"
+    )
+    foreign_unregistered_net_buy_qty: Mapped[int] = mapped_column(
+        BigInteger, nullable=False, comment="외국인 미등록분 순매수 수량(frgn_nreg_ntby_qty). 단위는 주"
+    )
+    individual_net_buy_qty: Mapped[int] = mapped_column(
+        BigInteger, nullable=False, comment="개인 순매수 수량(prsn_ntby_qty). 단위는 주. 장중 추정 API에는 없는 값이다"
+    )
+    institution_net_buy_qty: Mapped[int] = mapped_column(
+        BigInteger,
+        nullable=False,
+        comment="기관계 순매수 수량(orgn_ntby_qty). 단위는 주. 세부 일곱의 합과 일치하는지 검증한다",
+    )
+    securities_net_buy_qty: Mapped[int] = mapped_column(
+        BigInteger, nullable=False, comment="금융투자 순매수 수량(scrt_ntby_qty). 기관계의 부분집합이다"
+    )
+    investment_trust_net_buy_qty: Mapped[int] = mapped_column(
+        BigInteger, nullable=False, comment="투자신탁 순매수 수량(ivtr_ntby_qty). 기관계의 부분집합이다"
+    )
+    private_equity_net_buy_qty: Mapped[int] = mapped_column(
+        BigInteger,
+        nullable=False,
+        comment="사모펀드 순매수 수량(pe_fund_ntby_vol). 이 분류만 접미사가 _vol이다",
+    )
+    bank_net_buy_qty: Mapped[int] = mapped_column(
+        BigInteger, nullable=False, comment="은행 순매수 수량(bank_ntby_qty). 기관계의 부분집합이다"
+    )
+    insurance_net_buy_qty: Mapped[int] = mapped_column(
+        BigInteger, nullable=False, comment="보험 순매수 수량(insu_ntby_qty). 기관계의 부분집합이다"
+    )
+    merchant_bank_net_buy_qty: Mapped[int] = mapped_column(
+        BigInteger, nullable=False, comment="종금 순매수 수량(mrbn_ntby_qty). 기관계의 부분집합이다"
+    )
+    pension_fund_net_buy_qty: Mapped[int] = mapped_column(
+        BigInteger, nullable=False, comment="기금 순매수 수량(fund_ntby_qty). 기관계의 부분집합이다"
+    )
+    other_corporation_net_buy_qty: Mapped[int] = mapped_column(
+        BigInteger,
+        nullable=False,
+        comment="기타법인 순매수 수량(etc_corp_ntby_vol). 기관계 밖이며 접미사가 _vol이다",
+    )
+    other_organization_net_buy_qty: Mapped[int] = mapped_column(
+        BigInteger,
+        nullable=False,
+        comment="기타단체 순매수 수량(etc_orgt_ntby_vol). 기관계 밖이며 접미사가 _vol이다",
+    )
+    foreign_net_buy_amount: Mapped[Decimal] = mapped_column(
+        Numeric(24, 2), nullable=False, comment="외국인 순매수 대금(frgn_ntby_tr_pbmn). **단위는 백만원이다**"
+    )
+    institution_net_buy_amount: Mapped[Decimal] = mapped_column(
+        Numeric(24, 2), nullable=False, comment="기관계 순매수 대금(orgn_ntby_tr_pbmn). 단위는 백만원"
+    )
+    individual_net_buy_amount: Mapped[Decimal] = mapped_column(
+        Numeric(24, 2), nullable=False, comment="개인 순매수 대금(prsn_ntby_tr_pbmn). 단위는 백만원"
+    )
+    source_record_id: Mapped[int] = mapped_column(
+        BigInteger,
+        ForeignKey("source_record.id", ondelete="RESTRICT"),
+        nullable=False,
+        comment="이 행을 마지막으로 갱신한 수집의 source_record 레코드 ID",
+    )

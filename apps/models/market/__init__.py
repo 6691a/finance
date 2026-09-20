@@ -20,6 +20,7 @@ from apps.models.market.investor_flow import (
     MarketInvestorFlowSnapshot,
     StockInvestorEstimateSnapshot,
     StockInvestorTradeDaily,
+    StockInvestorTradeDailyNxt,
 )
 from apps.models.market.positioning import (
     KrxCreditBalanceRankingDaily,
@@ -114,4 +115,5 @@ __all__ = [
     "StockExchange",
     "StockInvestorEstimateSnapshot",
     "StockInvestorTradeDaily",
+    "StockInvestorTradeDailyNxt",
 ]

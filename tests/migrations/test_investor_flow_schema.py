@@ -73,3 +73,29 @@ def test_the_member_flow_tables_are_not_created_yet(capsys):
     sql = head_sql(capsys)
 
     assert "foreign_member_flow_snapshot" not in sql
+
+
+def create_table_columns(sql: str, table: str) -> list[str]:
+    statement = sql[sql.index(f"CREATE TABLE {table} (") :]
+    statement = statement[: statement.index(";")]
+    return [
+        line.split()[0] for line in statement.splitlines()[1:] if line.startswith("    ") and "CONSTRAINT" not in line
+    ]
+
+
+def test_the_nxt_daily_table_has_the_same_columns_as_the_krx_one(capsys):
+    """모델만 만들고 리비전을 빠뜨리면 NXT 수집이 없는 표에 INSERT하다 죽는다."""
+    sql = head_sql(capsys)
+
+    krx = create_table_columns(sql, "stock_investor_trade_daily")
+    nxt = create_table_columns(sql, "stock_investor_trade_daily_nxt")
+
+    assert nxt == krx
+    assert "uq_stock_investor_trade_daily_nxt_natural_key UNIQUE (provider, stock_code, business_date)" in sql
+    assert "CREATE INDEX ix_stock_investor_trade_daily_nxt_business_date" in sql
+    assert "CREATE INDEX ix_stock_investor_trade_daily_nxt_source_record_id" in sql
+    statement = sql[sql.index("CREATE TABLE stock_investor_trade_daily_nxt (") :]
+    statement = statement[: statement.index(";")]
+    assert statement.count("REFERENCES source_record (id) ON DELETE RESTRICT") == 1
+    assert "COMMENT ON TABLE stock_investor_trade_daily_nxt IS" in sql
+    assert "COMMENT ON COLUMN stock_investor_trade_daily_nxt.close_price IS" in sql

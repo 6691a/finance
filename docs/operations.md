@@ -278,7 +278,8 @@ DAG마다 절을 두지 않습니다. 상세는 각 DAG 파일의 `doc_md`에 �
 | `kis_quote_intraday` | 평일 08~16시 5분마다 | `quote_bar`, `market_movement_snapshot` | KIS |
 | `kis_investor_flow_intraday` | 평일 09~15시 5분마다 | `market_investor_flow_snapshot` | KIS |
 | `kis_investor_estimate_intraday` | 평일 09:35·10:05·11:25·13:25·14:35 | `stock_investor_estimate_snapshot` | KIS |
-| `kis_investor_trade_daily` | 평일 18:10 | `stock_investor_trade_daily` | KIS |
+| `kis_investor_trade_daily` | 평일 18:10 | `stock_investor_trade_daily`(KRX) | KIS |
+| `kis_investor_trade_nxt_daily` | 평일 20:10 | `stock_investor_trade_daily_nxt`(NXT. 같은 파일에서 시장 코드만 다른 DAG) | KIS |
 | `kis_stock_minute_bars_daily` | 평일 20:05 | `stock_bar` | KIS |
 | `kis_equity_bar_reconcile` | 평일 08~19시 05·35분 | `stock_bar`(실시간 잠정 봉을 REST 확정값으로 조정) | KIS |
 | `kis_index_daily` | 평일 18:20 | `index_daily`(코스피·코스닥·코스피200) | KIS |

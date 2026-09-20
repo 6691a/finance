@@ -11,6 +11,7 @@ import pytest
 from airflow.sdk.exceptions import AirflowFailException
 
 from dags import kis_investor_trade_daily
+from modules.collectors.kis import StockExchange
 from modules.collectors.market.kis_investor_flow import InvestorFlowStock
 from modules.utility import KST_TIMEZONE
 
@@ -137,9 +138,7 @@ def test_the_recovery_walk_stores_despite_the_disagreement(monkeypatch, no_trans
     monkeypatch.setattr(kis_investor_trade_daily, "close_conflicts", lambda connection, fetch: (date(2026, 8, 13),))
     collector = FakeCollector()
 
-    walk = kis_investor_trade_daily.walk_back(
-        collector, object(), SAMSUNG, END_DATE, pages=3, detect_conflicts=False
-    )
+    walk = kis_investor_trade_daily.walk_back(collector, object(), SAMSUNG, END_DATE, pages=3, detect_conflicts=False)
 
     assert walk.conflicts == ()
     assert len(collector.stored) == 3
@@ -220,3 +219,85 @@ def test_the_walk_waits_between_pages(monkeypatch, no_transaction):
 def test_a_single_page_run_does_not_wait():
     """일상 실행은 종목당 한 장이라 대기가 붙으면 안 된다."""
     assert kis_investor_trade_daily.requested_pages({}) == 1
+
+
+# ---------------------------------------------------------------------------
+# NXT 판 — 같은 파일에서 시장만 다른 DAG를 하나 더 만든다
+# ---------------------------------------------------------------------------
+
+KRX_DAG = kis_investor_trade_daily.kis_investor_trade_daily
+NXT_DAG = kis_investor_trade_daily.kis_investor_trade_nxt_daily
+
+
+def test_the_nxt_dag_runs_after_nxt_closes():
+    """NXT 애프터마켓은 20:00에 끝난다. 그 뒤에 받아야 가장 최근 행의 종가가 NXT 마감가다."""
+    # KST 평일 20:10 = UTC 평일 11:10.
+    assert NXT_DAG.dag_id == "kis_investor_trade_nxt_daily"
+    assert NXT_DAG.schedule == "10 20 * * 1-5"
+    assert NXT_DAG.max_active_runs == 1
+    assert set(NXT_DAG.task_dict) == {"collect"}
+
+
+def test_the_nxt_start_date_is_a_kst_midnight():
+    # KST 2026-09-21 00:00 = UTC 2026-09-20 15:00.
+    assert NXT_DAG.start_date.astimezone(UTC) == datetime(2026, 9, 20, 15, 0, tzinfo=UTC)
+
+
+def test_the_two_dags_are_told_apart_in_the_ui():
+    """이름이 같으면 화면에서 어느 거래소 DAG인지 못 가린다. params는 둘이 같아야 백필 명령이 같다."""
+    assert KRX_DAG.dag_id != NXT_DAG.dag_id
+    assert "KRX" in KRX_DAG.dag_display_name
+    assert "NXT" in NXT_DAG.dag_display_name
+    assert set(KRX_DAG.params) == set(NXT_DAG.params) == {"end_date", "pages"}
+    assert "krx" in KRX_DAG.tags and "nxt" in NXT_DAG.tags
+
+
+def test_the_dags_do_not_start_together():
+    """토큰 발급은 분당 1회 제한이고 두 DAG가 같은 캐시를 쓴다. 겹치면 둘이 함께 발급하려 든다."""
+    assert KRX_DAG.schedule != NXT_DAG.schedule
+
+
+def test_each_exchange_has_its_own_backfill_floor():
+    """KRX는 항등식이 성립하는 날, NXT는 실제 값이 나오는 날이다. 서로의 바닥을 쓰면 안 된다."""
+    floors = kis_investor_trade_daily.BACKFILL_START_DATES
+
+    assert floors[StockExchange.KRX] == date(2018, 12, 10)
+    assert floors[StockExchange.NXT] == date(2025, 3, 24)
+
+
+class RecordingFetchCollector(FakeCollector):
+    def __init__(self) -> None:
+        super().__init__()
+        self.since: list[date | None] = []
+
+    def fetch_stock_trade_daily(self, stock, end_date, *, since=None):
+        self.since.append(since)
+        return super().fetch_stock_trade_daily(stock, end_date, since=since)
+
+
+@pytest.mark.parametrize("exchange", [StockExchange.KRX, StockExchange.NXT])
+def test_a_run_walks_to_its_floor_and_checks_gaps_on_its_own_table(monkeypatch, no_transaction, exchange):
+    checked: list[StockExchange] = []
+
+    def record_gap_check(connection, stock_code, start, end, *, exchange):
+        checked.append(exchange)
+        return ()
+
+    monkeypatch.setattr(kis_investor_trade_daily, "close_conflicts", lambda connection, fetch: ())
+    monkeypatch.setattr(kis_investor_trade_daily, "missing_open_days", record_gap_check)
+    collector = RecordingFetchCollector()
+
+    kis_investor_trade_daily.collect_stocks(collector, object(), exchange, END_DATE, pages=2)
+
+    assert set(collector.since) == {kis_investor_trade_daily.BACKFILL_START_DATES[exchange]}
+    # 종목마다 한 번, 그 거래소로 본다. KRX 표를 보고 NXT 구멍을 찾으면 오류 없이 통과한다.
+    assert checked == [exchange] * len(InvestorFlowStock)
+
+
+def test_the_recovery_names_the_floor_of_the_exchange(monkeypatch, no_transaction):
+    """다 덮었는데도 어긋나는 실패 메시지가 어느 바닥부터 다시 받았는지 말해야 운영자가 읽는다."""
+    monkeypatch.setattr(kis_investor_trade_daily, "close_conflicts", lambda connection, fetch: (date(2026, 8, 13),))
+    monkeypatch.setattr(kis_investor_trade_daily, "missing_open_days", lambda *args, **kwargs: ())
+
+    with pytest.raises(AirflowFailException, match="refetching from 2025-03-24"):
+        kis_investor_trade_daily.collect_stocks(FakeCollector(), object(), StockExchange.NXT, END_DATE, pages=1)

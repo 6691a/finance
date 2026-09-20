@@ -45,6 +45,7 @@ from apps.models.market import (
     StockDaily,
     StockInvestorEstimateSnapshot,
     StockInvestorTradeDaily,
+    StockInvestorTradeDailyNxt,
 )
 from apps.models.raw import SourceRecord
 from apps.models.reference import IndicatorSeries, Instrument, QuoteSymbol
@@ -95,5 +96,6 @@ __all__ = [
     "StockEventOutcome",
     "StockInvestorEstimateSnapshot",
     "StockInvestorTradeDaily",
+    "StockInvestorTradeDailyNxt",
     "TechnicalSignal",
 ]

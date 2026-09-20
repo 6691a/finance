@@ -13,15 +13,16 @@ from apps.models.market import (
     MarketInvestorFlowSnapshot,
     StockInvestorEstimateSnapshot,
     StockInvestorTradeDaily,
+    StockInvestorTradeDailyNxt,
 )
 from apps.models.raw import SourceRecord
-from modules.collectors.kis import KisPayloadError, KisResultError, KisTimeWindowError
+from modules.collectors.kis import KisPayloadError, KisResultError, KisTimeWindowError, StockExchange
 from modules.collectors.market import kis_investor_flow
 from modules.collectors.market.kis_investor_flow import (
-    DAILY_TRADE_UPSERT,
     MARKET_FLOW_UPSERT,
     SOURCE_RECORD_INSERT,
     STOCK_ESTIMATE_UPSERT,
+    TRADE_DAILY_SQL,
     InvestorFlowMarket,
     InvestorFlowStock,
     KisInvestorFlowCollector,
@@ -190,7 +191,8 @@ def rows_for(cursor: FakeCursor, table: str) -> list[tuple]:
     [
         (STOCK_ESTIMATE_UPSERT, StockInvestorEstimateSnapshot),
         (MARKET_FLOW_UPSERT, MarketInvestorFlowSnapshot),
-        (DAILY_TRADE_UPSERT, StockInvestorTradeDaily),
+        (TRADE_DAILY_SQL[StockExchange.KRX].upsert, StockInvestorTradeDaily),
+        (TRADE_DAILY_SQL[StockExchange.NXT].upsert, StockInvestorTradeDailyNxt),
         (SOURCE_RECORD_INSERT, SourceRecord),
     ],
 )
@@ -646,10 +648,16 @@ def test_missing_open_days_asks_for_the_stock_and_the_window():
     """구멍 검사는 KIS 자격 증명과 무관해 함수다. 판정(태스크를 죽일지)은 DAG이 한다."""
     connection = FakeConnection()
 
-    assert kis_investor_flow.missing_open_days(connection, "005930", date(2026, 8, 3), date(2026, 8, 20)) == ()
+    assert (
+        kis_investor_flow.missing_open_days(
+            connection, "005930", date(2026, 8, 3), date(2026, 8, 20), exchange=StockExchange.KRX
+        )
+        == ()
+    )
 
     statement, parameters = connection.recorded_cursor.calls[0]
     assert "market_session" in statement
+    assert "stock_investor_trade_daily_nxt" not in statement
     assert parameters == ("005930", date(2026, 8, 3), date(2026, 8, 20))
 
 
@@ -819,3 +827,77 @@ def test_rows_before_the_identity_epoch_are_dropped_before_validation(monkeypatc
 def test_the_identity_epoch_is_the_measured_boundary():
     """제공처가 정한 값이다. 앞으로 당기면 못 믿는 세부 수급이 DB에 들어간다."""
     assert kis_investor_flow.IDENTITY_EPOCH == date(2018, 12, 10)
+
+
+# ---------------------------------------------------------------------------
+# NXT 판 — 같은 API를 시장 코드 `NX`로 부른다(docs/collection/kis-stock-daily-nxt.md)
+# ---------------------------------------------------------------------------
+
+NXT_COLLECTOR = KisInvestorFlowCollector(TOKEN, APP_KEY, APP_SECRET, exchange=StockExchange.NXT)
+
+
+def test_the_collector_asks_the_market_it_was_built_for(monkeypatch):
+    """시장은 한 실행 동안 안 변하므로 호출마다 받지 않고 수집기가 든다. 기본은 KRX다."""
+    send = fake_send_get(body(output2=[DAILY_ROW]))
+    monkeypatch.setattr(kis_investor_flow, "send_get", send)
+
+    krx = COLLECTOR.fetch_stock_trade_daily(SAMSUNG, BUSINESS_DATE)
+    nxt = NXT_COLLECTOR.fetch_stock_trade_daily(SAMSUNG, BUSINESS_DATE)
+
+    assert [call["query"]["FID_COND_MRKT_DIV_CODE"] for call in send.sent] == ["J", "NX"]
+    # 같은 API·같은 TR이다. 다른 것은 시장 코드 하나다.
+    assert {call["tr_id"] for call in send.sent} == {"FHPTJ04160001"}
+    assert (krx.exchange, nxt.exchange) == (StockExchange.KRX, StockExchange.NXT)
+
+
+def test_the_nxt_rows_go_to_the_nxt_table_and_ledger(monkeypatch):
+    """KRX 표에 NXT 값이 섞이면 같은 날짜의 종가가 둘이 되어 소급 조정 감지가 오탐한다."""
+    monkeypatch.setattr(kis_investor_flow, "send_get", fake_send_get(body(output2=[DAILY_ROW, DAILY_ROW_PREVIOUS])))
+    fetch = NXT_COLLECTOR.fetch_stock_trade_daily(SAMSUNG, BUSINESS_DATE)
+    connection = FakeConnection()
+
+    assert NXT_COLLECTOR.store_stock_trade_daily(connection, fetch) == 2
+
+    cursor = connection.recorded_cursor
+    assert len(rows_for(cursor, "stock_investor_trade_daily_nxt")) == 2
+    assert not [statement for statement, _ in cursor.calls if "INSERT INTO stock_investor_trade_daily (" in statement]
+    # 원장의 조회 이름도 거래소로 갈려야 어느 표를 채운 수집인지 계보만 보고 안다.
+    assert rows_for(cursor, "source_record")[0][2] == "investor_trade_by_stock_daily_nxt"
+    # 개수 검증도 NXT 표를 센다. KRX 표를 세면 저장이 덜 돼도 통과한다.
+    assert any("FROM stock_investor_trade_daily_nxt" in statement for statement, _ in cursor.calls)
+
+
+def test_close_conflicts_reads_the_table_of_the_fetched_exchange(monkeypatch):
+    monkeypatch.setattr(kis_investor_flow, "send_get", fake_send_get(body(output2=[DAILY_ROW])))
+    krx_connection, nxt_connection = ConflictConnection(), ConflictConnection()
+
+    kis_investor_flow.close_conflicts(krx_connection, COLLECTOR.fetch_stock_trade_daily(SAMSUNG, BUSINESS_DATE))
+    kis_investor_flow.close_conflicts(nxt_connection, NXT_COLLECTOR.fetch_stock_trade_daily(SAMSUNG, BUSINESS_DATE))
+
+    krx_statement = krx_connection.recorded_cursor.calls[0][0]
+    nxt_statement = nxt_connection.recorded_cursor.calls[0][0]
+    assert "FROM stock_investor_trade_daily AS stored" in krx_statement
+    assert "FROM stock_investor_trade_daily_nxt AS stored" in nxt_statement
+    # 저장된 가장 최근 행을 뺀다는 규칙이 NXT 쪽에도 같이 있어야 한다.
+    assert "SELECT max(latest.business_date)" in nxt_statement
+
+
+def test_missing_open_days_reads_the_table_of_the_exchange():
+    """NXT 개장일도 KRX 캘린더로 본다. 두 시장은 같은 거래일에 열린다."""
+    connection = FakeConnection()
+
+    kis_investor_flow.missing_open_days(
+        connection, "005930", date(2026, 8, 3), date(2026, 8, 20), exchange=StockExchange.NXT
+    )
+
+    statement, _ = connection.recorded_cursor.calls[0]
+    assert "stock_investor_trade_daily_nxt" in statement
+    assert "market_session" in statement
+
+
+def test_the_nxt_data_starts_on_the_day_all_stocks_listed():
+    """2025-03-24 이전은 응답에 행은 오되 시가·종가·거래량이 빈 문자열이다(2026-09-20 실측).
+
+    지금 파서는 빈 칸을 0으로 읽어 통과시키므로 시작일 아래를 받지 않는 것이 유일한 장치다.
+    """
+    assert kis_investor_flow.NXT_FIRST_TRADE_DATE == date(2025, 3, 24)

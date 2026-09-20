@@ -1,10 +1,34 @@
-"""종목별 투자자 매매동향 확정 일별값 수집 DAG.
+"""종목별 투자자 매매동향 확정 일별값 수집 DAG. KRX용과 NXT용 둘이 한 파일에 있다.
 
 `kis_investor_estimate_intraday`가 장중 **추정치**를 받는다면 이 DAG는 장 마감 뒤의 **확정값**을
 받는다. 추정은 하루 다섯 회차뿐이고 개인이 없지만, 확정값은 12개 분류가 전부 있고 외국인이
 등록·미등록으로 갈리며 대금 단위까지 확정돼 있다(백만원).
 
 수집 규칙은 `modules/collectors/market/kis_investor_flow.py`에 있다.
+
+## KRX와 NXT — 시장 코드만 다른 DAG 둘
+
+| DAG | 시장 코드 | 스케줄(KST) | 저장 표 |
+| --- | --- | --- | --- |
+| `kis_investor_trade_daily` | `J`(KRX) | 평일 18:10 | `stock_investor_trade_daily` |
+| `kis_investor_trade_nxt_daily` | `NX`(NXT) | 평일 20:10 | `stock_investor_trade_daily_nxt` |
+
+같은 API(`FHPTJ04160001`)를 시장 코드만 바꿔 부른다. **NXT 응답은 NXT 체결만의 값이다** — 가격·거래량·
+수급이 KRX와 다르다(2026-09-20 실측: 005930 09-18 외국인 순매수 KRX −1,673,323, NXT +240,463).
+NXT 종가는 NXT 마지막 봉 종가와 같았다. 통합(`UN`)은 어느 거래소 값도 아니라 받지 않는다.
+
+**NXT는 20:10에 돈다.** NXT가 20:00에 끝난 뒤라 가장 최근 행의 종가도 NXT 마감가다. KRX 18:10과 겹치지
+않아 토큰 발급(분당 1회 제한, 두 DAG가 같은 캐시)도 부딪치지 않는다.
+
+**바닥이 다르다.** KRX는 `BACKFILL_START_DATE`(2018-12-10), NXT는 `NXT_FIRST_TRADE_DATE`(2025-03-24)다 —
+그 앞은 응답에 빈 행이 오고 파서가 0으로 읽어 통과시킨다. 두 표는 컬럼이 같고 따로 있다. 같은 표에
+거래소 열을 더하면 그 표를 읽는 SQL 열둘이 하나라도 KRX 조건을 빠뜨릴 때 조용히 틀린다.
+설계는 `docs/collection/kis-stock-daily-nxt.md`다.
+
+NXT 백필(종목당 13장쯤이다):
+
+    airflow dags trigger kis_investor_trade_nxt_daily \\
+      --conf '{"end_date": "2026-09-18", "pages": 20}'
 
 ## 한 번 부르면 30 거래일이 온다
 
@@ -110,10 +134,12 @@ from modules.collectors.kis import (
     KisPayloadError,
     KisResultError,
     KisTimeWindowError,
+    StockExchange,
     access_token,
 )
 from modules.collectors.market.kis_investor_flow import (
     IDENTITY_EPOCH,
+    NXT_FIRST_TRADE_DATE,
     InvestorFlowStock,
     KisInvestorFlowCollector,
     close_conflicts,
@@ -140,6 +166,13 @@ PAGES_PARAM = "pages"
 #
 # 지수(`index_daily`)는 이 응답과 무관해 2016-08-15 그대로다.
 BACKFILL_START_DATE = IDENTITY_EPOCH
+
+# 거래소마다 바닥이 다르다. KRX는 위 근거(항등식), NXT는 실제 값이 나오는 첫 날이다 — 그 앞은 응답에
+# 빈 행이 오고 파서가 0으로 읽어 통과시킨다(`NXT_FIRST_TRADE_DATE`, 2026-09-20 실측).
+BACKFILL_START_DATES = {
+    StockExchange.KRX: BACKFILL_START_DATE,
+    StockExchange.NXT: NXT_FIRST_TRADE_DATE,
+}
 
 # 걷기의 backstop. 2018-12-10까지 약 1,900 거래일이고 한 응답이 30 거래일이라 64장이면
 # 닿는다. 실제로 멈추는 것은 `BACKFILL_START_DATE`이고 이 값은 그물이다.
@@ -275,113 +308,161 @@ def walk_back(
     return StockWalk(stored=stored, earliest=earliest)
 
 
-@dag(
-    dag_id="kis_investor_trade_daily",
-    dag_display_name="🧾 종목 투자자 매매동향 확정 (KIS)",
-    description="장 마감 뒤 종목별 투자자 매매동향 확정값을 30 거래일씩 받아 저장한다.",
-    # KST 평일 18:10 = UTC 평일 09:10. 정규장과 시간외를 모두 지난 뒤다.
-    schedule="10 18 * * 1-5",
-    start_date=pendulum.datetime(2026, 8, 15, tz=KST_TIMEZONE),  # KST 2026-08-15 00:00 = UTC 2026-08-14 15:00
-    catchup=False,
-    max_active_runs=1,
-    default_args={"retries": 2, "retry_delay": timedelta(minutes=10)},
-    params={
-        END_DATE_PARAM: Param(
-            None,
-            type=["null", "string"],
-            title="구간의 끝",
-            description="YYYY-MM-DD. 비우면 실행일(KST). 이 날짜부터 과거로 30 거래일이 온다.",
-        ),
-        PAGES_PARAM: Param(
-            1,
-            type="integer",
-            minimum=1,
-            title="구간 수",
-            description="30 거래일씩 몇 구간을 뒤로 걸을지. 백필에만 쓴다.",
-        ),
-    },
-    doc_md=__doc__,
-    tags=["kis", "market", "daily", "korea", "investor"],
-)
-def kis_investor_trade_daily():
-    @task(task_display_name="확정 수급 수집·저장")
-    def collect() -> int:
-        context = get_current_context()
-        params = dict(context.get("params") or {})
+def collect_stocks(
+    collector: KisInvestorFlowCollector,
+    connection: Connection,
+    exchange: StockExchange,
+    end_date: date,
+    *,
+    pages: int,
+) -> int:
+    """두 종목을 걸어 저장하고 실패를 판정한다. 저장한 행 수를 돌려준다.
 
-        now_kst = datetime.now(UTC).astimezone(KST_TIMEZONE)
-        end_date = requested_end_date(now_kst, params)
-        pages = requested_pages(params)
+    KRX와 NXT가 같은 로직이다. 거래소마다 다른 것은 걷기의 바닥(`BACKFILL_START_DATES`)과 구멍을 보는
+    표(`missing_open_days`의 `exchange`)뿐이고, 어느 표에 쓸지는 수집기가 든 거래소가 정한다.
+    """
+    floor = BACKFILL_START_DATES[exchange]
+    stored = 0
+    failures: list[str] = []
+    gaps: list[str] = []
+    for stock in InvestorFlowStock:
+        walk = walk_back(collector, connection, stock, end_date, pages=pages, until=floor)
 
-        # 자동 실행만 휴장일을 건너뛴다. 백필은 끝 날짜가 휴장일이어도 그 앞 거래일들이
-        # 응답에 담겨 오므로 막을 이유가 없다.
-        if not params.get(END_DATE_PARAM):
+        if walk.conflicts:
+            # 수정주가 소급 조정이다. 조정은 분할일 이전 **전 기간**에 걸리므로
+            # 어긋난 날짜까지만 다시 받으면 경계가 뒤로 밀릴 뿐 두 기준이 섞이는
+            # 것은 그대로다. 그 종목 전체를 다시 받아 덮는다.
+            logger.warning(
+                "%s %s: stored closes disagree on %s — refetching from %s (adjusted prices were rewritten)",
+                exchange.value,
+                stock.value,
+                ", ".join(day.isoformat() for day in walk.conflicts),
+                floor,
+            )
+            # **실행당 한 번뿐이다.** 검사를 끄고 걷는다 — DB 전체가 옛 기준이라
+            # 매 페이지가 어긋난다. 다 덮은 뒤 한 번만 다시 확인한다.
+            walk = walk_back(
+                collector,
+                connection,
+                stock,
+                end_date,
+                pages=RECOVERY_MAX_PAGES,
+                until=floor,
+                detect_conflicts=False,
+            )
+            if walk.failure is None:
+                settled = walk_back(collector, connection, stock, end_date, pages=1, until=floor)
+                if settled.conflicts:
+                    # 다 덮었는데도 어긋난다. 저장이 우리가 믿는 대로 굴러가지
+                    # 않은 것이고, 그대로 두면 매일 같은 재수집을 돈다.
+                    raise AirflowFailException(
+                        f"{stock.value}: closes still disagree after refetching from "
+                        f"{floor} on "
+                        f"{', '.join(day.isoformat() for day in settled.conflicts)}"
+                    )
+
+        stored += walk.stored
+        if walk.failure is not None:
+            failures.append(walk.failure)
+
+        # 받은 구간에 KRX 개장일이 빠져 있으면 그 구멍은 아무도 모르게 남는다.
+        # 한 응답이 30 거래일을 담으므로 매일 도는 것만으로 메워져야 하고, 메워지지
+        # 않았다면 응답이나 저장 어느 한쪽이 우리가 믿는 대로 굴러가지 않은 것이다.
+        missing = missing_open_days(connection, stock.value, walk.earliest, end_date, exchange=exchange)
+        if missing:
+            gaps.append(f"{stock.value}: {', '.join(day.isoformat() for day in missing)}")
+
+    # 호출 실패가 먼저다. 실패하면 구멍은 그 결과라 원인을 두 번 말할 것이 없다.
+    if failures:
+        raise AirflowFailException(f"{len(failures)} KIS calls failed: {'; '.join(failures)}")
+
+    if gaps:
+        raise AirflowFailException(f"{exchange.value} daily bars are missing on KRX open days — {'; '.join(gaps)}")
+
+    logger.info("Stored %s daily investor trade rows (%s) ending %s", stored, exchange.value, end_date)
+    return stored
+
+
+def build_dag(
+    exchange: StockExchange,
+    *,
+    dag_id: str,
+    display_name: str,
+    description: str,
+    schedule: str,
+    start_date: pendulum.DateTime,
+):
+    """거래소 한 곳의 확정 수급 DAG. 시장 코드와 스케줄·이름만 다르고 나머지는 한 벌이다."""
+
+    @dag(
+        dag_id=dag_id,
+        dag_display_name=display_name,
+        description=description,
+        schedule=schedule,
+        start_date=start_date,
+        catchup=False,
+        max_active_runs=1,
+        default_args={"retries": 2, "retry_delay": timedelta(minutes=10)},
+        params={
+            END_DATE_PARAM: Param(
+                None,
+                type=["null", "string"],
+                title="구간의 끝",
+                description="YYYY-MM-DD. 비우면 실행일(KST). 이 날짜부터 과거로 30 거래일이 온다.",
+            ),
+            PAGES_PARAM: Param(
+                1,
+                type="integer",
+                minimum=1,
+                title="구간 수",
+                description="30 거래일씩 몇 구간을 뒤로 걸을지. 백필에만 쓴다.",
+            ),
+        },
+        doc_md=__doc__,
+        tags=["kis", "market", "daily", "korea", "investor", exchange.value.lower()],
+    )
+    def trade_daily():
+        @task(task_display_name="확정 수급 수집·저장")
+        def collect() -> int:
+            context = get_current_context()
+            params = dict(context.get("params") or {})
+
+            now_kst = datetime.now(UTC).astimezone(KST_TIMEZONE)
+            end_date = requested_end_date(now_kst, params)
+            pages = requested_pages(params)
+
+            # 자동 실행만 휴장일을 건너뛴다. 백필은 끝 날짜가 휴장일이어도 그 앞 거래일들이
+            # 응답에 담겨 오므로 막을 이유가 없다. NXT도 KRX 개장일에 열어 같은 캘린더를 본다.
+            if not params.get(END_DATE_PARAM):
+                with closing(dag_common.connection()) as connection:
+                    dag_common.skip_unless_krx_open(connection, end_date)
+
+            app_key, app_secret = dag_common.kis_credentials()
+            collector = KisInvestorFlowCollector(
+                access_token(Variable, app_key, app_secret), app_key, app_secret, exchange
+            )
             with closing(dag_common.connection()) as connection:
-                dag_common.skip_unless_krx_open(connection, end_date)
+                return collect_stocks(collector, connection, exchange, end_date, pages=pages)
 
-        app_key, app_secret = dag_common.kis_credentials()
-        collector = KisInvestorFlowCollector(access_token(Variable, app_key, app_secret), app_key, app_secret)
+        collect()
 
-        stored = 0
-        failures: list[str] = []
-        gaps: list[str] = []
-        with closing(dag_common.connection()) as connection:
-            for stock in InvestorFlowStock:
-                walk = walk_back(collector, connection, stock, end_date, pages=pages)
-
-                if walk.conflicts:
-                    # 수정주가 소급 조정이다. 조정은 분할일 이전 **전 기간**에 걸리므로
-                    # 어긋난 날짜까지만 다시 받으면 경계가 뒤로 밀릴 뿐 두 기준이 섞이는
-                    # 것은 그대로다. 그 종목 전체를 다시 받아 덮는다.
-                    logger.warning(
-                        "%s: stored closes disagree on %s — refetching from %s (adjusted prices were rewritten)",
-                        stock.value,
-                        ", ".join(day.isoformat() for day in walk.conflicts),
-                        BACKFILL_START_DATE,
-                    )
-                    # **실행당 한 번뿐이다.** 검사를 끄고 걷는다 — DB 전체가 옛 기준이라
-                    # 매 페이지가 어긋난다. 다 덮은 뒤 한 번만 다시 확인한다.
-                    walk = walk_back(
-                        collector,
-                        connection,
-                        stock,
-                        end_date,
-                        pages=RECOVERY_MAX_PAGES,
-                        detect_conflicts=False,
-                    )
-                    if walk.failure is None:
-                        settled = walk_back(collector, connection, stock, end_date, pages=1)
-                        if settled.conflicts:
-                            # 다 덮었는데도 어긋난다. 저장이 우리가 믿는 대로 굴러가지
-                            # 않은 것이고, 그대로 두면 매일 같은 재수집을 돈다.
-                            raise AirflowFailException(
-                                f"{stock.value}: closes still disagree after refetching from "
-                                f"{BACKFILL_START_DATE} on "
-                                f"{', '.join(day.isoformat() for day in settled.conflicts)}"
-                            )
-
-                stored += walk.stored
-                if walk.failure is not None:
-                    failures.append(walk.failure)
-
-                # 받은 구간에 KRX 개장일이 빠져 있으면 그 구멍은 아무도 모르게 남는다.
-                # 한 응답이 30 거래일을 담으므로 매일 도는 것만으로 메워져야 하고, 메워지지
-                # 않았다면 응답이나 저장 어느 한쪽이 우리가 믿는 대로 굴러가지 않은 것이다.
-                missing = missing_open_days(connection, stock.value, walk.earliest, end_date)
-                if missing:
-                    gaps.append(f"{stock.value}: {', '.join(day.isoformat() for day in missing)}")
-
-        # 호출 실패가 먼저다. 실패하면 구멍은 그 결과라 원인을 두 번 말할 것이 없다.
-        if failures:
-            raise AirflowFailException(f"{len(failures)} KIS calls failed: {'; '.join(failures)}")
-
-        if gaps:
-            raise AirflowFailException(f"daily bars are missing on KRX open days — {'; '.join(gaps)}")
-
-        logger.info("Stored %s daily investor trade rows ending %s", stored, end_date)
-        return stored
-
-    collect()
+    return trade_daily()
 
 
-kis_investor_trade_daily = kis_investor_trade_daily()
+kis_investor_trade_daily = build_dag(
+    StockExchange.KRX,
+    dag_id="kis_investor_trade_daily",
+    display_name="🧾 종목 투자자 매매동향 확정 KRX (KIS)",
+    description="장 마감 뒤 종목별 KRX 투자자 매매동향 확정값을 30 거래일씩 받아 저장한다.",
+    schedule="10 18 * * 1-5",  # KST 평일 18:10 = UTC 평일 09:10. 정규장과 시간외를 모두 지난 뒤다.
+    start_date=pendulum.datetime(2026, 8, 15, tz=KST_TIMEZONE),  # KST 2026-08-15 00:00 = UTC 2026-08-14 15:00
+)
+
+kis_investor_trade_nxt_daily = build_dag(
+    StockExchange.NXT,
+    dag_id="kis_investor_trade_nxt_daily",
+    display_name="🌙 종목 투자자 매매동향 확정 NXT (KIS)",
+    description="NXT 마감 뒤 종목별 NXT 투자자 매매동향 확정값을 30 거래일씩 받아 저장한다.",
+    schedule="10 20 * * 1-5",  # KST 평일 20:10 = UTC 평일 11:10. NXT 애프터마켓이 20:00에 끝난 뒤다.
+    start_date=pendulum.datetime(2026, 9, 21, tz=KST_TIMEZONE),  # KST 2026-09-21 00:00 = UTC 2026-09-20 15:00
+)

@@ -461,3 +461,36 @@ def test_the_future_daily_table_keeps_the_real_contract():
     assert column.comment
 
     assert "contract_code" not in IndexDaily.__table__.c
+
+
+def test_the_nxt_daily_table_mirrors_the_krx_daily_table():
+    """NXT 일봉·수급은 KRX와 같은 모양의 표에 따로 쌓는다(docs/collection/kis-stock-daily-nxt.md).
+
+    같은 표에 거래소 열을 더하지 않은 것은 이 표를 읽는 SQL 열둘이 하나라도 KRX 조건을 빠뜨리면
+    같은 날짜가 두 행으로 나와 조용히 틀리기 때문이다. 대신 두 표가 어긋나지 않게 컬럼을 대조한다.
+    """
+    from apps.models import StockInvestorTradeDaily, StockInvestorTradeDailyNxt
+
+    krx, nxt = StockInvestorTradeDaily.__table__, StockInvestorTradeDailyNxt.__table__
+
+    assert nxt.name == "stock_investor_trade_daily_nxt"
+    assert [(c.name, str(c.type), c.nullable) for c in nxt.columns] == [
+        (c.name, str(c.type), c.nullable) for c in krx.columns
+    ]
+    assert {c.name for c in nxt.columns if c.foreign_keys} == {"source_record_id"}
+    (natural_key,) = [c for c in nxt.constraints if isinstance(c, UniqueConstraint)]
+    assert [c.name for c in natural_key.columns] == ["provider", "stock_code", "business_date"]
+    assert natural_key.name == "uq_stock_investor_trade_daily_nxt_natural_key"
+
+
+def test_the_nxt_daily_table_documents_every_column_as_nxt():
+    from apps.models import StockInvestorTradeDailyNxt
+
+    table = StockInvestorTradeDailyNxt.__table__
+
+    assert "NXT" in table.comment
+    assert all(column.comment for column in table.columns)
+    # KRX 표의 설명이 그대로 복사돼 이 표가 KRX 값이라고 말하면 읽는 사람이 거래소를 오해한다.
+    assert "KRX" not in table.c.close_price.comment
+    assert "NXT" in table.c.close_price.comment
+    assert "NXT" in table.c.business_date.comment

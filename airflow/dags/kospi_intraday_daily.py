@@ -41,6 +41,9 @@
 
 - `LlmError`·`KospiError`·`GraphError` → `AirflowFailException`
 - `RetryableLlmError`·`ConnectionError`·`KospiNotReady` → 그대로 올려 Airflow가 재시도
+- KRX 확정 휴장일 → `AirflowSkipException`. 모델을 부르기 전에 끊는다. 판정을 모르면 계속한다
+  (`dag_common.skip_unless_krx_open`). 2026-09-24·25 추석에 이것이 없어 장전은 채점 못 할 행을
+  남겼고 장중은 재시도 끝에 실패했다
 - 슬롯을 못 정함 → `AirflowFailException`. **반올림하지 않는다**
 
 재시도가 둘인 것은 앞 슬롯이 다음 슬롯을 막지 않게 하려는 값이다. 슬롯 간격이 세 시간이라

@@ -55,3 +55,30 @@ def test_runs_before_the_first_aggregation_are_skipped(hour, minute, expected):
     now = datetime(2026, 8, 19, hour, minute, tzinfo=KST_TIMEZONE)
 
     assert kis_investor_flow_intraday.before_first_aggregation(now) is expected
+
+
+def test_a_transient_failure_on_some_markets_lets_the_task_succeed():
+    """값이 누적이라 5분 뒤 run 이 그 사이를 담는다. 하나로 죽이면 경보만 는다."""
+    markets = list(kis_investor_flow_intraday.InvestorFlowMarket)
+
+    assert kis_investor_flow_intraday.require_any_market([f"{m.value}(HTTP 500)" for m in markets[:-1]]) is None
+
+
+def test_every_market_failing_kills_the_task_but_keeps_the_retries():
+    from airflow.sdk.exceptions import AirflowFailException
+
+    failures = [f"{m.value}(HTTP 500, again)" for m in kis_investor_flow_intraday.InvestorFlowMarket]
+
+    with pytest.raises(ConnectionError, match="; ") as caught:
+        kis_investor_flow_intraday.require_any_market(failures)
+    assert not isinstance(caught.value, AirflowFailException)
+
+
+def test_one_malformed_market_kills_the_task_but_keeps_the_retries():
+    """전부 0·행 없음은 코드나 원천이 바뀐 것이라 다음 run 도 같다. 09:05 직후 늦은 첫 집계는 재시도가 건진다."""
+    from airflow.sdk.exceptions import AirflowFailException
+
+    with pytest.raises(ValueError, match="1 of 7") as caught:
+        kis_investor_flow_intraday.require_no_malformed(["KSP(all-zero, again)"])
+    assert not isinstance(caught.value, AirflowFailException)
+    assert kis_investor_flow_intraday.require_no_malformed([]) is None

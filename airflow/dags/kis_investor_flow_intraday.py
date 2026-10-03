@@ -31,8 +31,15 @@
 
 - **한 시장이 실패해도 다른 시장은 저장한다.** 호출 하나가 트랜잭션 하나다.
 - HTTP 400/403/404: 설정 오류라 즉시 실패한다.
-- 응답이 전부 0이면 실패시킨다. 코드가 틀렸다는 뜻이다. 단 09:05 이전 run 은 skip 한다.
-  장 시작 직후에는 옳은 코드도 첫 집계 전이라 전부 0으로 온다.
+- **일시 오류(HTTP 5xx·KIS 결과 코드·연결)는 일곱 시장이 전부 실패했을 때만 죽인다.** 값이
+  누적이라 5분 뒤 run 이 그 사이를 그대로 담는다 — 잃는 것은 스냅샷 하나의 해상도뿐이다.
+  하나로 죽이면 경보만 늘고 고쳐지는 것은 없다(2026-09 한 달에 네 번, 전부 다음 run 은 성공).
+  다른 장중 수집(`kis_quote_intraday` 등)과 같은 판정이다.
+- **형식 오류는 한 시장이라도 죽인다.** 응답이 전부 0이거나 행이 없거나 모양이 틀린 것은 코드나
+  원천이 바뀌었다는 뜻이라 다음 run 도 같다. 단 09:05 이전 run 은 skip 한다. 장 시작 직후에는
+  옳은 코드도 첫 집계 전이라 전부 0으로 온다.
+- 두 경우 다 재시도(1회, 2분 뒤)는 살린다. `AirflowFailException`을 쓰지 않는 이유가 그것이다 —
+  첫 집계가 09:05에 조금 늦게 나와 전부 0이 온 run 도 재시도가 건진다.
 
 ## 필요한 환경
 
@@ -81,6 +88,23 @@ def before_first_aggregation(now_kst: datetime) -> bool:
     return now_kst.time() < FIRST_AGGREGATION_TIME
 
 
+def require_no_malformed(malformed: list[str]) -> None:
+    """형식 오류는 한 시장이라도 태스크를 실패시킨다. 재시도는 살린다(`ValueError`).
+
+    사유에 쉼표가 들어가므로 구분자는 `;`다.
+    """
+    if malformed:
+        raise ValueError(
+            f"{len(malformed)} of {len(InvestorFlowMarket)} KIS responses were malformed: {'; '.join(malformed)}"
+        )
+
+
+def require_any_market(failures: list[str]) -> None:
+    """일시 오류는 일곱 시장이 전부 실패했을 때만 태스크를 실패시킨다. 재시도는 살린다."""
+    if len(failures) == len(InvestorFlowMarket):
+        raise ConnectionError(f"Every KIS market flow call failed: {'; '.join(failures)}")
+
+
 @dag(
     dag_id="kis_investor_flow_intraday",
     dag_display_name="🧭 시장 수급 (KIS)",
@@ -114,6 +138,7 @@ def kis_investor_flow_intraday():
 
         stored = 0
         failures: list[str] = []
+        malformed: list[str] = []
         with closing(dag_common.connection()) as connection:
             for market in InvestorFlowMarket:
                 try:
@@ -128,9 +153,13 @@ def kis_investor_flow_intraday():
                     # 제공처가 지금은 이 조회를 받지 않는다(응답 본문이 창을 말해 준다). 재시도는 같은
                     # 답을 받으며 예산만 태우므로 즉시 죽인다. 사람이 시각을 맞춰 다시 트리거한다.
                     raise AirflowFailException(f"{market.value}: {error}. 제한 시각 뒤에 다시 트리거한다.") from error
-                except (KisResultError, KisPayloadError) as error:
+                except KisResultError as error:
                     logger.warning("%s failed: %s", market.value, error)
                     failures.append(f"{market.value}({error})")
+                    continue
+                except KisPayloadError as error:
+                    logger.warning("%s returned a malformed payload: %s", market.value, error)
+                    malformed.append(f"{market.value}({error})")
                     continue
                 except ConnectionError as error:
                     logger.warning("%s failed to connect: %s", market.value, error)
@@ -143,9 +172,14 @@ def kis_investor_flow_intraday():
                 stored += rows
                 logger.info("Stored %s rows for %s", rows, market.value)
 
+        require_no_malformed(malformed)
+        require_any_market(failures)
         if failures:
-            raise AirflowFailException(
-                f"{len(failures)} of {len(InvestorFlowMarket)} KIS calls failed: {'; '.join(failures)}"
+            logger.warning(
+                "%s of %s KIS calls failed; the next run covers them: %s",
+                len(failures),
+                len(InvestorFlowMarket),
+                "; ".join(failures),
             )
 
         logger.info("Stored %s investor flow rows at %s", stored, observed_at.isoformat())

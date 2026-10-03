@@ -79,7 +79,8 @@
 - BoE IADB는 값이 없는 구간과 잘못된 코드에 똑같이 HTML 오류 페이지를 HTTP 200으로 준다.
   수집기가 조회 구간 앞에 패딩을 붙이므로, 그러고도 HTML이면 코드나 구간이 틀린 것이라
   즉시 실패한다.
-- 그 밖의 HTTP·네트워크 오류는 그대로 올려 재시도한다(2회, 1시간 간격).
+- 그 밖의 HTTP·네트워크 오류는 재시도한다(2회, 1시간 간격). 계열이 둘인 제공처는 실패를 모은
+  뒤 `ConnectionError`로 올린다 — `AirflowFailException`이면 재시도 없이 끝난다.
 
 ## 필요한 환경
 
@@ -151,13 +152,16 @@ def require_observations(name: str, stored: int, observation_start: date, observ
 
 
 def require_no_failures(provider: str, failures: list[str]) -> None:
-    """계열 하나라도 실패했으면 태스크를 죽인다.
+    """계열 하나라도 실패했으면 태스크를 실패시킨다. **재시도는 살려 둔다.**
 
-    주 1회라 다음 실행이 곧 같은 창을 다시 보지 않는다(한 주 뒤다). 사유에 쉼표가 들어가므로
-    구분자는 `;`다.
+    주 1회라 다음 실행이 곧 같은 창을 다시 보지 않는다(한 주 뒤다). 여기 모이는 것은 되돌릴 수
+    없는 오류를 이미 즉시 실패로 걸러 낸 나머지(HTTP 5xx·429, 재시도할 만한 ECOS 결과 코드)라
+    `AirflowFailException`을 쓰면 안 된다 — 그것은 `retries`를 건너뛰어, 일시 오류 한 번에
+    한 주가 빈다(2026-09-28 FRED `EADFR`). 성공한 계열은 멱등 키라 재시도가 다시 받아도
+    행이 늘지 않는다. 사유에 쉼표가 들어가므로 구분자는 `;`다.
     """
     if failures:
-        raise AirflowFailException(f"{provider} policy rate collection failed: {'; '.join(failures)}")
+        raise ConnectionError(f"{provider} policy rate collection failed: {'; '.join(failures)}")
 
 
 @dag(

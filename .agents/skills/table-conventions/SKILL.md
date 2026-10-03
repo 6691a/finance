@@ -43,9 +43,9 @@ API·크롤링·웹소켓 수집 결과의 출처와 상태를 가볍게 보존�
 `fred_treasury_daily`·`fred_macro_daily`·`fred_signal_daily`·`ecos_market_rate_daily`·
 `mof_jgb_daily`·`boe_gilt_daily`·`bbk_bund_daily`·`ecb_yield_curve_daily`·
 `ecb_convergence_monthly`·`policy_rate_weekly`·`central_bank_assets_weekly`·
-`kcs_trade_daily` 열둘이 채운다.
+`kcs_trade_daily`·`dtcc_cds_daily` 열셋이 채운다.
 
-- `provider`는 그 값을 준 제공처(`fred`·`ecos`·`mof`·`boe`·`bbk`·`ecb`·`kcs`)이며
+- `provider`는 그 값을 준 제공처(`fred`·`ecos`·`mof`·`boe`·`bbk`·`ecb`·`kcs`·`dtcc`)이며
   **같은 수집의 `source_record.source`와 같다.**
 - **`series_id`는 제공처 안에서만 고유하다.** 그래서 자연키에 `provider`가 함께 들어가고,
   **조회하는 쪽도 `provider`를 함께 건다.** `series_id` 하나로 거는 쿼리는 제공처가 늘어나면

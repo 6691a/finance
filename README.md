@@ -31,12 +31,12 @@ flowchart LR
     subgraph EXT["외부 제공처"]
         KIS["KIS Open API<br/>시세·수급·포지션"]
         DART["DART 공시"]
-        MACRO["FRED · ECOS · ECB<br/>BoE · 분데스방크 · 일본 재무성<br/>관세청 · Yahoo"]
+        MACRO["FRED · ECOS · ECB<br/>BoE · 분데스방크 · 일본 재무성<br/>관세청 · Yahoo · DTCC"]
         FEED["뉴스·리서치 피드"]
     end
 
-    subgraph AF["Airflow — DAG 49"]
-        COL["수집 DAG 36<br/>분봉·일봉·수급·공시·실적·매크로·문서"]
+    subgraph AF["Airflow — DAG 50"]
+        COL["수집 DAG 37<br/>분봉·일봉·수급·공시·실적·매크로·문서"]
         ANA["분석 DAG 8<br/>문서 평가(LLM) · 기술 신호(SQL)<br/>코스피 전망·관찰(LLM+툴)<br/>기대 대비 발표(LLM)<br/>급변 포착(분봉) · 급변 원인(LLM+검색)"]
         BRF["브리핑 DAG 5"]
     end
@@ -92,6 +92,7 @@ flowchart LR
 | 08:35 | **코스피 장전 전망** — 최근 15영업일 봉, 관계 그래프의 요인별 가중치, 지난 관찰이 남긴 메모를 놓고 오늘의 방향·기대 등락률·± 폭을 근거와 함께 적는다 |
 | 08:00 ~ 20:15 | 장중: 5분마다 시세(08~16시)·투자자 수급(09~15시) 스냅샷, 5분마다 급변 포착(09~15시), 국내장 브리핑(08:10·09:00·10~19시 매시·15:35·20:15) |
 | 매시 | 문서 수집·첨부 PDF 파싱·LLM 평가, 이벤트 기대 대비 발표 대조 — 24시간 |
+| 10:00 | 미국 빅테크·반도체 열 곳의 CDS 프리미엄(DTCC 공개 체결, 전날 미국 하루치의 1·3·5년물) |
 | 09:00 ~ 17:55 | 5분마다 아시아 지수 1분봉(니케이·상해·항셍·대만, KIS). 제공처가 15분 지연이라 30분 창으로 받는다 |
 | 11:35 · 14:35 | **코스피 장중 전망** — 개장 뒤 나온 공시·기사·수급과 현재가를 놓고 마감까지를 다시 본다. 기준가가 전일 종가가 아니라 그 시각 현재가다 |
 | 18:00 ~ 18:40 | 아시아·국내 지수와 선물의 확정 일봉(KIS), KRX 투자자별 매매동향 확정, 기술 신호 검출·채점 |
@@ -153,7 +154,7 @@ flowchart LR
 | 수집 | urllib(표준 라이브러리), scrapling(+playwright) | REST와 HTML을 같은 규약으로 |
 | 관측 | Sentry (Airflow / 상주 서비스 각각) | 에러·로그·트레이싱·프로파일링 |
 | 배포 | Docker Compose (Synology NAS), just | 이미지 3종, bind-mount 배포 |
-| 품질 | pytest, ruff, pyrefly, pre-commit | 테스트 2,373개 |
+| 품질 | pytest, ruff, pyrefly, pre-commit | 테스트 2,466개 |
 
 ## 설계하면서 고민한 것들
 

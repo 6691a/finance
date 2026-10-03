@@ -5,6 +5,8 @@ from modules.collectors.indicator.bbk_statement import BALANCE_SHEET_SERIES as B
 from modules.collectors.indicator.boe import BALANCE_SHEET_SERIES as BOE_ASSET_SERIES
 from modules.collectors.indicator.boe import GILT_DATASET, BoeSeries
 from modules.collectors.indicator.boe import POLICY_RATE_SERIES as BOE_POLICY_SERIES
+from modules.collectors.indicator.dtcc_cds import CdsCompany, CdsTenor
+from modules.collectors.indicator.dtcc_cds import series_id as cds_series_id
 from modules.collectors.indicator.ecb import EuroYieldSeries
 from modules.collectors.indicator.ecb_irs import MATURITY_MONTHS as CONVERGENCE_MATURITY_MONTHS
 from modules.collectors.indicator.ecb_irs import ConvergenceSeries
@@ -198,6 +200,14 @@ def test_every_mof_series_has_a_master_row(series, capsys):
     sql = head_sql(capsys)
 
     assert f"'mof', '{series.value}'" in sql
+
+
+@pytest.mark.parametrize(("company", "tenor"), [(company, tenor) for company in CdsCompany for tenor in CdsTenor])
+def test_every_cds_series_has_a_master_row_with_its_maturity(company, tenor, capsys):
+    # CDS는 `credit_spread`지만 `HY_OAS`와 달리 만기가 있다. 만기마다 값이 다르다.
+    sql = head_sql(capsys)
+
+    assert f"'dtcc', '{cds_series_id(company, tenor)}', 'US', '미국', {tenor.maturity_months}, 'credit_spread'" in sql
 
 
 @pytest.mark.parametrize("series", list(BoeSeries))

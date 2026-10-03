@@ -274,6 +274,7 @@ DAG마다 절을 두지 않습니다. 상세는 각 DAG 파일의 `doc_md`에 �
 | `policy_rate_weekly` | 월 09:00 | `indicator_observation`(중앙은행 다섯 정책금리) | ECOS·FRED·BoE |
 | `central_bank_assets_weekly` | 월 09:20 | `indicator_observation`(중앙은행 여섯 총자산) | FRED·ECOS·BBK·BoE |
 | `kcs_trade_daily` | 매일 09:30 | `indicator_observation`(10일 단위 수출입 42계열) | 관세청 |
+| `dtcc_cds_daily` | 화~토 10:00 | `indicator_observation`(미국 빅테크 열 곳 1·3·5년 CDS 30계열) | DTCC |
 | `market_calendar_daily` | 매일 07:00 | `market_session` | KIS·NYSE |
 | `kis_quote_intraday` | 평일 08~16시 5분마다 | `quote_bar`, `market_movement_snapshot` | KIS |
 | `kis_investor_flow_intraday` | 평일 09~15시 5분마다 | `market_investor_flow_snapshot` | KIS |

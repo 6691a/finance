@@ -39,6 +39,9 @@
 
 - `LlmError`·`KospiError`·`GraphError` → `AirflowFailException`(재시도해도 같다)
 - `RetryableLlmError`·`ConnectionError`·`KospiNotReady` → 그대로 올려 Airflow가 재시도
+- KRX 확정 휴장일 → `AirflowSkipException`. 모델을 부르기 전에 끊는다. 판정을 모르면 계속한다
+  (`dag_common.skip_unless_krx_open`). 2026-09-24·25 추석에 이것이 없어 장전은 채점 못 할 행을
+  남겼고 장중은 재시도 끝에 실패했다
 - `SlackError` → `AirflowFailException`. **발송은 at-least-once다** — 서버가 수락한 뒤 응답만
   끊긴 경우가 `ConnectionError`로 올라와 재시도가 같은 메시지를 한 번 더 보낼 수 있다
 

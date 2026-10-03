@@ -1357,3 +1357,43 @@ def test_the_slack_grade_line_names_the_basis():
     text = json.dumps(render_blocks(built), ensure_ascii=False)
     assert "장전(전일 종가 대비) ▲ +1.20%" in text
     assert "장중(현재가 대비) ▼ -0.90% ± 1.55%p — _채점 대기_" in text
+
+
+def test_build_skips_a_confirmed_krx_holiday_before_calling_the_model():
+    # 2026-09-24·25 추석에 장전은 모델을 불러 채점 못 할 행을 남겼고 장중은 재시도 끝에 실패했다.
+    # 휴장 판정은 저장소·모델보다 먼저 와야 한다 — 그래서 store·resolve_base에 닿으면 실패다.
+    from airflow.exceptions import AirflowSkipException
+
+    from modules.kospi.run import build_and_store
+
+    class HolidayCursor:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            return False
+
+        def execute(self, query, parameters):
+            self.parameters = parameters
+
+        def fetchone(self):
+            return (False,)
+
+    class HolidayConnection:
+        def cursor(self):
+            return HolidayCursor()
+
+    def unreachable(*args, **kwargs):
+        raise AssertionError("휴장일에 기준가를 읽으면 안 된다")
+
+    for slot in RunSlot:
+        with pytest.raises(AirflowSkipException, match="KRX is closed on 2026-09-24"):
+            build_and_store(
+                connection=HolidayConnection(),
+                graph=None,
+                run_date=date(2026, 9, 24),
+                slot=slot,
+                as_of_at=datetime(2026, 9, 23, 23, 35, tzinfo=UTC),
+                context={},
+                resolve_base=unreachable,
+            )

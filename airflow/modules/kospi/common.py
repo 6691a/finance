@@ -21,7 +21,12 @@ from pendulum import instance as pendulum_instance
 
 # 연결과 Slack 설정은 DAG 공용 도우미 한 벌을 그대로 쓴다. 이 이름으로 다시 내보내는 것은
 # 세 DAG와 테스트가 `common.connection`·`common.slack_settings`로 부르기 때문이다.
-from modules.dag_common import connection, slack_settings
+# 휴장 가드도 같은 이유다 — `run.py`가 `dag_common`을 직접 import하지 않게 여기서 내보낸다.
+from modules.dag_common import (
+    connection,
+    skip_unless_krx_open,  # noqa: F401
+    slack_settings,
+)
 from modules.kospi.domain import (
     BARS_WINDOW,
     CLOSE_TIME,

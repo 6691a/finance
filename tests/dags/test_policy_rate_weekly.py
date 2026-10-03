@@ -64,13 +64,15 @@ def test_the_five_central_banks_are_split_across_the_three_providers():
     assert POLICY_DATASET.source_key == "bank_rate"
 
 
-def test_one_failed_series_kills_the_task():
+def test_one_failed_series_kills_the_task_but_keeps_the_retries():
     """주 1회라 다음 실행이 곧 같은 창을 다시 보지 않는다(한 주 뒤다).
 
+    `AirflowFailException`이면 `retries`를 건너뛴다 — 일시 오류 한 번에 한 주가 빈다.
     사유에 쉼표가 들어가므로 구분자는 `;`다.
     """
-    with pytest.raises(AirflowFailException, match="KRBASE.*; .*JPBASE_M"):
+    with pytest.raises(ConnectionError, match="KRBASE.*; .*JPBASE_M") as caught:
         policy_rate_weekly.require_no_failures("ECOS", ["KRBASE(boom, again)", "JPBASE_M(boom)"])
+    assert not isinstance(caught.value, AirflowFailException)
 
 
 def test_no_failure_lets_the_task_succeed():

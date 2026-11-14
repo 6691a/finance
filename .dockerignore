@@ -1,5 +1,6 @@
-# 저장소 루트를 빌드 컨텍스트로 쓰는 이미지는 조회 API 하나이고, 그것이 필요로 하는
-# 것은 의존성 목록 둘뿐이다. 실행 코드(apps/)와 config.yaml은 굽지 않고 마운트한다.
+# 저장소 루트를 빌드 컨텍스트로 쓰는 이미지는 셋이다. 조회 API는 의존성 목록 둘만 쓰고,
+# 운영 Airflow·KIS 실시간 이미지는 실행 코드를 굽는다(2026-11-14, k3s 배포).
+# config.yaml·airflow/config·files·logs는 넣지 않는다 — 비밀값과 데이터다.
 #
 # 화이트리스트로 두는 이유는 루트에 .venv(수백 MB)·.git·compose/local/airflow/data가
 # 있어서다. 그것들이 컨텍스트로 딸려 가면 빌드가 몇 분씩 걸린다.
@@ -7,3 +8,13 @@
 *
 !pyproject.toml
 !uv.lock
+!compose/prod/requirements.txt
+!compose/prod/airflow/requirements.txt
+!apps
+!airflow/dags
+!airflow/modules
+!airflow/sql
+!airflow/plugins
+!airflow/utility
+**/__pycache__
+**/*.pyc

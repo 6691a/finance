@@ -56,8 +56,8 @@ x-airflow-common:
   &airflow-common
   image: ${AIRFLOW_IMAGE_NAME:-finance-airflow:${AIRFLOW_VERSION:-3.3.0}}
   build:
-    context: .
-    dockerfile: Dockerfile
+    context: ../../..
+    dockerfile: compose/prod/airflow/Dockerfile
     args:
       AIRFLOW_VERSION: ${AIRFLOW_VERSION:-3.3.0}
       PYTHON_VERSION: ${PYTHON_VERSION:-3.13}

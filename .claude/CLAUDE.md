@@ -204,7 +204,9 @@ ruff isort `known-first-party`가 `pyproject.toml`에 맞춰져 있다.
 `airflow/sql`을 읽는다. 컨테이너와 로컬 pytest가 같은 파일을 쓴다.
 
 로컬 Compose와 Dockerfile은 운영 Airflow에 맞춰 둔 상태다. **코드 배치 문제로는 건드리지
-않는다.** 실행 코드를 이미지에 굽거나 `apps/`를 볼륨으로 붙이지 않는다.
+않는다.** import가 안 풀린다고 실행 코드를 이미지에 더 굽거나 `apps/`를 볼륨으로 붙이지 않는다.
+운영 이미지가 `airflow/`·`apps/`를 굽는 것은 배포 방식이지 배치 해법이 아니다(2026-11-14, k3s) —
+굽는 경로는 위 표의 1:1 대응 그대로다.
 
 **데이터 볼륨은 예외이고, 그때는 로컬과 운영 compose를 함께 고친다.** `airflow/files/`가
 그 예다(2026-08-30, `document_body_hourly`의 첨부 파일). 한쪽만 고치면 로컬에서 도는 DAG이

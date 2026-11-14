@@ -2,7 +2,7 @@
 #
 # 실행 코드는 굽지 않는다. 저장소의 apps/와 config.yaml이 /app 아래로 마운트된다.
 # `apps.core.config`가 작업 디렉터리의 config.yaml을 읽으므로 WORKDIR가 /app이어야 한다.
-# compose/prod/Dockerfile과 내용이 같다 — 갈라질 이유가 생기기 전까지 함께 고친다.
+# compose/prod/Dockerfile과 의존성은 같고, 운영은 apps/를 굽는다는 점만 다르다(2026-11-14).
 FROM python:3.13-slim
 
 COPY requirements.txt /tmp/requirements.txt

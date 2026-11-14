@@ -12,7 +12,9 @@ networks:
 
 services:
   kis-realtime:
-    build: .
+    build:
+      context: ../..
+      dockerfile: compose/prod/Dockerfile
     image: finance-kis-realtime
     env_file:
       - .env

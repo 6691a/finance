@@ -227,7 +227,7 @@ import 뿌리는 `airflow/`입니다. DAG는 배포와 같은 이름으로 `from
 
 쿼리는 Python 문자열이 아니라 `airflow/sql/<엔진>/<테이블>/<동작>.sql`에 둡니다. `modules/sql.py`의 `read_sql`이 `AIRFLOW_HOME`이 있으면 그 아래를, 없으면 저장소의 `airflow/sql`을 읽으므로 컨테이너와 로컬 pytest가 같은 파일을 씁니다.
 
-로컬 Compose와 Dockerfile은 운영 Airflow에 맞춰 둔 상태이므로 코드 배치로만 맞춥니다. 실행 코드를 이미지에 굽거나 `apps/`를 볼륨으로 붙이는 방식은 쓰지 않습니다.
+로컬 Compose와 Dockerfile은 운영 Airflow에 맞춰 둔 상태이므로 코드 배치로만 맞춥니다. import 문제를 이미지에 코드를 더 굽거나 `apps/`를 볼륨으로 붙여서 풀지 않습니다. 운영 이미지가 `airflow/`를 굽는 것은 배포 방식이고, 굽는 경로는 위 표와 1:1입니다(아래 "이미지 빌드").
 
 ### 겹치는 코드의 위치와 규칙
 
@@ -542,6 +542,19 @@ docker compose -f compose/prod/airflow/docker-compose.yaml up -d --force-recreat
 /volume1/docker/finance`, 세 파일을 `.env.sample`과 대조해 채우고, 각 compose를
 `up -d --build` 합니다. Airflow 과거 태스크 로그를 유지하려면 이전 `logs/` 내용을
 `airflow/logs/`로 복사합니다(생략해도 동작에는 지장 없음).
+
+### 이미지 빌드 (GitHub Actions → GHCR)
+
+k3s로 옮기면서(2026-11-14) 운영 이미지는 **코드를 굽고 CI가 빌드합니다.** `main`에 `airflow/`·`apps/`·`compose/prod/`가 바뀌어 들어오면 [`.github/workflows/images.yaml`](../.github/workflows/images.yaml)이 두 이미지를 GHCR에 올립니다.
+
+| 이미지 | Dockerfile | 굽는 코드 |
+| --- | --- | --- |
+| `ghcr.io/6691a/finance-airflow` | `compose/prod/airflow/Dockerfile` | `airflow/{dags,modules,sql,plugins,utility}` → `/opt/airflow/...` |
+| `ghcr.io/6691a/finance-kis-realtime` | `compose/prod/Dockerfile` | `apps/` → `/app/apps` |
+
+태그는 `main-<UTC 시각>-<짧은 SHA>`이고, homelab 저장소의 Flux image automation이 가장 새 태그를 골라 k3s에 배포합니다. 그래서 배포된 것은 언제나 커밋 하나이고, 되돌리기는 이전 태그로 돌리는 것입니다. 비밀값(`config.yaml`, Airflow `.env`)과 데이터(`airflow/files`, `logs`)는 이미지에 넣지 않습니다 — k3s에서 Secret과 볼륨으로 붙습니다.
+
+두 Dockerfile의 빌드 컨텍스트는 저장소 루트이고 [.dockerignore](../.dockerignore) 화이트리스트가 넣을 것을 고릅니다. NAS compose로 돌릴 때는 같은 경로의 bind-mount가 구운 코드 위에 덮이므로 위 `git pull` 배포도 그대로 동작합니다.
 
 ### Neo4j (코스피 관계·메모의 원본)
 

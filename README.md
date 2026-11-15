@@ -4,7 +4,7 @@
 **"오늘 시장이 왜 이렇게 움직였을까 / 앞으로 어떻게 움직일까"**를 근거와 함께 적어 둡니다.
 그리고 며칠 뒤 실제 결과로 그 판단을 채점합니다.
 
-혼자 만들고 있는 프로젝트이고, 지금은 집에 있는 Synology NAS에서 매일 돌고 있습니다.
+혼자 만들고 있는 프로젝트이고, 지금은 집 Synology NAS의 VM과 Oracle Cloud VM으로 만든 k3s 클러스터에서 매일 돌고 있습니다.
 
 저장소를 직접 돌려 보시려면 [docs/operations.md](docs/operations.md)에 설정·마이그레이션·배포가
 정리돼 있고, 설계 문서 색인은 [docs/README.md](docs/README.md)에 있습니다.
@@ -153,7 +153,7 @@ flowchart LR
 | API | FastAPI, dependency-injector | 읽기 전용 조회, 생성자 주입 + provider override 테스트 |
 | 수집 | urllib(표준 라이브러리), scrapling(+playwright) | REST와 HTML을 같은 규약으로 |
 | 관측 | Sentry (Airflow / 상주 서비스 각각) | 에러·로그·트레이싱·프로파일링 |
-| 배포 | Docker Compose (Synology NAS), just | 이미지 3종, bind-mount 배포 |
+| 배포 | k3s(공식 Airflow Helm 차트), Flux GitOps, GitHub Actions → GHCR | 코드를 구운 이미지, 커밋 하나 = 배포 하나 |
 | 품질 | pytest, ruff, pyrefly, pre-commit | 테스트 2,466개 |
 
 ## 설계하면서 고민한 것들

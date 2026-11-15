@@ -469,79 +469,55 @@ airflow dags trigger mof_jgb_daily --conf '{\"source_file\": \"all\", \"observat
 
 ## 배포
 
-운영은 Synology NAS 한 대이고 저장소 clone 하나(`/volume1/docker/finance`)에서 세 compose
-스택을 실행합니다. 세 스택 모두 코드를 이미지에 굽지 않고 clone 안의 트리를 bind-mount
-하므로, 배포는 clone을 `git pull` 하는 것이 전부입니다.
+운영은 **k3s 클러스터**입니다(2026-11-15부터, 그 전에는 Synology NAS의 Docker compose).
+클러스터 구성은 별도 저장소 [6691a/homelab](https://github.com/6691a/homelab)이 코드로 갖고 있고
+Flux가 배포합니다. 이 저장소는 **이미지를 만드는 데까지**를 맡습니다.
 
-| 스택 | compose | 마운트하는 트리 |
-| --- | --- | --- |
-| Airflow | `compose/prod/airflow/docker-compose.yaml` | `airflow/{dags,logs,config,plugins,modules,utility,sql}` (`config/airflow.cfg`는 추적하지 않는 호스트 파일) |
-| KIS 실시간 수집기 | `compose/prod/docker-compose.yaml` | `apps/`, clone 루트의 `config.yaml` |
-| 조회 API | `compose/prod/api/docker-compose.yaml` | `apps/`, clone 루트의 `config.yaml` |
-
-배포 순서: `main`에 push → NAS clone에서:
-
-```bash
-git pull
-just deploy            # 세 스택 전부
-just deploy-airflow    # airflow만
-just deploy-realtime   # realtime만
-just deploy-api        # 조회 API만
-just build-airflow     # Dockerfile·requirements 변경 시에만, 이어서 deploy
-just build-realtime
-just build-api
+```mermaid
+flowchart LR
+  push["main에 push"] --> ga["GitHub Actions<br/>.github/workflows/images.yaml"]
+  ga --> ghcr["GHCR<br/>main-&lt;UTC 시각&gt;-&lt;SHA&gt;"]
+  ghcr --> flux["homelab Flux<br/>image automation"]
+  flux --> k3s["k3s 배포"]
 ```
 
-`deploy`는 세 스택을 `up -d` 하고 realtime과 api를 재시작합니다(`apps/`가 bind-mount라 `up`이 코드 변경을 감지하지 못합니다). 이미지 빌드는 분리돼
-있습니다 — NAS buildkit이 느리고 코드가 bind-mount라 매 배포에 빌드할 이유가
-없습니다. 빌드가 `DeadlineExceeded`로 죽으면 `DOCKER_BUILDKIT=0`을 앞에 붙입니다.
-just가 없으면 레시피 안의 docker compose 명령을 그대로 실행합니다. 변경 종류별
-반영 방식은 다음과 같습니다.
+| 배포 단위 | k3s 리소스 (homelab) | 이미지 | 노드 |
+| --- | --- | --- | --- |
+| Airflow | HelmRelease `airflow/airflow` (공식 차트, `apps/airflow/airflow.yaml`) | `ghcr.io/6691a/finance-airflow` | k3s-master |
+| KIS 실시간 수집기 | Deployment `finance/kis-realtime` (`apps/finance/kis-realtime.yaml`) | `ghcr.io/6691a/finance-kis-realtime` | k3s-master |
+| 조회 API | 아직 배포하지 않음 | — | — |
 
-- `airflow/dags`·`modules` 등 bind-mount 코드 — dag-processor가 재파싱하고 태스크는
-  실행마다 새 프로세스이므로 pull만으로 반영됩니다. `just deploy`도 필요 없습니다.
-- `apps/` — 상주 프로세스라 pull로는 반영되지 않습니다. deploy 레시피가 realtime
-  컨테이너를 재시작합니다. 열린 분은 원래 저장하지 않고 마감 후 REST가 확정본을
-  채우므로 재시작 비용은 몇 초 끊김뿐입니다.
-- compose 파일 — `up -d`가 설정 변경을 감지해 재생성합니다.
-- Dockerfile·requirements — `just build-<스택>` 후 `just deploy-<스택>`. 드문 일이라
-  deploy에 넣지 않았습니다.
-- `airflow/config/airflow.cfg` — 컨테이너 재시작이 필요합니다. Airflow는 프로세스가
-  뜰 때 cfg를 한 번 읽습니다. NAS에서 airflow 스택을 `docker compose restart` 합니다
-  (드문 일이라 deploy 레시피에 넣지 않았습니다).
+**배포 순서는 `main`에 push하는 것이 전부입니다.** `airflow/`·`apps/`·`compose/prod/`가 바뀌면 CI가 이미지를
+올리고, homelab의 Flux가 5분 안에 새 태그를 받아 homelab 저장소에 커밋한 뒤 배포합니다(빌드 포함 수 분).
+배포된 것은 언제나 커밋 하나이고, 되돌리기는 revert 커밋을 push하는 것입니다.
 
-NAS에만 두는 파일은 넷이고 전부 gitignore 대상입니다: `compose/prod/airflow/.env`(Airflow
-환경변수·API 키, Sentry DSN 포함), `compose/prod/.env`(realtime 노브), clone 루트의
-`config.yaml`(KIS 키·DB·Sentry — 조회 API와 같은 파일), 그리고 `airflow/config/airflow.cfg`입니다.
-조회 API 스택은 `.env`를 갖지 않습니다 — 읽을 별칭은 `apps/api/main.py`의 상수입니다.
-키 구성은 각 디렉터리의 `.env.sample`이 기준입니다. Sentry는 `airflow.cfg`가 아니라 `.env`의
-`AIRFLOW__SENTRY__*`로 켭니다 — cfg는 Airflow가 실행 중에 덮어쓰는 파일이라 값을 넣어도
-호스트 밖으로 나가지 않고, 다음 재생성에 지워질 수 있습니다.
+| 바뀐 것 | 반영 |
+| --- | --- |
+| `airflow/dags`·`modules`·`sql` 등 | 새 이미지로 Airflow Pod이 교체됩니다 |
+| `apps/` | 새 이미지로 kis-realtime이 재시작됩니다(`Recreate`: WebSocket 세션이 둘 뜨지 않게) |
+| Dockerfile·requirements | 같은 경로로 이미지에 들어갑니다. 따로 할 일이 없습니다 |
+| Airflow 설정(airflow.cfg 값, 동시 실행 수 등) | homelab `apps/airflow/airflow.yaml`의 `config:`. 이 저장소의 `airflow/config/airflow.cfg`는 운영에서 쓰지 않습니다 |
+| 비밀값(API 키, Sentry DSN, KIS 키, DB 비밀번호) | homelab `secrets/airflow.env`, `secrets/finance-config.yaml`(Git 제외) → Ansible이 Secret으로 넣습니다 |
 
-**`airflow/config/airflow.cfg`는 추적하지 않습니다**(2026-08-24). Airflow가 실행 중에 값을
-덮어써 매번 diff에 뜨고 DSN이 커밋될 위험이 있었습니다. 파일이 없어도 `airflow-init`이
-`airflow config list`로 기본 설정을 찍어 만들고, 그전까지는 Airflow가 내장 기본값과 `.env`로
-동작합니다. 따로 준비할 것이 없습니다.
+### 운영 환경에서 달라진 것
 
-**cfg는 파일이 아니라 `config` 디렉터리째 마운트합니다**(2026-08-25). 파일 하나만
-bind-mount 하면 컨테이너가 생성 시점의 inode에 못 박힙니다. 호스트에서 에디터가
-rename-replace로 저장하는 순간 inode가 갈리고, 컨테이너는 이름이 사라진 옛 파일을 계속
-읽습니다 — `docker compose restart`로도 붙지 않아 `--force-recreate`가 필요했습니다.
-운영에서 실제로 이 상태가 관측됐습니다(컨테이너 쪽 `stat`이 `Links: 0`). 디렉터리 마운트는
-경로를 읽을 때마다 풀므로 이 덫이 없고, 로컬 compose와 배치도 같아집니다.
+- **설정 파일의 자리.** Airflow 환경변수는 Secret `airflow/airflow-env`(옛 `compose/prod/airflow/.env`의 키 그대로),
+  realtime의 `config.yaml`은 Secret `finance/finance-config`가 `/app/config.yaml`로 마운트됩니다.
+  키 구성은 여전히 각 `.env.sample`과 `config.yaml.sample`이 기준입니다.
+- **DB 주소.** 클러스터 안에서는 `postgres.database.svc.cluster.local:5432`, 개발 PC에서는 tailnet으로
+  `100.82.170.74:5432`입니다. DAG가 쓰는 Airflow Connection `finance`도 클러스터 안 주소를 가리킵니다.
+  DB는 tailnet과 클러스터 안에서만 열립니다(집 LAN에서도 닫힘).
+- **Celery broker.** Redis 대신 Valkey(`valkey.database.svc.cluster.local:6379/15`)입니다.
+- **첨부 파일과 로그.** `/opt/airflow/files`와 `/opt/airflow/logs`는 NAS의 NFS 폴더(`K3S/airflow-files`,
+  `K3S/airflow-logs`)입니다. 로그는 차트의 log groomer가 30일 지난 것을 지웁니다.
+- **Airflow UI.** https://airflow.playhub.kr, 로그인은 Authentik SSO입니다(tailnet 전용). 옛 로컬 계정은 쓰지 않습니다.
+- **마이그레이션.** 운영 DB에 적용할 때는 개발 PC(tailnet)의 `config.yaml`에서 migration이 켜진 alias의 `url`을
+  `100.82.170.74:5432`(운영 계정)로 두고 평소처럼 `just migrate upgrade head`를 실행합니다.
 
-기존 clone은 `git pull` 후 파일을 한 번 옮기고 스택을 재생성합니다.
+### 남아 있는 compose 파일
 
-```bash
-# NAS clone에서 1회. 실행 중인 태스크가 없을 때 한다 — 컨테이너를 새로 만든다.
-mv airflow/airflow.cfg airflow/config/airflow.cfg
-docker compose -f compose/prod/airflow/docker-compose.yaml up -d --force-recreate
-```
-
-최초 세팅(1회): NAS에 deploy key를 등록해 `git clone git@github.com:6691a/finance.git
-/volume1/docker/finance`, 세 파일을 `.env.sample`과 대조해 채우고, 각 compose를
-`up -d --build` 합니다. Airflow 과거 태스크 로그를 유지하려면 이전 `logs/` 내용을
-`airflow/logs/`로 복사합니다(생략해도 동작에는 지장 없음).
+`compose/prod/`의 **Dockerfile 둘은 CI가 쓰는 운영 이미지 정의**입니다. 같은 폴더의 `docker-compose.yaml`들과
+`justfile`의 `deploy-*`·`build-*` 레시피는 NAS 시절 것으로 운영에서 쓰지 않습니다. 로컬 개발은 `compose/local/`입니다.
 
 ### 이미지 빌드 (GitHub Actions → GHCR)
 
@@ -554,54 +530,21 @@ k3s로 옮기면서(2026-11-14) 운영 이미지는 **코드를 굽고 CI가 빌
 
 태그는 `main-<UTC 시각>-<짧은 SHA>`이고, homelab 저장소의 Flux image automation이 가장 새 태그를 골라 k3s에 배포합니다. 그래서 배포된 것은 언제나 커밋 하나이고, 되돌리기는 이전 태그로 돌리는 것입니다. 비밀값(`config.yaml`, Airflow `.env`)과 데이터(`airflow/files`, `logs`)는 이미지에 넣지 않습니다 — k3s에서 Secret과 볼륨으로 붙습니다.
 
-두 Dockerfile의 빌드 컨텍스트는 저장소 루트이고 [.dockerignore](../.dockerignore) 화이트리스트가 넣을 것을 고릅니다. NAS compose로 돌릴 때는 같은 경로의 bind-mount가 구운 코드 위에 덮이므로 위 `git pull` 배포도 그대로 동작합니다.
+두 Dockerfile의 빌드 컨텍스트는 저장소 루트이고 [.dockerignore](../.dockerignore) 화이트리스트가 넣을 것을 고릅니다. compose로 돌릴 때는 같은 경로의 bind-mount가 구운 코드 위에 덮입니다.
 
 ### Neo4j (코스피 관계·메모의 원본)
 
-**이 저장소의 `compose/prod/`에는 없습니다.** Postgres·Redis가 사는 NAS의 `database` 스택
-(저장소 밖)에 서비스 하나로 들어갑니다. Airflow prod compose가 `database` 네트워크에
-external로 붙어 있어 **컨테이너 이름으로 닿습니다**.
+**이 저장소에는 없습니다.** homelab 저장소의 `apps/database/neo4j.yaml`(StatefulSet, `neo4j:5.26.29-community`)이고
+Airflow에는 homelab이 `NEO4J_URI=bolt://neo4j.database.svc.cluster.local:7687`을 넣습니다.
+`NEO4J_USER`·`NEO4J_PASSWORD`는 Secret `airflow/airflow-env`(옛 Airflow `.env`의 값)입니다.
 
 **여기가 코스피 관계와 메모의 원본입니다.** 투영이 아니라 원본이라 Postgres에 같은 값이
 없습니다 — 지우면 되살릴 데가 없습니다. `kospi_review_daily`만 씁니다.
 
-```yaml
-  neo4j:
-    image: neo4j:5.26.29-community
-    user: "1026:100"                 # 바인드 마운트 폴더의 호스트 소유자
-    ports:
-      - "17474:7474"
-      - "17687:7687"
-    volumes:
-      - ./neo4j:/data
-    networks:
-      - database
-      - monitoring
-    environment:
-      NEO4J_AUTH: neo4j/${NEO4J_PWD}
-      NEO4J_server_memory_heap_initial__size: 512m
-      NEO4J_server_memory_heap_max__size: 512m
-      NEO4J_server_memory_pagecache_size: 256m
-    healthcheck:
-      test: [ "CMD-SHELL", "cypher-shell -u neo4j -p '${NEO4J_PWD}' 'RETURN 1'" ]
-      interval: 30s
-      timeout: 10s
-      retries: 5
-      start_period: 60s
-    restart: always
-```
+Airflow 환경에 셋이 있어야 합니다. **없으면 `kospi_review_daily`가 죽습니다** — 관계를
+쓸 자리가 없으면 그 실행은 할 일이 없습니다(`NEO4J_URI`, `NEO4J_USER`, `NEO4J_PASSWORD`).
 
-Airflow `.env`에 셋을 넣습니다. **없으면 `kospi_review_daily`가 죽습니다** — 관계를
-쓸 자리가 없으면 그 실행은 할 일이 없습니다.
-
-```
-NEO4J_URI=bolt://neo4j:7687
-NEO4J_USER=neo4j
-NEO4J_PASSWORD=<database 스택 .env의 NEO4J_PWD와 같은 값>
-```
-
-드라이버가 이미지에 들어가야 하므로 **`just build-airflow` 후 `just deploy-airflow`**가
-필요합니다(`requirements.txt` 변경).
+드라이버는 `compose/prod/airflow/requirements.txt`로 이미지에 들어갑니다.
 
 과거 날짜의 관찰을 채우려면 `kospi_review_daily`를 날짜별로 트리거합니다. `notify=false`가
 Slack 발송만 건너뜁니다 — 운영 채널을 도배하지 않으려는 자리입니다.
@@ -618,10 +561,10 @@ airflow dags trigger kospi_review_daily \
 중복됩니다** — 실패한 실행이 그래프까지 쓴 뒤 죽었으면 그 날짜의 메모를 지우고 다시
 돌립니다.
 
-브라우저는 `http://<NAS 주소>:17474`이고, Connect URL은 **`bolt://<NAS 주소>:17687`**입니다.
-`neo4j://`는 서버가 자기 주소를 컨테이너 내부 포트(7687)로 알려 줘서 실패합니다.
+브라우저는 tailnet에서 `http://100.82.170.74:7474`이고, Connect URL은 **`bolt://100.82.170.74:7687`**입니다.
+`neo4j://`는 서버가 자기 주소를 클러스터 내부 주소로 알려 줘서 실패합니다.
 
-**기동에서 밟은 덫 셋**(2026-08-30, 전부 안 뜨거나 조용히 인증만 실패하는 모양입니다).
+**NAS compose 시절 기동에서 밟은 덫 셋**(2026-08-30, 전부 안 뜨거나 조용히 인증만 실패하는 모양입니다). k3s에서는 UID 7474로 띄우고 `enableServiceLinks: false`를 둡니다(Service 이름 `neo4j` 때문에 주입되는 `NEO4J_PORT_*` env를 이미지가 설정으로 읽어 죽는다).
 
 - **`/data` 소유권.** neo4j 이미지는 `USER neo4j`(uid 7474)로 **비root 시작**입니다.
   postgres·redis는 root로 시작해 스스로 `chown` 하고 권한을 내리므로 같은 바인드 마운트에서
@@ -638,7 +581,7 @@ airflow dags trigger kospi_review_daily \
 
 ## 관측 (Sentry)
 
-Sentry 프로젝트는 둘입니다. Airflow는 NAS `.env`의 `AIRFLOW__SENTRY__*`로, realtime은
+Sentry 프로젝트는 둘입니다. Airflow는 Secret `airflow-env`(homelab `secrets/airflow.env`)의 `AIRFLOW__SENTRY__*`로, realtime은
 `config.yaml`의 `sentry_*`로 붙습니다(`sentry_dsn`이 비면 전체 비활성).
 
 realtime(`apps/realtime/main.py`)에서 켜 둔 것:
